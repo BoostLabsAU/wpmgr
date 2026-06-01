@@ -1,12 +1,115 @@
-# Placeholder workflow — the real release pipeline is built by the devops-engineer
-# in Phase 4 (lint, typecheck, test, build / container push / SBOM + scan).
 name: release
 
+# Publishes the self-host artifacts on a version tag (vX.Y.Z):
+#   - Docker images -> GitHub Container Registry (ghcr.io):
+#       ghcr.io/<owner>/wpmgr-api
+#       ghcr.io/<owner>/wpmgr-web
+#       ghcr.io/<owner>/wpmgr-media-encoder
+#     each tagged :vX.Y.Z and :latest.
+#   - WordPress agent plugin -> a GitHub Release asset (wpmgr-agent.zip).
+#
+# Auth uses the built-in GITHUB_TOKEN (no PAT needed) via `packages: write`.
+# Trigger by pushing a tag:  git tag v0.12.0 && git push origin v0.12.0
+# or run manually (Actions -> release -> Run workflow) with a version input.
+#
+# NOTE: GHCR packages are PRIVATE on first publish. To let anyone `docker pull`,
+# set each package Public once: GitHub -> your profile -> Packages -> wpmgr-* ->
+# Package settings -> Change visibility -> Public.
+
 on:
+  push:
+    tags: ["v*.*.*"]
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. v0.12.0"
+        required: true
+
+permissions:
+  contents: write # create the GitHub Release + upload the agent zip
+  packages: write # push images to GHCR
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
 
 jobs:
-  placeholder:
+  images:
+    name: ${{ matrix.name }} → ghcr
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            file: infra/Dockerfile.api
+            build_arg: VERSION
+          - name: web
+            file: infra/Dockerfile.web
+            build_arg: BUILD_VERSION
+          - name: media-encoder
+            file: infra/Dockerfile.media-encoder
+            build_arg: VERSION
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version + lowercase owner
+        id: vars
+        run: |
+          echo "version=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata (tags + OCI labels)
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.vars.outputs.owner }}/wpmgr-${{ matrix.name }}
+          tags: |
+            type=raw,value=${{ steps.vars.outputs.version }}
+            type=raw,value=latest
+
+      - name: Build + push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.file }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: ${{ matrix.build_arg }}=${{ steps.vars.outputs.version }}
+          provenance: false
+
+  agent:
+    name: agent plugin → release asset
     runs-on: ubuntu-latest
     steps:
-      - run: echo "release pipeline lands in Phase 4"
+      - uses: actions/checkout@v4
+
+      - name: Resolve version
+        id: vars
+        run: echo "version=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      # make agent-zip builds vendor/ via a composer:2 container, then stages the
+      # plugin under a stable wpmgr-agent/ folder (the WP slug) and zips it.
+      - name: Build agent plugin zip
+        run: make agent-zip
+
+      - name: Publish GitHub Release with the agent zip
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.vars.outputs.version }}
+          name: ${{ steps.vars.outputs.version }}
+          generate_release_notes: true
+          files: release/wpmgr-agent.zip
