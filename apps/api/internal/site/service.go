@@ -389,14 +389,15 @@ func sanitizeCoreUpdate(cu *CoreUpdate) *CoreUpdate {
 // slices are capped. This is the single source of truth for metadata bounds.
 func sanitizeMetadata(m Metadata) Metadata {
 	return Metadata{
-		WPVersion:   truncateRunes(m.WPVersion, maxWPVersion),
-		PHPVersion:  truncateRunes(m.PHPVersion, maxPHPVersion),
-		ServerInfo:  truncateRunes(m.ServerInfo, maxServerInfo),
-		Multisite:   m.Multisite,
-		ActiveTheme: truncateRunes(m.ActiveTheme, maxActiveTheme),
-		Plugins:     sanitizeComponents(m.Plugins, maxPlugins),
-		Themes:      sanitizeComponents(m.Themes, maxThemes),
-		CoreUpdate:  sanitizeCoreUpdate(m.CoreUpdate),
+		WPVersion:    truncateRunes(m.WPVersion, maxWPVersion),
+		PHPVersion:   truncateRunes(m.PHPVersion, maxPHPVersion),
+		ServerInfo:   truncateRunes(m.ServerInfo, maxServerInfo),
+		Multisite:    m.Multisite,
+		ActiveTheme:  truncateRunes(m.ActiveTheme, maxActiveTheme),
+		AgentVersion: truncateRunes(m.AgentVersion, 64),
+		Plugins:      sanitizeComponents(m.Plugins, maxPlugins),
+		Themes:       sanitizeComponents(m.Themes, maxThemes),
+		CoreUpdate:   sanitizeCoreUpdate(m.CoreUpdate),
 		// ADR-037 Sprint 1, 1C — Extras pass through unchanged. The agent
 		// already bounds disk-usage walks to 2s; user/admin counts are tiny
 		// non-negative ints; host_flags is a fixed boolean enum.
