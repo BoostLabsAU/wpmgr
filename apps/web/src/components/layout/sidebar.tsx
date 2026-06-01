@@ -12,6 +12,7 @@ import {
 
 import { useShellState } from "@/components/layout/app-shell-context";
 import { useMe, isOrgScoped } from "@/features/auth/use-auth";
+import { useSites } from "@/features/sites/use-sites";
 import { cn } from "@/lib/utils";
 
 // Phase 4 / Sprint 1 surface 4.2 - primary navigation.
@@ -59,7 +60,7 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
     label: "Sites",
     icon: Globe,
     to: "/sites",
-    count: 12,
+    // count is injected live from useSites() in <Sidebar>; see SITES_LABEL.
   },
   {
     label: "Operations",
@@ -67,8 +68,8 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
     items: [
       // /backups index doesn't exist yet - only /backups/$snapshotId. Mark
       // disabled until Sprint 4 adds the index.
-      { label: "Backups", to: "/backups", count: 3 },
-      { label: "Updates", to: "/updates", count: 8 },
+      { label: "Backups", to: "/backups" },
+      { label: "Updates", to: "/updates" },
       // /migrations doesn't exist yet.
       { label: "Migrations", to: "/migrations" },
     ],
@@ -85,7 +86,7 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
     label: "Security",
     icon: Shield,
     items: [
-      { label: "Vulnerabilities", to: "/vulnerabilities", count: 0 },
+      { label: "Vulnerabilities", to: "/vulnerabilities" },
       { label: "Audit", to: "/audit" },
     ],
   },
@@ -120,6 +121,13 @@ export function Sidebar() {
   const pathname = location.pathname;
   const { data: me } = useMe();
   const orgScoped = isOrgScoped(me);
+
+  // Live "Sites" count for the nav badge (active, non-archived) — shares the
+  // sites-list query cache with the Sites page, so it's deduped. The other nav
+  // badges were hardcoded mocks and are intentionally dropped until each domain
+  // has a real count.
+  const { data: sitesData } = useSites();
+  const sitesCount = sitesData?.length;
 
   // Site-scoped collaborators only see a filtered settings group (Account only).
   const settingsGroup: NavGroup = orgScoped
@@ -167,11 +175,18 @@ export function Sidebar() {
 
         <div className="flex flex-1 flex-col overflow-y-auto px-2 py-3">
           <ul className="flex flex-col gap-0.5">
-            {TOP_GROUPS.map((group) => (
-              <li key={group.label}>
-                <NavGroupItem group={group} pathname={pathname} collapsed={collapsed} />
-              </li>
-            ))}
+            {TOP_GROUPS.map((group) => {
+              // Inject the live Sites count; other groups carry no badge.
+              const g =
+                group.label === "Sites" && typeof sitesCount === "number"
+                  ? { ...group, count: sitesCount }
+                  : group;
+              return (
+                <li key={group.label}>
+                  <NavGroupItem group={g} pathname={pathname} collapsed={collapsed} />
+                </li>
+              );
+            })}
             {/* Shared with me — visible to all users. */}
             <li>
               <NavGroupItem
