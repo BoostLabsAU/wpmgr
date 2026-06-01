@@ -41,7 +41,12 @@ jobs:
         env:
           GOWORK: "off"
           CGO_ENABLED: "0"
-        run: go build $(go list ./... | grep -v -e /cmd/media-encoder -e /internal/media/encoder)
+        # apps/api/tests is excluded from BUILD specifically: its only non-test
+        # files are CGO-tagged, so under CGO_ENABLED=0 the package has no buildable
+        # non-test files and `go build` errors on it when named explicitly. Vet
+        # (below) keeps it — vet compiles the _test.go files, so it still
+        # compile-checks the integration tests.
+        run: go build $(go list ./... | grep -v -e /cmd/media-encoder -e /internal/media/encoder -e /apps/api/tests)
 
       - name: Vet
         env:
