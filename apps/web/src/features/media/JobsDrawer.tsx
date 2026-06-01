@@ -84,6 +84,9 @@ export function JobsDrawer({ siteId }: JobsDrawerProps) {
   // still queued/in_progress, or that reached a terminal state recently.
   const merged = useMemo(() => {
     const out: Record<string, LiveJobRow> = { ...rowsRecord };
+    // Intentional render-time wall-clock read: the merge keeps server jobs that
+    // are non-terminal OR terminal-but-recent, which needs "now" at merge time.
+    // eslint-disable-next-line react-hooks/purity -- recency heuristic, benign impurity
     const now = Date.now();
     for (const job of serverJobs?.items ?? []) {
       if (job.id in out) continue; // live row already covers this job → it wins.

@@ -169,6 +169,9 @@ func (a *okAgent) MediaRestore(_ context.Context, _ uuid.UUID, _ string, _ agent
 func (a *okAgent) MediaDeleteOriginals(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.MediaDeleteOriginalsRequest) (agentcmd.MediaDeleteOriginalsResponse, error) {
 	return agentcmd.MediaDeleteOriginalsResponse{OK: true}, nil
 }
+func (a *okAgent) SyncMediaConfig(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.MediaConfigRequest) (agentcmd.MediaConfigResult, error) {
+	return agentcmd.MediaConfigResult{OK: true}, nil
+}
 
 type enrolledSites struct{}
 
@@ -219,7 +222,7 @@ func TestMediaOptimizeService_CallbackChain(t *testing.T) {
 	siteID := seedEnrolledSite(t, pool, tenantID, "https://media-svc.example.com")
 	const wpAttachmentID = int64(7777)
 	const origSize = int64(500_000)
-	if _, err := mediaRepo.UpsertAssetsAgent(ctx, tenantID, siteID, []repo.UpsertAssetInput{{
+	if _, err := mediaRepo.UpsertAssetsAgent(ctx, tenantID, siteID, 1, []repo.UpsertAssetInput{{
 		WPAttachmentID:    wpAttachmentID,
 		Title:             "hero.jpg",
 		OriginalPath:      "/uploads/hero.jpg",

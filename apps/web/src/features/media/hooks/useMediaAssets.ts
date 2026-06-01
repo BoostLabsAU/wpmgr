@@ -6,7 +6,7 @@ import {
   type UseInfiniteQueryResult,
   type UseMutationResult,
 } from "@tanstack/react-query";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { client } from "@wpmgr/api";
 
 import { toError } from "@/features/auth/use-auth";
@@ -161,9 +161,14 @@ export function useMediaAssets(
   };
 
   // Keep a ref to the latest query result so fetchAllPages never has a stale
-  // closure (query changes reference every render but we need the latest).
+  // closure (query changes reference every render but we need the latest). The
+  // ref is updated in an effect (NOT during render) — fetchAllPages is only ever
+  // invoked from user-triggered async callbacks, well after commit, so it always
+  // observes the latest value.
   const queryRef = useRef(query);
-  queryRef.current = query;
+  useEffect(() => {
+    queryRef.current = query;
+  });
 
   // fetchAllPages: fetch every remaining page sequentially, then return all ids.
   // Bounded by MAX_PREFETCH_PAGES and totalCount so a broken hasNextPage can't

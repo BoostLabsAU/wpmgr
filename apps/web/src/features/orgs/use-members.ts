@@ -142,7 +142,7 @@ export function useInviteMember(): UseMutationResult<
         headers: { "Content-Type": "application/json" },
       });
       if (result.error !== undefined) throw toError(result.error);
-      return (result.data ?? {}) as InviteMemberResult;
+      return result.data ?? {};
     },
     onSuccess: (_data) => {
       void queryClient.invalidateQueries({ queryKey: memberKeys.list() });
