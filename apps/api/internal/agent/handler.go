@@ -82,6 +82,9 @@ type metadataDTO struct {
 	ServerInfo  flexString `json:"server_info"`
 	Multisite   flexBool   `json:"multisite"`
 	ActiveTheme flexString `json:"active_theme"`
+	// AgentVersion is the WPMgr agent plugin version (M27). Optional; old agents
+	// omit it and the stored value stays ''.
+	AgentVersion flexString `json:"agent_version"`
 	// AgeRecipient is the agent's per-site age PUBLIC recipient ("age1…"). The
 	// CP stores it on sites.age_recipient so M4 backups can be triggered without
 	// a separate registration call. Optional; empty/missing leaves the stored
@@ -196,6 +199,7 @@ func (d metadataDTO) toMetadata() Metadata {
 		ServerInfo:   string(d.ServerInfo),
 		Multisite:    bool(d.Multisite),
 		ActiveTheme:  string(d.ActiveTheme),
+		AgentVersion: string(d.AgentVersion),
 		AgeRecipient: string(d.AgeRecipient),
 		Plugins:      conv(d.Plugins),
 		Themes:       conv(d.Themes),
@@ -260,6 +264,7 @@ type Metadata struct {
 	ServerInfo   string
 	Multisite    bool
 	ActiveTheme  string
+	AgentVersion string // optional; WPMgr agent plugin version (M27)
 	AgeRecipient string // optional; agent's per-site age PUBLIC recipient ("age1…")
 	Plugins      []Component
 	Themes       []Component

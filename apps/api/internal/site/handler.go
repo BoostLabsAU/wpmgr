@@ -557,25 +557,61 @@ func toAPI(s Site) gen.Site {
 	if s.DisconnectedReason != "" {
 		out.DisconnectedReason = gen.NewOptString(s.DisconnectedReason)
 	}
+	// M27 — current agent plugin version (last-synced).
+	if s.AgentVersion != "" {
+		out.AgentVersion = gen.NewOptString(s.AgentVersion)
+	}
+	// M27 — most-recent backup, normalized to the web's status enum here so the
+	// dashboard adapter stays dumb (DB completed→success, pending→running).
+	if s.LastBackupAt != nil {
+		out.LastBackupAt = gen.NewOptDateTime(*s.LastBackupAt)
+	}
+	switch s.LastBackupStatus {
+	case "completed":
+		out.LastBackupStatus = gen.NewOptSiteLastBackupStatus(gen.SiteLastBackupStatusSuccess)
+	case "failed":
+		out.LastBackupStatus = gen.NewOptSiteLastBackupStatus(gen.SiteLastBackupStatusFailed)
+	case "running", "pending":
+		out.LastBackupStatus = gen.NewOptSiteLastBackupStatus(gen.SiteLastBackupStatusRunning)
+	}
 	if len(s.Components) > 0 {
 		var comp struct {
 			Plugins    []Component `json:"plugins"`
 			Themes     []Component `json:"themes"`
 			CoreUpdate *CoreUpdate `json:"core_update,omitempty"`
 		}
-		if json.Unmarshal(s.Components, &comp) == nil &&
-			(len(comp.Plugins) > 0 || len(comp.Themes) > 0 || comp.CoreUpdate != nil) {
-			sc := gen.SiteComponents{
-				Plugins: toAPIComponents(comp.Plugins),
-				Themes:  toAPIComponents(comp.Themes),
+		if json.Unmarshal(s.Components, &comp) == nil {
+			// M27 — updates_available: same predicate as buildAvailableUpdates
+			// (a non-empty AvailableUpdate.NewVersion), +1 for a core update.
+			updates := 0
+			for _, p := range comp.Plugins {
+				if p.AvailableUpdate != nil && p.AvailableUpdate.NewVersion != "" {
+					updates++
+				}
+			}
+			for _, t := range comp.Themes {
+				if t.AvailableUpdate != nil && t.AvailableUpdate.NewVersion != "" {
+					updates++
+				}
 			}
 			if comp.CoreUpdate != nil {
-				sc.CoreUpdate = gen.NewOptNilSiteComponentsCoreUpdate(gen.SiteComponentsCoreUpdate{
-					NewVersion:     comp.CoreUpdate.NewVersion,
-					CurrentVersion: comp.CoreUpdate.CurrentVersion,
-				})
+				updates++
 			}
-			out.Components = gen.NewOptSiteComponents(sc)
+			out.UpdatesAvailable = gen.NewOptInt32(int32(updates))
+
+			if len(comp.Plugins) > 0 || len(comp.Themes) > 0 || comp.CoreUpdate != nil {
+				sc := gen.SiteComponents{
+					Plugins: toAPIComponents(comp.Plugins),
+					Themes:  toAPIComponents(comp.Themes),
+				}
+				if comp.CoreUpdate != nil {
+					sc.CoreUpdate = gen.NewOptNilSiteComponentsCoreUpdate(gen.SiteComponentsCoreUpdate{
+						NewVersion:     comp.CoreUpdate.NewVersion,
+						CurrentVersion: comp.CoreUpdate.CurrentVersion,
+					})
+				}
+				out.Components = gen.NewOptSiteComponents(sc)
+			}
 		}
 	}
 	return out

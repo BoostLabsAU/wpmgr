@@ -7915,6 +7915,52 @@ func (o OptSiteCreateStatus) Or(d SiteCreateStatus) SiteCreateStatus {
 	return d
 }
 
+// NewOptSiteLastBackupStatus returns new OptSiteLastBackupStatus with value set to v.
+func NewOptSiteLastBackupStatus(v SiteLastBackupStatus) OptSiteLastBackupStatus {
+	return OptSiteLastBackupStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSiteLastBackupStatus is optional SiteLastBackupStatus.
+type OptSiteLastBackupStatus struct {
+	Value SiteLastBackupStatus
+	Set   bool
+}
+
+// IsSet returns true if OptSiteLastBackupStatus was set.
+func (o OptSiteLastBackupStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSiteLastBackupStatus) Reset() {
+	var v SiteLastBackupStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSiteLastBackupStatus) SetTo(v SiteLastBackupStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSiteLastBackupStatus) Get() (v SiteLastBackupStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSiteLastBackupStatus) Or(d SiteLastBackupStatus) SiteLastBackupStatus {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSiteLifecycleReason returns new OptSiteLifecycleReason with value set to v.
 func NewOptSiteLifecycleReason(v SiteLifecycleReason) OptSiteLifecycleReason {
 	return OptSiteLifecycleReason{
@@ -9040,8 +9086,18 @@ type Site struct {
 	EnrolledAt OptDateTime       `json:"enrolled_at"`
 	LastSeenAt OptDateTime       `json:"last_seen_at"`
 	Components OptSiteComponents `json:"components"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	// Current WPMgr agent plugin version (last-synced via metadata push). Empty/absent until the site
+	// re-syncs on a newer agent.
+	AgentVersion OptString `json:"agent_version"`
+	// Count of plugins + themes + core with an available update (last-synced).
+	UpdatesAvailable OptInt32 `json:"updates_available"`
+	// Time of the most recent backup snapshot (finished_at, falling back to created_at).
+	LastBackupAt OptDateTime `json:"last_backup_at"`
+	// Normalized status of the most recent backup snapshot (DB 'completed'→'success',
+	// 'pending'→'running').
+	LastBackupStatus OptSiteLastBackupStatus `json:"last_backup_status"`
+	CreatedAt        time.Time               `json:"created_at"`
+	UpdatedAt        time.Time               `json:"updated_at"`
 }
 
 // GetID returns the value of ID.
@@ -9137,6 +9193,26 @@ func (s *Site) GetLastSeenAt() OptDateTime {
 // GetComponents returns the value of Components.
 func (s *Site) GetComponents() OptSiteComponents {
 	return s.Components
+}
+
+// GetAgentVersion returns the value of AgentVersion.
+func (s *Site) GetAgentVersion() OptString {
+	return s.AgentVersion
+}
+
+// GetUpdatesAvailable returns the value of UpdatesAvailable.
+func (s *Site) GetUpdatesAvailable() OptInt32 {
+	return s.UpdatesAvailable
+}
+
+// GetLastBackupAt returns the value of LastBackupAt.
+func (s *Site) GetLastBackupAt() OptDateTime {
+	return s.LastBackupAt
+}
+
+// GetLastBackupStatus returns the value of LastBackupStatus.
+func (s *Site) GetLastBackupStatus() OptSiteLastBackupStatus {
+	return s.LastBackupStatus
 }
 
 // GetCreatedAt returns the value of CreatedAt.
@@ -9242,6 +9318,26 @@ func (s *Site) SetLastSeenAt(val OptDateTime) {
 // SetComponents sets the value of Components.
 func (s *Site) SetComponents(val OptSiteComponents) {
 	s.Components = val
+}
+
+// SetAgentVersion sets the value of AgentVersion.
+func (s *Site) SetAgentVersion(val OptString) {
+	s.AgentVersion = val
+}
+
+// SetUpdatesAvailable sets the value of UpdatesAvailable.
+func (s *Site) SetUpdatesAvailable(val OptInt32) {
+	s.UpdatesAvailable = val
+}
+
+// SetLastBackupAt sets the value of LastBackupAt.
+func (s *Site) SetLastBackupAt(val OptDateTime) {
+	s.LastBackupAt = val
+}
+
+// SetLastBackupStatus sets the value of LastBackupStatus.
+func (s *Site) SetLastBackupStatus(val OptSiteLastBackupStatus) {
+	s.LastBackupStatus = val
 }
 
 // SetCreatedAt sets the value of CreatedAt.
@@ -10966,6 +11062,56 @@ func (s *SiteHealthStatus) UnmarshalText(data []byte) error {
 		return nil
 	case SiteHealthStatusUnreachable:
 		*s = SiteHealthStatusUnreachable
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Normalized status of the most recent backup snapshot (DB 'completed'→'success',
+// 'pending'→'running').
+type SiteLastBackupStatus string
+
+const (
+	SiteLastBackupStatusSuccess SiteLastBackupStatus = "success"
+	SiteLastBackupStatusRunning SiteLastBackupStatus = "running"
+	SiteLastBackupStatusFailed  SiteLastBackupStatus = "failed"
+)
+
+// AllValues returns all SiteLastBackupStatus values.
+func (SiteLastBackupStatus) AllValues() []SiteLastBackupStatus {
+	return []SiteLastBackupStatus{
+		SiteLastBackupStatusSuccess,
+		SiteLastBackupStatusRunning,
+		SiteLastBackupStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteLastBackupStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteLastBackupStatusSuccess:
+		return []byte(s), nil
+	case SiteLastBackupStatusRunning:
+		return []byte(s), nil
+	case SiteLastBackupStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteLastBackupStatus) UnmarshalText(data []byte) error {
+	switch SiteLastBackupStatus(data) {
+	case SiteLastBackupStatusSuccess:
+		*s = SiteLastBackupStatusSuccess
+		return nil
+	case SiteLastBackupStatusRunning:
+		*s = SiteLastBackupStatusRunning
+		return nil
+	case SiteLastBackupStatusFailed:
+		*s = SiteLastBackupStatusFailed
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)

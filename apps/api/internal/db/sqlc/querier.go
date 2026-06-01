@@ -273,6 +273,11 @@ type Querier interface {
 	// first. Tenant-scoped by RLS; site-bound + scope-bound here. The caller derives
 	// the display status (pending/accepted/expired/revoked) from the columns.
 	ListInvitationsForSite(ctx context.Context, arg ListInvitationsForSiteParams) ([]Invitation, error)
+	// The most-recent backup snapshot per site, for the sites-table "Backup" column.
+	// DISTINCT ON + ORDER BY (site_id, created_at DESC) is served by
+	// backup_snapshots_tenant_site_idx (tenant_id, site_id, created_at DESC) — one
+	// index-only seek per site, fetched in a single batched call for the listed ids.
+	ListLatestBackupsForSites(ctx context.Context, arg ListLatestBackupsForSitesParams) ([]ListLatestBackupsForSitesRow, error)
 	ListManifestEntries(ctx context.Context, arg ListManifestEntriesParams) ([]BackupManifestEntry, error)
 	ListMembershipsForTenant(ctx context.Context, arg ListMembershipsForTenantParams) ([]Membership, error)
 	// ListMembershipsForUser reads the caller's own memberships across all tenants.

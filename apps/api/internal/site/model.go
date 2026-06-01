@@ -23,6 +23,8 @@ type Site struct {
 	Status     string
 	WPVersion  string
 	PHPVersion string
+	// M27 — current WPMgr agent plugin version (last-synced via metadata push).
+	AgentVersion string
 	// M2 enrollment + agent identity.
 	AgentPublicKey string
 	EnrolledAt     *time.Time
@@ -54,6 +56,11 @@ type Site struct {
 	ArchivedAt           *time.Time
 	CreatedAt            time.Time
 	UpdatedAt            time.Time
+	// Derived for the sites list (NOT stored on the site row): the most-recent
+	// backup snapshot's normalized status (success|running|failed) + time. Empty/
+	// nil when the site has no backups. Populated by repo.List's batched lookup.
+	LastBackupStatus string
+	LastBackupAt     *time.Time
 }
 
 // CreateInput is the validated input for creating a site under a tenant.
@@ -173,13 +180,16 @@ func (s Site) ParsedCoreUpdate() *CoreUpdate {
 
 // Metadata is the site inventory an authenticated agent pushes.
 type Metadata struct {
-	WPVersion   string      `json:"wp_version" validate:"max=32"`
-	PHPVersion  string      `json:"php_version" validate:"max=32"`
-	ServerInfo  string      `json:"server_info" validate:"max=512"`
-	Multisite   bool        `json:"multisite"`
-	ActiveTheme string      `json:"active_theme" validate:"max=200"`
-	Plugins     []Component `json:"plugins" validate:"max=2000,dive"`
-	Themes      []Component `json:"themes" validate:"max=500,dive"`
+	WPVersion   string `json:"wp_version" validate:"max=32"`
+	PHPVersion  string `json:"php_version" validate:"max=32"`
+	ServerInfo  string `json:"server_info" validate:"max=512"`
+	Multisite   bool   `json:"multisite"`
+	ActiveTheme string `json:"active_theme" validate:"max=200"`
+	// AgentVersion is the WPMgr agent plugin version (M27). Optional; empty when
+	// an older agent does not report it.
+	AgentVersion string      `json:"-" validate:"max=64"`
+	Plugins      []Component `json:"plugins" validate:"max=2000,dive"`
+	Themes       []Component `json:"themes" validate:"max=500,dive"`
 	// CoreUpdate (when set) carries the WordPress core update advisory. nil
 	// when there is no core update, or when the agent is old enough that it
 	// does not report the field at all.

@@ -213,6 +213,7 @@ type Site struct {
 	Status               string             `json:"status"`
 	WpVersion            string             `json:"wp_version"`
 	PhpVersion           string             `json:"php_version"`
+	AgentVersion         string             `json:"agent_version"`
 	AgentPublicKey       string             `json:"agent_public_key"`
 	EnrolledAt           pgtype.Timestamptz `json:"enrolled_at"`
 	LastSeenAt           pgtype.Timestamptz `json:"last_seen_at"`

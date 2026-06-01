@@ -201,14 +201,15 @@ func (s *Service) RecordNonce(ctx context.Context, siteID uuid.UUID, nonce strin
 // returns the updated site in OpenAPI form, satisfying agent.MetadataSink.
 func (s *Service) ApplyAgentMetadata(ctx context.Context, tenantID, siteID uuid.UUID, m agentpkg.Metadata) (gen.Site, error) {
 	out, err := s.ApplyMetadata(ctx, tenantID, siteID, Metadata{
-		WPVersion:   m.WPVersion,
-		PHPVersion:  m.PHPVersion,
-		ServerInfo:  m.ServerInfo,
-		Multisite:   m.Multisite,
-		ActiveTheme: m.ActiveTheme,
-		Plugins:     fromAgentComponents(m.Plugins),
-		Themes:      fromAgentComponents(m.Themes),
-		CoreUpdate:  fromAgentCoreUpdate(m.CoreUpdate),
+		WPVersion:    m.WPVersion,
+		PHPVersion:   m.PHPVersion,
+		ServerInfo:   m.ServerInfo,
+		Multisite:    m.Multisite,
+		ActiveTheme:  m.ActiveTheme,
+		AgentVersion: m.AgentVersion,
+		Plugins:      fromAgentComponents(m.Plugins),
+		Themes:       fromAgentComponents(m.Themes),
+		CoreUpdate:   fromAgentCoreUpdate(m.CoreUpdate),
 		// ADR-037 Sprint 1, 1C — sparse-metadata expansion. The new fields are
 		// stored inside the existing JSONB `components` column (no migration);
 		// the strict ogen Site type round-trips them as raw JSON inside the

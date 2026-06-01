@@ -3064,6 +3064,21 @@ components:
           format: date-time
         components:
           $ref: "#/components/schemas/SiteComponents"
+        agent_version:
+          type: string
+          description: Current WPMgr agent plugin version (last-synced via metadata push). Empty/absent until the site re-syncs on a newer agent.
+        updates_available:
+          type: integer
+          format: int32
+          description: Count of plugins + themes + core with an available update (last-synced).
+        last_backup_at:
+          type: string
+          format: date-time
+          description: Time of the most recent backup snapshot (finished_at, falling back to created_at).
+        last_backup_status:
+          type: string
+          enum: [success, running, failed]
+          description: Normalized status of the most recent backup snapshot (DB 'completed'→'success', 'pending'→'running').
         created_at:
           type: string
           format: date-time

@@ -23,6 +23,17 @@ WHERE tenant_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: ListLatestBackupsForSites :many
+-- The most-recent backup snapshot per site, for the sites-table "Backup" column.
+-- DISTINCT ON + ORDER BY (site_id, created_at DESC) is served by
+-- backup_snapshots_tenant_site_idx (tenant_id, site_id, created_at DESC) — one
+-- index-only seek per site, fetched in a single batched call for the listed ids.
+SELECT DISTINCT ON (site_id)
+       site_id, status, finished_at, created_at
+FROM backup_snapshots
+WHERE tenant_id = $1 AND site_id = ANY($2::uuid[])
+ORDER BY site_id, created_at DESC;
+
 -- name: DeleteSite :execrows
 DELETE FROM sites
 WHERE id = $1 AND tenant_id = $2;
@@ -50,7 +61,8 @@ SET wp_version   = $3,
     server_info  = $5,
     multisite    = $6,
     active_theme = $7,
-    components   = $8,
+    agent_version = $8,
+    components   = $9,
     last_seen_at = now(),
     health_status = 'healthy',
     updated_at   = now()

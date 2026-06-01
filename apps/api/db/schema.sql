@@ -38,6 +38,8 @@ CREATE TABLE sites (
     status      text        NOT NULL DEFAULT 'pending',
     wp_version  text        NOT NULL DEFAULT '',
     php_version text        NOT NULL DEFAULT '',
+    -- M27 — current WPMgr agent plugin version, reported on each metadata push.
+    agent_version text      NOT NULL DEFAULT '',
     -- M2 enrollment + agent identity.
     -- agent_public_key is the agent's own Ed25519 public key (base64 std), stored
     -- so the control plane can verify signed agent->CP requests. Empty until the

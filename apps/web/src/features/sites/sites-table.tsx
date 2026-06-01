@@ -134,6 +134,8 @@ interface SiteRow {
   readonly backupTime: string | null;
   readonly wpVersionEol: boolean;
   readonly phpVersionEol: boolean;
+  /** Current WPMgr agent plugin version (M27); "" until the site re-syncs. */
+  readonly agentVersion: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -150,21 +152,21 @@ function hostnameFromUrl(url: string): string {
   }
 }
 
-// TODO(sprint-4): updates_count + backup_status come from CP endpoints not yet
-// wired. Defaults keep the table type-safe; the charts/backups subagent will
-// thread real data through here in Sprint 4.
 function rowOf(site: Site): SiteRow {
   return {
     site,
     hostname: hostnameFromUrl(site.url),
     connectionState: connectionStateOf(site),
     lastSeenAt: site.last_seen_at ?? null,
-    updatesCount: 0,
+    // M27 — real data from the sites list DTO. updates_available, last_backup_*
+    // and agent_version are summarized/joined CP-side.
+    updatesCount: site.updates_available ?? 0,
     updatesSeverity: "minor",
-    backupStatus: null,
-    backupTime: null,
+    backupStatus: site.last_backup_status ?? null,
+    backupTime: site.last_backup_at ?? null,
     wpVersionEol: false,
     phpVersionEol: false,
+    agentVersion: site.agent_version ?? "",
   };
 }
 
@@ -177,6 +179,7 @@ const COL_URL_MIN_PX = 320;
 const COL_TAGS_PX = 160;
 const COL_WP_PX = 90;
 const COL_PHP_PX = 90;
+const COL_AGENT_PX = 110;
 const COL_UPDATES_PX = 130;
 const COL_BACKUP_PX = 180;
 const COL_UPTIME_PX = 80;
@@ -329,6 +332,23 @@ function buildColumns(
             {v}
           </span>
         );
+      },
+    },
+    {
+      id: "agent_version",
+      accessorFn: (row) => row.agentVersion,
+      header: "Agent",
+      enableSorting: true,
+      size: COL_AGENT_PX,
+      cell: ({ row }) => {
+        const v = row.original.agentVersion;
+        if (!v)
+          return (
+            <span className="font-mono text-xs text-[var(--color-muted-foreground)]">
+              —
+            </span>
+          );
+        return <span className="font-mono text-sm tabular-nums">{v}</span>;
       },
     },
     {

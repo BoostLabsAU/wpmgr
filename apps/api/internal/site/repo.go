@@ -236,6 +236,41 @@ func (r *pgRepo) List(ctx context.Context, in ListInput) ([]Site, error) {
 		for _, row := range rows {
 			out = append(out, toModel(row))
 		}
+		// Batched per-site latest-backup lookup for the sites-table "Backup"
+		// column — ONE query for every listed site (index-only seek per site),
+		// inside the same tenant/scope tx so RLS applies. Sites with no backup
+		// simply stay nil. (Column2 is sqlc's name for the ANY($2::uuid[]) param.)
+		if len(out) > 0 {
+			ids := make([]uuid.UUID, len(out))
+			for i := range out {
+				ids[i] = out[i].ID
+			}
+			bks, berr := sqlc.New(tx).ListLatestBackupsForSites(ctx, sqlc.ListLatestBackupsForSitesParams{
+				TenantID: in.TenantID,
+				Column2:  ids,
+			})
+			if berr != nil {
+				return domain.Internal("site_list_backups_failed", "failed to fetch latest backups").WithCause(berr)
+			}
+			byID := make(map[uuid.UUID]sqlc.ListLatestBackupsForSitesRow, len(bks))
+			for _, b := range bks {
+				byID[b.SiteID] = b
+			}
+			for i := range out {
+				b, ok := byID[out[i].ID]
+				if !ok {
+					continue
+				}
+				out[i].LastBackupStatus = b.Status // raw DB status; toAPI normalizes
+				if b.FinishedAt.Valid {
+					t := b.FinishedAt.Time
+					out[i].LastBackupAt = &t
+				} else {
+					t := b.CreatedAt
+					out[i].LastBackupAt = &t
+				}
+			}
+		}
 		return nil
 	})
 	return out, err
@@ -438,14 +473,15 @@ func (r *pgRepo) UpdateMetadata(ctx context.Context, tenantID, siteID uuid.UUID,
 	var out Site
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row, err := sqlc.New(tx).UpdateSiteMetadata(ctx, sqlc.UpdateSiteMetadataParams{
-			ID:          siteID,
-			TenantID:    tenantID,
-			WpVersion:   m.WPVersion,
-			PhpVersion:  m.PHPVersion,
-			ServerInfo:  m.ServerInfo,
-			Multisite:   m.Multisite,
-			ActiveTheme: m.ActiveTheme,
-			Components:  components,
+			ID:           siteID,
+			TenantID:     tenantID,
+			WpVersion:    m.WPVersion,
+			PhpVersion:   m.PHPVersion,
+			ServerInfo:   m.ServerInfo,
+			Multisite:    m.Multisite,
+			ActiveTheme:  m.ActiveTheme,
+			AgentVersion: m.AgentVersion,
+			Components:   components,
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -559,6 +595,7 @@ func toModel(s sqlc.Site) Site {
 		Status:         s.Status,
 		WPVersion:      s.WpVersion,
 		PHPVersion:     s.PhpVersion,
+		AgentVersion:   s.AgentVersion,
 		AgentPublicKey: s.AgentPublicKey,
 		HealthStatus:   s.HealthStatus,
 		ServerInfo:     s.ServerInfo,

@@ -89,6 +89,22 @@ export type Site = {
   enrolled_at?: string;
   last_seen_at?: string;
   components?: SiteComponents;
+  /**
+   * Current WPMgr agent plugin version (last-synced via metadata push). Empty/absent until the site re-syncs on a newer agent.
+   */
+  agent_version?: string;
+  /**
+   * Count of plugins + themes + core with an available update (last-synced).
+   */
+  updates_available?: number;
+  /**
+   * Time of the most recent backup snapshot (finished_at, falling back to created_at).
+   */
+  last_backup_at?: string;
+  /**
+   * Normalized status of the most recent backup snapshot (DB 'completed'→'success', 'pending'→'running').
+   */
+  last_backup_status?: "success" | "running" | "failed";
   created_at: string;
   updated_at: string;
 };

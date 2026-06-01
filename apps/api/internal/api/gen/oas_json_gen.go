@@ -15212,6 +15212,39 @@ func (s *OptSiteCreateStatus) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes SiteLastBackupStatus as json.
+func (o OptSiteLastBackupStatus) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes SiteLastBackupStatus from json.
+func (o *OptSiteLastBackupStatus) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptSiteLastBackupStatus to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptSiteLastBackupStatus) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptSiteLastBackupStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes SiteLifecycleReason as json.
 func (o OptSiteLifecycleReason) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -17972,6 +18005,30 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.AgentVersion.Set {
+			e.FieldStart("agent_version")
+			s.AgentVersion.Encode(e)
+		}
+	}
+	{
+		if s.UpdatesAvailable.Set {
+			e.FieldStart("updates_available")
+			s.UpdatesAvailable.Encode(e)
+		}
+	}
+	{
+		if s.LastBackupAt.Set {
+			e.FieldStart("last_backup_at")
+			s.LastBackupAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.LastBackupStatus.Set {
+			e.FieldStart("last_backup_status")
+			s.LastBackupStatus.Encode(e)
+		}
+	}
+	{
 		e.FieldStart("created_at")
 		json.EncodeDateTime(e, s.CreatedAt)
 	}
@@ -17981,7 +18038,7 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSite = [21]string{
+var jsonFieldsNameOfSite = [25]string{
 	0:  "id",
 	1:  "tenant_id",
 	2:  "url",
@@ -18001,8 +18058,12 @@ var jsonFieldsNameOfSite = [21]string{
 	16: "enrolled_at",
 	17: "last_seen_at",
 	18: "components",
-	19: "created_at",
-	20: "updated_at",
+	19: "agent_version",
+	20: "updates_available",
+	21: "last_backup_at",
+	22: "last_backup_status",
+	23: "created_at",
+	24: "updated_at",
 }
 
 // Decode decodes Site from json.
@@ -18010,7 +18071,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode Site to nil")
 	}
-	var requiredBitSet [3]uint8
+	var requiredBitSet [4]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -18228,8 +18289,48 @@ func (s *Site) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"components\"")
 			}
+		case "agent_version":
+			if err := func() error {
+				s.AgentVersion.Reset()
+				if err := s.AgentVersion.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"agent_version\"")
+			}
+		case "updates_available":
+			if err := func() error {
+				s.UpdatesAvailable.Reset()
+				if err := s.UpdatesAvailable.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"updates_available\"")
+			}
+		case "last_backup_at":
+			if err := func() error {
+				s.LastBackupAt.Reset()
+				if err := s.LastBackupAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_backup_at\"")
+			}
+		case "last_backup_status":
+			if err := func() error {
+				s.LastBackupStatus.Reset()
+				if err := s.LastBackupStatus.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_backup_status\"")
+			}
 		case "created_at":
-			requiredBitSet[2] |= 1 << 3
+			requiredBitSet[2] |= 1 << 7
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -18241,7 +18342,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"created_at\"")
 			}
 		case "updated_at":
-			requiredBitSet[2] |= 1 << 4
+			requiredBitSet[3] |= 1 << 0
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -18261,10 +18362,11 @@ func (s *Site) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [3]uint8{
+	for i, mask := range [4]uint8{
 		0b11111111,
 		0b01010000,
-		0b00011000,
+		0b10000000,
+		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -22214,6 +22316,48 @@ func (s SiteHealthStatus) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *SiteHealthStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes SiteLastBackupStatus as json.
+func (s SiteLastBackupStatus) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes SiteLastBackupStatus from json.
+func (s *SiteLastBackupStatus) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode SiteLastBackupStatus to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch SiteLastBackupStatus(v) {
+	case SiteLastBackupStatusSuccess:
+		*s = SiteLastBackupStatusSuccess
+	case SiteLastBackupStatusRunning:
+		*s = SiteLastBackupStatusRunning
+	case SiteLastBackupStatusFailed:
+		*s = SiteLastBackupStatusFailed
+	default:
+		*s = SiteLastBackupStatus(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s SiteLastBackupStatus) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *SiteLastBackupStatus) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

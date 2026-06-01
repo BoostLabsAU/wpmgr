@@ -77,11 +77,12 @@ final class MetadataCommand implements CommandInterface
     public function collect(): array
     {
         $payload = [
-            'wp_version'   => $this->wpVersion(),
-            'php_version'  => PHP_VERSION,
-            'server_info'  => $this->serverSoftware(),
-            'multisite'    => function_exists('is_multisite') ? is_multisite() : false,
-            'active_theme' => $this->activeTheme(),
+            'wp_version'    => $this->wpVersion(),
+            'php_version'   => PHP_VERSION,
+            'agent_version' => defined('WPMGR_AGENT_VERSION') ? (string) constant('WPMGR_AGENT_VERSION') : '',
+            'server_info'   => $this->serverSoftware(),
+            'multisite'     => function_exists('is_multisite') ? is_multisite() : false,
+            'active_theme'  => $this->activeTheme(),
             'plugins'      => $this->plugins(),
             'themes'       => $this->themes(),
             'core_update'  => $this->coreUpdate(),
