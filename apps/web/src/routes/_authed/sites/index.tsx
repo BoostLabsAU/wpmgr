@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 import { FilterEmpty, SitesPageEmpty } from "@/components/empty";
 import { PageHeader } from "@/components/shared/page-header";
-import { useSites } from "@/features/sites/use-sites";
+import { useSites, useDeleteSite } from "@/features/sites/use-sites";
 import { SitesTable } from "@/features/sites/sites-table";
 import { SitesToolbar } from "@/features/sites/sites-toolbar";
 import { useSitesSelection } from "@/features/sites/use-sites-selection";
@@ -142,6 +142,11 @@ function SitesPage() {
   const revoke = useRevokeSite();
   const restore = useRestoreSite();
   const enrollmentCode = useCreateEnrollmentCode();
+
+  // Bulk delete (hard remove the selected sites + their WPMgr history).
+  const deleteSite = useDeleteSite();
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
 
   // Disconnect confirm target (DestructiveConfirm — type the hostname).
   const [disconnectTarget, setDisconnectTarget] = useState<Site | null>(null);
@@ -323,12 +328,33 @@ function SitesPage() {
   }, [selection.count]);
 
   const handleBulkDelete = useCallback(() => {
-    // TODO(sprint-4): open a destructive confirm modal that requires typing
-    // the resource count (per DESIGN.md "Destructive requires typing").
-    toast.error("Bulk delete needs a confirm modal", {
-      description: `Refusing to delete ${selection.count} sites without typed confirmation.`,
-    });
+    if (selection.count === 0) return;
+    setBulkDeleteOpen(true);
   }, [selection.count]);
+
+  // DELETE each selected site (the API is per-site). Tolerates partial failure:
+  // already-gone rows (404) just count as failed and the list refetches clean.
+  const confirmBulkDelete = useCallback(async () => {
+    const ids = Array.from(selection.selected);
+    if (ids.length === 0) {
+      setBulkDeleteOpen(false);
+      return;
+    }
+    setBulkDeleting(true);
+    const results = await Promise.allSettled(
+      ids.map((id) => deleteSite.mutateAsync(id)),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    const ok = ids.length - failed;
+    setBulkDeleting(false);
+    setBulkDeleteOpen(false);
+    selection.replace([]);
+    if (failed > 0) {
+      toast.error(`Deleted ${ok} of ${ids.length} sites; ${failed} failed`);
+    } else {
+      toast.success(`Deleted ${ok} ${ok === 1 ? "site" : "sites"}`);
+    }
+  }, [selection, deleteSite]);
 
   // Build a human-readable filter summary for the empty-search state.
   const filterDescription = search.trim()
@@ -461,6 +487,40 @@ function SitesPage() {
               <p>
                 Backups and monitoring stop. The site is archived with its full
                 history kept — you can reconnect later.
+              </p>
+            </div>
+          }
+        />
+      ) : null}
+
+      {/* Bulk delete — hard remove the selected sites (type the count to confirm). */}
+      {operate ? (
+        <DestructiveConfirm
+          open={bulkDeleteOpen}
+          onClose={() => setBulkDeleteOpen(false)}
+          onConfirm={confirmBulkDelete}
+          title={`Delete ${selection.count} ${selection.count === 1 ? "site" : "sites"}`}
+          resourceName={String(selection.count)}
+          confirmLabel={`Delete ${selection.count === 1 ? "site" : "sites"}`}
+          cancelLabel="Keep sites"
+          isPending={bulkDeleting}
+          consequencesBody={
+            <div className="space-y-2">
+              <p>
+                This permanently removes{" "}
+                {selection.count === 1
+                  ? "this site"
+                  : `these ${selection.count} sites`}{" "}
+                and all associated WPMgr history (backup metadata, scans,
+                monitoring, activity). The WordPress site itself is not touched —
+                only its WPMgr record.
+              </p>
+              <p>
+                To stop managing a site without losing its history, disconnect /
+                archive it instead.
+              </p>
+              <p>
+                Type <strong>{selection.count}</strong> to confirm.
               </p>
             </div>
           }
