@@ -1,0 +1,904 @@
+<?php
+/**
+ * LoginProtection — sliding-window brute-force detection and escalating lockout
+ * for WordPress login endpoints.
+ *
+ * ALGORITHM
+ * ---------
+ * This implementation follows the publicly documented fail2ban sliding-window
+ * pattern (https://www.fail2ban.org/wiki/index.php/MANUAL_0_8#Filters) and
+ * the OWASP Authentication Cheat Sheet recommendations for escalating lockout
+ * tiers (https://cheatsheetseries.owasp.org/cheatsheets/Authentication_Cheat_Sheet.html).
+ *
+ * Core mechanism:
+ *   1. Every login attempt (success, failure, or block) is recorded as a row in
+ *      {prefix}wpmgr_login_events with a Unix timestamp (occurred_at).
+ *   2. Counts within a configurable look-back window (gap) are computed by a
+ *      simple `COUNT(*) WHERE status = X AND occurred_at > (now - gap)` query —
+ *      the "findtime + maxretry" model from fail2ban. No counter variables or
+ *      TTL daemons are needed; the window is implicit in the query predicate.
+ *   3. The decision tree (authenticate filter, priority 30) applies escalating
+ *      lockout tiers in severity order (global -> per-IP-hard -> per-IP-soft):
+ *        - Tier 1 (captcha_limit, default  3): soft captcha gate per IP.
+ *        - Tier 2 (temp_block_limit, default 10): temporary hard block per IP.
+ *        - Tier 3 (block_all_limit, default 100): global site-wide block.
+ *      First-match wins; the most severe applicable tier always takes precedence.
+ *   4. IP resolution uses IpUtils::clientIp() (configurable header, default
+ *      REMOTE_ADDR). Private/loopback/link-local IPs are bypassed automatically
+ *      using binary inet_pton comparison (RFC 1918, RFC 4193, RFC 3927).
+ *   5. Allow/deny CIDR lists support both IPv4 and IPv6 using binary bitmask
+ *      comparison (IpUtils::matchesAnyCidr).
+ *   6. The ship-cursor pattern (advanceCursor / shipBatch) mirrors ErrorMonitor
+ *      and ActivityLog: store the highest confirmed id in wp-options; fetch
+ *      rows WHERE id > cursor ORDER BY id ASC LIMIT batch; advance on CP 2xx.
+ *   7. Row cap enforcement (enforceRowCap) uses DELETE ... ORDER BY occurred_at
+ *      ASC LIMIT N -- oldest-first FIFO eviction, bounding table growth.
+ *
+ * @package WPMgr\Agent\Support
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Support;
+
+/**
+ * Fail2ban-style sliding-window login-protection for WordPress.
+ *
+ * Inert by default (mode = 'disabled') until the control plane pushes a
+ * config via SyncSecurityConfigCommand / applyConfig(). No telemetry. No
+ * frontend output in audit mode; wp_die() only in protect mode.
+ */
+final class LoginProtection
+{
+    // -------------------------------------------------------------------------
+    // Table / option constants
+    // -------------------------------------------------------------------------
+
+    /** Unprefixed DB table name. */
+    public const TABLE = 'wpmgr_login_events';
+
+    /** Hard row cap; oldest rows are evicted when exceeded. */
+    public const ROW_CAP = 100000;
+
+    /** Maximum rows shipped per batch. */
+    public const SHIP_BATCH = 100;
+
+    /** wp-options key for the ship cursor (highest shipped id). */
+    public const OPTION_SHIP_CURSOR = 'wpmgr_agent_login_events_ship_cursor';
+
+    /** wp-options key where the validated security config is stored as JSON. */
+    public const OPTION_CONFIG = 'wpmgr_security_config';
+
+    /** Transient key prefix for the per-IP unblock path. */
+    public const UNBLOCK_TRANSIENT_PREFIX = 'wpmgr_lp_unblock_';
+
+    // -------------------------------------------------------------------------
+    // Mode constants
+    // -------------------------------------------------------------------------
+
+    /** Fully disabled: no hooks, no recording, no blocking. */
+    public const MODE_DISABLED = 'disabled';
+
+    /** Audit: record all events and log blocks, but never call wp_die(). */
+    public const MODE_AUDIT = 'audit';
+
+    /** Protect: record all events AND call wp_die() on detected blocks. */
+    public const MODE_PROTECT = 'protect';
+
+    // -------------------------------------------------------------------------
+    // Status codes (DB column `status TINYINT`, wire contract)
+    // -------------------------------------------------------------------------
+
+    /** Failed login attempt -- recorded by onLoginFailed(). */
+    public const STATUS_FAILURE = 1;
+
+    /** Successful login -- recorded by onLoginSuccess(). */
+    public const STATUS_SUCCESS = 2;
+
+    /** Blocked attempt -- recorded by terminate() before a potential wp_die(). */
+    public const STATUS_BLOCKED = 3;
+
+    // -------------------------------------------------------------------------
+    // Block-category constants (stored in DB, shipped to CP, displayed on dash)
+    // -------------------------------------------------------------------------
+
+    /** IP reached the captcha-gate threshold. */
+    public const CATEGORY_CAPTCHA_BLOCK = 'captcha_block';
+
+    /** IP reached the temporary-hard-block threshold. */
+    public const CATEGORY_TEMP_BLOCK = 'temp_block';
+
+    /** Site-wide failure count exceeded the all-blocked threshold. */
+    public const CATEGORY_ALL_BLOCKED = 'all_blocked';
+
+    /** IP matched a deny_cidrs entry. */
+    public const CATEGORY_BLACKLISTED = 'blacklisted';
+
+    /** IP matched an allow_cidrs entry (bypassed, no block). */
+    public const CATEGORY_BYPASSED = 'bypassed';
+
+    /** Normal successful or failed attempt (no block category applies). */
+    public const CATEGORY_ALLOWED = 'allowed';
+
+    /** Request came from a private/loopback/link-local address -- auto-bypassed. */
+    public const CATEGORY_PRIVATEIP = 'private_ip';
+
+    // -------------------------------------------------------------------------
+    // Default threshold values
+    // Applied individually when a stored threshold key is absent or non-positive.
+    // Source: fail2ban findtime+maxretry model + OWASP Authentication Cheat Sheet.
+    // -------------------------------------------------------------------------
+
+    /** @var array<string,int> */
+    private const DEFAULT_THRESHOLDS = [
+        'captcha_limit'     => 3,
+        'temp_block_limit'  => 10,
+        'block_all_limit'   => 100,
+        'failed_login_gap'  => 1800,
+        'success_login_gap' => 1800,
+        'all_blocked_gap'   => 1800,
+    ];
+
+    // -------------------------------------------------------------------------
+    // Instance state
+    // -------------------------------------------------------------------------
+
+    /** Optional ActivityLog for emitting block events. */
+    private ?ActivityLog $activityLog;
+
+    /**
+     * Per-instance config cache. Null means "not yet loaded".
+     * Set by loadConfig() on first call; cleared by applyConfig().
+     *
+     * @var array<string,mixed>|null
+     */
+    private ?array $configCache = null;
+
+    /**
+     * Per-request ID, generated once and reused across all records in the
+     * same PHP request so correlated rows can be grouped.
+     */
+    private ?string $cachedRequestId = null;
+
+    // -------------------------------------------------------------------------
+    // Constructor
+    // -------------------------------------------------------------------------
+
+    /**
+     * @param ActivityLog|null $activityLog When provided, terminate() additionally
+     *   calls $activityLog->record('login.blocked', ...) for every block event.
+     *   When null (e.g. in unit tests), the record() call is silently skipped.
+     *   The constructor never fails.
+     */
+    public function __construct(?ActivityLog $activityLog = null)
+    {
+        $this->activityLog = $activityLog;
+    }
+
+    // -------------------------------------------------------------------------
+    // Boot / config
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns true iff the current effective mode is not MODE_DISABLED.
+     *
+     * Used by Plugin to gate WAF mu-plugin installation: the mu-plugin is
+     * installed only when protection is not disabled.
+     */
+    public function isEnabled(): bool
+    {
+        return $this->loadConfig()['mode'] !== self::MODE_DISABLED;
+    }
+
+    /**
+     * Register WordPress hooks. Idempotent: a static bool guard prevents
+     * double-registration within the same request.
+     *
+     * Hooks registered only when mode !== MODE_DISABLED:
+     *   - authenticate (filter, priority 30): the main enforcement gate.
+     *     Priority 30 ensures we run AFTER WordPress's own check_password (20)
+     *     and typical 2FA plugins (25). We only block -- never approve.
+     *   - wp_login (action, priority 10): records successful logins.
+     *   - wp_login_failed (action, priority 10): records failed logins.
+     *
+     * @see https://developer.wordpress.org/reference/hooks/authenticate/
+     * @see https://developer.wordpress.org/reference/hooks/wp_login/
+     * @see https://developer.wordpress.org/reference/hooks/wp_login_failed/
+     */
+    public function install(): void
+    {
+        static $installed = false;
+        if ($installed) {
+            return;
+        }
+        $installed = true;
+
+        $config = $this->loadConfig();
+        if ($config['mode'] === self::MODE_DISABLED) {
+            return;
+        }
+
+        if (!function_exists('add_filter') || !function_exists('add_action')) {
+            return;
+        }
+
+        add_filter('authenticate', [$this, 'onAuthenticate'], 30, 3);
+        add_action('wp_login', [$this, 'onLoginSuccess'], 10, 2);
+        add_action('wp_login_failed', [$this, 'onLoginFailed'], 10, 1);
+    }
+
+    /**
+     * Build and return the fully-defaulted security config.
+     *
+     * Result is cached per-instance; call applyConfig() to flush the cache.
+     *
+     * Return shape:
+     *   array{
+     *     mode:        string,
+     *     thresholds:  array{captcha_limit:int, temp_block_limit:int,
+     *                         block_all_limit:int, failed_login_gap:int,
+     *                         success_login_gap:int, all_blocked_gap:int},
+     *     ip_header:   string,
+     *     allow_cidrs: list<string>,
+     *     deny_cidrs:  list<string>
+     *   }
+     *
+     * @return array<string,mixed>
+     */
+    public function loadConfig(): array
+    {
+        if ($this->configCache !== null) {
+            return $this->configCache;
+        }
+
+        // Read and decode the stored JSON option.
+        $raw = null;
+        if (function_exists('get_option')) {
+            $stored = get_option(self::OPTION_CONFIG);
+            if (is_string($stored) && $stored !== '') {
+                $decoded = json_decode($stored, true);
+                $raw     = is_array($decoded) ? $decoded : [];
+            } elseif (is_array($stored)) {
+                $raw = $stored;
+            }
+        }
+
+        $this->configCache = $this->buildConfig($raw);
+        return $this->configCache;
+    }
+
+    /**
+     * Validate $raw via buildConfig(), persist to wp-options, and clear the
+     * instance config cache so the next loadConfig() call re-reads the freshly
+     * written option.
+     *
+     * Does NOT re-register hooks that were skipped during install() when mode
+     * was disabled. However, onAuthenticate() re-reads loadConfig() on every
+     * call, so the new mode takes effect immediately on subsequent login
+     * attempts within the same request.
+     *
+     * @param array<string,mixed> $raw Raw config from the CP (or a test fixture).
+     */
+    public function applyConfig(array $raw): void
+    {
+        $validated = $this->buildConfig($raw);
+        $json      = (string) json_encode($validated);
+
+        if (function_exists('update_option')) {
+            update_option(self::OPTION_CONFIG, $json, false);
+        }
+
+        // Flush the cache so the next loadConfig() sees the new stored value.
+        $this->configCache = null;
+    }
+
+    /**
+     * Remove the brute-force block for a single IP address.
+     *
+     * Steps:
+     *   1. Clear the per-IP unblock transient (future CAPTCHA-solve path).
+     *   2. DELETE failure rows for the IP from the events table, resetting the
+     *      sliding-window counter to zero. Success rows are preserved so the
+     *      known-good-login bypass remains intact.
+     *
+     * Best-effort: DB failures are silently swallowed.
+     *
+     * @param string $ip IPv4 or IPv6 address to unblock.
+     */
+    public function unblockIp(string $ip): void
+    {
+        $ip = trim($ip);
+        if ($ip === '') {
+            return;
+        }
+
+        // Always attempt the transient delete even if wpdb is absent.
+        if (function_exists('delete_transient')) {
+            delete_transient(self::UNBLOCK_TRANSIENT_PREFIX . md5($ip));
+        }
+
+        global $wpdb;
+        if (!is_object($wpdb)) {
+            return;
+        }
+
+        try {
+            $table = $wpdb->prefix . self::TABLE;
+            $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM {$table} WHERE ip = %s AND status = %d",
+                    $ip,
+                    self::STATUS_FAILURE
+                )
+            );
+        } catch (\Throwable $_) {
+            // Best-effort; never fatal the request.
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // WP hook handlers (registered by install())
+    // -------------------------------------------------------------------------
+
+    /**
+     * authenticate filter (priority 30).
+     *
+     * The enforcement gate. Applies the fail2ban sliding-window decision tree:
+     *   1. Pass-through when mode is disabled.
+     *   2. Resolve client IP via the configured header.
+     *   3. Allow-CIDR bypass (short-circuit; no record).
+     *   4. Deny-CIDR block -> terminate(BLACKLISTED).
+     *   5. Private-IP bypass (RFC 1918 / loopback / link-local; no record).
+     *   6. Known-good bypass (recent success from this IP -> no block).
+     *   7. Global failure count >= block_all_limit -> terminate(ALL_BLOCKED).
+     *   8. Per-IP failure count >= temp_block_limit -> terminate(TEMP_BLOCK).
+     *   9. Per-IP failure count >= captcha_limit -> terminate(CAPTCHA_BLOCK).
+     *  10. Return $user unchanged.
+     *
+     * The method never returns null and never approves a login itself.
+     *
+     * @param mixed  $user     Existing filter value (WP_User|WP_Error|null).
+     * @param string $username Username/email attempted.
+     * @param string $password Password attempted.
+     * @return mixed $user (possibly a WP_Error in AUDIT mode on block).
+     */
+    public function onAuthenticate($user, string $username = '', string $password = '')
+    {
+        $config = $this->loadConfig();
+
+        // Step 1: Fully disabled -- pass through.
+        if ($config['mode'] === self::MODE_DISABLED) {
+            return $user;
+        }
+
+        // Step 2: Resolve client IP.
+        $ip = IpUtils::clientIp($config['ip_header']);
+
+        // Step 3: Allow-CIDR bypass -- trusted ranges are never blocked or recorded.
+        if (!empty($config['allow_cidrs']) && IpUtils::matchesAnyCidr($ip, $config['allow_cidrs'])) {
+            return $user;
+        }
+
+        // Step 4: Deny-CIDR block -- explicitly blacklisted IPs are always blocked.
+        if (!empty($config['deny_cidrs']) && IpUtils::matchesAnyCidr($ip, $config['deny_cidrs'])) {
+            $this->terminate($ip, $username, self::CATEGORY_BLACKLISTED, $config);
+            // In AUDIT mode terminate() returns; return a WP_Error as a safety net.
+            return new \WP_Error('wpmgr_ip_blocked', 'Your IP address is blocked from logging in to this site.');
+        }
+
+        // Step 5: Private-IP bypass -- loopback/LAN/link-local traffic is never blocked.
+        // Uses inet_pton binary comparison as per RFC 1918 / RFC 4193 / RFC 3927.
+        if (IpUtils::isPrivate($ip)) {
+            return $user;
+        }
+
+        $now        = time();
+        $thresholds = $config['thresholds'];
+
+        // Step 6: Known-good bypass. A recent successful login from this IP is
+        // treated as a trusted session; skip all brute-force checks.
+        if ($this->getLoginCount(self::STATUS_SUCCESS, $ip, $now, $thresholds['success_login_gap']) > 0) {
+            return $user;
+        }
+
+        // Step 7: Global all-blocked check. If total site-wide failures in the
+        // window exceed block_all_limit, every new attempt is blocked regardless
+        // of per-IP counts. Checked before per-IP so the most severe tier wins.
+        if ($this->getLoginCount(self::STATUS_FAILURE, null, $now, $thresholds['all_blocked_gap']) >= $thresholds['block_all_limit']) {
+            $this->terminate($ip, $username, self::CATEGORY_ALL_BLOCKED, $config);
+            return new \WP_Error('wpmgr_all_blocked', 'Logins to this site are currently blocked due to excessive failed login attempts. Please try again later.');
+        }
+
+        // Per-IP failure count (used for tiers 8 and 9 below).
+        $failedAttempts = $this->getLoginCount(self::STATUS_FAILURE, $ip, $now, $thresholds['failed_login_gap']);
+
+        // Step 8: Per-IP hard temp-block -- too many failures -> temporary ban.
+        if ($failedAttempts >= $thresholds['temp_block_limit']) {
+            $this->terminate($ip, $username, self::CATEGORY_TEMP_BLOCK, $config);
+            return new \WP_Error('wpmgr_temp_blocked', 'Too many failed login attempts. You cannot log in to this site for 30 minutes.');
+        }
+
+        // Step 9: Per-IP soft captcha-gate -- moderate failures -> captcha challenge.
+        if ($failedAttempts >= $thresholds['captcha_limit']) {
+            $this->terminate($ip, $username, self::CATEGORY_CAPTCHA_BLOCK, $config);
+            return new \WP_Error('wpmgr_captcha_block', 'Too many failed login attempts. Your IP has been temporarily restricted. Contact the site administrator to unblock access.');
+        }
+
+        // Step 10: No threshold exceeded -- pass through unchanged.
+        return $user;
+    }
+
+    /**
+     * wp_login action handler (priority 10).
+     *
+     * Records a STATUS_SUCCESS event for every successful login so that
+     * onAuthenticate()'s known-good bypass can short-circuit future checks
+     * from the same IP within the success window.
+     *
+     * @param string $userLogin The user's login name.
+     * @param mixed  $wpUser    The WP_User object (unused here).
+     */
+    public function onLoginSuccess(string $userLogin, $wpUser = null): void
+    {
+        $config = $this->loadConfig();
+        if ($config['mode'] === self::MODE_DISABLED) {
+            return;
+        }
+        $ip = IpUtils::clientIp($config['ip_header']);
+        $this->record($ip, self::STATUS_SUCCESS, self::CATEGORY_ALLOWED, $userLogin);
+    }
+
+    /**
+     * wp_login_failed action handler (priority 10).
+     *
+     * Records a STATUS_FAILURE event for every failed login attempt.
+     * The sliding-window counter for subsequent onAuthenticate() calls is
+     * derived from these rows.
+     *
+     * @param string $username The attempted username (or email).
+     */
+    public function onLoginFailed(string $username): void
+    {
+        $config = $this->loadConfig();
+        if ($config['mode'] === self::MODE_DISABLED) {
+            return;
+        }
+        $ip = IpUtils::clientIp($config['ip_header']);
+        $this->record($ip, self::STATUS_FAILURE, self::CATEGORY_ALLOWED, $username);
+    }
+
+    // -------------------------------------------------------------------------
+    // Ship / cursor
+    // -------------------------------------------------------------------------
+
+    /**
+     * Return the next batch of login events for shipping to the control plane.
+     *
+     * Uses the ship-cursor pattern: fetch up to SHIP_BATCH rows WHERE id >
+     * cursor ORDER BY id ASC. The caller POSTs the result to /agent/v1/security/
+     * login-events and, on a 2xx, calls advanceCursor() with the highest id in
+     * the batch.
+     *
+     * Wire shape:
+     *   { "login_events": [ { id, ip, status, category, username,
+     *                          request_id, occurred_at }, ... ] }
+     *
+     * @return list<array<string,mixed>> ARRAY_A rows with id/status/occurred_at
+     *   cast to int. Empty array when wpdb is unavailable or the table is empty.
+     */
+    public function shipBatch(): array
+    {
+        global $wpdb;
+        if (!is_object($wpdb)) {
+            return [];
+        }
+
+        $sinceId = (int) (function_exists('get_option') ? get_option(self::OPTION_SHIP_CURSOR, 0) : 0);
+        $table   = $wpdb->prefix . self::TABLE;
+
+        $rows = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT id, ip, status, category, username, request_id, occurred_at
+                 FROM {$table}
+                 WHERE id > %d
+                 ORDER BY id ASC
+                 LIMIT %d",
+                $sinceId,
+                self::SHIP_BATCH
+            ),
+            ARRAY_A
+        );
+
+        if (!is_array($rows)) {
+            return [];
+        }
+
+        // Cast integer-like fields so the wire payload carries numeric values,
+        // matching the CP's flexInt64 / flexInt16 expectations.
+        $result = [];
+        foreach ($rows as $row) {
+            $row['id']          = (int) $row['id'];
+            $row['status']      = (int) $row['status'];
+            $row['occurred_at'] = (int) $row['occurred_at'];
+            $result[]           = $row;
+        }
+        return $result;
+    }
+
+    /**
+     * Advance the ship cursor to $highestId (no-op if already at or beyond).
+     *
+     * Called by Plugin after a successful 2xx from the CP confirming receipt
+     * of a batch. Only moves forward; never rewinds.
+     *
+     * @param int $highestId The highest id value from the last shipped batch.
+     */
+    public function advanceCursor(int $highestId): void
+    {
+        if (!function_exists('get_option') || !function_exists('update_option')) {
+            return;
+        }
+        $current = (int) get_option(self::OPTION_SHIP_CURSOR, 0);
+        if ($highestId > $current) {
+            update_option(self::OPTION_SHIP_CURSOR, $highestId, false);
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Counting helper (public for direct unit-test access)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Count login events matching the given status within a sliding time window.
+     *
+     * Implements the fail2ban "findtime + maxretry" sliding-window model:
+     * `COUNT(*) WHERE status = X AND occurred_at > (now - gap) [AND ip = Y]`.
+     * No separate counter variables; the window is implicit in the predicate.
+     *
+     * @see https://www.fail2ban.org/wiki/index.php/MANUAL_0_8#Filters
+     *
+     * @param int         $status One of STATUS_FAILURE / STATUS_SUCCESS / STATUS_BLOCKED.
+     * @param string|null $ip     IP to filter on, or null/'' for a global count.
+     * @param int         $now    Current Unix timestamp (injectable for tests).
+     * @param int         $gap    Look-back window in seconds.
+     * @return int Event count, or 0 on any error / missing wpdb.
+     */
+    public function getLoginCount(int $status, ?string $ip, int $now, int $gap): int
+    {
+        global $wpdb;
+        if (!is_object($wpdb)) {
+            return 0;
+        }
+
+        $cutoff = $now - $gap;
+        $table  = $wpdb->prefix . self::TABLE;
+
+        try {
+            if ($ip !== null && $ip !== '') {
+                $sql = $wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$table} WHERE status = %d AND occurred_at > %d AND ip = %s",
+                    $status,
+                    $cutoff,
+                    $ip
+                );
+            } else {
+                $sql = $wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$table} WHERE status = %d AND occurred_at > %d",
+                    $status,
+                    $cutoff
+                );
+            }
+
+            $result = $wpdb->get_var($sql);
+
+            if (!is_numeric($result)) {
+                return 0;
+            }
+            return (int) $result;
+        } catch (\Throwable $_) {
+            return 0;
+        }
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
+
+    /**
+     * Build a fully-defaulted, validated config array from a raw input array.
+     *
+     * Validation rules are applied per-field and are independent: an invalid
+     * value for one field never blocks processing of another. Unknown keys in
+     * the raw thresholds object are silently ignored (forward-compatibility).
+     *
+     * @param array<string,mixed>|null $raw Raw input or null -> treat as [].
+     * @return array<string,mixed> Fully-populated config.
+     */
+    private function buildConfig(?array $raw): array
+    {
+        if ($raw === null) {
+            $raw = [];
+        }
+
+        // --- mode ---
+        $validModes = [self::MODE_DISABLED, self::MODE_AUDIT, self::MODE_PROTECT];
+        $mode       = (isset($raw['mode']) && is_string($raw['mode']) && in_array($raw['mode'], $validModes, true))
+            ? $raw['mode']
+            : self::MODE_DISABLED; // inert-by-default safety
+
+        // --- thresholds ---
+        $rawThresholds = (isset($raw['thresholds']) && is_array($raw['thresholds']))
+            ? $raw['thresholds']
+            : [];
+
+        $thresholds = [];
+        foreach (self::DEFAULT_THRESHOLDS as $key => $default) {
+            // A threshold key is accepted only when it is an integer > 0.
+            $thresholds[$key] = (isset($rawThresholds[$key]) && is_int($rawThresholds[$key]) && $rawThresholds[$key] > 0)
+                ? $rawThresholds[$key]
+                : $default;
+        }
+
+        // --- ip_header ---
+        if (isset($raw['ip_header']) && is_string($raw['ip_header'])) {
+            $trimmed  = strtoupper(trim($raw['ip_header']));
+            $ipHeader = ($trimmed !== '') ? $trimmed : 'REMOTE_ADDR';
+        } else {
+            $ipHeader = 'REMOTE_ADDR';
+        }
+
+        // --- allow_cidrs ---
+        $allowCidrs = $this->buildCidrList($raw['allow_cidrs'] ?? null);
+
+        // --- deny_cidrs ---
+        $denyCidrs = $this->buildCidrList($raw['deny_cidrs'] ?? null);
+
+        return [
+            'mode'        => $mode,
+            'thresholds'  => $thresholds,
+            'ip_header'   => $ipHeader,
+            'allow_cidrs' => $allowCidrs,
+            'deny_cidrs'  => $denyCidrs,
+        ];
+    }
+
+    /**
+     * Validate and normalise a raw CIDR list from the config.
+     *
+     * Each entry must be a non-empty string containing '/', and the portion
+     * before '/' must pass FILTER_VALIDATE_IP. Invalid entries are silently
+     * dropped. Returns an index-sequential (list) array.
+     *
+     * @param mixed $rawList Raw value from the config array.
+     * @return list<string>
+     */
+    private function buildCidrList($rawList): array
+    {
+        if (!is_array($rawList)) {
+            return [];
+        }
+
+        $cidrs = [];
+        foreach ($rawList as $entry) {
+            if (!is_string($entry) || $entry === '') {
+                continue;
+            }
+            // Must contain a slash.
+            if (strpos($entry, '/') === false) {
+                continue;
+            }
+            // The prefix (before the slash) must be a valid IP address.
+            $parts = explode('/', $entry, 2);
+            if (filter_var($parts[0], FILTER_VALIDATE_IP) === false) {
+                continue;
+            }
+            $cidrs[] = $entry;
+        }
+
+        // Return as a packed (index-sequential) list.
+        return array_values($cidrs);
+    }
+
+    /**
+     * Block-and-die helper. Records the block event, optionally emits to
+     * ActivityLog, and -- in PROTECT mode only -- sends a 403 wp_die() response.
+     *
+     * In AUDIT mode the method returns normally after recording; the caller
+     * then returns a WP_Error as a safety net for the authenticate filter chain.
+     *
+     * @param string               $ip       Resolved client IP.
+     * @param string               $username Attempted username/email.
+     * @param string               $category One of the CATEGORY_* constants.
+     * @param array<string,mixed>  $config   Current validated config.
+     */
+    private function terminate(string $ip, string $username, string $category, array $config): void
+    {
+        // Record the blocked attempt in the events table.
+        $this->record($ip, self::STATUS_BLOCKED, $category, $username);
+
+        // Optionally emit to ActivityLog (ADR-037).
+        $this->emitBlockEvent($ip, $username, $category);
+
+        // In AUDIT mode: log only, never call wp_die().
+        if ($config['mode'] !== self::MODE_PROTECT) {
+            return;
+        }
+
+        // PROTECT mode: build a minimal, non-leaking 403 page and terminate.
+        if (!headers_sent()) {
+            header('Cache-Control: no-store, no-cache, must-revalidate');
+            header('Pragma: no-cache');
+            header('Expires: 0');
+        }
+
+        $requestId = $this->requestId();
+        $message   = $this->blockMessage($category);
+
+        // Build safe HTML. htmlspecialchars is used directly so the class works
+        // outside a full WP bootstrap (e.g. mu-plugin early load).
+        $safeMessage   = htmlspecialchars($message, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+        $safeRequestId = htmlspecialchars($requestId, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+
+        $html = '<div style="text-align:center;padding:3em;font-family:sans-serif;">'
+            . '<h2>WPMgr Login Protection</h2>'
+            . '<p>' . $safeMessage . '</p>'
+            . '<p style="color:#999;font-size:0.85em;">Reference ID: ' . $safeRequestId . '</p>'
+            . '</div>';
+
+        wp_die($html, 'Login Blocked', ['response' => 403, 'back_link' => false]);
+        // wp_die() never returns.
+    }
+
+    /**
+     * Emit the block event to the ActivityLog if one is configured.
+     *
+     * @param string $ip       Client IP.
+     * @param string $username Attempted username.
+     * @param string $category Block category.
+     */
+    private function emitBlockEvent(string $ip, string $username, string $category): void
+    {
+        if ($this->activityLog === null) {
+            return;
+        }
+        $this->activityLog->record(
+            'login.blocked',
+            'auth',
+            $ip,
+            $username,
+            [
+                'category' => $category,
+                'ip'       => $ip,
+                'summary'  => "Login blocked ({$category}) for {$username} from {$ip}",
+            ]
+        );
+    }
+
+    /**
+     * Insert one login event row into the events table.
+     *
+     * Best-effort: any Throwable is silently swallowed so a DB issue can never
+     * fatal a login request. Enforces the row cap after every insert.
+     *
+     * Column lengths mirror the DDL in class-schema.php:
+     *   ip VARCHAR(64), category VARCHAR(64), username VARCHAR(191).
+     *
+     * @param string $ip       Client IP (truncated to 64 chars).
+     * @param int    $status   One of the STATUS_* constants.
+     * @param string $category One of the CATEGORY_* constants (truncated to 64).
+     * @param string $username Attempted login (truncated to 191 chars).
+     */
+    private function record(string $ip, int $status, string $category, string $username): void
+    {
+        global $wpdb;
+        if (!is_object($wpdb)) {
+            return;
+        }
+
+        try {
+            $table = $wpdb->prefix . self::TABLE;
+            $wpdb->insert(
+                $table,
+                [
+                    'ip'          => substr($ip, 0, 64),
+                    'status'      => $status,
+                    'category'    => substr($category, 0, 64),
+                    'username'    => substr($username, 0, 191),
+                    'request_id'  => $this->requestId(),
+                    'occurred_at' => time(),
+                ],
+                ['%s', '%d', '%s', '%s', '%s', '%d']
+            );
+
+            $this->enforceRowCap();
+        } catch (\Throwable $_) {
+            // Best-effort; never propagate DB exceptions to the login flow.
+        }
+    }
+
+    /**
+     * Enforce the ROW_CAP limit using oldest-first FIFO eviction.
+     *
+     * The eviction strategy is DELETE ... ORDER BY occurred_at ASC LIMIT N --
+     * the standard approach for capped time-series log tables (bounding table
+     * growth while retaining the most recent data). Batch size is capped at
+     * 500 to bound the DELETE's impact on table locks.
+     *
+     * Silently swallows any DB error.
+     */
+    private function enforceRowCap(): void
+    {
+        global $wpdb;
+        if (!is_object($wpdb)) {
+            return;
+        }
+
+        try {
+            $table = $wpdb->prefix . self::TABLE;
+            $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
+
+            if ($count <= self::ROW_CAP) {
+                return;
+            }
+
+            $overflow = $count - self::ROW_CAP;
+            $batch    = min($overflow, 500);
+
+            $wpdb->query(
+                $wpdb->prepare(
+                    "DELETE FROM {$table} ORDER BY occurred_at ASC LIMIT %d",
+                    $batch
+                )
+            );
+        } catch (\Throwable $_) {
+            // Best-effort eviction; never fatal.
+        }
+    }
+
+    /**
+     * Return a per-request unique ID for correlating all events in one HTTP
+     * request. Generated once on first call and cached for the request lifetime.
+     *
+     * Uses wp_unique_id() when available (WordPress >= 5.5); falls back to a
+     * hex-encoded random token.
+     *
+     * @return string Opaque request identifier.
+     */
+    private function requestId(): string
+    {
+        if ($this->cachedRequestId === null) {
+            if (function_exists('wp_unique_id')) {
+                $this->cachedRequestId = wp_unique_id('lp_');
+            } else {
+                $this->cachedRequestId = 'lp_' . bin2hex(random_bytes(6));
+            }
+        }
+        return $this->cachedRequestId;
+    }
+
+    /**
+     * Return the human-readable block message for the given category.
+     *
+     * These strings are shown to the end-user inside the 403 wp_die() page
+     * in PROTECT mode. They are intentionally vague to avoid leaking
+     * internal threshold configuration.
+     *
+     * @param string $category One of the CATEGORY_* constants.
+     * @return string
+     */
+    private function blockMessage(string $category): string
+    {
+        switch ($category) {
+            case self::CATEGORY_CAPTCHA_BLOCK:
+                return 'Too many failed login attempts. Your IP has been temporarily restricted. Contact the site administrator to unblock access.';
+            case self::CATEGORY_TEMP_BLOCK:
+                return 'Too many failed login attempts. You cannot log in to this site for 30 minutes.';
+            case self::CATEGORY_ALL_BLOCKED:
+                return 'Logins to this site are currently blocked due to excessive failed login attempts. Please try again later.';
+            case self::CATEGORY_BLACKLISTED:
+                return 'Your IP address is blocked from logging in to this site.';
+            default:
+                return 'Login blocked.';
+        }
+    }
+}

@@ -1,0 +1,308 @@
+# WPMgr — full self-host stack.
+#
+# Base profile: postgres, redis, seaweedfs (S3 gateway), clickhouse, api, web.
+# Optional "observability" profile adds a grafana/otel-lgtm backend.
+#
+# Image tags are pinned (no :latest). Bring up with:
+#   docker compose -f infra/docker-compose.yml up
+# With observability:
+#   docker compose -f infra/docker-compose.yml --profile observability up
+
+name: wpmgr
+
+services:
+  postgres:
+    image: postgres:16.4-alpine
+    restart: unless-stopped
+    environment:
+      # OWNER role (privileged). Decoupled from WPMGR_DB_USER, which the app uses
+      # for its UNPRIVILEGED wpmgr_app role — do not conflate the two.
+      POSTGRES_USER: ${WPMGR_DB_OWNER_USER:-wpmgr}
+      POSTGRES_PASSWORD: ${WPMGR_DB_OWNER_PASSWORD:-wpmgr}
+      POSTGRES_DB: ${WPMGR_DB_NAME:-wpmgr}
+      # Consumed by the first-init script below to create the app login role.
+      WPMGR_DB_APP_USER: wpmgr_app
+      WPMGR_DB_APP_PASSWORD: ${WPMGR_DB_APP_PASSWORD:-wpmgr-app-dev-secret}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # Runs ONCE on an empty data volume: provisions the unprivileged
+      # wpmgr_app LOGIN role (NOSUPERUSER NOBYPASSRLS) before migrations run.
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # pg_isready against the OWNER role (postgres image's POSTGRES_USER).
+      test: ["CMD-SHELL", "pg_isready -U ${WPMGR_DB_OWNER_USER:-wpmgr} -d ${WPMGR_DB_NAME:-wpmgr}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  # SeaweedFS in S3-gateway mode (Apache-2.0). Replaces MinIO (server EOL).
+  # S3 API is exposed on :8333 with path-style addressing.
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    restart: unless-stopped
+    command:
+      - server
+      - -s3
+      - -dir=/data
+      - -s3.config=/etc/seaweedfs/s3.json
+    ports:
+      - "8333:8333"
+    volumes:
+      - seaweedfs-data:/data
+      - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
+    healthcheck:
+      # The S3 gateway answers /status with 200 once up.
+      test: ["CMD", "wget", "-qO-", "http://localhost:8333/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+  # One-shot init: create the wpmgr-backups bucket via the S3 gateway.
+  seaweedfs-init:
+    image: chrislusf/seaweedfs:3.80
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        set -e
+        echo "seeding S3 bucket '${WPMGR_S3_BUCKET:-wpmgr-backups}'..."
+        # 'weed shell' talks to the master+filer running inside the server
+        # container. s3.bucket.create is idempotent enough for a seed step.
+        printf 's3.bucket.create -name %s\n' "${WPMGR_S3_BUCKET:-wpmgr-backups}" \
+          | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888 \
+          || echo "bucket seed attempted (it may already exist) — continuing"
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8-alpine
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_DB: ${WPMGR_CLICKHOUSE_DB:-wpmgr_metrics}
+      CLICKHOUSE_USER: ${WPMGR_CLICKHOUSE_USER:-default}
+      CLICKHOUSE_PASSWORD: ${WPMGR_CLICKHOUSE_PASSWORD:-}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.api
+    image: wpmgr-api:dev
+    restart: unless-stopped
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      WPMGR_HTTP_ADDR: ":8080"
+      WPMGR_DB_HOST: postgres
+      WPMGR_DB_PORT: "5432"
+      # --- Two-DSN model (M1) -------------------------------------------------
+      # APP connection: the unprivileged, NOSUPERUSER NOBYPASSRLS login role
+      # created by infra/postgres/init/01-app-role.sh. RLS is the real tenant
+      # isolation backstop, so the app deliberately runs as a non-superuser.
+      WPMGR_DB_USER: wpmgr_app
+      WPMGR_DB_PASSWORD: ${WPMGR_DB_APP_PASSWORD:-wpmgr-app-dev-secret}
+      WPMGR_DB_NAME: ${WPMGR_DB_NAME:-wpmgr}
+      WPMGR_DB_SSLMODE: ${WPMGR_DB_SSLMODE:-disable}
+      # MIGRATION connection: the privileged owner/superuser (the role the
+      # postgres image created from POSTGRES_USER). Used ONLY to run migrations,
+      # which CREATE ROLE wpmgr_app IF NOT EXISTS (a no-op since init made it)
+      # and GRANT it table/sequence privileges. The owner password here MUST
+      # equal the postgres service's POSTGRES_PASSWORD — both read
+      # ${WPMGR_DB_PASSWORD:-wpmgr}, so they stay in sync.
+      WPMGR_DB_MIGRATION_DSN: postgres://${WPMGR_DB_OWNER_USER:-wpmgr}:${WPMGR_DB_OWNER_PASSWORD:-wpmgr}@postgres:5432/${WPMGR_DB_NAME:-wpmgr}?sslmode=${WPMGR_DB_SSLMODE:-disable}
+      # App role is non-superuser now, so it must NOT be allowed to bypass RLS.
+      WPMGR_ALLOW_RLS_BYPASS_ROLE: "false"
+      # --- Sessions -----------------------------------------------------------
+      # REQUIRED, >=32 bytes. The app refuses to boot on the placeholder or
+      # anything shorter. This is a FIXED DEV value — production MUST override it
+      # (e.g. via .env / secret manager): openssl rand -base64 48
+      WPMGR_SESSION_SECRET: ${WPMGR_SESSION_SECRET:-ZGV2LW9ubHktc2Vzc2lvbi1zZWNyZXQtZG8tbm90LXVzZS1pbi1wcm9kdWN0aW9uLTQ4Ynl0ZXM=}
+      # --- OIDC (Dex) ---------------------------------------------------------
+      # Issuer must match Dex's configured issuer AND be reachable from this
+      # container; dex.localhost is mapped to host-gateway via extra_hosts below
+      # (see infra/dex/config.yaml for the full rationale).
+      WPMGR_OIDC_ISSUER: ${WPMGR_OIDC_ISSUER:-http://dex.localhost:5556/dex}
+      WPMGR_OIDC_CLIENT_ID: ${WPMGR_OIDC_CLIENT_ID:-wpmgr}
+      WPMGR_OIDC_CLIENT_SECRET: ${WPMGR_OIDC_CLIENT_SECRET:-wpmgr-oidc-dev-secret}
+      WPMGR_OIDC_REDIRECT_URL: ${WPMGR_OIDC_REDIRECT_URL:-http://localhost:8080/auth/oidc/callback}
+      WPMGR_REDIS_ADDR: redis:6379
+      # M5.6/ADR-033: presigned URLs the agent receives MUST be reachable from
+      # OUTSIDE this Docker network — `seaweedfs:8333` (Docker service name)
+      # only resolves inside the wpmgr_default network. When the agent runs on
+      # a real WP host (e.g. curvabykerline.in) it can't reach that hostname.
+      # Default to the in-network name for local-dev (browser-driven QA against
+      # an in-Docker WP), override via .env (WPMGR_S3_ENDPOINT) when the agent
+      # is external — typically a Cloudflare-tunnel-exposed public hostname.
+      WPMGR_S3_ENDPOINT: ${WPMGR_S3_ENDPOINT:-http://seaweedfs:8333}
+      WPMGR_S3_REGION: ${WPMGR_S3_REGION:-us-east-1}
+      WPMGR_S3_BUCKET: ${WPMGR_S3_BUCKET:-wpmgr-backups}
+      WPMGR_S3_ACCESS_KEY: ${WPMGR_S3_ACCESS_KEY:-wpmgr}
+      WPMGR_S3_SECRET_KEY: ${WPMGR_S3_SECRET_KEY:-wpmgr-dev-secret}
+      WPMGR_S3_FORCE_PATH_STYLE: "true"
+      WPMGR_CLICKHOUSE_ADDR: clickhouse:9000
+      WPMGR_CLICKHOUSE_DB: ${WPMGR_CLICKHOUSE_DB:-wpmgr_metrics}
+      WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT: ${WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-lgtm:4318}
+      WPMGR_OTEL_SERVICE_NAME: ${WPMGR_OTEL_SERVICE_NAME:-wpmgr-api}
+    ports:
+      - "8080:8080"
+    # Make `dex.localhost` (the OIDC issuer host) resolve to the host gateway so
+    # the api container reaches the same published Dex (:5556) that the browser
+    # reaches via loopback. Keeps the issuer string identical on both sides.
+    extra_hosts:
+      - "dex.localhost:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+      seaweedfs:
+        # API does not use object storage until backups (M4); only require it to
+        # have started, so slow S3-gateway warmup never blocks the control plane.
+        condition: service_started
+    # NOTE: no healthcheck here yet — the distroless image has no shell and the
+    # binary does not expose a self-probe subcommand. Once the real server lands
+    # (GET /healthz, GET /readyz), add an HTTP healthcheck (e.g. via a small
+    # busybox sidecar or by embedding a `wpmgr healthcheck` subcommand). TODO.
+
+  # Media Optimizer encode worker (ADR-043, M23). OPTIONAL: behind the `media`
+  # profile so a self-hoster who doesn't want image optimization simply doesn't
+  # run it (and their core API stays a minimal CGO_ENABLED=0 static binary).
+  # Bring it up with:  docker compose --profile media up
+  #
+  # It connects to the SAME Postgres + object storage as the api (it runs under
+  # the app.agent RLS GUC and moves bytes via presigned URLs — no extra grants).
+  # It registers a River worker on the bounded `media_encode` queue; the api
+  # registers that same queue with ZERO workers (insert-only), so encode jobs
+  # the api enqueues are only ever executed here.
+  media-encoder:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.media-encoder
+    image: wpmgr-media-encoder:dev
+    restart: unless-stopped
+    profiles: ["media"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      WPMGR_DB_HOST: postgres
+      WPMGR_DB_PORT: "5432"
+      # App (unprivileged, NOSUPERUSER NOBYPASSRLS) login role — same as the api.
+      WPMGR_DB_USER: wpmgr_app
+      WPMGR_DB_PASSWORD: ${WPMGR_DB_APP_PASSWORD:-wpmgr-app-dev-secret}
+      WPMGR_DB_NAME: ${WPMGR_DB_NAME:-wpmgr}
+      WPMGR_DB_SSLMODE: ${WPMGR_DB_SSLMODE:-disable}
+      WPMGR_ALLOW_RLS_BYPASS_ROLE: "false"
+      # Object storage — identical to the api. Presigned URLs the encoder mints
+      # must be reachable from the agent on the WP host (override via .env when
+      # the agent is external; see the api service's note).
+      WPMGR_S3_ENDPOINT: ${WPMGR_S3_ENDPOINT:-http://seaweedfs:8333}
+      WPMGR_S3_REGION: ${WPMGR_S3_REGION:-us-east-1}
+      WPMGR_S3_BUCKET: ${WPMGR_S3_BUCKET:-wpmgr-backups}
+      WPMGR_S3_ACCESS_KEY: ${WPMGR_S3_ACCESS_KEY:-wpmgr}
+      WPMGR_S3_SECRET_KEY: ${WPMGR_S3_SECRET_KEY:-wpmgr-dev-secret}
+      WPMGR_S3_FORCE_PATH_STYLE: "true"
+      # CP signing key: required to dispatch the signed media_apply command back
+      # to the agent. Share the same key the api uses (.env override in prod).
+      WPMGR_AGENT_SIGNING_PRIVATE_KEY: ${WPMGR_AGENT_SIGNING_PRIVATE_KEY:-}
+      # Public CP base URL the agent reaches callbacks at (presign/encode-ready/
+      # job-status). Same value the api uses.
+      WPMGR_PUBLIC_BASE_URL: ${WPMGR_PUBLIC_BASE_URL:-}
+      # Bounded encode concurrency (also sizes the lilliput ImageOps pool).
+      WPMGR_MEDIA_ENCODE_WORKERS: ${WPMGR_MEDIA_ENCODE_WORKERS:-2}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
+
+  # Dex — self-host OIDC IdP (ADR-026, Apache-2.0). Part of the BASE stack
+  # because auth is core. Config + dev static client/password live in
+  # infra/dex/config.yaml. Issuer is http://dex.localhost:5556/dex (see that
+  # file for the issuer-URL rationale). SQLite storage in a named volume.
+  dex:
+    image: dexidp/dex:v2.41.1
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    volumes:
+      - ./dex/config.yaml:/etc/dex/config.yaml:ro
+      - dex-data:/var/dex
+    ports:
+      - "5556:5556"
+    healthcheck:
+      # Dex serves a healthz endpoint on its telemetry listener (:5558).
+      test: ["CMD", "wget", "-qO-", "http://localhost:5558/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  web:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile.web
+    image: wpmgr-web:dev
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - api
+
+  # ---- observability (opt-in: --profile observability) ----
+  # grafana/otel-lgtm bundles OTel Collector + Tempo + Prometheus + Grafana.
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.8.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      # Mount our prometheus scrape + grafana provisioning into the bundle.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: "Admin"
+    volumes:
+      - otel-lgtm-data:/data
+      - ./prometheus/prometheus.yml:/otel-lgtm/prometheus.yaml:ro
+      - ./grafana/provisioning:/otel-lgtm/grafana/conf/provisioning/custom:ro
+      - ./grafana/dashboards:/otel-lgtm/grafana/dashboards:ro
+    ports:
+      - "3000:3000"   # Grafana UI
+      - "4317:4317"   # OTLP gRPC
+      - "4318:4318"   # OTLP HTTP
+
+volumes:
+  postgres-data:
+  redis-data:
+  seaweedfs-data:
+  clickhouse-data:
+  dex-data:
+  otel-lgtm-data:

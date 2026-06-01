@@ -1,0 +1,392 @@
+<?php
+/**
+ * MediaRestoreCommand: handles the CP's `media_restore` command — revert each
+ * attachment behind job_ids to its pre-optimization state using the
+ * wpmgr_image_optimization blob, then POST /agent/v1/media/restore-status.
+ *
+ * CP contract (apps/api/internal/agentcmd/media_contract.go MediaRestoreRequest):
+ *   POST /wp-json/wpmgr/v1/command/media_restore
+ *   body: { "job_ids":[...], "status_endpoint" }
+ *   resp: MediaRestoreResponse { "ok", "detail" }
+ *
+ * restore-status payload (restoreStatusBody, agent_handler.go:93-97):
+ *   { "job_id", "restored":bool, "error":string }
+ *
+ * Restore decision logic (analysis/media-postmeta-blob.md "Restore decision
+ * logic", analysis doc lines 164-226), per optimized size, keyed off the
+ * per-variant archive_mode recorded at apply time:
+ *   - MODE_REPLACE (same ext): delete the optimized file at the original path,
+ *     then Rename::restore() the .wpmgr-original.<ext> archive back. No URL change.
+ *   - MODE_COEXIST (different ext): delete the optimized .avif/.webp file; the
+ *     original .jpg was never touched and is already in place. Reverse the URL
+ *     replacement so the DB points back at the .jpg.
+ * ORDER MATTERS: delete optimized files BEFORE un-renaming archives so no window
+ * has two files claiming one URL (analysis doc lines 203-204).
+ *
+ * If original_deleted==1 the restore is REFUSED (restore is impossible —
+ * archives are gone). Always restore _wp_attachment_metadata from original_data,
+ * reverse the URL rewrite, then delete/reduce the blob (lifecycle shape #2).
+ *
+ * @package WPMgr\Agent\Commands
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Commands;
+
+use WPMgr\Agent\AutoOptimizeUpload;
+use WPMgr\Agent\Keystore;
+use WPMgr\Agent\Media\AttachmentMeta;
+use WPMgr\Agent\Media\DbRewriter;
+use WPMgr\Agent\Media\DiskWriter;
+use WPMgr\Agent\Media\MediaRunStore;
+use WPMgr\Agent\Media\MediaUploader;
+use WPMgr\Agent\Media\Rename;
+use WPMgr\Agent\MediaKeystore;
+use WPMgr\Agent\Signer;
+
+/**
+ * Reverses an optimization back to the pre-optimize on-disk + DB state.
+ *
+ * SCALE: bulk restore has the identical synchronous-batch shape as media_optimize
+ * — a per-job restoreOne() + signed restore-status callback in a loop — so on a
+ * mega library it hits the SAME CP timeout. It ACKs IMMEDIATELY ('accepted')
+ * after persisting the batch and drains it in bounded background chunks via
+ * wp-cron (MediaRunStore), mirroring BackupCommand. The wire contract and the
+ * restore-status callbacks are UNCHANGED.
+ */
+final class MediaRestoreCommand implements CommandInterface
+{
+    /** Cron hook the background worker is bound to in Plugin::registerHooks. */
+    public const RUN_HOOK = 'wpmgr_media_restore_run';
+
+    private MediaUploader $uploader;
+
+    private MediaKeystore $keystore;
+
+    private AttachmentMeta $meta;
+
+    private DbRewriter $rewriter;
+
+    private Rename $rename;
+
+    private DiskWriter $writer;
+
+    private MediaRunStore $store;
+
+    public function __construct(
+        MediaUploader $uploader,
+        ?MediaKeystore $keystore = null,
+        ?AttachmentMeta $meta = null,
+        ?DbRewriter $rewriter = null,
+        ?Rename $rename = null,
+        ?DiskWriter $writer = null,
+        ?MediaRunStore $store = null
+    ) {
+        $this->uploader = $uploader;
+        $this->keystore = $keystore ?? new MediaKeystore();
+        $this->meta     = $meta ?? new AttachmentMeta();
+        $this->rewriter = $rewriter ?? new DbRewriter();
+        $this->rename   = $rename ?? new Rename();
+        $this->writer   = $writer ?? new DiskWriter();
+        $this->store    = $store ?? new MediaRunStore();
+    }
+
+    public function name(): string
+    {
+        return 'media_restore';
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * Persists the batch under a fresh run id, schedules the background worker,
+     * and returns 'accepted' immediately. The per-attachment restore happens in
+     * runBackground() under wp-cron.
+     *
+     * @param array<string,mixed> $claims
+     * @param array<string,mixed> $params MediaRestoreRequest fields.
+     * @return array{ok:bool,detail:string}
+     */
+    public function execute(array $claims, array $params): array
+    {
+        $statusEp = $this->str($params, 'status_endpoint');
+        if ($statusEp === '') {
+            return ['ok' => false, 'detail' => 'missing status_endpoint'];
+        }
+
+        $jobs = $this->resolveJobs($params);
+        if ($jobs === []) {
+            return ['ok' => false, 'detail' => 'no resolvable jobs/attachments'];
+        }
+
+        $runId   = MediaRunStore::newRunId();
+        $payload = [
+            'status_endpoint' => $statusEp,
+            'jobs'            => $jobs,
+        ];
+        if (!$this->store->claim($runId, $payload)) {
+            $this->runInline($payload);
+            return ['ok' => true, 'detail' => 'processed inline (no background store)'];
+        }
+
+        $this->store->scheduleNext(self::RUN_HOOK, $runId);
+
+        return ['ok' => true, 'detail' => 'accepted'];
+    }
+
+    /**
+     * Cron callback (bound to RUN_HOOK). Drains one bounded chunk, reschedules
+     * until empty. Rebuilds its signed MediaUploader inside the worker the same
+     * way RestoreRunner rebuilds BackupTransport.
+     *
+     * @param string $runId Run id passed via wp_schedule_single_event $args.
+     * @return void
+     */
+    public static function runBackground(string $runId): void
+    {
+        if ($runId === '') {
+            return;
+        }
+        $store = new MediaRunStore();
+        if ($store->get($runId) === null) {
+            return;
+        }
+        $command = self::fromRuntime();
+        if ($command === null) {
+            return;
+        }
+        $store->drain(
+            self::RUN_HOOK,
+            $runId,
+            MediaRunStore::DEFAULT_CHUNK,
+            static function (array $job, array $r) use ($command): void {
+                $command->processJob($job, $r);
+            }
+        );
+    }
+
+    /**
+     * Restore a single job: restoreOne() + the signed restore-status callback.
+     * Public so the cron worker and unit tests can drive one job.
+     *
+     * @param array{job_id:string,wp_attachment_id:int} $job
+     * @param array<string,mixed>                       $run Full run payload (status_endpoint).
+     * @return bool True when the attachment was restored.
+     */
+    public function processJob(array $job, array $run): bool
+    {
+        $statusEp = isset($run['status_endpoint']) && is_string($run['status_endpoint']) ? $run['status_endpoint'] : '';
+        $jobId    = isset($job['job_id']) && is_string($job['job_id']) ? $job['job_id'] : '';
+        $attachmentId = isset($job['wp_attachment_id']) && is_numeric($job['wp_attachment_id']) ? (int) $job['wp_attachment_id'] : 0;
+
+        if ($statusEp === '' || $jobId === '' || $attachmentId <= 0) {
+            return false;
+        }
+
+        $result = $this->restoreOne($attachmentId);
+        $this->uploader->restoreStatus($statusEp, $jobId, $result['ok'], $result['error']);
+
+        return $result['ok'];
+    }
+
+    /**
+     * Build a command instance with a freshly-constructed signed MediaUploader.
+     * Returns null when the crypto seam is unavailable (tests drive processJob
+     * directly).
+     */
+    private static function fromRuntime(): ?self
+    {
+        if (!class_exists(Signer::class) || !class_exists(Keystore::class)) {
+            return null;
+        }
+        try {
+            return new self(new MediaUploader(new Signer(new Keystore())));
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * Synchronous fallback when no transient backend is available. Processes
+     * every job inline (the old behaviour).
+     *
+     * @param array<string,mixed> $payload Run payload (status_endpoint + jobs).
+     * @return void
+     */
+    private function runInline(array $payload): void
+    {
+        $jobs = isset($payload['jobs']) && is_array($payload['jobs']) ? $payload['jobs'] : [];
+        foreach ($jobs as $job) {
+            if (is_array($job)) {
+                $this->processJob($job, $payload);
+            }
+        }
+    }
+
+    /**
+     * Restore a single attachment from its blob. Public + returning a structured
+     * result so the round-trip test can drive it directly.
+     *
+     * @param int $attachmentId
+     * @return array{ok:bool,error:string}
+     */
+    public function restoreOne(int $attachmentId): array
+    {
+        $blob = $this->keystore->get($attachmentId);
+        if ($blob === []) {
+            return ['ok' => true, 'error' => '']; // Nothing to restore — idempotent success.
+        }
+        if ((int) ($blob['original_deleted'] ?? 0) === 1) {
+            return ['ok' => false, 'error' => 'originals_deleted_cannot_restore'];
+        }
+
+        $originalData  = is_array($blob['original_data'] ?? null) ? $blob['original_data'] : [];
+        $optimizedData = is_array($blob['optimized_data'] ?? null) ? $blob['optimized_data'] : [];
+        $replacements  = is_array($blob['replacements'] ?? null) ? $blob['replacements'] : [];
+
+        $optimizedFiles = [];
+        $archives       = [];
+
+        foreach ($optimizedData as $sizeName => $record) {
+            if (!is_array($record)) {
+                continue;
+            }
+            $optimizedPath = isset($record['path']) ? (string) $record['path'] : '';
+            $mode          = isset($record['archive_mode']) ? (string) $record['archive_mode'] : AttachmentMeta::MODE_COEXIST;
+
+            if ($optimizedPath !== '') {
+                // Always queue the optimized file for deletion.
+                $optimizedFiles[] = $optimizedPath;
+            }
+
+            if ($mode === AttachmentMeta::MODE_REPLACE) {
+                // Same-ext: the original was archived to .wpmgr-original.<ext>;
+                // un-rename it back to the original path (which == optimizedPath
+                // here, since the optimized bytes overwrote the original path).
+                $archives[] = $this->rename->archivePathFor($optimizedPath);
+            }
+        }
+
+        // ORDER: delete optimized files FIRST, then un-rename archives, so no
+        // window has two files claiming one URL.
+        foreach (array_unique($optimizedFiles) as $file) {
+            $this->writer->delete($file);
+        }
+        foreach (array_unique($archives) as $archive) {
+            $this->rename->restore($archive);
+        }
+
+        // Restore the live metadata from the snapshot.
+        // ADR-044 §6 re-entrancy guard: set the process-scoped flag so the
+        // wp_generate_attachment_metadata upload hook bails if any filter chain
+        // re-fires during this metadata write. restoreMetadata() already uses
+        // wp_update_attachment_metadata (the SETTER); the guard is belt-and-
+        // suspenders.
+        $originalFullUrl = $this->originalFullUrl($attachmentId, $originalData);
+        AutoOptimizeUpload::setGuard(true);
+        try {
+            $this->meta->restoreMetadata($attachmentId, $originalData, $originalFullUrl);
+        } finally {
+            AutoOptimizeUpload::setGuard(false);
+        }
+
+        // Reverse the URL rewrite (different-ext variants only).
+        if ($replacements !== []) {
+            $this->rewriter->reverseImages($this->stringMap($replacements));
+        }
+
+        // Delete or reduce the blob (lifecycle shape #2).
+        $compression = isset($blob['compression_level']) ? (string) $blob['compression_level'] : '';
+        $unoptimized = is_array($blob['sizes_unoptimized'] ?? null) ? $blob['sizes_unoptimized'] : [];
+        $this->keystore->reduceAfterRestore($attachmentId, $compression, $this->stringMap($unoptimized));
+
+        return ['ok' => true, 'error' => ''];
+    }
+
+    /**
+     * The original full-size URL (for the guid restore). Derived from the
+     * snapshot's relative `file` via the uploads base URL.
+     *
+     * @param int                 $attachmentId
+     * @param array<string,mixed> $originalData
+     * @return string
+     */
+    private function originalFullUrl(int $attachmentId, array $originalData): string
+    {
+        $file = isset($originalData['file']) ? (string) $originalData['file'] : '';
+        if ($file === '' || !function_exists('wp_get_upload_dir')) {
+            return '';
+        }
+        $uploads = wp_get_upload_dir();
+        if (!is_array($uploads) || empty($uploads['baseurl'])) {
+            return '';
+        }
+
+        return rtrim((string) $uploads['baseurl'], '/') . '/' . ltrim($file, '/');
+    }
+
+    /**
+     * Coerce a mixed map to array<string,string>.
+     *
+     * @param array<mixed,mixed> $map
+     * @return array<string,string>
+     */
+    private function stringMap(array $map): array
+    {
+        $out = [];
+        foreach ($map as $k => $v) {
+            if (is_string($k) && is_string($v)) {
+                $out[$k] = $v;
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * Resolve (job_id, wp_attachment_id) pairs. Mirrors the optimize command:
+     * `jobs:[{job_id,wp_attachment_id}]` OR `job_ids:["<jobId>:<attachmentId>"]`.
+     *
+     * @param array<string,mixed> $params
+     * @return list<array{job_id:string,wp_attachment_id:int}>
+     */
+    private function resolveJobs(array $params): array
+    {
+        $out = [];
+        if (isset($params['jobs']) && is_array($params['jobs'])) {
+            foreach ($params['jobs'] as $job) {
+                if (!is_array($job)) {
+                    continue;
+                }
+                $jobId = isset($job['job_id']) && is_string($job['job_id']) ? $job['job_id'] : '';
+                $att   = isset($job['wp_attachment_id']) && is_numeric($job['wp_attachment_id']) ? (int) $job['wp_attachment_id'] : 0;
+                if ($jobId !== '' && $att > 0) {
+                    $out[] = ['job_id' => $jobId, 'wp_attachment_id' => $att];
+                }
+            }
+        }
+        if ($out === [] && isset($params['job_ids']) && is_array($params['job_ids'])) {
+            foreach ($params['job_ids'] as $entry) {
+                if (is_string($entry) && strpos($entry, ':') !== false) {
+                    [$jobId, $att] = explode(':', $entry, 2);
+                    if ($jobId !== '' && is_numeric($att)) {
+                        $out[] = ['job_id' => $jobId, 'wp_attachment_id' => (int) $att];
+                    }
+                }
+            }
+        }
+
+        return $out;
+    }
+
+    /**
+     * @param array<string,mixed> $params
+     * @param string              $key
+     * @return string
+     */
+    private function str(array $params, string $key): string
+    {
+        return isset($params[$key]) && is_string($params[$key]) ? $params[$key] : '';
+    }
+}

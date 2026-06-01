@@ -1,0 +1,5434 @@
+openapi: 3.1.0
+info:
+  title: WPMgr API
+  version: 0.0.0
+  description: |
+    Control-plane REST API for WPMgr. This is the single source of truth for
+    both the Go server types and the generated TypeScript client. Real paths
+    and schemas are filled in during Phase 4 (skeleton) and Phase 5 (features).
+  license:
+    name: AGPL-3.0-only
+    url: https://www.gnu.org/licenses/agpl-3.0.txt
+servers:
+  - url: http://localhost:8080
+    description: Local development
+paths:
+  /healthz:
+    get:
+      operationId: getHealthz
+      summary: Liveness probe
+      tags: [system]
+      responses:
+        "200":
+          description: Service is alive
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Health"
+  /readyz:
+    get:
+      operationId: getReadyz
+      summary: Readiness probe
+      description: Returns 200 when the service can serve traffic (DB reachable).
+      tags: [system]
+      responses:
+        "200":
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+        "503":
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Readiness"
+  /auth/register:
+    post:
+      operationId: register
+      summary: Register (first-run bootstrap or invited)
+      description: |
+        On first run (zero users) this creates the first user, a tenant, and an
+        owner membership. Once any user exists, open registration is closed and
+        this returns 403; new users are added via the authenticated invite flow.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: User registered and session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "403":
+          description: Open registration is closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Email already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/login:
+    post:
+      operationId: login
+      summary: Email + password login
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Authenticated; session cookie set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: Destroy the current session
+      tags: [auth]
+      responses:
+        "204":
+          description: Logged out
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/me:
+    get:
+      operationId: getMe
+      summary: Current user, memberships, and active tenant
+      tags: [auth]
+      responses:
+        "200":
+          description: The authenticated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/oidc/login:
+    get:
+      operationId: oidcLogin
+      summary: Begin OIDC login (redirect to provider)
+      description: Redirects (302) to the OIDC provider. Returns 501 if OIDC is disabled.
+      tags: [auth]
+      responses:
+        "302":
+          description: Redirect to the OIDC provider
+        "501":
+          description: OIDC is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/oidc/callback:
+    get:
+      operationId: oidcCallback
+      summary: OIDC redirect callback
+      tags: [auth]
+      parameters:
+        - name: code
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Authenticated via OIDC; session cookie set
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "401":
+          description: OIDC verification failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          description: OIDC is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/members:
+    get:
+      operationId: listMembers
+      summary: List members of the active tenant
+      tags: [members]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of memberships
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MembershipList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: inviteMember
+      summary: Invite/create a member in the active tenant (admin+)
+      tags: [members]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InviteRequest"
+      responses:
+        "201":
+          description: Member added
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Already a member
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/members/{userId}:
+    patch:
+      operationId: patchMember
+      summary: Change a member's role (admin+; privilege-ceiling enforced)
+      tags: [members]
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PatchMemberRequest"
+      responses:
+        "200":
+          description: Role updated; returns the updated membership
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Membership"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or last-owner protection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteMember
+      summary: Remove a member from the active tenant (admin+; last-owner protected)
+      tags: [members]
+      parameters:
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204":
+          description: Member removed
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or last-owner protection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Member not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/orgs:
+    post:
+      operationId: createOrg
+      summary: Create a new organisation; the caller becomes the owner
+      tags: [orgs]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateOrgRequest"
+      responses:
+        "201":
+          description: Organisation created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Org"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Slug already taken
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/orgs/{orgId}/activate:
+    post:
+      operationId: activateOrg
+      summary: Switch the session's active organisation (must be a member)
+      tags: [orgs]
+      parameters:
+        - $ref: "#/components/parameters/OrgId"
+      responses:
+        "200":
+          description: Active organisation switched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivateOrgResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Not a member of the requested organisation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Organisation not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/shares:
+    get:
+      operationId: listSiteShares
+      summary: List collaborators for a site (admin+)
+      tags: [shares]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: List of site shares
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteShareList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createSiteShare
+      summary: |
+        Grant site access to an email (admin+; org-scope only). If the email
+        matches a known user the share is immediate (201); otherwise an invitation
+        is created and the accept link is returned (202).
+      tags: [shares]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSiteShareRequest"
+      responses:
+        "201":
+          description: Share created immediately (known user)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteShareGrantResponse"
+        "202":
+          description: Invitation created (unknown user); accept_link returned
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteShareGrantResponse"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or site-scoped principal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/shares/{userId}:
+    delete:
+      operationId: deleteSiteShare
+      summary: Revoke a collaborator's site access (admin+; org-scope only)
+      tags: [shares]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/UserId"
+      responses:
+        "204":
+          description: Share revoked
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or site-scoped principal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Share not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/shared-with-me:
+    get:
+      operationId: listSharedWithMe
+      summary: List sites shared to the authenticated user (any logged-in user)
+      tags: [shares]
+      responses:
+        "200":
+          description: Shares granted to this user across all orgs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteShareList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/invitations/accept:
+    post:
+      operationId: acceptInvitation
+      summary: |
+        Accept an invitation by token (public; creates/links user and session).
+        Accepts both org-scope invitations (creates a membership) and site-scope
+        invitations (creates a site_shares row). Validates token hash, email
+        binding, expiry, single-use, and rate-limit.
+      tags: [invitations]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AcceptInvitationRequest"
+      responses:
+        "200":
+          description: Invitation accepted; session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AcceptInvitationResponse"
+        "400":
+          description: Invalid token, expired, already used, or email mismatch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Too many attempts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/api-keys:
+    get:
+      operationId: listApiKeys
+      summary: List API keys for the active tenant (admin+)
+      tags: [api-keys]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of API keys (no secrets)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createApiKey
+      summary: Create an API key (admin+); the secret is shown once
+      tags: [api-keys]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeyCreate"
+      responses:
+        "201":
+          description: API key created; token returned once
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyCreated"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/api-keys/{apiKeyId}:
+    delete:
+      operationId: revokeApiKey
+      summary: Revoke an API key (admin+)
+      tags: [api-keys]
+      parameters:
+        - $ref: "#/components/parameters/ApiKeyId"
+      responses:
+        "204":
+          description: API key revoked
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: API key not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/destinations:
+    get:
+      operationId: listSiteDestinations
+      summary: List configured backup destinations for a site
+      description: |
+        ADR-036 P1 storage adapter. Returns every destination configured on the
+        site (`cp` / `local` / `s3_compat`). The encrypted S3 secret is NEVER
+        returned; `has_secret` reports whether one is stored.
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: A list of destinations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDestinationList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    post:
+      operationId: createSiteDestination
+      summary: Add a backup destination to a site
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteDestinationCreate"
+      responses:
+        "201":
+          description: Destination created.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDestination"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/destinations/test:
+    post:
+      operationId: testSiteDestination
+      summary: Verify credentials for a destination without persisting them
+      description: |
+        Returns 200 with `{ok, message}` regardless of success/failure so the
+        UI can render the operator-readable diagnostic inline. S3-compat
+        kinds run a HeadBucket + PutObject + DeleteObject probe against the
+        target bucket; cp/local kinds return ok=true trivially.
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteDestinationTest"
+      responses:
+        "200":
+          description: Test result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDestinationTestResult"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/destinations/{destinationId}:
+    get:
+      operationId: getSiteDestination
+      summary: Read one configured destination
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/DestinationId"
+      responses:
+        "200":
+          description: The destination.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDestination"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Destination not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: updateSiteDestination
+      summary: Update a configured destination (omit secret_key to keep it)
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/DestinationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteDestinationUpdate"
+      responses:
+        "200":
+          description: The updated destination.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDestination"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Destination not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteSiteDestination
+      summary: Remove a configured destination
+      tags: [destinations]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/DestinationId"
+      responses:
+        "204":
+          description: Destination deleted.
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Destination not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/audit:
+    get:
+      operationId: listAudit
+      summary: List the active tenant's audit log (admin+)
+      tags: [audit]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of audit entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/audit/verify:
+    get:
+      operationId: verifyAudit
+      summary: Verify the integrity of the audit hash-chain (admin+)
+      tags: [audit]
+      responses:
+        "200":
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditVerify"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/tenants:
+    post:
+      operationId: createTenant
+      summary: Create a tenant
+      tags: [tenants]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TenantCreate"
+      responses:
+        "201":
+          description: Tenant created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "409":
+          description: Tenant slug already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listTenants
+      summary: List tenants
+      tags: [tenants]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of tenants
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantList"
+  /api/v1/tenants/{tenantId}:
+    get:
+      operationId: getTenant
+      summary: Get a tenant by ID
+      tags: [tenants]
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+      responses:
+        "200":
+          description: The tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "404":
+          description: Tenant not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites:
+    post:
+      operationId: createSite
+      summary: Create a site (site-first enrollment)
+      description: |
+        M21 / Phase 5.7 (ADR-041) — the site-first "Add site" flow. Creates a
+        site row in `pending_enrollment` AND mints a single-use, site-bound
+        enrollment code in one call. The response carries the new `site_id` plus
+        the once-shown `enrollment_code` and its `expires_at` so the dashboard
+        can immediately show the install modal and subscribe to the
+        `/api/v1/sites/events` SSE stream for this site_id.
+
+        BREAKING CHANGE vs. pre-M21: the 201 body is now
+        `SiteEnrollmentCode` ({site_id, enrollment_code, expires_at}) instead of
+        a bare `Site`. When the connection-lifecycle service is disabled (dev
+        builds with no SSE bus) the control plane falls back to the legacy
+        create that returns a bare `Site`. Requires operator+.
+      tags: [sites]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteCreate"
+      responses:
+        "201":
+          description: Site created (pending_enrollment) with a once-shown enrollment code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEnrollmentCode"
+        "409":
+          description: Site URL already exists for this tenant
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listSites
+      summary: List sites for the current tenant
+      description: |
+        Lists the tenant's sites. By default (ADR-041) archived sites are hidden.
+        Pass `?state=<connection_state>` to filter to exactly one state (e.g.
+        `?state=archived` for the archived chip), or `?include_archived=true` as
+        a convenience alias that returns only the archived sites.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - name: tag
+          in: query
+          required: false
+          description: Filter to sites carrying this tag.
+          schema:
+            type: string
+            maxLength: 64
+        - name: state
+          in: query
+          required: false
+          description: |
+            Filter to a single connection_state. When omitted, archived sites are
+            hidden.
+          schema:
+            type: string
+            enum: [pending_enrollment, connected, degraded, disconnected, revoked, archived]
+        - name: include_archived
+          in: query
+          required: false
+          description: Convenience alias for state=archived.
+          schema:
+            type: boolean
+      responses:
+        "200":
+          description: A page of sites
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteList"
+  /api/v1/sites/pairing-codes:
+    post:
+      operationId: createPairingCode
+      summary: Generate a one-time agent pairing code
+      description: |
+        Generates a short-lived, single-use, high-entropy pairing code for the
+        current tenant. The plaintext code is returned ONCE in this response and
+        is never retrievable again. An agent presents it to POST /enroll. Requires
+        operator+.
+      tags: [sites]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PairingCodeCreate"
+      responses:
+        "201":
+          description: Pairing code created (plaintext shown once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PairingCode"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/tags:
+    put:
+      operationId: setSiteTags
+      summary: Replace the tag set on a site
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteTags"
+      responses:
+        "200":
+          description: The updated site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/media/assets:
+    get:
+      operationId: listMediaAssets
+      summary: List a site's media assets (Media Optimizer, ADR-043)
+      description: |
+        Cursor-paginated media library mirror with a summary rollup. Gated on
+        site:read + per-site access. DTOs are hand-rolled (c.JSON), not ogen.
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: status, in: query, schema: { type: string } }
+        - { name: format, in: query, schema: { type: string } }
+        - { name: search, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: A page of media assets + summary
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaAssetList" }
+  /api/v1/sites/{siteId}/media/sync:
+    post:
+      operationId: syncMedia
+      summary: Tell the agent to enumerate the media library
+      tags: [media]
+      parameters: [{ $ref: "#/components/parameters/SiteId" }]
+      responses:
+        "202":
+          description: Sync dispatched
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id: { type: string }
+                  started_at: { type: string, format: date-time }
+  /api/v1/sites/{siteId}/media/optimize:
+    post:
+      operationId: optimizeMedia
+      summary: Start an optimize batch (fans out one job per attachment)
+      tags: [media]
+      parameters: [{ $ref: "#/components/parameters/SiteId" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaOptimizeRequest" }
+      responses:
+        "202":
+          description: Optimize batch queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaBatchResult" }
+  /api/v1/sites/{siteId}/media/restore:
+    post:
+      operationId: restoreMedia
+      summary: Restore selected attachments to their pre-optimization state
+      tags: [media]
+      parameters: [{ $ref: "#/components/parameters/SiteId" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaAssetSelection" }
+      responses:
+        "202":
+          description: Restore batch queued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaBatchResult" }
+  /api/v1/sites/{siteId}/media/delete-originals:
+    post:
+      operationId: deleteMediaOriginals
+      summary: Irreversibly delete archived originals (admin+)
+      description: Gated on the media:delete_originals permission (RoleAdmin minimum).
+      tags: [media]
+      parameters: [{ $ref: "#/components/parameters/SiteId" }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MediaAssetSelection" }
+      responses:
+        "202":
+          description: Delete-originals batch queued (irreversible)
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/MediaBatchResult"
+                  - type: object
+                    properties: { irreversible: { type: boolean } }
+  /api/v1/sites/{siteId}/media/cancel:
+    post:
+      operationId: cancelMedia
+      summary: Cancel all in-flight media jobs for a site
+      tags: [media]
+      parameters: [{ $ref: "#/components/parameters/SiteId" }]
+      responses:
+        "200":
+          description: Cancelled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+                  cancelled_count: { type: integer }
+  /api/v1/sites/{siteId}/media/jobs:
+    get:
+      operationId: listMediaJobs
+      summary: List media optimization jobs for a site
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - { name: cursor, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, default: 50 } }
+        - { name: state, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: A page of media jobs
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaJobList" }
+  /api/v1/sites/{siteId}/media/jobs/{jobId}:
+    get:
+      operationId: getMediaJob
+      summary: Get a media job + its variant results
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - { name: jobId, in: path, required: true, schema: { type: string } }
+      responses:
+        "200":
+          description: The job detail
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaJobDetail" }
+  /api/v1/sites/events:
+    get:
+      operationId: streamSiteEvents
+      summary: Connection-lifecycle SSE stream (tenant-scoped)
+      description: |
+        M21 / ADR-038 — a single tenant-scoped Server-Sent Events stream of
+        connection-lifecycle events (site.created, site.state_changed,
+        site.revoked, site.disconnected, site.archived, site.restored). The
+        client filters by site_id in the browser. Supports `?since=<event_id>`
+        (or the `Last-Event-ID` header) to replay missed events from the durable
+        journal (~5 min retention) on reconnect; each frame carries an `id:`
+        (ULID) line. 15s keepalive comments; session-auth, requires site:read.
+      tags: [sites]
+      parameters:
+        - name: since
+          in: query
+          required: false
+          description: Replay events strictly after this event_id (ULID cursor).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: An event stream (text/event-stream)
+          content:
+            text/event-stream:
+              schema:
+                type: string
+  /api/v1/sites/{siteId}/enrollment-codes:
+    post:
+      operationId: beginReEnrollment
+      summary: Begin re-enrollment (fresh enrollment code)
+      description: |
+        M21 / ADR-041 — moves an existing revoked/disconnected/archived site back
+        to `pending_enrollment` (bumping connection_generation) and mints a fresh
+        site-bound enrollment code under the SAME site_id (preserving backup/scan
+        history). Returns the once-shown code. Requires operator+.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "201":
+          description: Re-enrollment code minted (plaintext shown once)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEnrollmentCode"
+        "409":
+          description: Site is in a state from which re-enrollment is not allowed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/revoke:
+    post:
+      operationId: revokeSite
+      summary: Revoke a site's agent connection
+      description: |
+        M21 / ADR-041 — operator action. Transitions the site to `revoked` and
+        queues a `revoke` instruction returned on the agent's next heartbeat,
+        accompanied by a short-lived signed token (`revoke_token`) the agent
+        verifies before it wipes its keys + self-deactivates (ADR-040 addendum).
+        The agent_public_key is KEPT (not nulled) so the agent can still
+        authenticate the heartbeat that delivers the revoke; a later re-enroll
+        overwrites the key on the same row (partial unique index). Requires
+        operator+ and org scope (a site-scoped collaborator cannot revoke).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteLifecycleReason"
+      responses:
+        "200":
+          description: The updated site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+        "409":
+          description: Illegal transition from the site's current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/archive:
+    post:
+      operationId: archiveSite
+      summary: Archive a site (terminal soft-delete)
+      description: |
+        M21 / ADR-041 — operator action. Transitions the site to `archived`
+        (terminal soft-delete); hidden from the default sites list. History is
+        preserved. Requires operator+.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteLifecycleReason"
+      responses:
+        "204":
+          description: Site archived
+        "409":
+          description: Illegal transition from the site's current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/restore:
+    post:
+      operationId: restoreSite
+      summary: Restore (un-archive) a site
+      description: |
+        M21 / ADR-041 — operator action. Un-archives a site back to
+        `disconnected`. Only valid from `archived`. Requires operator+.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: The updated site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+        "409":
+          description: Site is not archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /enroll:
+    post:
+      operationId: enroll
+      summary: Agent enrollment (public)
+      description: |
+        Called by an agent (NOT an authenticated control-plane user) to enroll a
+        site using a pairing code. The tenant is derived entirely from the code.
+        On success the site is created (or, if the URL already exists for the
+        tenant, its agent key is rotated) and the control-plane PUBLIC signing
+        key is returned so the agent can verify CP->agent commands. The code is
+        consumed (single-use).
+      tags: [agent]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+      responses:
+        "200":
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EnrollResponse"
+        "401":
+          description: Invalid or expired pairing code
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Pairing code already used, or agent key already bound
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/autologin:
+    post:
+      operationId: createAutologin
+      summary: Mint a one-click login URL into a managed WordPress site
+      description: |
+        Mints a single-use, ~60-second nonce + Ed25519 JWT (ADR-031) and
+        returns a redirect URL of the form
+        `{site.url}/wp-json/wpmgr/v1/autologin?token=<jwt>&redirect_to=<urlencoded>`
+        the operator's browser should follow. The WordPress agent verifies the
+        JWT and POSTs back to `/agent/v1/autologin/consume` to atomically
+        consume the nonce, then establishes a wp-admin session as the requested
+        user (or the first administrator when `target_wp_user_login` is empty).
+
+        Authorization: requires the `site:autologin` permission (owner+admin).
+        Operator and viewer roles are explicitly denied.
+
+        Rate-limited per `(initiator_user_id, site_id)` (10/min) and per
+        `site_id` (30/min). A 429 response carries `retry_after_seconds` in the
+        body and a `Retry-After` header in seconds.
+
+        2FA step-up (HTTP 409 `2fa_required`) is feature-flagged off in V0;
+        the 409 path is unreachable until both `WPMGR_AUTOLOGIN_REQUIRE_2FA_STEP_UP`
+        and the per-site `require_2fa_step_up` policy are true AND a future
+        2FA enrollment system is in place.
+
+        The minted JWT is NEVER returned in the response body apart from
+        being embedded in `redirect_url`; it is NEVER recorded in the audit
+        trail — the audit row stores only the nonce id and outcome.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AutologinCreate"
+      responses:
+        "200":
+          description: Autologin minted; follow `redirect_url` to land in wp-admin.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutologinResponse"
+        "403":
+          description: |
+            RBAC denied (`rbac_denied`) or autologin disabled by policy
+            (`policy_disabled`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            A two-factor step-up is required (`2fa_required`). Unreachable
+            today; feature-flagged off until the 2FA system ships.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: |
+            Rate-limited per `(initiator_user_id, site_id)` or per `site_id`.
+            Carries `retry_after_seconds` and a `Retry-After` header.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutologinRateLimited"
+  /agent/v1/autologin/consume:
+    post:
+      operationId: agentAutologinConsume
+      summary: Consume a one-click login nonce (agent-authenticated)
+      description: |
+        Called by the WordPress agent after it has verified the operator's
+        JWT, to atomically consume the nonce and learn the WP login + the
+        allowed WP roles. The control plane consults Redis (GETDEL) first as
+        the sub-millisecond hot path and falls back to a single
+        `UPDATE autologin_tokens ... RETURNING` in Postgres. Exactly one
+        agent wins the race per nonce.
+
+        The agent is authenticated by the M2 Ed25519 signed-request scheme
+        (see AgentSignature); the verified site identity is compared to the
+        body's `site_id` — a mismatch returns 403 `site_mismatch`. A nonce
+        that never existed, was already consumed, or has expired returns 410
+        `nonce_unavailable` (the three cases are intentionally indistinguishable
+        so the table cannot be probed).
+      tags: [agent]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AutologinConsumeRequest"
+      responses:
+        "200":
+          description: Nonce consumed; agent may now establish the wp-admin session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutologinConsumeResponse"
+        "401":
+          description: Agent authentication failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: |
+            The body's `site_id` does not match the agent's verified identity
+            (`site_mismatch`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "410":
+          description: |
+            Nonce is unknown, already consumed, or expired (`nonce_unavailable`).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/metadata:
+    post:
+      operationId: agentMetadata
+      summary: Push site metadata (agent-authenticated)
+      description: |
+        Authenticated via the Ed25519 signed-request scheme (see the AgentSignature
+        security scheme). The site + tenant are resolved from the verified agent
+        identity, never from a header. Updates last_seen_at and marks the site
+        healthy.
+      tags: [agent]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMetadata"
+      responses:
+        "200":
+          description: Metadata stored
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/heartbeat:
+    post:
+      operationId: agentHeartbeat
+      summary: Liveness heartbeat (agent-authenticated)
+      description: |
+        The 60s agent heartbeat (ADR-039). Authenticated via the Ed25519
+        signed-request scheme; refreshes last_seen_at for the resolved site,
+        recovers a degraded/disconnected site to `connected`, and returns any
+        pending agent instructions (e.g. `["revoke"]` for a revoked site). The
+        body may carry light metadata (status, versions, pending-update count);
+        it is accepted best-effort. Pre-M21 control planes return 204 with no
+        body.
+      tags: [agent]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentHeartbeat"
+      responses:
+        "200":
+          description: Heartbeat recorded; optional pending instructions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentHeartbeatResult"
+        "204":
+          description: Heartbeat recorded (legacy liveness-only path)
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/disconnect:
+    post:
+      operationId: agentDisconnect
+      summary: Signed last-will disconnect (agent-authenticated)
+      description: |
+        M21 / ADR-040 — the agent's signed last-will. Fired by the WordPress
+        deactivation/uninstall hooks (best-effort, 3s timeout). Authenticated via
+        the SAME Ed25519 signed-request scheme as every agent route: the
+        signature is verified and bound to the calling site BEFORE any write, so
+        possession of a site_id alone cannot disconnect a site. Transitions the
+        site connected/degraded → `disconnected` with the supplied reason. Does
+        NOT archive (archive stays an explicit operator action).
+      tags: [agent]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentDisconnect"
+      responses:
+        "200":
+          description: Disconnect recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/sync-batch:
+    post:
+      operationId: agentMediaSyncBatch
+      summary: Push a page of enumerated media attachments (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — the agent's `media_sync` command pushes pages
+        of ≤200 attachments here. Authenticated via the Ed25519 signed-request
+        scheme; the tenant+site come from the verified identity, never a header.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaSyncBatch"
+      responses:
+        "200":
+          description: Batch upserted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  upserted_count: { type: integer }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/presign:
+    post:
+      operationId: agentMediaPresign
+      summary: Request presigned PUT URLs for source variants (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — the agent's `media_optimize` command requests
+        presigned PUT URLs (one per variant, ≤10) so it can upload source bytes to
+        media/<tenant>/<site>/<job>/src/<name>. No image bytes pass through the CP.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaPresign"
+      responses:
+        "200":
+          description: Presigned upload URLs keyed by variant name
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  uploads:
+                    type: object
+                    additionalProperties: { type: string }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/encode-ready:
+    post:
+      operationId: agentMediaEncodeReady
+      summary: Signal that source variants are uploaded (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — the agent calls this after presigned-PUTting
+        the source variants so the CP enqueues the encode jobs.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaPresign"
+      responses:
+        "200":
+          description: Encode-ready acknowledged
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/job-status:
+    post:
+      operationId: agentMediaJobStatus
+      summary: Report an apply (or delete-originals) result (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — after `media_apply` or `media_delete_originals`,
+        the agent reports the applied variants, byte sizes, compression level,
+        target format, and DB-rewrite row counts so the CP can upsert the mirror
+        row (site_media_assets).
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaJobStatus"
+      responses:
+        "200":
+          description: Status recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/restore-status:
+    post:
+      operationId: agentMediaRestoreStatus
+      summary: Report a restore result (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — after `media_restore`, the agent reports
+        whether the attachment was reverted to its pre-optimization state.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaRestoreStatus"
+      responses:
+        "200":
+          description: Restore status recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/asset-deleted:
+    post:
+      operationId: agentMediaAssetDeleted
+      summary: Report a WP attachment was deleted (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — the agent's `delete_attachment` hook fired on
+        any deletion path (wp-admin, programmatic, WP-CLI, REST). The agent has
+        already removed its own untracked originals from disk; this notifies the
+        CP to reconcile the site_media_assets row. Best-effort from the agent;
+        the periodic sync sweep is the backstop.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaAssetDeleted"
+      responses:
+        "200":
+          description: Asset deletion recorded
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /agent/v1/media/sync-finalize:
+    post:
+      operationId: agentMediaSyncFinalize
+      summary: Finalize a clean media enumeration (agent-authenticated)
+      description: |
+        Media Optimizer (ADR-043) — the agent calls this once a FULL paged media
+        enumeration completed cleanly (every sync-batch page succeeded) so the CP
+        reconciles offline deletions (marks any site_media_assets row not seen in
+        this job's pages as deleted). NEVER sent on a partial/errored run — the
+        blast-radius guard against a transiently-empty WP wiping the asset list.
+      tags: [agent, media]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentMediaSyncFinalize"
+      responses:
+        "200":
+          description: Enumeration finalized; offline deletions reconciled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok: { type: boolean }
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}:
+    get:
+      operationId: getSite
+      summary: Get a site by ID
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: The site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Site"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteSite
+      summary: Delete a site
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "204":
+          description: Site deleted
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/updates:
+    post:
+      operationId: createUpdateRun
+      summary: Start a bulk update run
+      description: |
+        Creates an update run targeting a selection of sites (by site_ids OR by
+        tag) and a set of items (plugins/themes/core, each with a desired version
+        or "latest"). One task is created per (site, item) and a background job is
+        enqueued per task (respecting a per-tenant parallelism limit). When
+        dry_run is true the agent is asked what WOULD change and the site is not
+        mutated. Requires operator+.
+      tags: [updates]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateRunCreate"
+      responses:
+        "201":
+          description: Update run created (tasks enqueued)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateRun"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listUpdateRuns
+      summary: List update runs for the current tenant
+      tags: [updates]
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of update runs
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateRunList"
+  /api/v1/updates/{runId}:
+    get:
+      operationId: getUpdateRun
+      summary: Get an update run with its tasks
+      tags: [updates]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: The update run and its per-(site,item) tasks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UpdateRun"
+        "404":
+          description: Update run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/updates/{runId}/events:
+    get:
+      operationId: streamUpdateRunEvents
+      summary: Stream live update-task status changes (SSE)
+      description: |
+        Server-Sent Events stream (text/event-stream) of task status transitions
+        for a run, for live progress. Each `data:` line is a JSON UpdateEvent.
+        The stream emits periodic heartbeat comment lines (":\n") and ends when
+        the run reaches a terminal state or the client disconnects. Requires
+        viewer+.
+      tags: [updates]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: |
+            An event stream. Media type text/event-stream; each event payload is
+            an UpdateEvent JSON object. Documented here as the UpdateEvent schema
+            for clients/codegen even though the transport is SSE, not JSON.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/UpdateEvent"
+        "404":
+          description: Update run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/backups:
+    post:
+      operationId: createBackup
+      summary: Start a backup of a site
+      description: |
+        Records a pending backup snapshot for the site and enqueues a background
+        job that dispatches a signed `backup` command to the site's agent. The
+        agent chunks, encrypts (client-side, age, to the site's PUBLIC recipient)
+        and uploads ciphertext directly to object storage via presigned URLs,
+        then submits the manifest. Incremental: a chunk whose content hash is
+        already stored is not re-uploaded. Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupCreate"
+      responses:
+        "201":
+          description: Backup snapshot created (job enqueued)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    get:
+      operationId: listBackups
+      summary: List a site's backup snapshots
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of backup snapshots
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshotList"
+  /api/v1/backups/{snapshotId}:
+    get:
+      operationId: getBackup
+      summary: Get a backup snapshot with its manifest summary
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: The backup snapshot and its manifest entries
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshotDetail"
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/events:
+    get:
+      operationId: streamBackupSnapshotEvents
+      summary: Stream live backup snapshot progress (SSE)
+      description: |
+        Server-Sent Events stream (text/event-stream) of progress transitions for
+        a backup snapshot, for live UI updates. Each `data:` line is a JSON
+        BackupEvent. The stream emits periodic heartbeat comment lines (":\n")
+        and ends when the snapshot reaches a terminal state (completed/failed)
+        or the client disconnects. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: |
+            An event stream. Media type text/event-stream; each event payload is
+            a BackupEvent JSON object. Documented here as the BackupEvent schema
+            for clients/codegen even though the transport is SSE, not JSON.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/BackupEvent"
+        "404":
+          description: Backup snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/sql-inspection:
+    get:
+      operationId: getBackupSqlInspection
+      summary: Inspect the SQL dump contained in a backup snapshot
+      description: |
+        Returns a structured report on the SQL dump artifact of a backup
+        snapshot: table inventory, row/byte estimates, charset, table prefix,
+        and (when the dump looks like a WordPress install) the canonical
+        siteurl/home/db_version probed from wp_options. Resolution order:
+        1. If the snapshot manifest carries an agent-generated inspection
+           artifact, that JSON is returned (source="agent"). This is the cheap,
+           always-correct path because the agent has the SQL plaintext locally.
+        2. Otherwise the control plane streams the dump artifact, parses it
+           with the legacy scanner, and caches the result for subsequent calls
+           (source="cp-legacy"). The first request returns 202 Accepted while
+           the inspection job runs; the client polls until it gets 200.
+        Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: The parsed SQL inspection report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SqlInspection"
+        "202":
+          description: |
+            The legacy inspection job has been enqueued; the client should poll
+            the same URL until the report is ready. The Location header echoes
+            the polling URL for clients that follow it transparently.
+          headers:
+            Location:
+              description: URL to poll for the ready report.
+              schema:
+                type: string
+        "404":
+          description: Snapshot not found, or has no DB artifact to inspect
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/restore:
+    post:
+      operationId: createRestore
+      summary: Restore from a backup snapshot (full or partial)
+      description: |
+        Enqueues a restore job. The control plane resolves the (possibly partial)
+        selection into ordered chunks, issues presigned GET URLs, and dispatches
+        a signed `restore` command. The agent downloads ciphertext, verifies the
+        BLAKE3 of each chunk, decrypts with the age identity it alone holds, and
+        reassembles. Supports full, by-path, and by-db-table partial restore.
+        Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RestoreCreate"
+      responses:
+        "202":
+          description: Restore job enqueued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/backup-schedule:
+    get:
+      operationId: getBackupSchedule
+      summary: Get a site's backup schedule
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: The site's backup schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSchedule"
+        "404":
+          description: No schedule configured for the site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: putBackupSchedule
+      summary: Create or update a site's backup schedule
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BackupScheduleUpdate"
+      responses:
+        "200":
+          description: The saved backup schedule
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSchedule"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/updates/refresh:
+    post:
+      operationId: refreshSiteUpdates
+      summary: Trigger an immediate inventory + available-updates refresh
+      description: |
+        Enqueues a CP->agent refresh-inventory command for the site. The agent
+        re-reads its plugin/theme inventory and `update_*` transients and pushes
+        them back over /agent/v1/metadata. Returns 202 immediately. Requires
+        viewer+. Returns 409 when the site is offline or unreachable, or 404 if
+        the site is not enrolled in this tenant.
+      tags: [updates]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "202":
+          description: Refresh queued
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Site offline or refresh already in flight
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/updates/available:
+    get:
+      operationId: getSiteAvailableUpdates
+      summary: Get the cached per-item available-updates list for a site
+      description: |
+        Returns the cached list of plugins/themes (and core) that have an update
+        available, derived from the agent's last metadata sync. Items are sorted
+        core -> plugins -> themes, with active before inactive. `as_of` is the
+        site's last update timestamp. Requires viewer+.
+      tags: [updates]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Available updates
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteAvailableUpdates"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/uptime:
+    get:
+      operationId: getSiteUptime
+      summary: Get a site's uptime status over a window
+      description: |
+        Returns the uptime % and average latency for a site over the requested
+        window (7d/30d/90d), the current up/down state, the last check time, the
+        TLS certificate expiry, and a downsampled recent check series. Metrics
+        come from the ClickHouse uptime store, scoped by tenant_id + site_id; the
+        site's tenant ownership is verified in Postgres first (a foreign site is
+        a 404). Requires viewer+.
+      tags: [uptime]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: window
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["7d", "30d", "90d"]
+            default: "7d"
+      responses:
+        "200":
+          description: The site's uptime status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UptimeStatus"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/uptime/summary:
+    get:
+      operationId: getUptimeSummary
+      summary: Current up/down status per site for the dashboard
+      description: |
+        Returns the current up/down status and last check for every site in the
+        tenant (from the latest recorded probe). Requires viewer+.
+      tags: [uptime]
+      responses:
+        "200":
+          description: Per-site current uptime status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UptimeSummary"
+  /api/v1/alert-config:
+    get:
+      operationId: getAlertConfig
+      summary: Get the tenant's uptime alert configuration
+      description: |
+        Returns the tenant's downtime/recovery alert channel: email recipients,
+        whether a webhook is configured, and the enabled flag. The webhook secret
+        is never returned. Requires admin+.
+      tags: [uptime]
+      responses:
+        "200":
+          description: The tenant's alert configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertConfig"
+    put:
+      operationId: putAlertConfig
+      summary: Create or update the tenant's uptime alert configuration
+      description: |
+        Sets the email recipients, webhook URL + signing secret, and enabled flag
+        for downtime/recovery alerts. The webhook secret is write-only. Requires
+        admin+.
+      tags: [uptime]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertConfigUpdate"
+      responses:
+        "200":
+          description: The saved alert configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AlertConfig"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  # ── ADR-037 Sprint 2 — Site Health (diagnostics) + PHP error monitor ────────
+  /api/v1/sites/{siteId}/diagnostics:
+    get:
+      operationId: getSiteDiagnostics
+      summary: Latest site diagnostics by category
+      description: |
+        Returns one card per category (14 total) carrying the latest payload
+        the agent shipped + the collection/freshness timestamps. Categories the
+        agent has never reported for are returned with a null payload so the UI
+        can render an "awaiting first sync" placeholder.
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Site diagnostics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteDiagnosticsList"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/diagnostics/refresh:
+    post:
+      operationId: refreshSiteDiagnostics
+      summary: Enqueue an on-demand diagnostics command to the agent
+      description: |
+        Enqueues a signed `diagnostics` command to the agent. The agent runs
+        the 14-category collector immediately and pushes the result back to
+        POST /agent/v1/diagnostics. Returns 202 on accept. Returns 503 with
+        code `diagnostics_refresh_unwired` when the CP->agent commander has
+        not yet been wired (V1).
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "202":
+          description: Refresh enqueued
+        "503":
+          description: Refresh is not yet wired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/errors:
+    get:
+      operationId: listSitePHPErrors
+      summary: List fingerprint-grouped PHP errors for a site
+      description: |
+        Returns the agent-captured PHP errors for the site, grouped by md5
+        fingerprint. Each row carries the occurrence count, first/last seen
+        timestamps, and the silenced flag.
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: since
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+          description: Only rows whose last_seen_at is after this timestamp.
+        - name: silenced
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["true", "false"]
+          description: Filter by silenced state. Omit for both.
+        - $ref: "#/components/parameters/Limit"
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: PHP error list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PHPErrorList"
+  /api/v1/sites/{siteId}/errors/{md5}/silence:
+    post:
+      operationId: silenceSitePHPError
+      summary: Silence (or unsilence) a fingerprint-grouped PHP error
+      description: |
+        Toggles the silenced flag on a (site, md5) error row. The agent
+        continues to count silently on its side; the CP UI hides silenced
+        rows by default.
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: md5
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The md5 fingerprint.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PHPErrorSilence"
+      responses:
+        "204":
+          description: Silence flag updated
+        "404":
+          description: Error not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  # ── S1.2 PHP-error ignore-list + error-level config ─────────────────────────
+  /api/v1/sites/{siteId}/errors/config:
+    get:
+      operationId: getSiteErrorConfig
+      summary: Get the per-site PHP error reporting config
+      description: |
+        Returns the site's PHP error-level mask and md5 ignore-list. When no
+        config row has been saved yet the defaults are returned: error_level=6143
+        (WordPress default E_ALL & ~E_STRICT) and an empty ignore_md5s list.
+        The config is pushed to the agent on each PATCH; this GET only reads
+        the CP-side stored value.
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Error config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteErrorConfig"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    patch:
+      operationId: patchSiteErrorConfig
+      summary: Save per-site PHP error reporting config and push to agent
+      description: |
+        Stores the PHP error-level mask and md5 ignore-list for the site, then
+        pushes the new config to the agent via a signed `sync_error_config`
+        command. Returns the stored config on success.
+
+        Validation:
+          - `error_level` must be a positive integer that fits in int32 (>0,
+            ≤2147483647). Typical values: 6143 (WP default), 32767 (E_ALL),
+            0x7FFFFFFF (all flags set).
+          - Each entry in `ignore_md5s` must be exactly 32 lowercase hex
+            characters (the md5(code:file:line:message) fingerprint produced
+            by the agent).
+
+        If the agent push fails after the config is successfully stored the
+        response is still HTTP 200 with the stored config; an
+        `X-Agent-Push-Warning` response header carries the push error message
+        so the UI can surface it as a non-blocking warning.
+      tags: [diagnostics]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteErrorConfigUpdate"
+      responses:
+        "200":
+          description: Config stored (and pushed to agent unless the push failed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteErrorConfig"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  # ── ADR-037 Sprint 3 — WordPress activity log (tamper-evident) ──────────────
+  /api/v1/sites/{siteId}/activity:
+    get:
+      operationId: listSiteActivity
+      summary: List WordPress activity-log events for a site
+      description: |
+        Returns the agent-captured WordPress activity events for the site,
+        newest first. Each event carries the hash-chain fields (prev_hash,
+        this_hash) and a server-verified chain_valid flag: the CP recomputes
+        every event's hash at ingest and flags any tamper (a mutated, inserted,
+        or deleted historical row) as chain_valid=false. Filter by event_type,
+        object_type, actor_login, severity, and an occurred-at time range.
+      tags: [activity]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: event_type
+          in: query
+          required: false
+          schema: { type: string }
+          description: Exact-match filter on the event type.
+        - name: object_type
+          in: query
+          required: false
+          schema: { type: string }
+          description: Exact-match filter on the object type.
+        - name: actor_login
+          in: query
+          required: false
+          schema: { type: string }
+          description: Exact-match filter on the actor login.
+        - name: severity
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [high, medium, low]
+          description: Filter by severity.
+        - name: since
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Only events whose occurred_at is at/after this timestamp.
+        - name: until
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+          description: Only events whose occurred_at is at/before this timestamp.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        "200":
+          description: Activity event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteActivityList"
+  /api/v1/sites/{siteId}/activity/verify:
+    get:
+      operationId: verifySiteActivity
+      summary: Re-verify the activity-log hash chain for a site
+      description: |
+        Recomputes the entire hash chain for the site server-side from genesis
+        and reports whether it is intact. When a break is found, break_at_seq
+        carries the seq of the first event whose recomputed hash (or prev_hash
+        linkage) does not match — the tamper point. This is the integrity badge
+        feeding the activity view.
+      tags: [activity]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Chain verification result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ActivityVerifyResult"
+  # ── S2 — Login Protection + IP store ───────────────────────────────────────
+  /api/v1/sites/{siteId}/security/login-protection:
+    get:
+      operationId: getSiteLoginProtection
+      summary: Get the login-protection config for a site
+      description: |
+        Returns the current login-protection mode, brute-force thresholds, IP
+        header selection, and CIDR allow/deny lists for the site. When no config
+        has been saved yet, returns the built-in defaults (mode=protect, standard
+        thresholds, REMOTE_ADDR, empty CIDR lists).
+      tags: [security]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Current login-protection config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteLoginProtectionConfig"
+    put:
+      operationId: putSiteLoginProtection
+      summary: Save (and push to agent) the login-protection config
+      description: |
+        Stores the new config and pushes it to the agent via the signed
+        `sync_security_config` command. If the agent push fails after a
+        successful store, HTTP 200 is still returned with the stored config;
+        the push error is surfaced in the `X-Agent-Push-Warning` response
+        header so callers can surface it as a non-blocking warning.
+
+        **Safety rail**: when `mode` is `"protect"` and `allow_cidrs` is empty,
+        the CP automatically adds the requesting operator's client IP (/32 for
+        IPv4, /128 for IPv6) to `allow_cidrs` before storing. This prevents the
+        operator from enabling protection and immediately locking themselves out.
+        The auto-added CIDR is reflected in the returned config.
+      tags: [security]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteLoginProtectionConfigUpdate"
+      responses:
+        "200":
+          description: Stored login-protection config (including any auto-added operator CIDR)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteLoginProtectionConfig"
+        "422":
+          description: Validation error (invalid mode, CIDR, or thresholds)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/security/unblock-ip:
+    post:
+      operationId: unblockSiteIP
+      summary: Unblock an IP address on the site
+      description: |
+        Sends the signed `unblock_ip` command to the site's agent, removing any
+        active block for the given IP. Returns `ok=true` on success; `ok=false`
+        with a `detail` message when the agent rejects or cannot apply the
+        unblock (still HTTP 200 — it is an application-level, not transport, failure).
+      tags: [security]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UnblockIPRequest"
+      responses:
+        "200":
+          description: Unblock result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UnblockIPResult"
+        "422":
+          description: Validation error (invalid IP address)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Security agent client not wired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/security/login-events:
+    get:
+      operationId: listSiteLoginEvents
+      summary: List login events for a site
+      description: |
+        Returns the agent-ingested login events for the site, ordered by
+        `occurred_at` descending (newest first). Filter by `status` (1=failure,
+        2=success, 3=blocked). Default limit is 100; max 500.
+      tags: [security]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 500
+            default: 100
+          description: Maximum number of events to return.
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int32
+            enum: [1, 2, 3]
+          description: |
+            Filter by login-event status: 1=failure, 2=success, 3=blocked.
+            Omit to return all statuses.
+      responses:
+        "200":
+          description: Login event list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteLoginEventList"
+  # ── M14 Login Whitelabel ────────────────────────────────────────────────────
+  /api/v1/sites/{siteId}/login-brand:
+    get:
+      operationId: getSiteLoginBrand
+      summary: Get the login brand config for a site
+      description: |
+        Returns the current login brand config (logo URL, logo link, message)
+        for the site. When no config has been saved yet, returns the all-empty
+        default (all string fields are `""`), which the agent interprets as
+        "no override" (WordPress built-in login logo / no custom message).
+      tags: [loginbrand]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Current login brand config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteLoginBrand"
+    put:
+      operationId: putSiteLoginBrand
+      summary: Save (and push to agent) the login brand config
+      description: |
+        Stores the new login brand config and pushes it to the agent via the
+        signed `sync_login_brand` command. If the agent push fails after a
+        successful store, HTTP 200 is still returned with the stored config;
+        the push error is surfaced in the `X-Agent-Push-Warning` response
+        header so callers can surface it as a non-blocking warning.
+
+        **Validation**:
+          - `logo_url` and `logo_link` must be empty (`""`) or a valid
+            `http`/`https` URL (other schemes are rejected with 422).
+          - `message` must be at most 2000 characters.
+          - All fields are optional; omitted or `""` fields mean "no override".
+      tags: [loginbrand]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteLoginBrandUpdate"
+      responses:
+        "200":
+          description: Stored login brand config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteLoginBrand"
+        "422":
+          description: Validation error (invalid URL scheme or message too long)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+        maximum: 200
+        default: 50
+    Offset:
+      name: offset
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 0
+        default: 0
+    TenantId:
+      name: tenantId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SiteId:
+      name: siteId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    ApiKeyId:
+      name: apiKeyId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RunId:
+      name: runId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    SnapshotId:
+      name: snapshotId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    DestinationId:
+      name: destinationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    UserId:
+      name: userId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    OrgId:
+      name: orgId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+  securitySchemes:
+    AgentSignature:
+      type: apiKey
+      in: header
+      name: X-WPMgr-Signature
+      description: |
+        Ed25519 signed-request authentication for agent->control-plane calls. The
+        agent sends four headers: X-WPMgr-Agent-Key (its base64 Ed25519 public
+        key, identifying the enrolled site), X-WPMgr-Timestamp (Unix seconds),
+        X-WPMgr-Nonce (a unique per-request token), and X-WPMgr-Signature (the
+        base64 Ed25519 signature over the canonical message
+        "METHOD\nPATH\nTIMESTAMP\nNONCE\nhex(sha256(body))"). The control plane
+        rejects stale timestamps and replayed nonces. (apiKey type is the closest
+        OpenAPI 3.1 primitive for this header-carried signature scheme.)
+  schemas:
+    Health:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+        version:
+          type: string
+    Readiness:
+      type: object
+      required: [status, checks]
+      properties:
+        status:
+          type: string
+          enum: [ok, degraded]
+        checks:
+          type: object
+          additionalProperties:
+            type: string
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: Stable machine-readable error code.
+        message:
+          type: string
+          description: Human-readable error description.
+        details:
+          type: object
+          additionalProperties: true
+    Tenant:
+      type: object
+      required: [id, name, slug, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    TenantCreate:
+      type: object
+      required: [name, slug]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 64
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    TenantList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tenant"
+    Site:
+      type: object
+      required:
+        [id, tenant_id, url, name, status, wp_version, php_version, health_status, multisite, tags, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        url:
+          type: string
+          format: uri
+        name:
+          type: string
+        status:
+          type: string
+          enum: [pending, active, error, disabled]
+        wp_version:
+          type: string
+        php_version:
+          type: string
+        health_status:
+          type: string
+          enum: [unknown, healthy, unreachable]
+        connection_state:
+          type: string
+          description: |
+            M21 / ADR-041 — the single source of truth for the agent connection
+            lifecycle. Surfaced live on the /api/v1/sites/events SSE `site`
+            payload; surfacing it on this strict REST Site shape is a Phase 4
+            follow-up (the legacy status/health_status remain in sync meanwhile).
+          enum: [pending_enrollment, connected, degraded, disconnected, revoked, archived]
+        connection_generation:
+          type: integer
+          format: int32
+          description: M21 — bumps on each re-enrollment under the same site_id.
+        disconnected_reason:
+          type: string
+          description: M21 — reason recorded on the last down transition.
+        server_info:
+          type: string
+        multisite:
+          type: boolean
+        active_theme:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        enrolled:
+          type: boolean
+          description: Whether an agent has enrolled this site.
+        enrolled_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        components:
+          $ref: "#/components/schemas/SiteComponents"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SiteComponents:
+      type: object
+      description: Installed plugin/theme inventory pushed by the agent.
+      properties:
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteComponent"
+        themes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteComponent"
+        core_update:
+          type: object
+          nullable: true
+          description: When set, WordPress core has an update available.
+          required: [new_version, current_version]
+          properties:
+            new_version:
+              type: string
+            current_version:
+              type: string
+    SiteComponent:
+      type: object
+      required: [slug]
+      properties:
+        slug:
+          type: string
+        name:
+          type: string
+        version:
+          type: string
+        active:
+          type: boolean
+        available_update:
+          type: object
+          nullable: true
+          description: When set, an update is available for this plugin/theme.
+          required: [new_version]
+          properties:
+            new_version:
+              type: string
+            package:
+              type: string
+              nullable: true
+            tested:
+              type: string
+              nullable: true
+            requires_php:
+              type: string
+              nullable: true
+    SiteAvailableUpdates:
+      type: object
+      description: Per-site cached list of items with updates available.
+      required: [site_id, items]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        core_update:
+          type: object
+          nullable: true
+          required: [new_version, current_version]
+          properties:
+            new_version:
+              type: string
+            current_version:
+              type: string
+        items:
+          type: array
+          items:
+            type: object
+            required: [type, slug, name, version, new_version, active]
+            properties:
+              type:
+                type: string
+                enum: [plugin, theme]
+              slug:
+                type: string
+              name:
+                type: string
+              version:
+                type: string
+              new_version:
+                type: string
+              active:
+                type: boolean
+              package:
+                type: string
+                nullable: true
+              tested:
+                type: string
+                nullable: true
+              requires_php:
+                type: string
+                nullable: true
+        as_of:
+          type: string
+          format: date-time
+          nullable: true
+    SiteTags:
+      type: object
+      required: [tags]
+      properties:
+        tags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+    PairingCodeCreate:
+      type: object
+      properties:
+        site_name:
+          type: string
+          maxLength: 200
+        tags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+    PairingCode:
+      type: object
+      required: [id, tenant_id, code, expires_at, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        code:
+          type: string
+          description: The one-time plaintext pairing code. Shown ONCE; never stored.
+        site_name:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    EnrollRequest:
+      type: object
+      required: [pairing_code, site_url, agent_public_key]
+      properties:
+        pairing_code:
+          type: string
+          maxLength: 128
+        site_url:
+          type: string
+          format: uri
+          maxLength: 2048
+        agent_public_key:
+          type: string
+          description: The agent's own Ed25519 public key, base64 (std) encoded.
+        name:
+          type: string
+          maxLength: 200
+        wp_version:
+          type: string
+          maxLength: 32
+        php_version:
+          type: string
+          maxLength: 32
+        tags:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 64
+    EnrollResponse:
+      type: object
+      required: [site_id, tenant_id, control_plane_public_key]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        control_plane_public_key:
+          type: string
+          description: |
+            The control plane's Ed25519 PUBLIC signing key (base64 std). The agent
+            uses it to verify control-plane->agent commands.
+    SiteEnrollmentCode:
+      type: object
+      description: |
+        M21 — the once-shown enrollment code returned by the site-first create
+        and the begin-re-enrollment endpoints. The plaintext code is never
+        retrievable again.
+      required: [site_id, enrollment_code, expires_at]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        enrollment_code:
+          type: string
+          description: The single-use, site-bound pairing code (shown once).
+        expires_at:
+          type: string
+          format: date-time
+    SiteLifecycleReason:
+      type: object
+      description: Optional reason recorded in connection history + audit.
+      properties:
+        reason:
+          type: string
+          maxLength: 200
+    AgentHeartbeat:
+      type: object
+      description: |
+        M21 / ADR-039 — the light 60s heartbeat body the WordPress agent sends.
+        All fields are optional and accepted best-effort: the beat is about
+        liveness, not the payload. Forward-compatible (additive) so a future CP
+        can render drift without a separate metadata pull.
+      properties:
+        site_id:
+          type: string
+          description: The enrolled site UUID (echoed for convenience; auth binds the real identity).
+        ts:
+          type: integer
+          format: int64
+          description: Unix seconds at send time.
+        status:
+          type: string
+          description: Agent self-reported status, currently always "ok".
+        wp_version:
+          type: string
+          maxLength: 32
+        php_memory:
+          type: string
+          maxLength: 32
+          description: PHP memory_limit (ini_get).
+        plugin_versions:
+          type: object
+          additionalProperties:
+            type: string
+          description: Compact plugin-file => version map.
+        installed_updates_count:
+          type: integer
+          description: Count of available plugin + theme + core updates (from cached transients).
+        multisite:
+          type: boolean
+    AgentHeartbeatResult:
+      type: object
+      description: M21 — heartbeat acknowledgement with optional pending instructions.
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        instructions:
+          type: array
+          description: Pending agent instructions, e.g. ["revoke"].
+          items:
+            type: string
+        revoke_token:
+          type: string
+          description: |
+            Present with a `["revoke"]` instruction: a short-lived signed Ed25519
+            JWT (aud=site_id, cmd="revoke") the agent MUST verify with the CP
+            public key before any self-teardown (ADR-040 addendum). Fail-closed —
+            an absent/invalid token must be a no-op.
+    AgentDisconnect:
+      type: object
+      description: M21 — the signed last-will body.
+      properties:
+        site_id:
+          type: string
+          description: The enrolled site UUID (echoed for convenience; auth binds the real identity).
+        reason:
+          type: string
+          maxLength: 64
+          description: deactivated | uninstalled | user_initiated
+    AgentMediaSyncBatch:
+      type: object
+      description: |
+        ADR-043 — one page (≤200) of enumerated media attachments. Every page
+        also carries the sync `job_id` so the CP can scope the enumeration and so
+        the matching `/agent/v1/media/sync-finalize` call (sent only after a clean
+        full enumeration) can reconcile offline deletions against this run's pages.
+      required: [attachments]
+      properties:
+        job_id: { type: string }
+        attachments:
+          type: array
+          maxItems: 200
+          items:
+            type: object
+            properties:
+              wp_attachment_id: { type: integer, format: int64 }
+              title: { type: string }
+              original_path: { type: string }
+              original_url: { type: string }
+              original_mime: { type: string }
+              original_width: { type: integer, nullable: true }
+              original_height: { type: integer, nullable: true }
+              original_size_bytes: { type: integer, format: int64 }
+    AgentMediaPresign:
+      type: object
+      description: ADR-043 — request presigned PUT URLs (presign) or signal sources uploaded (encode-ready).
+      required: [job_id, variants]
+      properties:
+        job_id: { type: string }
+        variants:
+          type: array
+          maxItems: 10
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              source_size: { type: integer, format: int64 }
+              source_mime: { type: string }
+    AgentMediaJobStatus:
+      type: object
+      description: ADR-043 — apply / delete-originals result reported to the CP.
+      required: [job_id]
+      properties:
+        job_id: { type: string }
+        applied_variants:
+          type: array
+          items: { type: string }
+        sizes_unoptimized:
+          type: object
+          additionalProperties: { type: string }
+        current_format: { type: string }
+        current_size_bytes: { type: integer, format: int64 }
+        bytes_before: { type: integer, format: int64, nullable: true }
+        bytes_after: { type: integer, format: int64, nullable: true }
+        compression_level: { type: string }
+        target_format: { type: string }
+        rewrite_stats:
+          type: object
+          additionalProperties: true
+        error: { type: string }
+    AgentMediaRestoreStatus:
+      type: object
+      description: ADR-043 — restore result reported to the CP.
+      required: [job_id, restored]
+      properties:
+        job_id: { type: string }
+        restored: { type: boolean }
+        error: { type: string }
+    AgentMediaAssetDeleted:
+      type: object
+      description: |
+        ADR-043 — the agent's `delete_attachment` hook fired: a WP attachment was
+        deleted (wp-admin, programmatic, WP-CLI, or REST). The agent has already
+        removed its own untracked originals from disk (the *.wpmgr-original.<ext>
+        archive in replace mode, the original-ext twin in coexist mode); this
+        signals the CP to reconcile the site_media_assets row. Best-effort from
+        the agent — the sync sweep is the backstop.
+      required: [wp_attachment_id]
+      properties:
+        wp_attachment_id: { type: integer, format: int64 }
+    AgentMediaSyncFinalize:
+      type: object
+      description: |
+        ADR-043 — a FULL paged media enumeration completed cleanly. Sent ONLY
+        after every sync-batch page succeeded (a partial/errored run must NOT
+        finalize — the blast-radius guard against a transiently-empty WP wiping
+        the asset list). The CP marks any site_media_assets row NOT seen in this
+        job's pages as deleted (offline-deletion reconciliation).
+      required: [job_id]
+      properties:
+        job_id: { type: string }
+    AgentMetadata:
+      type: object
+      properties:
+        wp_version:
+          type: string
+          maxLength: 32
+        php_version:
+          type: string
+          maxLength: 32
+        server_info:
+          type: string
+          maxLength: 512
+        multisite:
+          type: boolean
+        active_theme:
+          type: string
+          maxLength: 200
+        plugins:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteComponent"
+        themes:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteComponent"
+    SiteCreate:
+      type: object
+      required: [url, name]
+      properties:
+        url:
+          type: string
+          format: uri
+          minLength: 1
+          maxLength: 2048
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        status:
+          type: string
+          enum: [pending, active, error, disabled]
+          default: pending
+        wp_version:
+          type: string
+          maxLength: 32
+        php_version:
+          type: string
+          maxLength: 32
+        tags:
+          type: array
+          description: M21 — optional tags applied to the pending site.
+          items:
+            type: string
+            maxLength: 64
+    SiteList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Site"
+    Role:
+      type: string
+      enum: [owner, admin, operator, viewer]
+    User:
+      type: object
+      required: [id, email, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        last_login_at:
+          type: string
+          format: date-time
+    Membership:
+      type: object
+      required: [user_id, tenant_id, role]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/Role"
+    MembershipList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+    Me:
+      type: object
+      required: [user, memberships]
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        memberships:
+          type: array
+          items:
+            $ref: "#/components/schemas/Membership"
+        active_tenant_id:
+          type: string
+          format: uuid
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 1
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+          maxLength: 200
+        name:
+          type: string
+          maxLength: 200
+        tenant_name:
+          type: string
+          maxLength: 200
+        tenant_slug:
+          type: string
+          maxLength: 64
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+    InviteRequest:
+      type: object
+      required: [email, password, role]
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+          minLength: 12
+          maxLength: 200
+        name:
+          type: string
+          maxLength: 200
+        role:
+          $ref: "#/components/schemas/Role"
+    ApiKey:
+      type: object
+      required: [id, tenant_id, name, prefix, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        prefix:
+          type: string
+        role:
+          $ref: "#/components/schemas/Role"
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+        revoked_at:
+          type: string
+          format: date-time
+    ApiKeyList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApiKey"
+    ApiKeyCreate:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        role:
+          $ref: "#/components/schemas/Role"
+    ApiKeyCreated:
+      type: object
+      required: [api_key, token]
+      properties:
+        api_key:
+          $ref: "#/components/schemas/ApiKey"
+        token:
+          type: string
+          description: The full API key, shown only once at creation.
+    SiteDestinationKind:
+      type: string
+      enum: [cp, local, s3_compat]
+      description: |
+        ADR-036 P1 destination backend type. `cp` is the WPMgr-managed bucket,
+        `local` writes to wp-content/wpmgr-backups on the agent host, and
+        `s3_compat` targets a customer-owned S3-compatible bucket.
+    SiteDestination:
+      type: object
+      required:
+        [id, tenant_id, site_id, kind, label, endpoint, region, bucket,
+         path_prefix, access_key_id, has_secret, force_path_style, is_default,
+         created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        kind:
+          $ref: "#/components/schemas/SiteDestinationKind"
+        label:
+          type: string
+        endpoint:
+          type: string
+        region:
+          type: string
+        bucket:
+          type: string
+        path_prefix:
+          type: string
+        access_key_id:
+          type: string
+        has_secret:
+          type: boolean
+          description: |
+            True iff a secret key is stored. The encrypted bytes never cross
+            the wire; the UI uses this to render a "Re-enter to save changes"
+            hint on the secret_key field.
+        force_path_style:
+          type: boolean
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SiteDestinationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteDestination"
+    SiteDestinationCreate:
+      type: object
+      required: [kind, label]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SiteDestinationKind"
+        label:
+          type: string
+          minLength: 1
+          maxLength: 200
+        endpoint:
+          type: string
+        region:
+          type: string
+        bucket:
+          type: string
+        path_prefix:
+          type: string
+        access_key_id:
+          type: string
+        secret_key:
+          type: string
+          description: |
+            PLAINTEXT secret. The CP age-encrypts it at rest before persisting;
+            it is NEVER stored in clear nor read back over the API.
+        force_path_style:
+          type: boolean
+        is_default:
+          type: boolean
+    SiteDestinationUpdate:
+      type: object
+      properties:
+        label:
+          type: string
+        endpoint:
+          type: string
+        region:
+          type: string
+        bucket:
+          type: string
+        path_prefix:
+          type: string
+        access_key_id:
+          type: string
+        secret_key:
+          type: string
+          description: |
+            Omit to keep the existing secret; non-empty replaces it.
+        force_path_style:
+          type: boolean
+        is_default:
+          type: boolean
+    SiteDestinationTest:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          $ref: "#/components/schemas/SiteDestinationKind"
+        endpoint:
+          type: string
+        region:
+          type: string
+        bucket:
+          type: string
+        path_prefix:
+          type: string
+        access_key_id:
+          type: string
+        secret_key:
+          type: string
+        force_path_style:
+          type: boolean
+    SiteDestinationTestResult:
+      type: object
+      required: [ok, message]
+      properties:
+        ok:
+          type: boolean
+        message:
+          type: string
+    AuditEntry:
+      type: object
+      required:
+        [id, tenant_id, actor_type, actor_id, action, target_type, target_id, hash, prev_hash, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        actor_type:
+          type: string
+        actor_id:
+          type: string
+        action:
+          type: string
+        target_type:
+          type: string
+        target_id:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        prev_hash:
+          type: string
+        hash:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    AuditList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEntry"
+    AuditVerify:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+        broken_at:
+          type: string
+          format: uuid
+    UpdateItem:
+      type: object
+      required: [type]
+      description: One thing to update on a site.
+      properties:
+        type:
+          type: string
+          enum: [plugin, theme, core]
+        slug:
+          type: string
+          maxLength: 200
+          description: Plugin/theme slug. Ignored (forced to "core") when type is core.
+        version:
+          type: string
+          maxLength: 64
+          description: Desired version, "latest" or an explicit pin. Defaults to latest.
+    UpdateRunCreate:
+      type: object
+      required: [items]
+      description: |
+        Request to start a bulk update run. Provide EITHER site_ids OR tag to
+        select target sites (not both).
+      properties:
+        site_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Explicit target site IDs.
+        tag:
+          type: string
+          maxLength: 64
+          description: Target all enrolled sites carrying this tag.
+        items:
+          type: array
+          minItems: 1
+          maxItems: 200
+          items:
+            $ref: "#/components/schemas/UpdateItem"
+        dry_run:
+          type: boolean
+          default: false
+          description: When true, do not mutate sites; report what would change.
+        schedule_at:
+          type: string
+          format: date-time
+          description: Optional time to run; omitted/now means immediately.
+    UpdateTask:
+      type: object
+      required: [id, run_id, tenant_id, site_id, target_type, target_slug, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        run_id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        target_type:
+          type: string
+          enum: [plugin, theme, core]
+        target_slug:
+          type: string
+        desired_version:
+          type: string
+        from_version:
+          type: string
+        to_version:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, rolled_back, skipped]
+        detail:
+          type: string
+        error:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    UpdateRun:
+      type: object
+      required: [id, tenant_id, status, dry_run, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        created_by:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, completed]
+        dry_run:
+          type: boolean
+        scheduled_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        tasks:
+          type: array
+          items:
+            $ref: "#/components/schemas/UpdateTask"
+    UpdateRunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UpdateRun"
+    UpdateEvent:
+      type: object
+      description: One task-status transition streamed over SSE.
+      required: [run_id, task_id, site_id, target_type, target_slug, status, run_status]
+      properties:
+        run_id:
+          type: string
+          format: uuid
+        task_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        target_type:
+          type: string
+          enum: [plugin, theme, core]
+        target_slug:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, succeeded, failed, rolled_back, skipped]
+        from_version:
+          type: string
+        to_version:
+          type: string
+        detail:
+          type: string
+        run_status:
+          type: string
+          enum: [pending, running, completed]
+    BackupEvent:
+      type: object
+      description: |
+        One snapshot-progress transition streamed over SSE. Status mirrors the
+        parent snapshot's status at publish time so a subscriber can detect a
+        terminal state (completed/failed) and close the EventSource. Phase
+        values come from the closed `allowedProgressPhases` set on the CP.
+      required: [snapshot_id, phase, status, ts]
+      properties:
+        snapshot_id:
+          type: string
+          format: uuid
+        phase:
+          type: string
+          enum:
+            - queued
+            - started
+            - dumping_db
+            - archiving_files
+            - encrypting_uploading
+            - compressing_files
+            - encrypting
+            - uploading
+            - submitting_manifest
+            - completed
+            - failed
+        phase_detail:
+          type: object
+          additionalProperties: true
+          description: Pass-through of the agent's POST /progress payload (e.g. chunk counters).
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        ts:
+          type: string
+          format: date-time
+    BackupCreate:
+      type: object
+      description: Request to start a backup of a site.
+      properties:
+        kind:
+          type: string
+          enum: [files, db, full]
+          default: full
+          description: What to back up. Defaults to full (files + database).
+    BackupSnapshot:
+      type: object
+      required: [id, tenant_id, site_id, kind, status, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        created_by:
+          type: string
+          format: uuid
+        kind:
+          type: string
+          enum: [files, db, full]
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        age_recipient:
+          type: string
+          description: |
+            The age PUBLIC recipient the chunks were encrypted to (provenance).
+            NEVER a private key; the control plane cannot decrypt backups.
+        total_size:
+          type: integer
+          format: int64
+        chunk_count:
+          type: integer
+          format: int64
+        archived:
+          type: boolean
+          description: Kept by the monthly-archive retention rule.
+        error:
+          type: string
+        progress:
+          type: object
+          additionalProperties: true
+          description: |
+            M5.6 / ADR-032 phpbu runner progress. Empty `{}` until the runner posts
+            its first phase. Shape:
+              { "phase": "uploading", "phase_detail": {"chunks_done": 17, "chunks_total": 42, ...} }
+            Phases form a closed set (see backup.allowedProgressPhases on the CP).
+        progress_updated_at:
+          type: string
+          format: date-time
+          description: |
+            Server timestamp of the last progress POST from the runner. Used by the
+            CP watchdog (>120s without an update on a running snapshot → marked
+            failed/stalled) and by the frontend to detect a silent runner.
+        started_at:
+          type: string
+          format: date-time
+        finished_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    BackupSnapshotList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupSnapshot"
+    BackupManifestEntry:
+      type: object
+      required: [path, entry_kind, size, chunk_count]
+      description: One file (or db dump) in a snapshot, summarized.
+      properties:
+        path:
+          type: string
+        entry_kind:
+          type: string
+          enum: [file, db]
+        table_name:
+          type: string
+          description: Set for db entries (partial restore-by-table).
+        size:
+          type: integer
+          format: int64
+        mode:
+          type: integer
+          format: int32
+        chunk_count:
+          type: integer
+          format: int32
+          description: Number of ordered ciphertext chunks reassembling the path.
+    BackupSnapshotDetail:
+      type: object
+      required: [snapshot, entries]
+      properties:
+        snapshot:
+          $ref: "#/components/schemas/BackupSnapshot"
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupManifestEntry"
+    RestoreCreate:
+      type: object
+      description: |
+        Restore selection. Omit both arrays (or set full=true) for a full
+        restore; provide paths for partial file restore, or db_tables for partial
+        db restore. `components` further restricts the operation to specific
+        backup components ("files" and/or "db"); see field doc below.
+      properties:
+        full:
+          type: boolean
+          default: false
+        paths:
+          type: array
+          items:
+            type: string
+          description: Site-relative file paths to restore.
+        db_tables:
+          type: array
+          items:
+            type: string
+          description: Database table names to restore.
+        components:
+          type: array
+          description: >
+            Which backup components to restore. When omitted, restores all
+            components in the snapshot. Valid values:
+
+              - "files"      — broad-strokes alias for ALL file components
+                               (plugin + theme + upload + wp-content). Use
+                               this for "restore everything except the DB".
+              - "db"         — the database dump.
+              - "plugin"     — wp-content/plugins/* only (Track 5).
+              - "theme"      — wp-content/themes/* only (Track 5).
+              - "upload"     — wp-content/uploads/* only (Track 5).
+              - "wp-content" — everything ELSE under wp-content (mu-plugins,
+                               languages, drop-ins, custom dirs — NOT
+                               plugins/themes/uploads) (Track 5).
+
+            Examples — to restore only the database, pass ["db"]. To restore
+            only files, pass ["files"]. To restore both, pass ["files","db"]
+            or omit. To restore only plugins, pass ["plugin"]. To restore
+            plugins + uploads, pass ["plugin","upload"].
+          items:
+            type: string
+            enum: [files, db, plugin, theme, upload, wp-content]
+          uniqueItems: true
+        keep_old_files:
+          type: boolean
+          description: >
+            When true, the agent keeps the pre-restore wp-content tree at
+            .wpmgr-old-files-<id>/ for 24 hours as a manual rollback affordance.
+            When false (default), the agent cleans it up immediately after a
+            successful restore.
+          default: false
+        target_site_url:
+          type: string
+          format: uri
+          nullable: true
+          description: >
+            When set, the agent will rewrite `siteurl` and `home` references
+            from the snapshot's source URLs to this target. When unset, the
+            agent uses the current site's URL (no-op when restoring to the
+            same environment). Required for cross-environment restores
+            (dev->prod, staging->prod). The control plane derives this from
+            the destination Site.URL when the restore is dispatched, so
+            callers typically don't need to set it.
+    SqlInspection:
+      type: object
+      description: |
+        Structured projection of a backup snapshot's SQL dump. Produced either
+        by the agent at backup time (preferred; "source": "agent") or by the
+        control plane's legacy streaming parser (fallback; "source":
+        "cp-legacy"). `truncated: true` indicates the parser hit its CPU/time
+        budget; tables/totals may be incomplete.
+      required: [schema_version, source, is_wordpress, tables, generated_at]
+      properties:
+        schema_version:
+          type: integer
+          description: Report wire-shape version; bump when the JSON shape changes.
+        dump_bytes:
+          type: integer
+          format: int64
+          description: Total plaintext bytes scanned from the dump.
+        charset:
+          type: string
+          description: Connection-level charset from SET NAMES (e.g. utf8mb4).
+        collation:
+          type: string
+          description: Default collation declared in CREATE TABLE trailers, if any.
+        table_prefix:
+          type: string
+          description: |
+            Most common table-name prefix (chars up to the first underscore);
+            empty when no consistent prefix could be determined.
+        wp_version:
+          type: string
+          nullable: true
+          description: WordPress db_version from wp_options, when detectable.
+        siteurl:
+          type: string
+          nullable: true
+          description: WordPress siteurl from wp_options, when detectable.
+        home:
+          type: string
+          nullable: true
+          description: WordPress home from wp_options, when detectable.
+        is_wordpress:
+          type: boolean
+          description: True when a {prefix}options table is present in the dump.
+        truncated:
+          type: boolean
+          description: True when the parser hit its budget before finishing.
+        source:
+          type: string
+          enum: [agent, cp-legacy]
+          description: |
+            "agent" — the JSON was produced by the agent at backup time and
+            stored as a snapshot artifact. "cp-legacy" — the CP streamed the
+            dump artifact through its own parser as a fallback.
+        parser_warnings:
+          type: array
+          items:
+            type: string
+          description: Non-fatal scanner warnings (oversized rows, regex anomalies).
+        tables:
+          type: array
+          description: Per-table inventory; row/byte estimates are best-effort.
+          items:
+            type: object
+            required: [name, rows_estimate]
+            properties:
+              name:
+                type: string
+              rows_estimate:
+                type: integer
+                format: int64
+              bytes_estimate:
+                type: integer
+                format: int64
+              auto_increment:
+                type: integer
+                format: int64
+                nullable: true
+              charset:
+                type: string
+              has_fk:
+                type: boolean
+        generated_at:
+          type: string
+          format: date-time
+          description: When the report was assembled (agent or CP wall clock).
+    BackupSchedule:
+      type: object
+      required: [id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, keep_last, timezone, gmt_offset, next_run_at, next_runs, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        cadence:
+          type: string
+          enum: [hourly, every_n_hours, daily, weekly, monthly]
+        kind:
+          type: string
+          enum: [files, db, full]
+        enabled:
+          type: boolean
+        retention_days:
+          type: integer
+          format: int32
+        monthly_archive_keep:
+          type: integer
+          format: int32
+        run_hour:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 23
+          description: Hour of day (0-23) in the site timezone at which the backup fires.
+        run_minute:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 59
+          description: Minute (0-59) within the hour at which the backup fires.
+        day_of_week:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 6
+          nullable: true
+          description: "Day of week (0=Sun..6=Sat) for weekly cadence; null otherwise."
+        day_of_month:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 28
+          nullable: true
+          description: "Day of month (1-28, capped) for monthly cadence; null otherwise."
+        frequency_hours:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 24
+          nullable: true
+          description: "Interval in hours for every_n_hours cadence; null otherwise."
+        keep_last:
+          type: integer
+          format: int32
+          description: Minimum number of snapshots to retain regardless of age.
+        timezone:
+          type: string
+          description: "Read-only. IANA timezone name (or fixed-offset label) resolved from the site's WordPress timezone. Used by the UI to display run times."
+        gmt_offset:
+          type: number
+          description: "Read-only. GMT offset in hours (e.g. 5.5 for +05:30) from the site's WordPress settings."
+        next_run_at:
+          type: string
+          format: date-time
+        next_runs:
+          type: array
+          description: "Read-only. The next ~3 scheduled occurrence times (RFC 3339 UTC) for the upcoming-preview strip in the UI."
+          items:
+            type: string
+            format: date-time
+        last_run_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    BackupScheduleUpdate:
+      type: object
+      description: Create or update a site's backup schedule (daily default).
+      properties:
+        cadence:
+          type: string
+          enum: [hourly, every_n_hours, daily, weekly, monthly]
+          default: daily
+        kind:
+          type: string
+          enum: [files, db, full]
+          default: full
+        enabled:
+          type: boolean
+          default: true
+        retention_days:
+          type: integer
+          format: int32
+          description: Rolling-window retention in days. Defaults to the server policy.
+        monthly_archive_keep:
+          type: integer
+          format: int32
+          description: Number of monthly-archive snapshots to keep beyond the window.
+        run_hour:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 23
+          description: Hour of day (0-23) in the site timezone at which the backup fires.
+        run_minute:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 59
+          description: Minute (0-59) within the hour at which the backup fires.
+        day_of_week:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 6
+          nullable: true
+          description: "Day of week (0=Sun..6=Sat) for weekly cadence; null otherwise."
+        day_of_month:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 28
+          nullable: true
+          description: "Day of month (1-28, capped) for monthly cadence; null otherwise."
+        frequency_hours:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 24
+          nullable: true
+          description: "Interval in hours for every_n_hours cadence; null otherwise."
+        keep_last:
+          type: integer
+          format: int32
+          description: Minimum number of snapshots to retain regardless of age.
+    UptimeStatus:
+      type: object
+      description: Windowed uptime status for a single site (from the metrics store).
+      required: [site_id, window, uptime_pct, avg_latency_ms, checks, up, series]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        window:
+          type: string
+          enum: ["7d", "30d", "90d"]
+        uptime_pct:
+          type: number
+          format: double
+          description: Percentage of checks in the window that were up (0-100).
+        avg_latency_ms:
+          type: number
+          format: double
+          description: Mean total request time over the window, in milliseconds.
+        checks:
+          type: integer
+          format: int64
+          description: Number of probe checks recorded in the window.
+        up:
+          type: boolean
+          description: Whether the most recent probe classified the site as up.
+        last_check:
+          type: string
+          format: date-time
+          description: Time of the most recent probe (absent if never probed).
+        tls_expiry:
+          type: string
+          format: date-time
+          description: Leaf TLS certificate expiry from the latest probe (HTTPS only).
+        series:
+          type: array
+          description: Downsampled per-bucket check series over the window.
+          items:
+            $ref: "#/components/schemas/UptimePoint"
+    UptimePoint:
+      type: object
+      required: [bucket, checks, up_checks, avg_latency_ms]
+      properties:
+        bucket:
+          type: string
+          format: date-time
+          description: Start of the time bucket.
+        checks:
+          type: integer
+          format: int64
+        up_checks:
+          type: integer
+          format: int64
+        avg_latency_ms:
+          type: number
+          format: double
+    UptimeSummary:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/UptimeSummaryItem"
+    UptimeSummaryItem:
+      type: object
+      required: [site_id, up]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        up:
+          type: boolean
+        http_status:
+          type: integer
+          format: int32
+        last_check:
+          type: string
+          format: date-time
+        tls_expiry:
+          type: string
+          format: date-time
+    AlertConfig:
+      type: object
+      description: |
+        A tenant's uptime alert channel. The webhook secret is write-only and is
+        never returned; webhook_configured indicates whether a webhook URL is set.
+      required: [email_recipients, enabled, webhook_configured]
+      properties:
+        email_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+        webhook_url:
+          type: string
+        webhook_configured:
+          type: boolean
+        enabled:
+          type: boolean
+    AlertConfigUpdate:
+      type: object
+      description: Create or update the tenant's uptime alert channel.
+      properties:
+        email_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+        webhook_url:
+          type: string
+        webhook_secret:
+          type: string
+          description: Write-only HMAC signing secret for the webhook payload.
+        enabled:
+          type: boolean
+          default: true
+    AutologinCreate:
+      type: object
+      description: |
+        Optional inputs for minting an autologin URL. Both fields default to
+        empty: an absent `target_wp_user_login` means "agent picks the first
+        administrator", and an absent `redirect_to` lands the operator on the
+        wp-admin home.
+      properties:
+        target_wp_user_login:
+          type: string
+          maxLength: 60
+          description: |
+            The WordPress username the agent should log the operator in as.
+            Empty -> the agent picks the first administrator on the site.
+        redirect_to:
+          type: string
+          maxLength: 2048
+          description: |
+            Optional URL the agent forwards the operator's browser to after
+            establishing the wp-admin session. The agent may rewrite it to a
+            same-origin URL.
+    AutologinResponse:
+      type: object
+      required: [redirect_url, expires_at]
+      properties:
+        redirect_url:
+          type: string
+          description: |
+            The URL the operator's browser should follow. Shape:
+            `{site.url}/wp-json/wpmgr/v1/autologin?token=<jwt>&redirect_to=<urlencoded>`.
+            The embedded `token` is a single-use Ed25519 JWT bound to the
+            target site (`aud` = site UUID, `cmd` = "autologin") with a
+            ~60-second TTL. NEVER log or persist this URL — the token is a
+            credential.
+        expires_at:
+          type: string
+          format: date-time
+          description: When the JWT/nonce expires (~60s from mint).
+    AutologinRateLimited:
+      type: object
+      required: [code, message, retry_after_seconds]
+      properties:
+        code:
+          type: string
+          enum: [rate_limited]
+        message:
+          type: string
+        retry_after_seconds:
+          type: integer
+          format: int32
+          description: Smallest seconds to wait before retrying.
+    AutologinConsumeRequest:
+      type: object
+      required: [nonce, site_id]
+      properties:
+        nonce:
+          type: string
+          description: |
+            The base64url-no-pad nonce id from the JWT's `jti` claim. Single-use.
+          minLength: 8
+          maxLength: 256
+        site_id:
+          type: string
+          format: uuid
+          description: |
+            The agent's claimed site_id. MUST equal the site_id derived from
+            the agent's verified Ed25519 identity, else the request is
+            rejected (`site_mismatch`).
+        consumed_from_ip:
+          type: string
+          description: |
+            The IP that initiated the consume (typically the operator's
+            browser as seen by the agent). Optional; the control plane falls
+            back to the request peer IP when absent.
+    AutologinConsumeResponse:
+      type: object
+      required: [ok, target_wp_user_login, allowed_wp_roles, audit_id]
+      properties:
+        ok:
+          type: boolean
+        target_wp_user_login:
+          type: string
+          description: |
+            The WP login the agent should establish a session as. Empty means
+            the agent should pick the first administrator (the policy still
+            constrains which roles are admissible).
+        allowed_wp_roles:
+          type: array
+          items:
+            type: string
+          description: |
+            The WP roles the agent is permitted to log the operator in as
+            (from `autologin_policies.allowed_wp_roles`; defaults to
+            ["administrator"] when no policy row exists).
+        audit_id:
+          type: string
+          format: uuid
+          description: |
+            The audit entry id recorded for the consume; the agent may surface
+            it for correlation but it has no security significance.
+    # ── ADR-037 Sprint 2 — Site Health (diagnostics) + PHP errors ──────────
+    SiteDiagnosticsCard:
+      type: object
+      required: [category, payload, fresh]
+      properties:
+        category:
+          type: string
+          description: |
+            One of: identity, php, mysql, filesystem, http, cron, themes,
+            plugins, users, security, https, mail, performance, hosting,
+            wp_native. The first 14 are the WPMgr-extra leapfrog collector
+            (the 9-card legacy grid + the ribbon-summary entries); the 15th
+            `wp_native` carries the verbatim WP_Debug_Data::debug_data()
+            dump (full Site Health > Info parity) and is rendered as four
+            additional cards: Directory Sizes, Media Handling, Filesystem
+            Permissions, WordPress Constants.
+        payload:
+          description: |
+            The raw JSON sub-blob the agent shipped for this category, or
+            null when the agent has never shipped a payload for it yet.
+            Shape is category-specific and deliberately tolerant — the UI
+            parses it lazily so the agent can evolve the shape without a
+            wire schema change.
+        collected_at:
+          type: string
+          format: date-time
+          description: Agent-side collection timestamp (UTC).
+        received_at:
+          type: string
+          format: date-time
+          description: CP-side ingestion timestamp (UTC).
+        fresh:
+          type: boolean
+          description: |
+            True when the agent's `collected_at` is within the freshness
+            tolerance (24h + 2h slack). Card UIs render a stale warning
+            badge when false.
+    SiteDiagnosticsList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteDiagnosticsCard"
+    PHPErrorFrame:
+      type: object
+      description: One frame in a PHP error backtrace (most-recent-call-first).
+      required:
+        - file
+        - line
+        - function
+      properties:
+        file:
+          type: string
+          description: Absolute path to the PHP file containing the call.
+        line:
+          type: integer
+          description: Line number of the call site.
+        function:
+          type: string
+          description: Function or method name at this frame (empty string for file-level code).
+    PHPError:
+      type: object
+      required:
+        - id
+        - md5
+        - code
+        - severity
+        - message
+        - file
+        - line
+        - request_path
+        - first_seen_at
+        - last_seen_at
+        - occurrence_count
+        - silenced
+        - backtrace
+      properties:
+        id:
+          type: string
+          description: The CP-side row UUID (stringified).
+        md5:
+          type: string
+          description: The agent-side dedup fingerprint (md5(code:file:line:message)).
+        code:
+          type: integer
+          description: PHP error code (E_* constant value).
+        severity:
+          type: string
+          description: One of fatal, warning, notice, deprecated, bootstrap, unknown.
+        message:
+          type: string
+        file:
+          type: string
+        line:
+          type: integer
+        request_path:
+          type: string
+        first_seen_at:
+          type: string
+          format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        occurrence_count:
+          type: integer
+          format: int64
+        silenced:
+          type: boolean
+        backtrace:
+          type: array
+          description: >
+            Up to 10 stack frames captured at the error site, most-recent-call-first.
+            Always present; may be an empty array for errors captured before S1.1
+            or when the agent could not produce a trace.
+          items:
+            $ref: "#/components/schemas/PHPErrorFrame"
+    PHPErrorList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PHPError"
+        next_cursor: { type: string }
+    PHPErrorSilence:
+      type: object
+      properties:
+        silenced:
+          type: boolean
+          default: true
+          description: Whether to silence (default true).
+    # ── S1.2 PHP-error ignore-list + error-level config ────────────────────
+    SiteErrorConfig:
+      type: object
+      required:
+        - error_level
+        - ignore_md5s
+      properties:
+        error_level:
+          type: integer
+          format: int32
+          description: |
+            PHP E_* bitmask the agent applies to wp_debug_log collection.
+            Default 6143 = E_ALL & ~E_STRICT (WordPress default).
+        ignore_md5s:
+          type: array
+          description: |
+            Ordered list of 32-character lowercase hex md5 fingerprints
+            (md5(code:file:line:message)) the agent must suppress without
+            counting or reporting. An empty list clears all suppression.
+          items:
+            type: string
+    SiteErrorConfigUpdate:
+      type: object
+      required:
+        - error_level
+        - ignore_md5s
+      properties:
+        error_level:
+          type: integer
+          format: int32
+          description: |
+            PHP E_* bitmask to apply. Must be >0 and fit in int32.
+        ignore_md5s:
+          type: array
+          description: |
+            Full canonical ignore-list (replaces the stored list atomically).
+            Each entry must be exactly 32 lowercase hex characters.
+          items:
+            type: string
+    # ── ADR-037 Sprint 3 — WordPress activity log ──────────────────────────
+    SiteActivityEvent:
+      type: object
+      required:
+        - id
+        - seq
+        - event_type
+        - object_type
+        - object_id
+        - object_label
+        - actor_user_id
+        - actor_login
+        - actor_ip
+        - summary
+        - meta
+        - severity
+        - prev_hash
+        - this_hash
+        - chain_valid
+        - occurred_at
+        - received_at
+      properties:
+        id:
+          type: string
+          description: The CP-side row id (stringified BIGSERIAL).
+        seq:
+          type: integer
+          format: int64
+          description: Agent-assigned monotonic sequence within the chain.
+        event_type:
+          type: string
+        object_type:
+          type: string
+        object_id:
+          type: string
+        object_label:
+          type: string
+        actor_user_id:
+          type: integer
+          format: int64
+          description: WP user id of the actor; 0 for system events.
+        actor_login:
+          type: string
+          description: WP login of the actor; empty for system events.
+        actor_ip:
+          type: string
+        summary:
+          type: string
+        meta:
+          type: object
+          additionalProperties: true
+          description: Agent-supplied event metadata (severity lives here).
+        severity:
+          type: string
+          enum: [high, medium, low]
+        prev_hash:
+          type: string
+          description: The prior link's hash (64 zero chars at genesis).
+        this_hash:
+          type: string
+          description: sha256 over the canonical event preimage.
+        chain_valid:
+          type: boolean
+          description: |
+            Server-verified at ingest. False marks a tampered/broken link: the
+            CP-recomputed hash did not match the shipped this_hash, or the
+            shipped prev_hash did not match the prior stored row.
+        occurred_at:
+          type: string
+          format: date-time
+        received_at:
+          type: string
+          format: date-time
+    SiteActivityList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteActivityEvent"
+        next_cursor: { type: string }
+    ActivityVerifyResult:
+      type: object
+      required: [valid, total]
+      properties:
+        valid:
+          type: boolean
+          description: True when the entire chain re-verifies intact.
+        break_at_seq:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            The seq of the first broken link, or null when the chain is intact.
+        total:
+          type: integer
+          description: Total number of events folded during verification.
+    # ── S2 — Login Protection + IP store ───────────────────────────────────
+    SecurityThresholds:
+      type: object
+      required:
+        - captcha_limit
+        - temp_block_limit
+        - block_all_limit
+        - failed_login_gap
+        - success_login_gap
+        - all_blocked_gap
+      properties:
+        captcha_limit:
+          type: integer
+          format: int32
+          description: Number of failures before a CAPTCHA challenge is shown.
+        temp_block_limit:
+          type: integer
+          format: int32
+          description: Number of failures before a temporary block is applied.
+        block_all_limit:
+          type: integer
+          format: int32
+          description: Number of failures before a permanent block is applied.
+        failed_login_gap:
+          type: integer
+          format: int32
+          description: |
+            Seconds of inactivity that reset the failure counter.
+        success_login_gap:
+          type: integer
+          format: int32
+          description: |
+            Seconds after a successful login before a new failure series begins.
+        all_blocked_gap:
+          type: integer
+          format: int32
+          description: Seconds a permanent block remains active.
+    SiteLoginProtectionConfig:
+      type: object
+      required:
+        - mode
+        - thresholds
+        - ip_header
+        - allow_cidrs
+        - deny_cidrs
+      properties:
+        mode:
+          type: string
+          enum: [disabled, audit, protect]
+          description: |
+            Login protection mode:
+              - `disabled` — no login protection active.
+              - `audit` — record events but do not block.
+              - `protect` — record events AND block based on thresholds.
+        thresholds:
+          $ref: "#/components/schemas/SecurityThresholds"
+        ip_header:
+          type: string
+          description: |
+            HTTP header the agent reads to extract the real client IP (e.g.
+            `REMOTE_ADDR`, `HTTP_X_FORWARDED_FOR`).
+        allow_cidrs:
+          type: array
+          description: |
+            CIDRs that always bypass all checks (IPv4 or IPv6, with prefix length).
+          items:
+            type: string
+        deny_cidrs:
+          type: array
+          description: |
+            CIDRs that are always denied before threshold evaluation.
+          items:
+            type: string
+        updated_at:
+          type: string
+          format: date-time
+          description: When the config was last saved. Absent for the built-in default.
+    SiteLoginProtectionConfigUpdate:
+      type: object
+      required:
+        - mode
+        - thresholds
+        - ip_header
+        - allow_cidrs
+        - deny_cidrs
+      properties:
+        mode:
+          type: string
+          enum: [disabled, audit, protect]
+          description: Login protection mode.
+        thresholds:
+          $ref: "#/components/schemas/SecurityThresholds"
+        ip_header:
+          type: string
+          description: HTTP header the agent reads for the real client IP.
+        allow_cidrs:
+          type: array
+          description: |
+            CIDRs always allowed. Empty = no static allowlist. When mode=protect
+            and this list is empty the CP auto-adds the operator's IP (/32 or /128).
+          items:
+            type: string
+        deny_cidrs:
+          type: array
+          description: CIDRs always denied before threshold evaluation. Empty = none.
+          items:
+            type: string
+    UnblockIPRequest:
+      type: object
+      required: [ip]
+      properties:
+        ip:
+          type: string
+          description: The IPv4 or IPv6 address to unblock.
+    UnblockIPResult:
+      type: object
+      required: [ok, detail]
+      properties:
+        ok:
+          type: boolean
+          description: Whether the agent successfully removed the block.
+        detail:
+          type: string
+          description: Short human-readable note from the agent.
+    SiteLoginEvent:
+      type: object
+      required:
+        - id
+        - agent_event_id
+        - ip
+        - status
+        - category
+        - username
+        - request_id
+        - occurred_at
+        - ingested_at
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: CP-side row id (BIGSERIAL).
+        agent_event_id:
+          type: integer
+          format: int64
+          description: Agent-side event id (cursor tracking).
+        ip:
+          type: string
+          description: Client IP address.
+        status:
+          type: integer
+          format: int32
+          enum: [1, 2, 3]
+          description: "1=failure, 2=success, 3=blocked."
+        category:
+          type: string
+          description: Agent-assigned event category.
+        username:
+          type: string
+          description: Attempted username.
+        request_id:
+          type: string
+          description: Agent-side request id for correlation.
+        occurred_at:
+          type: string
+          format: date-time
+        ingested_at:
+          type: string
+          format: date-time
+    SiteLoginEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteLoginEvent"
+    # ── M14 Login Whitelabel ─────────────────────────────────────────────────
+    SiteLoginBrand:
+      type: object
+      required:
+        - logo_url
+        - logo_link
+        - message
+      properties:
+        logo_url:
+          type: string
+          description: |
+            Full URL of the image shown on the WP login page. Empty string
+            means no override (WordPress default logo is used).
+        logo_link:
+          type: string
+          description: |
+            URL the logo links to on the login page. Empty string means no
+            override (WordPress default link is used).
+        message:
+          type: string
+          description: |
+            Text shown below the logo on the login page. Empty string means
+            no custom message. Maximum 2000 characters.
+        updated_at:
+          type: string
+          format: date-time
+          description: When the config was last saved. Absent for the built-in default.
+    SiteLoginBrandUpdate:
+      type: object
+      required:
+        - logo_url
+        - logo_link
+        - message
+      properties:
+        logo_url:
+          type: string
+          description: |
+            Full http/https URL of the login logo image, or `""` to clear.
+        logo_link:
+          type: string
+          description: |
+            http/https URL the login logo links to, or `""` to clear.
+        message:
+          type: string
+          description: |
+            Text shown below the login logo (max 2000 chars), or `""` to clear.
+    # ── M5.7 — Orgs + per-site sharing + invitations ────────────────────────
+    PatchMemberRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          $ref: "#/components/schemas/Role"
+    CreateOrgRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: Display name of the new organisation.
+        slug:
+          type: string
+          maxLength: 64
+          pattern: "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+          description: |
+            URL-safe slug. Auto-derived from name when omitted.
+    Org:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        slug:
+          type: string
+    ActivateOrgResponse:
+      type: object
+      required: [active_tenant_id]
+      properties:
+        active_tenant_id:
+          type: string
+          format: uuid
+    SiteShareRole:
+      type: string
+      enum: [viewer, operator, admin]
+      description: |
+        Role a site collaborator holds. Subset of the full org Role enum —
+        site shares cannot be owner.
+    SiteShare:
+      type: object
+      required: [id, site_id, user_id, role, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+          format: uuid
+        role:
+          $ref: "#/components/schemas/SiteShareRole"
+        granted_by:
+          type: string
+          format: uuid
+          description: UUID of the org member who created the share.
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            When the share expires (null = durable). After this time the
+            RESTRICTIVE RLS policy treats the grant as absent.
+        created_at:
+          type: string
+          format: date-time
+    SiteShareList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteShare"
+    CreateSiteShareRequest:
+      type: object
+      required: [email, role]
+      properties:
+        email:
+          type: string
+          format: email
+          description: |
+            Email of the collaborator to invite. If a user with this email exists
+            the share is created immediately; otherwise an invitation is emailed/linked.
+        role:
+          $ref: "#/components/schemas/SiteShareRole"
+        expires_at:
+          type: string
+          format: date-time
+          description: |
+            Optional expiry (RFC3339). Null / omitted = durable grant. Use for
+            time-limited support access.
+    SiteShareGrantResponse:
+      type: object
+      required: [invited]
+      properties:
+        share:
+          $ref: "#/components/schemas/SiteShare"
+          description: Present when the user already existed and the share is immediate.
+        invited:
+          type: boolean
+          description: |
+            true when an invitation was created because the email is not a known
+            user; false when the share was applied directly.
+        accept_link:
+          type: string
+          description: |
+            The raw invitation accept URL (shown once, like an API key). Present
+            when invited=true AND the notification SMTP is not configured — the
+            inviter must copy and share this link manually.
+    AcceptInvitationRequest:
+      type: object
+      required: [token, email]
+      properties:
+        token:
+          type: string
+          description: The raw token from the accept link (?token=…).
+        email:
+          type: string
+          format: email
+          description: |
+            Must match the email the invitation was addressed to (prevents
+            identity swap and enumeration).
+        name:
+          type: string
+          maxLength: 200
+          description: Display name to set when a new user account is created.
+        password:
+          type: string
+          minLength: 8
+          maxLength: 200
+          description: |
+            Password to set when a new user account is created. Required only
+            when the invited email has no existing account.
+    AcceptInvitationResponse:
+      type: object
+      required: [tenant_id, scope]
+      properties:
+        tenant_id:
+          type: string
+          format: uuid
+          description: The organisation the invitation belonged to.
+        scope:
+          type: string
+          enum: [org, site]
+          description: |
+            "org" when a full membership was granted; "site" when a site-scoped
+            share was created.
+        site_id:
+          type: string
+          format: uuid
+          description: Set when scope="site"; the specific site the user now has access to.
+
+    # ----------------------------------------------------------------------
+    # Media Optimizer (ADR-043, M23). DTOs are hand-rolled in the Go handler
+    # (c.JSON), mirroring the scan feature; these schemas document the wire
+    # shape for the generated TS client.
+    # ----------------------------------------------------------------------
+    MediaAsset:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        site_id: { type: string, format: uuid }
+        wp_attachment_id: { type: integer, format: int64 }
+        title: { type: string }
+        original_url: { type: string }
+        original_mime: { type: string }
+        original_size_bytes: { type: integer, format: int64 }
+        current_format: { type: string, enum: [original, webp, avif] }
+        current_size_bytes: { type: integer, format: int64 }
+        status:
+          type: string
+          enum: [pending, optimizing, optimized, failed, restoring, restored, excluded, originals_deleted]
+        generation: { type: integer }
+        sizes_optimized: { type: array, items: { type: string } }
+        sizes_unoptimized: { type: object, additionalProperties: { type: string } }
+        last_optimized_at: { type: string, format: date-time }
+    MediaSummary:
+      type: object
+      properties:
+        total: { type: integer, format: int64 }
+        optimized: { type: integer, format: int64 }
+        pending: { type: integer, format: int64 }
+        failed: { type: integer, format: int64 }
+        bytes_saved: { type: integer, format: int64 }
+    MediaAssetList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MediaAsset" } }
+        next_cursor: { type: string }
+        total_count: { type: integer, format: int64 }
+        summary: { $ref: "#/components/schemas/MediaSummary" }
+    MediaOptimizeRequest:
+      type: object
+      properties:
+        asset_ids: { type: array, items: { type: string, format: uuid } }
+        all_pending: { type: boolean }
+        target_format: { type: string, enum: [avif, webp, original] }
+        target_quality: { type: string, enum: [lossy, lossless] }
+    MediaAssetSelection:
+      type: object
+      properties:
+        asset_ids: { type: array, items: { type: string, format: uuid } }
+    MediaBatchResult:
+      type: object
+      properties:
+        batch_job_id: { type: string }
+        queued_count: { type: integer }
+    MediaJob:
+      type: object
+      properties:
+        id: { type: string }
+        site_id: { type: string, format: uuid }
+        asset_id: { type: string, format: uuid }
+        wp_attachment_id: { type: integer, format: int64 }
+        kind: { type: string, enum: [optimize, restore, delete_originals, sync] }
+        target_format: { type: string }
+        target_quality: { type: string }
+        state:
+          type: string
+          enum: [queued, in_progress, succeeded, partially_succeeded, failed, cancelled]
+        bytes_before: { type: integer, format: int64 }
+        bytes_after: { type: integer, format: int64 }
+        variants_total: { type: integer }
+        variants_succeeded: { type: integer }
+        variants_failed: { type: integer }
+        error_reason: { type: string }
+        created_at: { type: string, format: date-time }
+        started_at: { type: string, format: date-time }
+        completed_at: { type: string, format: date-time }
+    MediaVariantResult:
+      type: object
+      properties:
+        variant_name: { type: string }
+        source_size_bytes: { type: integer, format: int64 }
+        optimized_size_bytes: { type: integer, format: int64 }
+        source_mime: { type: string }
+        optimized_mime: { type: string }
+        encode_ms: { type: integer }
+        state: { type: string, enum: [succeeded, failed, skipped] }
+        reason: { type: string }
+    MediaJobList:
+      type: object
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/MediaJob" } }
+        next_cursor: { type: string }
+    MediaJobDetail:
+      allOf:
+        - $ref: "#/components/schemas/MediaJob"
+        - type: object
+          properties:
+            variants: { type: array, items: { $ref: "#/components/schemas/MediaVariantResult" } }

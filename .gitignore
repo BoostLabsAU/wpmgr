@@ -1,0 +1,66 @@
+# ---- Go ----
+/apps/api/bin/
+/apps/cli/bin/
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+go.work.sum
+
+# ---- Node / pnpm ----
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+.vite/
+playwright-report/
+test-results/
+.eslintcache
+
+# ---- PHP / Composer ----
+/apps/agent/vendor/
+composer.lock
+.phpunit.result.cache
+.phpunit.cache/
+
+# ---- Env / secrets ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/**/*.key
+secrets/
+keys/
+
+# ---- IDE / OS ----
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# ---- Build artifacts ----
+/release/
+/sbom/
+*.zip
+!apps/agent/**/*.zip
+
+# stray compiled binaries (build to bin/ instead)
+/apps/api/wpmgr
+/apps/api/media-encoder
+/wpmgr
+/cmd
+
+# ---- Local research / scratch trees (never part of the product) ----
+/reference/
+/analysis/
+
+# ---- Skills (installed via npx skills add; lockfile is tracked separately) ----
+.agents/
+.claude/skills/
+.claude/scheduled_tasks.lock
+
+# ---- pnpm content-addressed store (local cache; not source) ----
+.pnpm-store/

@@ -1,0 +1,43 @@
+{
+  "name": "wpmgr/agent",
+  "description": "WPMgr WordPress agent plugin",
+  "type": "wordpress-plugin",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.1",
+    "ext-mysqli": "*",
+    "ext-openssl": "*",
+    "ext-sodium": "*",
+    "ext-zlib": "*",
+    "ext-zip": "*"
+  },
+  "require-dev": {
+    "brain/monkey": "^2.6",
+    "php-stubs/wordpress-stubs": "^6.5",
+    "phpstan/phpstan": "^2.0",
+    "phpunit/phpunit": "^10.5",
+    "szepeviktor/phpstan-wordpress": "^2.0",
+    "yoast/phpunit-polyfills": "^2.0"
+  },
+  "autoload": {
+    "classmap": [
+      "includes/"
+    ]
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "WPMgr\\Agent\\Tests\\": "tests/"
+    }
+  },
+  "config": {
+    "allow-plugins": {
+      "antecedent/patchwork": true
+    },
+    "optimize-autoloader": true,
+    "sort-packages": true
+  },
+  "scripts": {
+    "test": "phpunit",
+    "analyse": "phpstan analyse --memory-limit=2G"
+  }
+}
