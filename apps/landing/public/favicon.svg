@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <!-- Fleet Hub favicon. At small sizes the satellites render as solid teal
+       dots so the one-to-many shape survives. -->
+  <rect x="11.5" y="11.5" width="9" height="9" rx="2.5" fill="#1791A6"/>
+  <g fill="#1791A6">
+    <circle cx="6.5" cy="6.5" r="2.6"/>
+    <circle cx="25.5" cy="6.5" r="2.6"/>
+    <circle cx="6.5" cy="25.5" r="2.6"/>
+    <circle cx="25.5" cy="25.5" r="2.6"/>
+  </g>
+  <g stroke="#1791A6" stroke-width="2" stroke-linecap="round">
+    <line x1="9" y1="9" x2="11.6" y2="11.6"/>
+    <line x1="23" y1="9" x2="20.4" y2="11.6"/>
+    <line x1="9" y1="23" x2="11.6" y2="20.4"/>
+    <line x1="23" y1="23" x2="20.4" y2="20.4"/>
+  </g>
+</svg>

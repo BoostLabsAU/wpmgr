@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="theme-color" content="#1791A6" />
+
+    <title>WPMgr: Open-Source, Self-Hosted WordPress Fleet Management</title>
+    <meta
+      name="description"
+      content="Manage all your WordPress sites from one dashboard you own. Open source and self-hostable: scheduled backups, safe fleet updates, AVIF and WebP image optimization, uptime, and security, with a signed agent you can audit."
+    />
+    <link rel="canonical" href="https://wpmgr.app/" />
+
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://wpmgr.app/" />
+    <meta property="og:title" content="WPMgr: Open-Source, Self-Hosted WordPress Fleet Management" />
+    <meta
+      property="og:description"
+      content="All your WordPress sites, one dashboard you own. Backups, safe fleet updates, image optimization, uptime, and security, self-hosted with a signed agent you can audit."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="WPMgr: Open-Source, Self-Hosted WordPress Fleet Management" />
+    <meta
+      name="twitter:description"
+      content="All your WordPress sites, one dashboard you own. Self-hostable WordPress fleet management with backups, updates, image optimization, uptime, and security."
+    />
+
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+
+    <script>
+      // Apply a persisted theme before first paint to avoid a flash. Light is
+      // the default; dark is only applied when the visitor opted into it.
+      try {
+        if (localStorage.getItem("wpmgr-landing-theme") === "dark") {
+          document.documentElement.classList.add("dark");
+        }
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
