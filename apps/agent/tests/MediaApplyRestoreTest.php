@@ -56,6 +56,17 @@ final class MediaApplyRestoreTest extends TestCase
         parent::set_up();
         Monkey\setUp();
 
+        // MediaRunStore guards transient access on function_exists('get_transient').
+        // Brain Monkey leaks function definitions process-wide, so once any earlier
+        // test in the run defines the transient functions, those guards pass here
+        // too and the store calls them. Mock them to reproduce the original
+        // transients-unavailable behaviour this suite was written against:
+        // get() finds nothing (false), and put()/claim() fail (set_transient
+        // false) so MediaRestoreCommand takes its inline (non-async) restore path.
+        Functions\when('get_transient')->justReturn(false);
+        Functions\when('set_transient')->justReturn(false);
+        Functions\when('delete_transient')->justReturn(true);
+
         $this->baseDir = sys_get_temp_dir() . '/wpmgr-media-' . bin2hex(random_bytes(6)) . '/2026/05';
         mkdir($this->baseDir, 0755, true);
         $this->metaStore = [];

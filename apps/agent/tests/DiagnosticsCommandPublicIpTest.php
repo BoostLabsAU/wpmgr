@@ -129,7 +129,6 @@ final class DiagnosticsCommandPublicIpTest extends TestCase
             'get_bloginfo'              => '',
             'get_option'                => false,
             'wp_using_ext_object_cache' => false,
-            'function_exists'           => true,
             '_get_cron_array'           => [],
             'get_plugins'               => [],
             'wp_get_themes'             => [],
