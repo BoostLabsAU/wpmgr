@@ -6,7 +6,8 @@
   "description": "Marketing landing page for WPMgr (apex wpmgr.app). Standalone Vite + React + Tailwind v4, reuses the Impeccable design tokens.",
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
+    "docs:sync": "node scripts/sync-openapi.mjs",
+    "build": "node scripts/sync-openapi.mjs && tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
     "impeccable": "impeccable detect src/"
@@ -20,6 +21,7 @@
     "tailwind-merge": "^3.6.0"
   },
   "devDependencies": {
+    "@scalar/api-reference": "1.57.5",
     "@tailwindcss/vite": "^4.3.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
@@ -27,6 +29,7 @@
     "impeccable": "^2.1.9",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "yaml": "^2.9.0"
   }
 }

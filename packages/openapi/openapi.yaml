@@ -1,17 +1,78 @@
 openapi: 3.1.0
 info:
   title: WPMgr API
-  version: 0.0.0
+  version: 0.12.7
   description: |
-    Control-plane REST API for WPMgr. This is the single source of truth for
-    both the Go server types and the generated TypeScript client. Real paths
-    and schemas are filled in during Phase 4 (skeleton) and Phase 5 (features).
+    Control-plane REST API for **WPMgr**, the open-source, self-hostable
+    WordPress fleet management platform (AGPL-3.0). One control plane enrolls,
+    monitors, updates, backs up, optimizes, and secures many WordPress sites.
+
+    ## Authentication
+    - **Dashboard / operator routes** use a session cookie established at login
+      (email and password, or OIDC single sign-on). Role-based access
+      (owner, admin, operator, viewer) and per-site sharing are enforced
+      server-side by Postgres row-level security.
+    - **Agent routes** (`/agent/v1/*`, `/enroll`) use Ed25519 signed requests:
+      each site's agent plugin signs its calls with a per-site key the control
+      plane verifies. The control plane never holds a site secret.
+    - **API keys** (`wpmgr_<prefix>_<secret>`) carry the same role matrix as a
+      user session, for programmatic access.
+
+    Endpoints declared as `text/event-stream` are live Server-Sent Event
+    streams. Documentation tools render them but cannot exercise them from the
+    in-page "try it" client.
+  contact:
+    name: WPMgr
+    url: https://github.com/mosamlife/wpmgr
   license:
     name: AGPL-3.0-only
     url: https://www.gnu.org/licenses/agpl-3.0.txt
 servers:
+  - url: https://manage.wpmgr.app
+    description: Production
   - url: http://localhost:8080
     description: Local development
+tags:
+  - name: system
+    description: Liveness, readiness, and version probes.
+  - name: auth
+    description: Login, logout, session, and first-run owner bootstrap.
+  - name: tenants
+    description: Tenant (organization) lifecycle and settings.
+  - name: orgs
+    description: Organization configuration and membership.
+  - name: members
+    description: Organization members and their roles (owner, admin, operator, viewer).
+  - name: invitations
+    description: Tokenized, single-use invitations to join an organization.
+  - name: sites
+    description: WordPress site enrollment, the connection-state machine, tags, and one-click autologin.
+  - name: diagnostics
+    description: Per-site Site Health diagnostics (14 categories) and PHP error monitoring.
+  - name: backups
+    description: Scheduled and on-demand backups, snapshots, restore, and SQL inspection.
+  - name: destinations
+    description: Backup destinations (control-plane bucket, customer S3, or a local folder).
+  - name: updates
+    description: WordPress core, plugin, and theme updates with dry-run preview and automatic rollback.
+  - name: media
+    description: Image optimization to AVIF and WebP, library sync, and savings metrics.
+  - name: uptime
+    description: Active uptime monitoring, latency reports, TLS certificate tracking, and alerts.
+  - name: activity
+    description: Hash-chained WordPress activity log and the filtered activity feed.
+  - name: audit
+    description: Tamper-evident, hash-chained organization audit log.
+  - name: security
+    description: Core file-integrity scans, brute-force protection, and the IP firewall.
+  - name: api-keys
+    description: Role-scoped, hashed, revocable API keys.
+  - name: shares
+    description: Per-site sharing with outside collaborators.
+  - name: agent
+    description: Ed25519 signed agent-to-control-plane endpoints (metadata, heartbeat, diagnostics, backups).
+  - name: loginbrand
+    description: Per-site wp-login whitelabeling (logo, link, message).
 paths:
   /healthz:
     get:

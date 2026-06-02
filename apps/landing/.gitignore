@@ -4,3 +4,8 @@ dist-ssr
 *.local
 .DS_Store
 .vite
+
+# Generated each build by scripts/sync-openapi.mjs from the source spec + the
+# pinned Scalar dependency. Never hand-edit; public/docs/index.html is tracked.
+public/docs/openapi.json
+public/docs/vendor/
