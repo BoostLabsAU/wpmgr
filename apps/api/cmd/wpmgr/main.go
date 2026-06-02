@@ -694,6 +694,10 @@ func run() error {
 	}
 	diagnosticsH := diagnostics.NewHandler(diagnosticsSvc, auditRec)
 	diagnosticsAgentH := agent.NewDiagnosticsHandler(diagnosticsSvc)
+	// M28 — also resolve the host provider on the metadata push (30-min cadence +
+	// plugin events), not just the daily diagnostics push, so the inferred host
+	// populates within ~30 min instead of up to a day.
+	agentH.SetHostResolver(diagnosticsSvc)
 	errorsAgentH := agent.NewErrorsHandler(diagnosticsSvc)
 	diagSiteAdapter := newDiagnosticsSiteAdapter(siteSvc)
 	if diagCmd, ok := commander.(diagnostics.AgentDiagnosticsClient); ok {

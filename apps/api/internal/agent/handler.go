@@ -358,12 +358,21 @@ type LifecycleSink interface {
 	RecordLastWill(ctx context.Context, tenantID, siteID uuid.UUID, reason string) error
 }
 
+// HostResolver infers + records the site's hosting provider from the agent's
+// egress IP (M28). *diagnostics.Service satisfies it. Optional; nil disables.
+// Wiring it onto the metadata push (30-min cadence + plugin events) resolves the
+// host far sooner than the daily diagnostics push.
+type HostResolver interface {
+	ResolveHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, observedIP string, body []byte)
+}
+
 // Handler serves the agent-authenticated endpoints under /agent/v1. Every route
 // runs behind the agent Authenticator; the site/tenant come from the verified
 // identity on the context.
 type Handler struct {
-	sink      MetadataSink
-	lifecycle LifecycleSink
+	sink         MetadataSink
+	lifecycle    LifecycleSink
+	hostResolver HostResolver
 }
 
 // NewHandler builds an agent Handler.
@@ -375,6 +384,9 @@ func NewHandler(sink MetadataSink) *Handler {
 // instructions + signed disconnect). Call once at boot; nil disables the
 // lifecycle behaviour (legacy liveness-only heartbeat; /disconnect → 501).
 func (h *Handler) SetLifecycleSink(l LifecycleSink) { h.lifecycle = l }
+
+// SetHostResolver wires the M28 host-provider resolver onto the metadata push.
+func (h *Handler) SetHostResolver(r HostResolver) { h.hostResolver = r }
 
 // Register mounts the agent routes on the given group (already wrapped with the
 // agent Authenticator middleware).
@@ -418,6 +430,13 @@ func (h *Handler) metadata(c *gin.Context) {
 	if err != nil {
 		httpx.Error(c, err)
 		return
+	}
+	// M28 — resolve the hosting provider from this push's egress IP. The metadata
+	// cadence (30 min + on plugin events) resolves the host far sooner than the
+	// daily diagnostics push. Best-effort and non-fatal; nil body = observed-IP
+	// only (no agent-reported fallback on the metadata path).
+	if h.hostResolver != nil {
+		h.hostResolver.ResolveHostProvider(c.Request.Context(), id.TenantID, id.SiteID, c.ClientIP(), nil)
 	}
 	c.JSON(http.StatusOK, &out)
 }

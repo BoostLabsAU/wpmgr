@@ -32,6 +32,10 @@ type SiteLookup interface {
 // tripping through Postgres.
 type IngestSink interface {
 	IngestDiagnostics(ctx context.Context, tenantID, siteID uuid.UUID, body []byte) (int, error)
+	// ResolveHostProvider runs the M28 host inference. On this refresh (CP->agent
+	// pull) path there is no observed egress IP, so it relies on the agent-
+	// reported hosting.public_ip carried in the body (0.12.5+ agents).
+	ResolveHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, observedIP string, body []byte)
 }
 
 // RefreshEnqueuerImpl satisfies diagnostics.RefreshEnqueuer (defined in
@@ -90,6 +94,11 @@ func (r *RefreshEnqueuerImpl) EnqueueRefreshDiagnostics(ctx context.Context, ten
 	if _, ierr := r.sink.IngestDiagnostics(ctx, tenantID, siteID, body); ierr != nil {
 		return fmt.Errorf("ingest agent response: %w", ierr)
 	}
+	// M28 — this is a CP->agent pull, so there is no observed egress IP; resolve
+	// the host from the agent-reported hosting.public_ip in the body (0.12.5+).
+	// Best-effort and non-fatal: a 0.12.4 agent (no public_ip) simply leaves the
+	// inferred host unchanged.
+	r.sink.ResolveHostProvider(ctx, tenantID, siteID, "", body)
 	return nil
 }
 
