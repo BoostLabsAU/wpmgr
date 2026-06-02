@@ -209,6 +209,11 @@ export const SiteSchema = {
       description:
         "Current WPMgr agent plugin version (last-synced via metadata push). Empty/absent until the site re-syncs on a newer agent.",
     },
+    host_provider: {
+      type: "string",
+      description:
+        "Inferred hosting/infrastructure provider (e.g. DigitalOcean, Hetzner, AWS), derived control-plane-side from the agent's observed public egress IP via an offline ASN lookup. Best-effort hint shown only when no managed-host flag matched. Empty/absent until inferred.",
+    },
     updates_available: {
       type: "integer",
       format: "int32",

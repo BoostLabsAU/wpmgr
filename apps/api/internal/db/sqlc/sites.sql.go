@@ -24,7 +24,7 @@ SET agent_public_key = $3,
     php_version = $5,
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type AttachAgentToSiteParams struct {
@@ -66,6 +66,9 @@ func (q *Queries) AttachAgentToSite(ctx context.Context, arg AttachAgentToSitePa
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -80,7 +83,7 @@ func (q *Queries) AttachAgentToSite(ctx context.Context, arg AttachAgentToSitePa
 const createSite = `-- name: CreateSite :one
 INSERT INTO sites (tenant_id, url, name, status, wp_version, php_version)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type CreateSiteParams struct {
@@ -125,6 +128,9 @@ func (q *Queries) CreateSite(ctx context.Context, arg CreateSiteParams) (Site, e
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -140,7 +146,7 @@ const createSiteForEnroll = `-- name: CreateSiteForEnroll :one
 INSERT INTO sites (tenant_id, url, name, status, wp_version, php_version,
                    agent_public_key, enrolled_at, last_seen_at, health_status, tags)
 VALUES ($1, $2, $3, 'active', $4, $5, $6, now(), now(), 'healthy', $7)
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type CreateSiteForEnrollParams struct {
@@ -185,6 +191,9 @@ func (q *Queries) CreateSiteForEnroll(ctx context.Context, arg CreateSiteForEnro
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -215,7 +224,7 @@ func (q *Queries) DeleteSite(ctx context.Context, arg DeleteSiteParams) (int64, 
 }
 
 const getSite = `-- name: GetSite :one
-SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
+SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
 WHERE id = $1 AND tenant_id = $2
 `
 
@@ -248,6 +257,9 @@ func (q *Queries) GetSite(ctx context.Context, arg GetSiteParams) (Site, error) 
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -261,7 +273,7 @@ func (q *Queries) GetSite(ctx context.Context, arg GetSiteParams) (Site, error) 
 
 const getSiteByAgentKey = `-- name: GetSiteByAgentKey :one
 
-SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
+SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
 WHERE agent_public_key = $1 AND agent_public_key <> ''
 `
 
@@ -292,6 +304,9 @@ func (q *Queries) GetSiteByAgentKey(ctx context.Context, agentPublicKey string) 
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -305,7 +320,7 @@ func (q *Queries) GetSiteByAgentKey(ctx context.Context, agentPublicKey string) 
 
 const getSiteByURLForEnroll = `-- name: GetSiteByURLForEnroll :one
 
-SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
+SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
 WHERE tenant_id = $1 AND url = $2
 `
 
@@ -341,6 +356,9 @@ func (q *Queries) GetSiteByURLForEnroll(ctx context.Context, arg GetSiteByURLFor
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -485,7 +503,7 @@ func (q *Queries) ListLatestBackupsForSites(ctx context.Context, arg ListLatestB
 }
 
 const listSites = `-- name: ListSites :many
-SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
+SELECT id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at FROM sites
 WHERE tenant_id = $1
   AND ($4::text IS NULL OR $4::text = ANY (tags))
   AND (
@@ -543,6 +561,9 @@ func (q *Queries) ListSites(ctx context.Context, arg ListSitesParams) ([]Site, e
 			&i.AgeRecipient,
 			&i.WpTimezone,
 			&i.WpGmtOffset,
+			&i.HostProvider,
+			&i.HostProviderIp,
+			&i.HostProviderCheckedAt,
 			&i.ConnectionState,
 			&i.ConnectionGeneration,
 			&i.DisconnectedAt,
@@ -580,7 +601,7 @@ const setSiteAgeRecipient = `-- name: SetSiteAgeRecipient :one
 UPDATE sites
 SET age_recipient = $3, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type SetSiteAgeRecipientParams struct {
@@ -615,6 +636,9 @@ func (q *Queries) SetSiteAgeRecipient(ctx context.Context, arg SetSiteAgeRecipie
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -651,7 +675,7 @@ const setSiteTags = `-- name: SetSiteTags :one
 UPDATE sites
 SET tags = $3, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type SetSiteTagsParams struct {
@@ -684,6 +708,9 @@ func (q *Queries) SetSiteTags(ctx context.Context, arg SetSiteTagsParams) (Site,
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -701,7 +728,7 @@ SET last_seen_at = now(),
     health_status = 'healthy',
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type TouchSiteSeenParams struct {
@@ -733,6 +760,9 @@ func (q *Queries) TouchSiteSeen(ctx context.Context, arg TouchSiteSeenParams) (S
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,
@@ -757,7 +787,7 @@ SET wp_version   = $3,
     health_status = 'healthy',
     updated_at   = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
+RETURNING id, tenant_id, url, name, status, wp_version, php_version, agent_version, agent_public_key, enrolled_at, last_seen_at, health_status, server_info, multisite, active_theme, components, tags, age_recipient, wp_timezone, wp_gmt_offset, host_provider, host_provider_ip, host_provider_checked_at, connection_state, connection_generation, disconnected_at, disconnected_reason, archived_at, created_at, updated_at
 `
 
 type UpdateSiteMetadataParams struct {
@@ -808,6 +838,9 @@ func (q *Queries) UpdateSiteMetadata(ctx context.Context, arg UpdateSiteMetadata
 		&i.AgeRecipient,
 		&i.WpTimezone,
 		&i.WpGmtOffset,
+		&i.HostProvider,
+		&i.HostProviderIp,
+		&i.HostProviderCheckedAt,
 		&i.ConnectionState,
 		&i.ConnectionGeneration,
 		&i.DisconnectedAt,

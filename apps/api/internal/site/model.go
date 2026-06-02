@@ -46,6 +46,13 @@ type Site struct {
 	// WpGmtOffset is the site's GMT offset in fractional hours (e.g. 5.5 for
 	// +05:30). Used as a fallback when WpTimezone is empty.
 	WpGmtOffset float64
+	// HostProvider (M28) is the inferred hosting/infrastructure provider name
+	// (e.g. "DigitalOcean", "Hetzner", "AWS"), derived CP-side from the agent's
+	// observed public egress IP via an offline ASN lookup. Empty when no
+	// diagnostics push has landed yet, or when the network could not be
+	// confidently attributed. A best-effort hint: a positive agent HostFlag
+	// (managed-host detection) always takes precedence over this value.
+	HostProvider string
 	// M21 connection lifecycle (ADR-041). ConnectionState is the single source of
 	// truth for the agent connection; the legacy Status/HealthStatus columns are
 	// kept in sync but only ConnectionState drives the lifecycle UI.

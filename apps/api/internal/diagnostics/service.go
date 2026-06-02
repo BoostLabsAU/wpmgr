@@ -12,7 +12,15 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
 )
+
+// HostResolver infers a hosting provider from an IP (M28). *ipprovider.Resolver
+// satisfies it. Declared as an optional interface so the service composes with
+// or without the feature and tests can substitute a fake.
+type HostResolver interface {
+	Resolve(ip string) ipprovider.Result
+}
 
 // AgentErrorConfigClient is the subset of agentcmd.Client the service needs to
 // push an error config to the agent. *agentcmd.Client satisfies it via its
@@ -26,10 +34,11 @@ type AgentErrorConfigClient interface {
 // AgentErrorConfigClient (optional). Held stateless so handlers can compose
 // it freely.
 type Service struct {
-	repo        *Repo
-	enqueuer    RefreshEnqueuer
-	errorClient AgentErrorConfigClient
-	siteLookup  SiteLookup
+	repo         *Repo
+	enqueuer     RefreshEnqueuer
+	errorClient  AgentErrorConfigClient
+	siteLookup   SiteLookup
+	hostResolver HostResolver
 }
 
 // RefreshEnqueuer enqueues an on-demand diagnostics command to the agent.
@@ -42,6 +51,25 @@ type RefreshEnqueuer interface {
 // NewService builds a Service.
 func NewService(repo *Repo) *Service {
 	return &Service{repo: repo}
+}
+
+// SetHostResolver wires the offline IP -> hosting-provider resolver (M28).
+// Optional: when nil, ResolveHostProvider is a no-op and host_provider stays "".
+func (s *Service) SetHostResolver(r HostResolver) {
+	s.hostResolver = r
+}
+
+// ResolveHostProvider infers and records the site's hosting provider from the
+// agent's observed public egress IP (M28). Best-effort and non-fatal, called
+// after a diagnostics push. A nil resolver (feature disabled) or empty IP is a
+// no-op. The result is recorded even when the provider is "" so the observed IP
+// and checked-at timestamp are stored and a changed IP re-resolves next time.
+func (s *Service) ResolveHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, sourceIP string) {
+	if s.hostResolver == nil || sourceIP == "" {
+		return
+	}
+	res := s.hostResolver.Resolve(sourceIP)
+	_ = s.repo.SetSiteHostProvider(ctx, tenantID, siteID, res.Provider, sourceIP)
 }
 
 // SetRefreshEnqueuer wires the on-demand refresh enqueuer once it is built

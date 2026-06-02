@@ -18011,6 +18011,12 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.HostProvider.Set {
+			e.FieldStart("host_provider")
+			s.HostProvider.Encode(e)
+		}
+	}
+	{
 		if s.UpdatesAvailable.Set {
 			e.FieldStart("updates_available")
 			s.UpdatesAvailable.Encode(e)
@@ -18038,7 +18044,7 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSite = [25]string{
+var jsonFieldsNameOfSite = [26]string{
 	0:  "id",
 	1:  "tenant_id",
 	2:  "url",
@@ -18059,11 +18065,12 @@ var jsonFieldsNameOfSite = [25]string{
 	17: "last_seen_at",
 	18: "components",
 	19: "agent_version",
-	20: "updates_available",
-	21: "last_backup_at",
-	22: "last_backup_status",
-	23: "created_at",
-	24: "updated_at",
+	20: "host_provider",
+	21: "updates_available",
+	22: "last_backup_at",
+	23: "last_backup_status",
+	24: "created_at",
+	25: "updated_at",
 }
 
 // Decode decodes Site from json.
@@ -18299,6 +18306,16 @@ func (s *Site) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"agent_version\"")
 			}
+		case "host_provider":
+			if err := func() error {
+				s.HostProvider.Reset()
+				if err := s.HostProvider.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"host_provider\"")
+			}
 		case "updates_available":
 			if err := func() error {
 				s.UpdatesAvailable.Reset()
@@ -18330,7 +18347,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"last_backup_status\"")
 			}
 		case "created_at":
-			requiredBitSet[2] |= 1 << 7
+			requiredBitSet[3] |= 1 << 0
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -18342,7 +18359,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"created_at\"")
 			}
 		case "updated_at":
-			requiredBitSet[3] |= 1 << 0
+			requiredBitSet[3] |= 1 << 1
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -18365,8 +18382,8 @@ func (s *Site) Decode(d *jx.Decoder) error {
 	for i, mask := range [4]uint8{
 		0b11111111,
 		0b01010000,
-		0b10000000,
-		0b00000001,
+		0b00000000,
+		0b00000011,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

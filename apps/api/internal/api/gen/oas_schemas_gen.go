@@ -9089,6 +9089,10 @@ type Site struct {
 	// Current WPMgr agent plugin version (last-synced via metadata push). Empty/absent until the site
 	// re-syncs on a newer agent.
 	AgentVersion OptString `json:"agent_version"`
+	// Inferred hosting/infrastructure provider (e.g. DigitalOcean, Hetzner, AWS), derived
+	// control-plane-side from the agent's observed public egress IP via an offline ASN lookup.
+	// Best-effort hint shown only when no managed-host flag matched. Empty/absent until inferred.
+	HostProvider OptString `json:"host_provider"`
 	// Count of plugins + themes + core with an available update (last-synced).
 	UpdatesAvailable OptInt32 `json:"updates_available"`
 	// Time of the most recent backup snapshot (finished_at, falling back to created_at).
@@ -9198,6 +9202,11 @@ func (s *Site) GetComponents() OptSiteComponents {
 // GetAgentVersion returns the value of AgentVersion.
 func (s *Site) GetAgentVersion() OptString {
 	return s.AgentVersion
+}
+
+// GetHostProvider returns the value of HostProvider.
+func (s *Site) GetHostProvider() OptString {
+	return s.HostProvider
 }
 
 // GetUpdatesAvailable returns the value of UpdatesAvailable.
@@ -9323,6 +9332,11 @@ func (s *Site) SetComponents(val OptSiteComponents) {
 // SetAgentVersion sets the value of AgentVersion.
 func (s *Site) SetAgentVersion(val OptString) {
 	s.AgentVersion = val
+}
+
+// SetHostProvider sets the value of HostProvider.
+func (s *Site) SetHostProvider(val OptString) {
+	s.HostProvider = val
 }
 
 // SetUpdatesAvailable sets the value of UpdatesAvailable.

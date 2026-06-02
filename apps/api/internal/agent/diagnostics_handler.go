@@ -54,5 +54,13 @@ func (h *DiagnosticsHandler) push(c *gin.Context) {
 		httpx.Error(c, ierr)
 		return
 	}
+	// M28 — infer the hosting provider from this signed request's source IP (the
+	// WordPress origin's public egress IP). Best-effort and non-fatal: it runs
+	// only on this low-frequency daily push, the IP is attributable to the
+	// verified site identity, and the result is a labelled hint that never
+	// overrides the agent's defined()-based managed-host detection. c.ClientIP()
+	// is the in-repo convention; hardening the global proxy-trust boundary is
+	// tracked separately.
+	h.svc.ResolveHostProvider(c.Request.Context(), id.TenantID, id.SiteID, c.ClientIP())
 	c.JSON(http.StatusOK, gin.H{"categories_ingested": count})
 }

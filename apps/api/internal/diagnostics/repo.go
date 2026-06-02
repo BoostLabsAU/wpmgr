@@ -424,6 +424,29 @@ func (r *Repo) UpdateSiteTimezone(ctx context.Context, tenantID, siteID uuid.UUI
 	})
 }
 
+// SetSiteHostProvider records the CP-inferred hosting provider for a site,
+// derived from the agent's observed public egress IP (M28). Mirrors
+// UpdateSiteTimezone: a raw tenant-scoped UPDATE inside InTenantTx (RLS-safe).
+// `provider` may be "" when the IP could not be attributed to a known provider;
+// the observed IP and checked-at timestamp are still recorded so the inference
+// is auditable and re-resolves naturally on the next diagnostics push.
+func (r *Repo) SetSiteHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, provider, ip string) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE sites
+			    SET host_provider            = $3,
+			        host_provider_ip         = $4,
+			        host_provider_checked_at = now()
+			  WHERE tenant_id = $1
+			    AND id        = $2`,
+			tenantID, siteID, provider, ip,
+		); err != nil {
+			return domain.Internal("site_host_provider_update_failed", "failed to update site host provider").WithCause(err)
+		}
+		return nil
+	})
+}
+
 // strFromInt is a tiny helper for building $-arg numbers in the dynamic
 // WHERE clauses above without pulling in fmt.Sprintf on the hot path.
 func strFromInt(n int) string {

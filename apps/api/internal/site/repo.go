@@ -606,6 +606,7 @@ func toModel(s sqlc.Site) Site {
 		AgeRecipient:   s.AgeRecipient,
 		WpTimezone:     s.WpTimezone,
 		WpGmtOffset:    float64(s.WpGmtOffset),
+		HostProvider:   s.HostProvider,
 		// M21 connection lifecycle.
 		ConnectionState:      ConnectionState(s.ConnectionState),
 		ConnectionGeneration: s.ConnectionGeneration,

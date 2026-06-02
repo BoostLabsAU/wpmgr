@@ -34,6 +34,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
+	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
@@ -683,6 +684,14 @@ func run() error {
 	// on the next GET /diagnostics.
 	// diagnosticsRepo is already built above (before River start) so we reuse it.
 	diagnosticsSvc := diagnostics.NewService(diagnosticsRepo)
+	// M28 — offline IP -> hosting-provider resolver. Self-disables (no-op) if the
+	// embedded DB-IP ASN database fails to open; never blocks boot.
+	if ipResolver, ipErr := ipprovider.New(); ipErr != nil {
+		logger.Warn("ipprovider disabled: could not open ASN database", "error", ipErr)
+	} else {
+		diagnosticsSvc.SetHostResolver(ipResolver)
+		logger.Info("ipprovider enabled", "db_release", ipResolver.Resolve("8.8.8.8").DBRelease)
+	}
 	diagnosticsH := diagnostics.NewHandler(diagnosticsSvc, auditRec)
 	diagnosticsAgentH := agent.NewDiagnosticsHandler(diagnosticsSvc)
 	errorsAgentH := agent.NewErrorsHandler(diagnosticsSvc)
@@ -956,11 +965,11 @@ func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 // update worker, and the M4 backup/restore/GC/scheduler workers (any of which
 // may be nil when the corresponding feature is disabled).
 type riverDeps struct {
-	healthChecker          *site.HealthChecker
-	healthInterval         time.Duration
+	healthChecker  *site.HealthChecker
+	healthInterval time.Duration
 	// M21 connection lifecycle: the timeout sweeper (15s) + site_events prune (1m).
-	siteSweepWorker      *site.SweepWorker
-	siteEventPruneWorker *site.EventPruneWorker
+	siteSweepWorker        *site.SweepWorker
+	siteEventPruneWorker   *site.EventPruneWorker
 	updateWorker           *update.Worker
 	refreshWorker          *update.RefreshInventoryWorker
 	perTenantParallelism   int

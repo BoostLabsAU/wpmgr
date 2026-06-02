@@ -28,6 +28,7 @@ require (
 	github.com/knadh/koanf/providers/file v1.2.1
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/ogen-go/ogen v1.20.3
+	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/riverqueue/river v0.38.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.38.0
 	github.com/testcontainers/testcontainers-go v0.42.0

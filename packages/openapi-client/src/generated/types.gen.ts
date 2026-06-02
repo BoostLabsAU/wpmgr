@@ -94,6 +94,10 @@ export type Site = {
    */
   agent_version?: string;
   /**
+   * Inferred hosting/infrastructure provider (e.g. DigitalOcean, Hetzner, AWS), derived control-plane-side from the agent's observed public egress IP via an offline ASN lookup. Best-effort hint shown only when no managed-host flag matched. Empty/absent until inferred.
+   */
+  host_provider?: string;
+  /**
    * Count of plugins + themes + core with an available update (last-synced).
    */
   updates_available?: number;

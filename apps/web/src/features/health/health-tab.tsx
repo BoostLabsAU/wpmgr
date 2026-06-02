@@ -80,6 +80,7 @@ export function HealthTab({ siteId }: { siteId: string }) {
         data={data}
         refreshing={refresh.isPending}
         onRefresh={onRefresh}
+        hostProvider={site?.host_provider}
       />
 
       <Section label="Runtime">
@@ -143,10 +144,17 @@ function HealthRibbon({
   data,
   refreshing,
   onRefresh,
+  hostProvider,
 }: {
   data: SiteDiagnosticsCard[] | undefined;
   refreshing: boolean;
   onRefresh: () => void;
+  /**
+   * M28 — CP-inferred hosting provider (from the agent's egress IP). Used only
+   * as a fallback when the agent's defined()-based managed-host detection
+   * (pickPlatform) finds nothing; the managed-host name always wins.
+   */
+  hostProvider?: string;
 }) {
   const identityCard = cardFor(data, "identity");
   const hostingCard = cardFor(data, "hosting");
@@ -183,7 +191,20 @@ function HealthRibbon({
         Health
       </h2>
       <Sep />
-      <RibbonFact label="Host" value={platform ?? "Unrecognized"} />
+      {platform ? (
+        <RibbonFact label="Host" value={platform} />
+      ) : hostProvider ? (
+        <>
+          <RibbonFact
+            label="Host"
+            value={`${hostProvider} (inferred)`}
+            title="Inferred from the server's network provider, not a recognized managed host. IP data by DB-IP.com"
+          />
+          <span className="text-xs text-muted-foreground">IP data by DB-IP.com</span>
+        </>
+      ) : (
+        <RibbonFact label="Host" value="Unrecognized" />
+      )}
       <Sep />
       <span className="inline-flex items-center gap-1.5 text-sm">
         <span className="text-muted-foreground">PHP</span>
@@ -231,9 +252,17 @@ function HealthRibbon({
   );
 }
 
-function RibbonFact({ label, value }: { label: string; value: string }) {
+function RibbonFact({
+  label,
+  value,
+  title,
+}: {
+  label: string;
+  value: string;
+  title?: string;
+}) {
   return (
-    <span className="inline-flex items-center gap-1.5 text-sm">
+    <span className="inline-flex items-center gap-1.5 text-sm" title={title}>
       <span className="text-muted-foreground">{label}</span>
       <span className="text-foreground">{value}</span>
     </span>

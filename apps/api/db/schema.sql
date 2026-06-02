@@ -70,6 +70,12 @@ CREATE TABLE sites (
     -- compute the next run instant in the site's own WordPress timezone.
     wp_timezone   text      NOT NULL DEFAULT '',
     wp_gmt_offset real      NOT NULL DEFAULT 0,
+    -- M28 host provider: inferred CP-side from the agent's observed public
+    -- egress IP via an offline ASN lookup. Best-effort hint, shown only when no
+    -- managed-host defined()-flag matched. Empty until the first diagnostics push.
+    host_provider            text NOT NULL DEFAULT '',
+    host_provider_ip         text NOT NULL DEFAULT '',
+    host_provider_checked_at timestamptz,
     -- M21 connection lifecycle: connection_state is the single source of truth
     -- (legacy status/health_status kept for compat). See ADR-041.
     connection_state      text    NOT NULL DEFAULT 'pending_enrollment'
