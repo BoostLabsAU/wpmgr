@@ -21,6 +21,7 @@ export const NAV = {
     { label: "Media", href: "#media" },
     { label: "How it works", href: "#how-it-works" },
     { label: "Open source", href: "#open-source" },
+    { label: "API", href: "/docs/" },
     { label: "FAQ", href: "#faq" },
   ],
 };
@@ -319,6 +320,7 @@ export const FOOTER = {
   ],
   links: [
     { label: "GitHub", href: SITE.github, icon: "Github" },
+    { label: "API reference", href: "/docs/", icon: "FileSearch" },
     { label: "Live dashboard", href: SITE.dashboard, icon: "LayoutDashboard" },
     { label: "License", href: SITE.github + "/blob/main/LICENSE", icon: "Scale" },
   ],
