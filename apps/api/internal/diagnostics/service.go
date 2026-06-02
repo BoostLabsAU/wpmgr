@@ -60,16 +60,49 @@ func (s *Service) SetHostResolver(r HostResolver) {
 }
 
 // ResolveHostProvider infers and records the site's hosting provider from the
-// agent's observed public egress IP (M28). Best-effort and non-fatal, called
-// after a diagnostics push. A nil resolver (feature disabled) or empty IP is a
-// no-op. The result is recorded even when the provider is "" so the observed IP
-// and checked-at timestamp are stored and a changed IP re-resolves next time.
-func (s *Service) ResolveHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, sourceIP string) {
-	if s.hostResolver == nil || sourceIP == "" {
+// agent's egress IP (M28). Best-effort and non-fatal, called after a diagnostics
+// push. It prefers the CP-observed source IP, falling back to the agent-reported
+// public IP (hosting.public_ip, fetched by the agent from ipify) ONLY when the
+// observed IP is not globally routable — the self-host-behind-proxy / same-LAN
+// case. The result is recorded even when the provider is unrecognized so the
+// observed IP, raw network org, and checked-at are stored (auditable + visible),
+// and a changed IP re-resolves on the next push.
+func (s *Service) ResolveHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, observedIP string, body []byte) {
+	if s.hostResolver == nil {
 		return
 	}
-	res := s.hostResolver.Resolve(sourceIP)
-	_ = s.repo.SetSiteHostProvider(ctx, tenantID, siteID, res.Provider, sourceIP)
+	ip := observedIP
+	if !ipprovider.IsGlobalUnicast(observedIP) {
+		if reported := reportedPublicIP(body); ipprovider.IsGlobalUnicast(reported) {
+			ip = reported
+		}
+	}
+	if ip == "" {
+		return
+	}
+	res := s.hostResolver.Resolve(ip)
+	_ = s.repo.SetSiteHostProvider(ctx, tenantID, siteID, res.Provider, res.ASOrg, ip)
+}
+
+// reportedPublicIP extracts the agent-reported public IP (M28 fallback) from the
+// diagnostics body's hosting category (hosting.public_ip). Returns "" when
+// absent or malformed.
+func reportedPublicIP(body []byte) string {
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return ""
+	}
+	h, ok := raw["hosting"]
+	if !ok {
+		return ""
+	}
+	var hosting struct {
+		PublicIP string `json:"public_ip"`
+	}
+	if json.Unmarshal(h, &hosting) != nil {
+		return ""
+	}
+	return hosting.PublicIP
 }
 
 // SetRefreshEnqueuer wires the on-demand refresh enqueuer once it is built

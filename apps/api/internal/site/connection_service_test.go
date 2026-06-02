@@ -195,4 +195,3 @@ func TestHeartbeatRecoversDegraded(t *testing.T) {
 		t.Fatalf("expected one state_changed event, got %v", pub.types())
 	}
 }
-

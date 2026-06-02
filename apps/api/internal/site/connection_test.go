@@ -10,10 +10,10 @@ func TestCanTransition(t *testing.T) {
 		{StateConnected, StateDisconnected},
 		{StateConnected, StateRevoked},
 		{StateConnected, StateArchived},
-		{StateDegraded, StateConnected},  // recovery
+		{StateDegraded, StateConnected}, // recovery
 		{StateDegraded, StateDisconnected},
-		{StateDisconnected, StateConnected},          // heartbeat returns
-		{StateDisconnected, StatePendingEnrollment},  // begin re-enroll
+		{StateDisconnected, StateConnected},         // heartbeat returns
+		{StateDisconnected, StatePendingEnrollment}, // begin re-enroll
 		{StateDisconnected, StateRevoked},
 		{StateRevoked, StatePendingEnrollment}, // re-enroll
 		{StateRevoked, StateArchived},
@@ -31,7 +31,7 @@ func TestCanTransition(t *testing.T) {
 		{StatePendingEnrollment, StateDisconnected}, // ditto
 		{StateArchived, StateConnected},             // must restore first
 		{StateArchived, StateRevoked},
-		{StateRevoked, StateConnected},  // revoked needs a re-enroll, not a direct connect
+		{StateRevoked, StateConnected},           // revoked needs a re-enroll, not a direct connect
 		{StateConnected, StatePendingEnrollment}, // can't un-enroll a live site directly
 		{StateDegraded, StatePendingEnrollment},  // re-enroll only from disconnected/revoked/archived
 	}

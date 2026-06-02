@@ -53,6 +53,13 @@ type Site struct {
 	// confidently attributed. A best-effort hint: a positive agent HostFlag
 	// (managed-host detection) always takes precedence over this value.
 	HostProvider string
+	// HostProviderOrg (M29) is the raw Autonomous System organization string for
+	// the inferred network (e.g. "Hetzner Online GmbH"). Used as a display
+	// fallback when HostProvider (the canonical mapped name) is empty but the
+	// network is still known. HostProviderIP is the IP the inference used,
+	// surfaced to the site's own operators for debugging.
+	HostProviderOrg string
+	HostProviderIP  string
 	// M21 connection lifecycle (ADR-041). ConnectionState is the single source of
 	// truth for the agent connection; the legacy Status/HealthStatus columns are
 	// kept in sync but only ConnectionState drives the lifecycle UI.

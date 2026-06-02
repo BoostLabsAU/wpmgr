@@ -561,9 +561,16 @@ func toAPI(s Site) gen.Site {
 	if s.AgentVersion != "" {
 		out.AgentVersion = gen.NewOptString(s.AgentVersion)
 	}
-	// M28 — inferred hosting provider (CP-derived from the agent's egress IP).
+	// M28/M29 — inferred hosting provider (CP-derived from the agent's egress
+	// IP) plus the raw network org and the IP used, surfaced for visibility.
 	if s.HostProvider != "" {
 		out.HostProvider = gen.NewOptString(s.HostProvider)
+	}
+	if s.HostProviderOrg != "" {
+		out.HostProviderOrg = gen.NewOptString(s.HostProviderOrg)
+	}
+	if s.HostProviderIP != "" {
+		out.HostProviderIP = gen.NewOptString(s.HostProviderIP)
 	}
 	// M27 — most-recent backup, normalized to the web's status enum here so the
 	// dashboard adapter stays dumb (DB completed→success, pending→running).

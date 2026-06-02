@@ -430,16 +430,17 @@ func (r *Repo) UpdateSiteTimezone(ctx context.Context, tenantID, siteID uuid.UUI
 // `provider` may be "" when the IP could not be attributed to a known provider;
 // the observed IP and checked-at timestamp are still recorded so the inference
 // is auditable and re-resolves naturally on the next diagnostics push.
-func (r *Repo) SetSiteHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, provider, ip string) error {
+func (r *Repo) SetSiteHostProvider(ctx context.Context, tenantID, siteID uuid.UUID, provider, org, ip string) error {
 	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`UPDATE sites
 			    SET host_provider            = $3,
-			        host_provider_ip         = $4,
+			        host_provider_org        = $4,
+			        host_provider_ip         = $5,
 			        host_provider_checked_at = now()
 			  WHERE tenant_id = $1
 			    AND id        = $2`,
-			tenantID, siteID, provider, ip,
+			tenantID, siteID, provider, org, ip,
 		); err != nil {
 			return domain.Internal("site_host_provider_update_failed", "failed to update site host provider").WithCause(err)
 		}

@@ -9093,6 +9093,13 @@ type Site struct {
 	// control-plane-side from the agent's observed public egress IP via an offline ASN lookup.
 	// Best-effort hint shown only when no managed-host flag matched. Empty/absent until inferred.
 	HostProvider OptString `json:"host_provider"`
+	// Raw Autonomous System organization for the inferred network (e.g. "Hetzner Online GmbH"). Display
+	// fallback when host_provider (the canonical name) is empty but the network is known. Empty/absent
+	// until inferred.
+	HostProviderOrg OptString `json:"host_provider_org"`
+	// The public egress IP the host inference used (the agent's observed or reported IP). Surfaced to
+	// the site's own operators for debugging. Empty/absent until inferred.
+	HostProviderIP OptString `json:"host_provider_ip"`
 	// Count of plugins + themes + core with an available update (last-synced).
 	UpdatesAvailable OptInt32 `json:"updates_available"`
 	// Time of the most recent backup snapshot (finished_at, falling back to created_at).
@@ -9207,6 +9214,16 @@ func (s *Site) GetAgentVersion() OptString {
 // GetHostProvider returns the value of HostProvider.
 func (s *Site) GetHostProvider() OptString {
 	return s.HostProvider
+}
+
+// GetHostProviderOrg returns the value of HostProviderOrg.
+func (s *Site) GetHostProviderOrg() OptString {
+	return s.HostProviderOrg
+}
+
+// GetHostProviderIP returns the value of HostProviderIP.
+func (s *Site) GetHostProviderIP() OptString {
+	return s.HostProviderIP
 }
 
 // GetUpdatesAvailable returns the value of UpdatesAvailable.
@@ -9337,6 +9354,16 @@ func (s *Site) SetAgentVersion(val OptString) {
 // SetHostProvider sets the value of HostProvider.
 func (s *Site) SetHostProvider(val OptString) {
 	s.HostProvider = val
+}
+
+// SetHostProviderOrg sets the value of HostProviderOrg.
+func (s *Site) SetHostProviderOrg(val OptString) {
+	s.HostProviderOrg = val
+}
+
+// SetHostProviderIP sets the value of HostProviderIP.
+func (s *Site) SetHostProviderIP(val OptString) {
+	s.HostProviderIP = val
 }
 
 // SetUpdatesAvailable sets the value of UpdatesAvailable.

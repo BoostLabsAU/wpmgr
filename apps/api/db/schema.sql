@@ -74,6 +74,7 @@ CREATE TABLE sites (
     -- egress IP via an offline ASN lookup. Best-effort hint, shown only when no
     -- managed-host defined()-flag matched. Empty until the first diagnostics push.
     host_provider            text NOT NULL DEFAULT '',
+    host_provider_org        text NOT NULL DEFAULT '',
     host_provider_ip         text NOT NULL DEFAULT '',
     host_provider_checked_at timestamptz,
     -- M21 connection lifecycle: connection_state is the single source of truth

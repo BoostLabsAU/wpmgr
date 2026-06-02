@@ -61,6 +61,6 @@ func (h *DiagnosticsHandler) push(c *gin.Context) {
 	// overrides the agent's defined()-based managed-host detection. c.ClientIP()
 	// is the in-repo convention; hardening the global proxy-trust boundary is
 	// tracked separately.
-	h.svc.ResolveHostProvider(c.Request.Context(), id.TenantID, id.SiteID, c.ClientIP())
+	h.svc.ResolveHostProvider(c.Request.Context(), id.TenantID, id.SiteID, c.ClientIP(), body)
 	c.JSON(http.StatusOK, gin.H{"categories_ingested": count})
 }

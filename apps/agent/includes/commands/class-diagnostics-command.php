@@ -992,16 +992,100 @@ final class DiagnosticsCommand implements CommandInterface
     private function collectHosting(): array
     {
         return [
-            'is_pressable' => defined('IS_PRESSABLE'),
-            'is_gridpane'  => defined('GRIDPANE_LOCATION'),
-            'is_wpengine'  => defined('WPE_APIKEY') || function_exists('is_wpe'),
-            'is_atomic'    => defined('IS_ATOMIC') || defined('IS_WPCOM'),
-            'is_kinsta'    => defined('KINSTA_CACHE_ZONE') || defined('KINSTAMU_VERSION'),
-            'is_flywheel'  => defined('FLYWHEEL_CONFIG_DIR'),
-            'is_runcloud'  => defined('RUNCLOUD'),
-            'is_cloudways' => defined('CLOUDWAYS_HOSTING'),
+            'is_pressable'    => defined('IS_PRESSABLE'),
+            'is_gridpane'     => defined('GRIDPANE_LOCATION'),
+            'is_wpengine'     => defined('WPE_APIKEY') || function_exists('is_wpe'),
+            'is_atomic'       => defined('IS_ATOMIC') || defined('IS_WPCOM'),
+            'is_kinsta'       => defined('KINSTA_CACHE_ZONE') || defined('KINSTAMU_VERSION'),
+            'is_flywheel'     => defined('FLYWHEEL_CONFIG_DIR'),
+            'is_runcloud'     => defined('RUNCLOUD'),
+            'is_cloudways'    => defined('CLOUDWAYS_HOSTING'),
             'server_software' => isset($_SERVER['SERVER_SOFTWARE']) ? (string) $_SERVER['SERVER_SOFTWARE'] : '',
+            // M28 fallback: agent-observed egress IP. Empty string when the probe
+            // fails or times out — the CP uses its own observed IP in that case.
+            'public_ip'       => $this->fetchPublicIp(),
         ];
+    }
+
+    /**
+     * Fetch and cache the server's public egress IPv4 via ipify.
+     *
+     * Uses a WordPress transient (wpmgr_public_ip, 8h TTL) so the outbound
+     * request fires at most once per 8 hours, not on every diagnostics push.
+     * A separate short-lived failure marker (wpmgr_public_ip_fail, 5min TTL)
+     * prevents hammering ipify during a transient network outage.
+     *
+     * On any failure — WP_Error, non-200, body that is not a valid IP, or a
+     * WordPress HTTP API that is unavailable — returns '' immediately and
+     * silently. NEVER throws, NEVER warns, NEVER blocks the hosting collector.
+     *
+     * @return string Validated public IP address, or '' on any failure.
+     */
+    private function fetchPublicIp(): string
+    {
+        if (!function_exists('get_transient') || !function_exists('set_transient')) {
+            return '';
+        }
+
+        // Fast path: cached good result.
+        $cached = get_transient('wpmgr_public_ip');
+        if (is_string($cached) && $cached !== '') {
+            return $cached;
+        }
+
+        // Fast path: cached failure marker — avoid hammering ipify during an
+        // outage. The marker TTL (5 min) is much shorter than the success TTL
+        // (8 h) so a recovered network is retried promptly.
+        if (get_transient('wpmgr_public_ip_fail') !== false) {
+            return '';
+        }
+
+        if (!function_exists('wp_remote_get') || !function_exists('is_wp_error')) {
+            return '';
+        }
+
+        $response = wp_remote_get('https://api.ipify.org', [
+            'timeout'     => 5,
+            'sslverify'   => true,
+            'redirection' => 0,
+            'user-agent'  => 'WPMgr-Agent-Diagnostics/1.0',
+        ]);
+
+        if (is_wp_error($response)) {
+            set_transient('wpmgr_public_ip_fail', '1', 5 * MINUTE_IN_SECONDS);
+            return '';
+        }
+
+        $status = function_exists('wp_remote_retrieve_response_code')
+            ? (int) wp_remote_retrieve_response_code($response)
+            : 0;
+
+        if ($status !== 200) {
+            set_transient('wpmgr_public_ip_fail', '1', 5 * MINUTE_IN_SECONDS);
+            return '';
+        }
+
+        $body = function_exists('wp_remote_retrieve_body')
+            ? (string) wp_remote_retrieve_body($response)
+            : '';
+
+        // Cap length before validation: a valid IP is at most 45 chars (IPv6
+        // notation). Anything longer is garbage and we reject it outright.
+        $body = trim($body);
+        if ($body === '' || strlen($body) > 45) {
+            set_transient('wpmgr_public_ip_fail', '1', 5 * MINUTE_IN_SECONDS);
+            return '';
+        }
+
+        // Validate: must be a real IP address (ipify returns the bare IP as text).
+        if (!filter_var($body, FILTER_VALIDATE_IP)) {
+            set_transient('wpmgr_public_ip_fail', '1', 5 * MINUTE_IN_SECONDS);
+            return '';
+        }
+
+        // Cache the validated IP for 8 hours.
+        set_transient('wpmgr_public_ip', $body, 8 * HOUR_IN_SECONDS);
+        return $body;
     }
 
     /**

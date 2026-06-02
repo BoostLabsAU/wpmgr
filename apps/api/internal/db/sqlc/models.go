@@ -227,6 +227,7 @@ type Site struct {
 	WpTimezone            string             `json:"wp_timezone"`
 	WpGmtOffset           float32            `json:"wp_gmt_offset"`
 	HostProvider          string             `json:"host_provider"`
+	HostProviderOrg       string             `json:"host_provider_org"`
 	HostProviderIp        string             `json:"host_provider_ip"`
 	HostProviderCheckedAt pgtype.Timestamptz `json:"host_provider_checked_at"`
 	ConnectionState       string             `json:"connection_state"`

@@ -81,6 +81,8 @@ export function HealthTab({ siteId }: { siteId: string }) {
         refreshing={refresh.isPending}
         onRefresh={onRefresh}
         hostProvider={site?.host_provider}
+        hostProviderOrg={site?.host_provider_org}
+        hostProviderIp={site?.host_provider_ip}
       />
 
       <Section label="Runtime">
@@ -145,17 +147,27 @@ function HealthRibbon({
   refreshing,
   onRefresh,
   hostProvider,
+  hostProviderOrg,
+  hostProviderIp,
 }: {
   data: SiteDiagnosticsCard[] | undefined;
   refreshing: boolean;
   onRefresh: () => void;
   /**
-   * M28 — CP-inferred hosting provider (from the agent's egress IP). Used only
-   * as a fallback when the agent's defined()-based managed-host detection
-   * (pickPlatform) finds nothing; the managed-host name always wins.
+   * M28/M29 — CP-inferred network, from the agent's egress IP. Fallback only
+   * when the agent's defined()-based managed-host detection (pickPlatform) finds
+   * nothing; the managed-host name always wins. hostProvider is the canonical
+   * mapped name (e.g. "Hetzner"); hostProviderOrg is the raw AS org used when no
+   * canonical name matched (e.g. "Hetzner Online GmbH"); hostProviderIp is the
+   * IP the inference used, shown in the tooltip for debugging.
    */
   hostProvider?: string;
+  hostProviderOrg?: string;
+  hostProviderIp?: string;
 }) {
+  // Prefer the canonical provider name; fall back to the raw network org so a
+  // known-but-unmapped host shows its real network instead of "Unrecognized".
+  const inferredNetwork = hostProvider || hostProviderOrg;
   const identityCard = cardFor(data, "identity");
   const hostingCard = cardFor(data, "hosting");
   const phpCard = cardFor(data, "php");
@@ -193,12 +205,14 @@ function HealthRibbon({
       <Sep />
       {platform ? (
         <RibbonFact label="Host" value={platform} />
-      ) : hostProvider ? (
+      ) : inferredNetwork ? (
         <>
           <RibbonFact
             label="Host"
-            value={`${hostProvider} (inferred)`}
-            title="Inferred from the server's network provider, not a recognized managed host. IP data by DB-IP.com"
+            value={`${inferredNetwork} (inferred)`}
+            title={`Inferred from the server's network${
+              hostProviderIp ? ` (${hostProviderIp})` : ""
+            }, not a recognized managed host. IP data by DB-IP.com`}
           />
           <span className="text-xs text-muted-foreground">IP data by DB-IP.com</span>
         </>

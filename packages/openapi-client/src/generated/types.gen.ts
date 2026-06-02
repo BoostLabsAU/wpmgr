@@ -98,6 +98,14 @@ export type Site = {
    */
   host_provider?: string;
   /**
+   * Raw Autonomous System organization for the inferred network (e.g. "Hetzner Online GmbH"). Display fallback when host_provider (the canonical name) is empty but the network is known. Empty/absent until inferred.
+   */
+  host_provider_org?: string;
+  /**
+   * The public egress IP the host inference used (the agent's observed or reported IP). Surfaced to the site's own operators for debugging. Empty/absent until inferred.
+   */
+  host_provider_ip?: string;
+  /**
    * Count of plugins + themes + core with an available update (last-synced).
    */
   updates_available?: number;

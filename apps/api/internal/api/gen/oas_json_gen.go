@@ -18017,6 +18017,18 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.HostProviderOrg.Set {
+			e.FieldStart("host_provider_org")
+			s.HostProviderOrg.Encode(e)
+		}
+	}
+	{
+		if s.HostProviderIP.Set {
+			e.FieldStart("host_provider_ip")
+			s.HostProviderIP.Encode(e)
+		}
+	}
+	{
 		if s.UpdatesAvailable.Set {
 			e.FieldStart("updates_available")
 			s.UpdatesAvailable.Encode(e)
@@ -18044,7 +18056,7 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSite = [26]string{
+var jsonFieldsNameOfSite = [28]string{
 	0:  "id",
 	1:  "tenant_id",
 	2:  "url",
@@ -18066,11 +18078,13 @@ var jsonFieldsNameOfSite = [26]string{
 	18: "components",
 	19: "agent_version",
 	20: "host_provider",
-	21: "updates_available",
-	22: "last_backup_at",
-	23: "last_backup_status",
-	24: "created_at",
-	25: "updated_at",
+	21: "host_provider_org",
+	22: "host_provider_ip",
+	23: "updates_available",
+	24: "last_backup_at",
+	25: "last_backup_status",
+	26: "created_at",
+	27: "updated_at",
 }
 
 // Decode decodes Site from json.
@@ -18316,6 +18330,26 @@ func (s *Site) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"host_provider\"")
 			}
+		case "host_provider_org":
+			if err := func() error {
+				s.HostProviderOrg.Reset()
+				if err := s.HostProviderOrg.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"host_provider_org\"")
+			}
+		case "host_provider_ip":
+			if err := func() error {
+				s.HostProviderIP.Reset()
+				if err := s.HostProviderIP.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"host_provider_ip\"")
+			}
 		case "updates_available":
 			if err := func() error {
 				s.UpdatesAvailable.Reset()
@@ -18347,7 +18381,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"last_backup_status\"")
 			}
 		case "created_at":
-			requiredBitSet[3] |= 1 << 0
+			requiredBitSet[3] |= 1 << 2
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -18359,7 +18393,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"created_at\"")
 			}
 		case "updated_at":
-			requiredBitSet[3] |= 1 << 1
+			requiredBitSet[3] |= 1 << 3
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -18383,7 +18417,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 		0b11111111,
 		0b01010000,
 		0b00000000,
-		0b00000011,
+		0b00001100,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.

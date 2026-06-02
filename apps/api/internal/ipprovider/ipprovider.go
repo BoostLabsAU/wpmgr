@@ -113,3 +113,24 @@ func (r *Resolver) Resolve(ipStr string) Result {
 	out.Confidence = confidence
 	return out
 }
+
+// IsGlobalUnicast reports whether an IP string is a globally routable public
+// address (not private, loopback, link-local, unspecified, or CGNAT
+// 100.64.0.0/10). The CP uses it to decide whether its observed source IP is
+// usable, or whether to fall back to the agent-reported public IP (the
+// self-host-behind-proxy / same-LAN case).
+func IsGlobalUnicast(ipStr string) bool {
+	ip := net.ParseIP(strings.TrimSpace(ipStr))
+	if ip == nil {
+		return false
+	}
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() {
+		return false
+	}
+	// CGNAT 100.64.0.0/10 is not flagged by IsPrivate but is shared, not a
+	// globally routable single host.
+	if v4 := ip.To4(); v4 != nil && v4[0] == 100 && v4[1]&0xC0 == 64 {
+		return false
+	}
+	return true
+}
