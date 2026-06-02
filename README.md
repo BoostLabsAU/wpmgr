@@ -4,6 +4,14 @@
 
 WPMgr lets you enroll, monitor, update, back up, and secure a fleet of WordPress sites from one dashboard — all running on infrastructure you control. The control plane is a Go binary with a React dashboard; a lightweight PHP plugin on each managed site handles the work. Everything between the agent and the control plane is Ed25519-signed.
 
+[![WPMgr — run your whole WordPress fleet from one dashboard you own](docs/images/landing.png)](https://wpmgr.app)
+
+<p align="center">
+  <a href="https://wpmgr.app">Website</a> ·
+  <a href="https://manage.wpmgr.app">Live dashboard</a> ·
+  <a href="https://wpmgr.app/docs/">API reference</a>
+</p>
+
 **v0.12.0** — first public release. Early but production-usable for self-hosters.
 
 ---
