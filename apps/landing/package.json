@@ -1,0 +1,32 @@
+{
+  "name": "@wpmgr/landing",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Marketing landing page for WPMgr (apex wpmgr.app). Standalone Vite + React + Tailwind v4, reuses the Impeccable design tokens.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit",
+    "impeccable": "impeccable detect src/"
+  },
+  "dependencies": {
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.16.0",
+    "motion": "^12.40.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwind-merge": "^3.6.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "impeccable": "^2.1.9",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5"
+  }
+}

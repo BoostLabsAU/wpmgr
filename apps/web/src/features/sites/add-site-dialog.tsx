@@ -6,6 +6,7 @@ import {
   Check,
   CircleCheck,
   Copy,
+  Download,
   Plus,
   RotateCw,
 } from "lucide-react";
@@ -23,6 +24,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { fade, scaleIn } from "@/lib/motion-presets";
+import { AGENT_PLUGIN_DOWNLOAD_URL } from "@/lib/links";
 import { useNow } from "@/lib/use-now";
 import { cn } from "@/lib/utils";
 import {
@@ -439,11 +441,22 @@ function AwaitingStep({
   return (
     <>
       <DialogBody>
-        <ol className="list-decimal space-y-1 rounded-md border border-border p-3 pl-7 text-sm text-muted-foreground">
-          <li>Install the WPMgr Agent plugin on your WordPress site.</li>
-          <li>Open the plugin settings and enter your control-plane URL.</li>
-          <li>Paste the enrollment code below and click Enroll.</li>
-        </ol>
+        <div className="space-y-2.5">
+          <ol className="list-decimal space-y-1 rounded-md border border-border p-3 pl-7 text-sm text-muted-foreground">
+            <li>Download the WPMgr Agent plugin and install it on your WordPress site.</li>
+            <li>Open the plugin settings and enter your control-plane URL.</li>
+            <li>Paste the enrollment code below and click Enroll.</li>
+          </ol>
+          {/* Direct download of the latest published agent plugin zip (GitHub
+              release asset). The browser downloads it as an attachment, so this
+              never navigates the dashboard away. */}
+          <Button asChild variant="outline" className="w-full">
+            <a href={AGENT_PLUGIN_DOWNLOAD_URL} download rel="noreferrer">
+              <Download aria-hidden="true" />
+              Download the plugin (.zip)
+            </a>
+          </Button>
+        </div>
 
         {expired ? (
           <ExpiredPanel
