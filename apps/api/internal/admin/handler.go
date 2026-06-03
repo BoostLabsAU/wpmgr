@@ -32,6 +32,51 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.DELETE("/users/:userId", h.deleteUser)
 	g.PATCH("/users/:userId", h.setStatus)
 	g.POST("/users/:userId/resend-verification", h.resendVerification)
+	g.GET("/sites/:siteId/tenancy", h.siteTenancy)
+}
+
+// siteTenancy is a read-only diagnostic: it returns where a site + its perf data
+// (rucss results / cache stats / config) live vs the calling superadmin's org
+// memberships, to surface a tenant/ownership split. No mutation.
+func (h *Handler) siteTenancy(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	rep, err := h.svc.SiteTenancy(c.Request.Context(), p.UserID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Derive a human verdict: do any of your orgs match the tenant that owns the
+	// site's perf data?
+	dataTenant := uuid.Nil
+	for _, d := range rep.DataTenants {
+		dataTenant = d.TenantID // last writer wins; they should all agree
+	}
+	youMatchData := false
+	for _, m := range rep.Memberships {
+		if dataTenant != uuid.Nil && m.TenantID == dataTenant {
+			youMatchData = true
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"site_id":          rep.SiteID,
+		"site_found":       rep.SiteFound,
+		"site_tenant_id":   rep.SiteTenantID,
+		"site_tenant_name": rep.SiteTenantName,
+		"site_url":         rep.SiteURL,
+		"data_tenants":     rep.DataTenants,
+		"your_memberships": rep.Memberships,
+		"site_shares":      rep.SiteShares,
+		"verdict": gin.H{
+			"site_matches_data":     rep.SiteFound && dataTenant != uuid.Nil && rep.SiteTenantID == dataTenant,
+			"you_can_see_perf_data": youMatchData,
+		},
+	})
 }
 
 // requireSuperadmin is a Gin middleware that returns 403 unless the

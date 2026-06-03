@@ -196,6 +196,112 @@ func (r *Repo) DeleteEmptyTenant(ctx context.Context, tenantID uuid.UUID) (bool,
 	return deleted, nil
 }
 
+// TenancyRef is one tenant reference in the site-tenancy diagnostic. Role is the
+// membership/share role or the source table label; Count is the row count.
+type TenancyRef struct {
+	TenantID   uuid.UUID `json:"tenant_id"`
+	TenantName string    `json:"tenant_name"`
+	Role       string    `json:"role,omitempty"`
+	Count      int64     `json:"count,omitempty"`
+}
+
+// SiteTenancyReport compares where a site + its perf data live against a user's
+// org memberships — for diagnosing a tenant/ownership split.
+type SiteTenancyReport struct {
+	SiteID         uuid.UUID    `json:"site_id"`
+	SiteFound      bool         `json:"site_found"`
+	SiteTenantID   uuid.UUID    `json:"site_tenant_id"`
+	SiteTenantName string       `json:"site_tenant_name"`
+	SiteURL        string       `json:"site_url"`
+	DataTenants    []TenancyRef `json:"data_tenants"`
+	Memberships    []TenancyRef `json:"your_memberships"`
+	SiteShares     []TenancyRef `json:"site_shares"`
+}
+
+// SiteTenancy returns where a site (and its rucss/cache-stats/config rows) live vs
+// the requesting user's orgs. Runs under InAgentTx so the *_agent RLS policies
+// expose rows cross-tenant. Read-only.
+func (r *Repo) SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error) {
+	rep := SiteTenancyReport{SiteID: siteID}
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		// site owner
+		serr := tx.QueryRow(ctx,
+			`SELECT s.tenant_id, t.name, s.url FROM sites s JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`,
+			siteID,
+		).Scan(&rep.SiteTenantID, &rep.SiteTenantName, &rep.SiteURL)
+		if serr == nil {
+			rep.SiteFound = true
+		} else if !errors.Is(serr, pgx.ErrNoRows) {
+			return serr
+		}
+
+		// which tenant owns each perf table's rows for this site
+		dataQ := []struct{ label, sql string }{
+			{"rucss_results", `SELECT r.tenant_id, t.name, count(*) FROM rucss_results r JOIN tenants t ON t.id = r.tenant_id WHERE r.site_id = $1 GROUP BY r.tenant_id, t.name`},
+			{"site_cache_stats", `SELECT c.tenant_id, t.name, count(*) FROM site_cache_stats c JOIN tenants t ON t.id = c.tenant_id WHERE c.site_id = $1 GROUP BY c.tenant_id, t.name`},
+			{"site_perf_config", `SELECT pc.tenant_id, t.name, count(*) FROM site_perf_config pc JOIN tenants t ON t.id = pc.tenant_id WHERE pc.site_id = $1 GROUP BY pc.tenant_id, t.name`},
+		}
+		for _, dq := range dataQ {
+			rows, qerr := tx.Query(ctx, dq.sql, siteID)
+			if qerr != nil {
+				return qerr
+			}
+			for rows.Next() {
+				ref := TenancyRef{Role: dq.label}
+				if scanErr := rows.Scan(&ref.TenantID, &ref.TenantName, &ref.Count); scanErr != nil {
+					rows.Close()
+					return scanErr
+				}
+				rep.DataTenants = append(rep.DataTenants, ref)
+			}
+			rows.Close()
+			if rows.Err() != nil {
+				return rows.Err()
+			}
+		}
+
+		// the requesting user's org memberships
+		mem, merr := collectRefs(ctx, tx,
+			`SELECT m.tenant_id, t.name, m.role FROM memberships m JOIN tenants t ON t.id = m.tenant_id WHERE m.user_id = $1`,
+			userID)
+		if merr != nil {
+			return merr
+		}
+		rep.Memberships = mem
+		// any per-site share of this site
+		shares, sherr := collectRefs(ctx, tx,
+			`SELECT sh.tenant_id, t.name, sh.role FROM site_shares sh JOIN tenants t ON t.id = sh.tenant_id WHERE sh.site_id = $1`,
+			siteID)
+		if sherr != nil {
+			return sherr
+		}
+		rep.SiteShares = shares
+		return nil
+	})
+	if err != nil {
+		return SiteTenancyReport{}, domain.Internal("admin_site_tenancy_failed", "failed to inspect site tenancy").WithCause(err)
+	}
+	return rep, nil
+}
+
+// collectRefs runs a (tenant_id, name, role) query and returns the refs.
+func collectRefs(ctx context.Context, tx pgx.Tx, sql string, arg uuid.UUID) ([]TenancyRef, error) {
+	rows, err := tx.Query(ctx, sql, arg)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []TenancyRef
+	for rows.Next() {
+		var ref TenancyRef
+		if err := rows.Scan(&ref.TenantID, &ref.TenantName, &ref.Role); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
+}
+
 // SetStatus updates a user's status and returns the updated view model.
 func (r *Repo) SetStatus(ctx context.Context, id uuid.UUID, status string) (AdminUser, error) {
 	row, err := r.q.AdminSetUserStatus(ctx, sqlc.AdminSetUserStatusParams{ID: id, Status: status})

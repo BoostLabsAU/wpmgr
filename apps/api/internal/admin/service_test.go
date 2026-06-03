@@ -86,6 +86,10 @@ func (f *fakeStore) DeleteEmptyTenant(_ context.Context, tenantID uuid.UUID) (bo
 	return false, nil
 }
 
+func (f *fakeStore) SiteTenancy(_ context.Context, _, siteID uuid.UUID) (SiteTenancyReport, error) {
+	return SiteTenancyReport{SiteID: siteID}, nil
+}
+
 func newService(f *fakeStore) *Service {
 	return &Service{repo: f}
 }
