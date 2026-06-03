@@ -219,6 +219,40 @@ func run() error {
 		}
 	}
 
+	// One-shot membership reconciliation: WPMGR_GRANT_MEMBERSHIPS =
+	// "email:tenant_uuid[:role][,email2:tenant_uuid2[:role2]]". Ensures an EXISTING
+	// user is a member of an EXISTING org (addressed by tenant UUID, so there is no
+	// name ambiguity) — the fix for a recovery that attached an account to the
+	// wrong org. Unlike WPMGR_RECOVER_ACCOUNTS it NEVER creates a user or mints a
+	// password link; it is pure, idempotent membership upsert. Role defaults to
+	// 'owner'. Safe to re-run; remove the env after use for cleanliness.
+	if raw := os.Getenv("WPMGR_GRANT_MEMBERSHIPS"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			parts := strings.SplitN(entry, ":", 3)
+			if len(parts) < 2 {
+				logger.Warn("grant membership: bad entry, want email:tenant_uuid[:role]", slog.String("entry", entry))
+				continue
+			}
+			email := strings.ToLower(strings.TrimSpace(parts[0]))
+			tenantID, perr := uuid.Parse(strings.TrimSpace(parts[1]))
+			if perr != nil {
+				logger.Warn("grant membership: tenant must be a UUID", slog.String("entry", entry))
+				continue
+			}
+			role := "owner"
+			if len(parts) == 3 && strings.TrimSpace(parts[2]) != "" {
+				role = strings.TrimSpace(parts[2])
+			}
+			if err := grantMembership(ctx, migPool.Pool, logger, email, tenantID, role); err != nil {
+				logger.Warn("grant membership failed", slog.String("email", email), slog.String("tenant_id", tenantID.String()), slog.Any("error", err))
+			}
+		}
+	}
+
 	migPool.Close()
 	logger.Info("migrations applied")
 
@@ -1338,6 +1372,48 @@ func recoverAccountIntoOrg(ctx context.Context, pool *pgxpool.Pool, logger *slog
 		slog.String("email", email), slog.String("org", tenantName), slog.String("tenant_id", tenantID.String()))
 
 	return mintSetPasswordLink(ctx, pool, logger, baseURL, userID, email, "account recovery requested")
+}
+
+// grantMembership idempotently ensures the user with `email` is a member of
+// tenantID with `role`. Both the user and the tenant must already exist — it
+// never creates either and never touches passwords. The INSERT sets
+// app.tenant_id so the memberships tenant_isolation WITH CHECK passes; the
+// ON CONFLICT keeps it idempotent + keeps the role current.
+func grantMembership(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, email string, tenantID uuid.UUID, role string) error {
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = $1`, email).Scan(&userID); err != nil {
+		return fmt.Errorf("resolve user %q: %w", email, err)
+	}
+	var tenantName string
+	if err := pool.QueryRow(ctx, `SELECT name FROM tenants WHERE id = $1`, tenantID).Scan(&tenantName); err != nil {
+		return fmt.Errorf("resolve tenant %s: %w", tenantID, err)
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
+		return fmt.Errorf("set app.tenant_id: %w", err)
+	}
+	ct, err := tx.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, $3)
+		 ON CONFLICT (user_id, tenant_id) DO UPDATE SET role = EXCLUDED.role, updated_at = now()`,
+		tenantID, userID, role)
+	if err != nil {
+		return fmt.Errorf("upsert membership: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit membership: %w", err)
+	}
+	logger.Info("grant membership: ensured",
+		slog.String("email", email),
+		slog.String("org", tenantName),
+		slog.String("tenant_id", tenantID.String()),
+		slog.String("role", role),
+		slog.Int64("rows", ct.RowsAffected()))
+	return nil
 }
 
 func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
