@@ -42,9 +42,24 @@ export function useComputeRucss(
           description: res.detail ?? "The agent rejected the request.",
         });
         useRucssStore.getState().reset(siteId);
+        return;
       }
-      // The authoritative completion arrives via rucss.completed SSE which also
-      // invalidates the results list — no invalidation needed here.
+      // Refresh the results list now: when the page's structure already has
+      // computed used-CSS, the agent gets it back immediately (a cache HIT) and
+      // applies it — NO job is enqueued, so NO rucss.computing/completed SSE
+      // frames ever fire and the optimistic "Queued…" would otherwise spin
+      // forever. The authoritative completion still arrives via SSE for a genuine
+      // MISS (which first moves the phase to "computing").
+      void qc.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
+      // Grace-period fallback: if after ~12s the phase is STILL "queued" (never
+      // advanced to "computing" by an SSE frame), the compute hit an already-
+      // optimized page — resolve the indicator to "done" and re-pull the results.
+      window.setTimeout(() => {
+        if (useRucssStore.getState().bySite[siteId]?.phase === "queued") {
+          useRucssStore.getState().setPhase(siteId, "done");
+        }
+        void qc.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
+      }, 12000);
     },
     onError: (err) => {
       useRucssStore.getState().reset(siteId);
