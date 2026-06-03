@@ -109,8 +109,15 @@ final class CacheManager
         }
 
         // Output-buffer writer: open as early as template_redirect for front-end
-        // GET requests. Skip preload requests (the warmer wants fresh HTML).
-        if (function_exists('add_action') && !$this->isPreloadRequest()) {
+        // GET requests — INCLUDING preload / RUCSS-compute self-fetches (which
+        // carry the x-wpmgr-preload header). The drop-in already serves those
+        // requests fresh (no HIT), and this buffer is exactly what (a) writes the
+        // freshly rendered page to the disk cache — so preload actually WARMS the
+        // cache — and (b) runs the optimization + RUCSS pipeline. Skipping it on
+        // preload made preload a no-op for warming AND made "Compute Used-CSS now"
+        // never trigger the optimizer (the buffer-bound optimizer never ran). The
+        // warmer still receives the rendered HTML — the buffer returns it verbatim.
+        if (function_exists('add_action')) {
             add_action('template_redirect', [$this, 'startBuffer'], 0);
         }
     }
@@ -422,17 +429,6 @@ final class CacheManager
             }
         }
         return '';
-    }
-
-    /**
-     * Whether the current request is a preload warm (drop-in/writer must skip it).
-     *
-     * @return bool
-     */
-    private function isPreloadRequest(): bool
-    {
-        $header = 'HTTP_' . strtoupper(str_replace('-', '_', Preload::PRELOAD_HEADER));
-        return isset($_SERVER[$header]) && (string) $_SERVER[$header] === '1';
     }
 
     /**
