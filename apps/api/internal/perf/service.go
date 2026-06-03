@@ -549,6 +549,21 @@ func (s *Service) ComputeRucss(ctx context.Context, tenantID, siteID uuid.UUID, 
 	if err != nil {
 		return "", err
 	}
+	// Purge the target URLs FIRST (best-effort). On hosts with a static-file
+	// fast-path — e.g. the nginx `try_files` snippet that serves the cached .gz
+	// directly, or a host-level page cache — an already-cached URL is served
+	// WITHOUT invoking PHP, so the agent's compute self-fetch would never reach
+	// the request-path optimizer + RUCSS stage. Deleting the cache file makes the
+	// next render fall through to PHP, where the optimizer runs and posts the page
+	// for RUCSS. Empty urls ⇒ the home page (what the agent computes by default).
+	purgeURLs := urls
+	if len(purgeURLs) == 0 {
+		purgeURLs = []string{siteURL}
+	}
+	if _, perr := s.agent.CachePurge(ctx, siteID, siteURL, agentcmd.CachePurgeRequest{Scope: "url", URLs: purgeURLs}); perr != nil {
+		s.logger.Warn("rucss compute: pre-purge failed (continuing)",
+			slog.String("site_id", siteID.String()), slog.Any("error", perr))
+	}
 	res, perr := s.agent.RucssCompute(ctx, siteID, siteURL, agentcmd.RucssComputeRequest{URLs: urls})
 	if perr != nil {
 		return "", perr

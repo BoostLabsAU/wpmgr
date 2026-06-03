@@ -176,18 +176,15 @@ func (s *Store) PutViaPresign(ctx context.Context, key string, body io.Reader, s
 }
 
 // Get downloads an object. The caller MUST close the returned ReadCloser.
+//
+// Routes through a presigned GET (see GetViaPresign): aws-sdk-go-v2's live
+// GetObject is rejected by GCS's S3-compatible API with "SignatureDoesNotMatch:
+// Access denied", exactly like live PutObject — which is why the RUCSS worker's
+// source-bundle fetch (the only CP-side Get on GCS) 403'd while presigned reads
+// worked. Presigned SigV4 is accepted on every backend we run (GCS, SeaweedFS,
+// MinIO).
 func (s *Store) Get(ctx context.Context, key string) (io.ReadCloser, error) {
-	out, err := s.client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(s.bucket),
-		Key:    aws.String(key),
-	})
-	if err != nil {
-		if isNotFound(err) {
-			return nil, ErrNotFound
-		}
-		return nil, fmt.Errorf("blobstore: get %q: %w", key, err)
-	}
-	return out.Body, nil
+	return s.GetViaPresign(ctx, key)
 }
 
 // presignFetchClient bounds CP-side fetches of small objects via presigned URLs.
