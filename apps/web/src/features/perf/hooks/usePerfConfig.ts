@@ -5,7 +5,7 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { client } from "@wpmgr/api";
+import { getPerfConfig, putPerfConfig } from "@wpmgr/api";
 
 import { toast } from "@/components/toast";
 import { toError } from "@/features/auth/use-auth";
@@ -15,19 +15,19 @@ import type { PerfConfig } from "../types";
 
 // Server-state hooks for the per-site Performance Suite config (Phase 7 / m36).
 //
-// These routes are hand-rolled (NOT in the generated @wpmgr/api SDK):
-//   GET /api/v1/sites/:siteId/perf/config → PerfConfig
-//   PUT /api/v1/sites/:siteId/perf/config ← Partial-ish PerfConfig → 200 PerfConfig
+// Routes are now described in packages/openapi/openapi.yaml and called through
+// the generated @wpmgr/api SDK fns (getPerfConfig / putPerfConfig) instead of
+// inline `/api/v1/...` URL strings. The SDK owns the canonical path
+// (/api/v1/sites/{siteId}/perf/config), so the frontend can no longer drift
+// from the backend on it. The component-facing PerfConfig type (with required
+// fields) stays in ../types; the generated response type marks every field
+// optional, so we narrow with a cast at the boundary exactly as before.
 //
-// Pattern mirrors features/admin/use-admin.ts EXACTLY: raw client.get/put with
-// `toError` narrowing, TanStack Query, an OPTIMISTIC PUT mutation with rollback,
-// and a toast.error on failure. Every settings change autosaves through
-// useUpdatePerfConfig — the panel calls `save(patch)` and the optimistic update
-// makes the toggle reflect immediately; a failure reverts and toasts.
-
-function base(siteId: string): string {
-  return `/api/v1/sites/${encodeURIComponent(siteId)}/perf`;
-}
+// Pattern mirrors features/sites/use-login-brand.ts (generated SDK fn +
+// `{ data, error }` + `toError`) combined with use-admin.ts's OPTIMISTIC PUT
+// with rollback. Every settings change autosaves through useUpdatePerfConfig —
+// the panel calls `save(patch)` and the optimistic update makes the toggle
+// reflect immediately; a failure reverts and toasts.
 
 /** Fetch the site's performance config (GET /perf/config). */
 export function usePerfConfig(
@@ -36,10 +36,10 @@ export function usePerfConfig(
   return useQuery({
     queryKey: perfKeys.config(siteId),
     queryFn: async () => {
-      const r = await client.get({ url: `${base(siteId)}/config` });
-      if (r.error) throw toError(r.error);
-      if (!r.data) throw new Error("Empty response");
-      return r.data as PerfConfig;
+      const { data, error } = await getPerfConfig({ path: { siteId } });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data as PerfConfig;
     },
   });
 }
@@ -68,10 +68,13 @@ export function useUpdatePerfConfig(
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (next: PerfConfig) => {
-      const r = await client.put({ url: `${base(siteId)}/config`, body: next });
-      if (r.error) throw toError(r.error);
-      if (!r.data) throw new Error("Empty response");
-      return r.data as PerfConfig;
+      const { data, error } = await putPerfConfig({
+        path: { siteId },
+        body: next,
+      });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data as PerfConfig;
     },
     onMutate: async (next) => {
       await qc.cancelQueries({ queryKey: perfKeys.config(siteId) });

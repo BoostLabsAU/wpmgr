@@ -1,0 +1,88 @@
+package perf
+
+import (
+	"sort"
+	"testing"
+
+	"github.com/gin-gonic/gin"
+)
+
+// canonicalOperatorRoutes is the EXACT set of method+path tuples the operator
+// Performance Suite handler must register on the authenticated /api/v1 group.
+//
+// This list is the Go-side mirror of the perf operator paths described in
+// packages/openapi/openapi.yaml (the canonical contract the hey-api TS client is
+// generated from) and the perf-paths.ts constant the dashboard imports. The
+// three MUST stay in lock-step:
+//
+//   - openapi.yaml  → generates the @wpmgr/api SDK fns the frontend calls.
+//   - perf-paths.ts → the single place the frontend builds these URLs.
+//   - this list     → fails the build if the registered gin routes drift.
+//
+// A path mismatch (frontend calling /perf/cache/* while the backend served
+// /cache/*) shipped once because nothing pinned these together; this test is
+// that pin on the backend side. If you intentionally add/rename/remove an
+// operator route, update ALL THREE in the same change.
+//
+// Paths use gin's :param form (the registered form). The portfolio bulk routes
+// live at the /api/v1 root (no :siteId path param — the site ids are a body
+// array, checked per-id inside the handler).
+var canonicalOperatorRoutes = []string{
+	"GET    /api/v1/sites/:siteId/perf/config",
+	"PUT    /api/v1/sites/:siteId/perf/config",
+	"GET    /api/v1/sites/:siteId/perf/cache/stats",
+	"POST   /api/v1/sites/:siteId/perf/cache/purge",
+	"POST   /api/v1/sites/:siteId/perf/cache/preload",
+	"POST   /api/v1/sites/:siteId/perf/cache/enable",
+	"POST   /api/v1/sites/:siteId/perf/cache/disable",
+	"POST   /api/v1/sites/:siteId/perf/db/clean",
+	"GET    /api/v1/sites/:siteId/perf/rucss/results",
+	"POST   /api/v1/sites/:siteId/perf/rucss/clear",
+	"POST   /api/v1/cache/bulk-purge",
+	"PUT    /api/v1/cache/bulk-config",
+}
+
+// TestOperatorRoutesContract pins the registered operator route set to the
+// canonical list above. The handler is mounted exactly as server.New mounts it
+// (on a /api/v1 group), and the live gin route table is compared, so the test
+// catches a renamed/dropped/added route, a wrong method, or a path-prefix slip
+// (the bug that shipped). The middleware closures are not executed during
+// registration, so a bare *Service / nil rucss / nil audit is sufficient.
+func TestOperatorRoutesContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	v1 := engine.Group("/api/v1")
+
+	h := NewHandler(&Service{}, nil, nil)
+	h.Register(v1)
+
+	got := make([]string, 0, len(engine.Routes()))
+	for _, r := range engine.Routes() {
+		got = append(got, formatRoute(r.Method, r.Path))
+	}
+
+	want := make([]string, len(canonicalOperatorRoutes))
+	copy(want, canonicalOperatorRoutes)
+	sort.Strings(want)
+	sort.Strings(got)
+
+	if len(got) != len(want) {
+		t.Fatalf("operator route count = %d, want %d\n got: %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("operator route mismatch at index %d:\n got: %q\nwant: %q\n\nfull got: %v\nfull want: %v",
+				i, got[i], want[i], got, want)
+		}
+	}
+}
+
+// formatRoute renders a method+path tuple in the canonical list's fixed-width
+// form so the literals above line up and diff cleanly.
+func formatRoute(method, path string) string {
+	pad := method
+	for len(pad) < 6 {
+		pad += " "
+	}
+	return pad + " " + path
+}

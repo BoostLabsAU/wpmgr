@@ -2952,6 +2952,254 @@ func (s *BackupSnapshotStatus) UnmarshalText(data []byte) error {
 	}
 }
 
+// Ref: #/components/schemas/BulkConfigRequest
+type BulkConfigRequest struct {
+	SiteIds []uuid.UUID             `json:"site_ids"`
+	Preset  BulkConfigRequestPreset `json:"preset"`
+}
+
+// GetSiteIds returns the value of SiteIds.
+func (s *BulkConfigRequest) GetSiteIds() []uuid.UUID {
+	return s.SiteIds
+}
+
+// GetPreset returns the value of Preset.
+func (s *BulkConfigRequest) GetPreset() BulkConfigRequestPreset {
+	return s.Preset
+}
+
+// SetSiteIds sets the value of SiteIds.
+func (s *BulkConfigRequest) SetSiteIds(val []uuid.UUID) {
+	s.SiteIds = val
+}
+
+// SetPreset sets the value of Preset.
+func (s *BulkConfigRequest) SetPreset(val BulkConfigRequestPreset) {
+	s.Preset = val
+}
+
+type BulkConfigRequestPreset string
+
+const (
+	BulkConfigRequestPresetSafe       BulkConfigRequestPreset = "safe"
+	BulkConfigRequestPresetBalanced   BulkConfigRequestPreset = "balanced"
+	BulkConfigRequestPresetAggressive BulkConfigRequestPreset = "aggressive"
+)
+
+// AllValues returns all BulkConfigRequestPreset values.
+func (BulkConfigRequestPreset) AllValues() []BulkConfigRequestPreset {
+	return []BulkConfigRequestPreset{
+		BulkConfigRequestPresetSafe,
+		BulkConfigRequestPresetBalanced,
+		BulkConfigRequestPresetAggressive,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s BulkConfigRequestPreset) MarshalText() ([]byte, error) {
+	switch s {
+	case BulkConfigRequestPresetSafe:
+		return []byte(s), nil
+	case BulkConfigRequestPresetBalanced:
+		return []byte(s), nil
+	case BulkConfigRequestPresetAggressive:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *BulkConfigRequestPreset) UnmarshalText(data []byte) error {
+	switch BulkConfigRequestPreset(data) {
+	case BulkConfigRequestPresetSafe:
+		*s = BulkConfigRequestPresetSafe
+		return nil
+	case BulkConfigRequestPresetBalanced:
+		*s = BulkConfigRequestPresetBalanced
+		return nil
+	case BulkConfigRequestPresetAggressive:
+		*s = BulkConfigRequestPresetAggressive
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/BulkPurgeRequest
+type BulkPurgeRequest struct {
+	SiteIds []uuid.UUID `json:"site_ids"`
+}
+
+// GetSiteIds returns the value of SiteIds.
+func (s *BulkPurgeRequest) GetSiteIds() []uuid.UUID {
+	return s.SiteIds
+}
+
+// SetSiteIds sets the value of SiteIds.
+func (s *BulkPurgeRequest) SetSiteIds(val []uuid.UUID) {
+	s.SiteIds = val
+}
+
+// One per-site result in a portfolio bulk-cache response.
+// Ref: #/components/schemas/BulkResult
+type BulkResult struct {
+	SiteID        string `json:"site_id"`
+	Ok            bool   `json:"ok"`
+	Detail        string `json:"detail"`
+	ConfigVersion OptInt `json:"config_version"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *BulkResult) GetSiteID() string {
+	return s.SiteID
+}
+
+// GetOk returns the value of Ok.
+func (s *BulkResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *BulkResult) GetDetail() string {
+	return s.Detail
+}
+
+// GetConfigVersion returns the value of ConfigVersion.
+func (s *BulkResult) GetConfigVersion() OptInt {
+	return s.ConfigVersion
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *BulkResult) SetSiteID(val string) {
+	s.SiteID = val
+}
+
+// SetOk sets the value of Ok.
+func (s *BulkResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *BulkResult) SetDetail(val string) {
+	s.Detail = val
+}
+
+// SetConfigVersion sets the value of ConfigVersion.
+func (s *BulkResult) SetConfigVersion(val OptInt) {
+	s.ConfigVersion = val
+}
+
+// Ref: #/components/schemas/BulkResultList
+type BulkResultList struct {
+	Results []BulkResult `json:"results"`
+}
+
+// GetResults returns the value of Results.
+func (s *BulkResultList) GetResults() []BulkResult {
+	return s.Results
+}
+
+// SetResults sets the value of Results.
+func (s *BulkResultList) SetResults(val []BulkResult) {
+	s.Results = val
+}
+
+func (*BulkResultList) bulkConfigCacheRes() {}
+
+// The latest cache gauges the agent reported for a site.
+// Ref: #/components/schemas/CacheStats
+type CacheStats struct {
+	CachedPagesCount OptInt      `json:"cached_pages_count"`
+	CacheSizeBytes   OptInt64    `json:"cache_size_bytes"`
+	LastPurgedAt     OptDateTime `json:"last_purged_at"`
+	LastPurgeKind    OptString   `json:"last_purge_kind"`
+	LastPreloadAt    OptDateTime `json:"last_preload_at"`
+	PreloadPending   OptInt      `json:"preload_pending"`
+	PreloadTotal     OptInt      `json:"preload_total"`
+	ReportedAt       OptDateTime `json:"reported_at"`
+}
+
+// GetCachedPagesCount returns the value of CachedPagesCount.
+func (s *CacheStats) GetCachedPagesCount() OptInt {
+	return s.CachedPagesCount
+}
+
+// GetCacheSizeBytes returns the value of CacheSizeBytes.
+func (s *CacheStats) GetCacheSizeBytes() OptInt64 {
+	return s.CacheSizeBytes
+}
+
+// GetLastPurgedAt returns the value of LastPurgedAt.
+func (s *CacheStats) GetLastPurgedAt() OptDateTime {
+	return s.LastPurgedAt
+}
+
+// GetLastPurgeKind returns the value of LastPurgeKind.
+func (s *CacheStats) GetLastPurgeKind() OptString {
+	return s.LastPurgeKind
+}
+
+// GetLastPreloadAt returns the value of LastPreloadAt.
+func (s *CacheStats) GetLastPreloadAt() OptDateTime {
+	return s.LastPreloadAt
+}
+
+// GetPreloadPending returns the value of PreloadPending.
+func (s *CacheStats) GetPreloadPending() OptInt {
+	return s.PreloadPending
+}
+
+// GetPreloadTotal returns the value of PreloadTotal.
+func (s *CacheStats) GetPreloadTotal() OptInt {
+	return s.PreloadTotal
+}
+
+// GetReportedAt returns the value of ReportedAt.
+func (s *CacheStats) GetReportedAt() OptDateTime {
+	return s.ReportedAt
+}
+
+// SetCachedPagesCount sets the value of CachedPagesCount.
+func (s *CacheStats) SetCachedPagesCount(val OptInt) {
+	s.CachedPagesCount = val
+}
+
+// SetCacheSizeBytes sets the value of CacheSizeBytes.
+func (s *CacheStats) SetCacheSizeBytes(val OptInt64) {
+	s.CacheSizeBytes = val
+}
+
+// SetLastPurgedAt sets the value of LastPurgedAt.
+func (s *CacheStats) SetLastPurgedAt(val OptDateTime) {
+	s.LastPurgedAt = val
+}
+
+// SetLastPurgeKind sets the value of LastPurgeKind.
+func (s *CacheStats) SetLastPurgeKind(val OptString) {
+	s.LastPurgeKind = val
+}
+
+// SetLastPreloadAt sets the value of LastPreloadAt.
+func (s *CacheStats) SetLastPreloadAt(val OptDateTime) {
+	s.LastPreloadAt = val
+}
+
+// SetPreloadPending sets the value of PreloadPending.
+func (s *CacheStats) SetPreloadPending(val OptInt) {
+	s.PreloadPending = val
+}
+
+// SetPreloadTotal sets the value of PreloadTotal.
+func (s *CacheStats) SetPreloadTotal(val OptInt) {
+	s.PreloadTotal = val
+}
+
+// SetReportedAt sets the value of ReportedAt.
+func (s *CacheStats) SetReportedAt(val OptDateTime) {
+	s.ReportedAt = val
+}
+
 type CancelMediaOK struct {
 	Ok             OptBool `json:"ok"`
 	CancelledCount OptInt  `json:"cancelled_count"`
@@ -2975,6 +3223,45 @@ func (s *CancelMediaOK) SetOk(val OptBool) {
 // SetCancelledCount sets the value of CancelledCount.
 func (s *CancelMediaOK) SetCancelledCount(val OptInt) {
 	s.CancelledCount = val
+}
+
+// Write-only CDN credentials. Accepted on PUT /perf/config and NEVER
+// returned by GET (the control plane decrypts server-side only).
+// Ref: #/components/schemas/CdnCredentials
+type CdnCredentials struct {
+	APIToken string    `json:"api_token"`
+	ZoneID   OptString `json:"zone_id"`
+	Zone     OptString `json:"zone"`
+}
+
+// GetAPIToken returns the value of APIToken.
+func (s *CdnCredentials) GetAPIToken() string {
+	return s.APIToken
+}
+
+// GetZoneID returns the value of ZoneID.
+func (s *CdnCredentials) GetZoneID() OptString {
+	return s.ZoneID
+}
+
+// GetZone returns the value of Zone.
+func (s *CdnCredentials) GetZone() OptString {
+	return s.Zone
+}
+
+// SetAPIToken sets the value of APIToken.
+func (s *CdnCredentials) SetAPIToken(val string) {
+	s.APIToken = val
+}
+
+// SetZoneID sets the value of ZoneID.
+func (s *CdnCredentials) SetZoneID(val OptString) {
+	s.ZoneID = val
+}
+
+// SetZone sets the value of Zone.
+func (s *CdnCredentials) SetZone(val OptString) {
+	s.Zone = val
 }
 
 type CreateApiKeyForbidden Error
@@ -3133,6 +3420,44 @@ func (*CreateTenantConflict) createTenantRes() {}
 type CreateTenantUnprocessableEntity Error
 
 func (*CreateTenantUnprocessableEntity) createTenantRes() {}
+
+// The acknowledgement returned by the database-cleanup endpoint.
+// Ref: #/components/schemas/DbCleanResult
+type DbCleanResult struct {
+	Ok          bool      `json:"ok"`
+	Detail      OptString `json:"detail"`
+	RowsCleaned OptInt    `json:"rows_cleaned"`
+}
+
+// GetOk returns the value of Ok.
+func (s *DbCleanResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *DbCleanResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// GetRowsCleaned returns the value of RowsCleaned.
+func (s *DbCleanResult) GetRowsCleaned() OptInt {
+	return s.RowsCleaned
+}
+
+// SetOk sets the value of Ok.
+func (s *DbCleanResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *DbCleanResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// SetRowsCleaned sets the value of RowsCleaned.
+func (s *DbCleanResult) SetRowsCleaned(val OptInt) {
+	s.RowsCleaned = val
+}
 
 // Merged schema.
 type DeleteMediaOriginalsAccepted struct {
@@ -3408,6 +3733,7 @@ func (*Error) agentMediaSyncBatchRes()     {}
 func (*Error) agentMediaSyncFinalizeRes()  {}
 func (*Error) archiveSiteRes()             {}
 func (*Error) beginReEnrollmentRes()       {}
+func (*Error) bulkConfigCacheRes()         {}
 func (*Error) createBackupRes()            {}
 func (*Error) createPairingCodeRes()       {}
 func (*Error) createRestoreRes()           {}
@@ -3427,8 +3753,10 @@ func (*Error) getUpdateRunRes()            {}
 func (*Error) listSharedWithMeRes()        {}
 func (*Error) logoutRes()                  {}
 func (*Error) oidcLoginRes()               {}
+func (*Error) purgeCacheRes()              {}
 func (*Error) putAlertConfigRes()          {}
 func (*Error) putBackupScheduleRes()       {}
+func (*Error) putPerfConfigRes()           {}
 func (*Error) putSiteLoginBrandRes()       {}
 func (*Error) putSiteLoginProtectionRes()  {}
 func (*Error) refreshSiteDiagnosticsRes()  {}
@@ -6014,6 +6342,52 @@ func (o OptBool) Or(d bool) bool {
 	return d
 }
 
+// NewOptCdnCredentials returns new OptCdnCredentials with value set to v.
+func NewOptCdnCredentials(v CdnCredentials) OptCdnCredentials {
+	return OptCdnCredentials{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptCdnCredentials is optional CdnCredentials.
+type OptCdnCredentials struct {
+	Value CdnCredentials
+	Set   bool
+}
+
+// IsSet returns true if OptCdnCredentials was set.
+func (o OptCdnCredentials) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptCdnCredentials) Reset() {
+	var v CdnCredentials
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptCdnCredentials) SetTo(v CdnCredentials) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptCdnCredentials) Get() (v CdnCredentials, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptCdnCredentials) Or(d CdnCredentials) CdnCredentials {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptDateTime returns new OptDateTime with value set to v.
 func NewOptDateTime(v time.Time) OptDateTime {
 	return OptDateTime{
@@ -6100,6 +6474,52 @@ func (o OptErrorDetails) Get() (v ErrorDetails, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptErrorDetails) Or(d ErrorDetails) ErrorDetails {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptFloat64 returns new OptFloat64 with value set to v.
+func NewOptFloat64(v float64) OptFloat64 {
+	return OptFloat64{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFloat64 is optional float64.
+type OptFloat64 struct {
+	Value float64
+	Set   bool
+}
+
+// IsSet returns true if OptFloat64 was set.
+func (o OptFloat64) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFloat64) Reset() {
+	var v float64
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFloat64) SetTo(v float64) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFloat64) Get() (v float64, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFloat64) Or(d float64) float64 {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -8569,6 +8989,782 @@ type PatchSiteErrorConfigNotFound Error
 
 func (*PatchSiteErrorConfigNotFound) patchSiteErrorConfigRes() {}
 
+// The `{ok, detail}` acknowledgement returned by the cache action
+// endpoints (purge / preload / enable / disable). `ok` is false when the
+// agent rejected the action (still HTTP 200).
+// Ref: #/components/schemas/PerfActionResult
+type PerfActionResult struct {
+	Ok      bool      `json:"ok"`
+	Detail  OptString `json:"detail"`
+	PurgeID OptUUID   `json:"purge_id"`
+}
+
+// GetOk returns the value of Ok.
+func (s *PerfActionResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *PerfActionResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// GetPurgeID returns the value of PurgeID.
+func (s *PerfActionResult) GetPurgeID() OptUUID {
+	return s.PurgeID
+}
+
+// SetOk sets the value of Ok.
+func (s *PerfActionResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *PerfActionResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// SetPurgeID sets the value of PurgeID.
+func (s *PerfActionResult) SetPurgeID(val OptUUID) {
+	s.PurgeID = val
+}
+
+func (*PerfActionResult) purgeCacheRes() {}
+
+// The full per-site performance configuration. `cdn_credentials` is
+// write-only (see CdnCredentials); `cdn_has_credentials` and the
+// install-state fields (`server_software`, `dropin_installed`,
+// `wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or
+// agent-derived.
+// Ref: #/components/schemas/PerfConfig
+type PerfConfig struct {
+	CacheEnabled              OptBool           `json:"cache_enabled"`
+	CacheLoggedIn             OptBool           `json:"cache_logged_in"`
+	CacheMobile               OptBool           `json:"cache_mobile"`
+	CacheRefresh              OptBool           `json:"cache_refresh"`
+	CacheRefreshInterval      OptString         `json:"cache_refresh_interval"`
+	CacheLinkPrefetch         OptBool           `json:"cache_link_prefetch"`
+	CacheBypassUrls           []string          `json:"cache_bypass_urls"`
+	CacheBypassCookies        []string          `json:"cache_bypass_cookies"`
+	CacheIncludeQueries       []string          `json:"cache_include_queries"`
+	CacheIncludeCookies       []string          `json:"cache_include_cookies"`
+	CSSJsMinify               OptBool           `json:"css_js_minify"`
+	CSSRucss                  OptBool           `json:"css_rucss"`
+	CSSRucssIncludeSelectors  []string          `json:"css_rucss_include_selectors"`
+	CSSJsSelfHostThirdParty   OptBool           `json:"css_js_self_host_third_party"`
+	JsDelay                   OptBool           `json:"js_delay"`
+	JsDelayMethod             OptString         `json:"js_delay_method"`
+	JsDelayExcludes           []string          `json:"js_delay_excludes"`
+	JsDelayThirdParty         OptBool           `json:"js_delay_third_party"`
+	JsDelayThirdPartyExcludes []string          `json:"js_delay_third_party_excludes"`
+	FontsDisplaySwap          OptBool           `json:"fonts_display_swap"`
+	FontsOptimizeGoogle       OptBool           `json:"fonts_optimize_google"`
+	FontsPreload              OptBool           `json:"fonts_preload"`
+	LazyLoad                  OptBool           `json:"lazy_load"`
+	LazyLoadExclusions        []string          `json:"lazy_load_exclusions"`
+	ProperlySizeImages        OptBool           `json:"properly_size_images"`
+	YoutubePlaceholder        OptBool           `json:"youtube_placeholder"`
+	SelfHostGravatars         OptBool           `json:"self_host_gravatars"`
+	CDNEnabled                OptBool           `json:"cdn_enabled"`
+	CDNURL                    OptString         `json:"cdn_url"`
+	CDNFileTypes              OptString         `json:"cdn_file_types"`
+	CDNProvider               OptString         `json:"cdn_provider"`
+	CDNHasCredentials         OptBool           `json:"cdn_has_credentials"`
+	CDNCredentials            OptCdnCredentials `json:"cdn_credentials"`
+	DbAutoClean               OptBool           `json:"db_auto_clean"`
+	DbAutoCleanInterval       OptString         `json:"db_auto_clean_interval"`
+	DbPostRevisions           OptBool           `json:"db_post_revisions"`
+	DbPostAutoDrafts          OptBool           `json:"db_post_auto_drafts"`
+	DbPostTrashed             OptBool           `json:"db_post_trashed"`
+	DbCommentsSpam            OptBool           `json:"db_comments_spam"`
+	DbCommentsTrashed         OptBool           `json:"db_comments_trashed"`
+	DbTransientsExpired       OptBool           `json:"db_transients_expired"`
+	DbOptimizeTables          OptBool           `json:"db_optimize_tables"`
+	BloatDisableBlockCSS      OptBool           `json:"bloat_disable_block_css"`
+	BloatDisableDashicons     OptBool           `json:"bloat_disable_dashicons"`
+	BloatDisableEmojis        OptBool           `json:"bloat_disable_emojis"`
+	BloatDisableJqueryMigrate OptBool           `json:"bloat_disable_jquery_migrate"`
+	BloatDisableXMLRPC        OptBool           `json:"bloat_disable_xml_rpc"`
+	BloatDisableRssFeed       OptBool           `json:"bloat_disable_rss_feed"`
+	BloatDisableOembeds       OptBool           `json:"bloat_disable_oembeds"`
+	BloatHeartbeatControl     OptBool           `json:"bloat_heartbeat_control"`
+	BloatPostRevisionsControl OptBool           `json:"bloat_post_revisions_control"`
+	ServerSoftware            OptString         `json:"server_software"`
+	DropinInstalled           OptBool           `json:"dropin_installed"`
+	WpCacheConstantSet        OptBool           `json:"wp_cache_constant_set"`
+	HtaccessManaged           OptBool           `json:"htaccess_managed"`
+	ConfigVersion             OptInt            `json:"config_version"`
+	UpdatedAt                 OptDateTime       `json:"updated_at"`
+}
+
+// GetCacheEnabled returns the value of CacheEnabled.
+func (s *PerfConfig) GetCacheEnabled() OptBool {
+	return s.CacheEnabled
+}
+
+// GetCacheLoggedIn returns the value of CacheLoggedIn.
+func (s *PerfConfig) GetCacheLoggedIn() OptBool {
+	return s.CacheLoggedIn
+}
+
+// GetCacheMobile returns the value of CacheMobile.
+func (s *PerfConfig) GetCacheMobile() OptBool {
+	return s.CacheMobile
+}
+
+// GetCacheRefresh returns the value of CacheRefresh.
+func (s *PerfConfig) GetCacheRefresh() OptBool {
+	return s.CacheRefresh
+}
+
+// GetCacheRefreshInterval returns the value of CacheRefreshInterval.
+func (s *PerfConfig) GetCacheRefreshInterval() OptString {
+	return s.CacheRefreshInterval
+}
+
+// GetCacheLinkPrefetch returns the value of CacheLinkPrefetch.
+func (s *PerfConfig) GetCacheLinkPrefetch() OptBool {
+	return s.CacheLinkPrefetch
+}
+
+// GetCacheBypassUrls returns the value of CacheBypassUrls.
+func (s *PerfConfig) GetCacheBypassUrls() []string {
+	return s.CacheBypassUrls
+}
+
+// GetCacheBypassCookies returns the value of CacheBypassCookies.
+func (s *PerfConfig) GetCacheBypassCookies() []string {
+	return s.CacheBypassCookies
+}
+
+// GetCacheIncludeQueries returns the value of CacheIncludeQueries.
+func (s *PerfConfig) GetCacheIncludeQueries() []string {
+	return s.CacheIncludeQueries
+}
+
+// GetCacheIncludeCookies returns the value of CacheIncludeCookies.
+func (s *PerfConfig) GetCacheIncludeCookies() []string {
+	return s.CacheIncludeCookies
+}
+
+// GetCSSJsMinify returns the value of CSSJsMinify.
+func (s *PerfConfig) GetCSSJsMinify() OptBool {
+	return s.CSSJsMinify
+}
+
+// GetCSSRucss returns the value of CSSRucss.
+func (s *PerfConfig) GetCSSRucss() OptBool {
+	return s.CSSRucss
+}
+
+// GetCSSRucssIncludeSelectors returns the value of CSSRucssIncludeSelectors.
+func (s *PerfConfig) GetCSSRucssIncludeSelectors() []string {
+	return s.CSSRucssIncludeSelectors
+}
+
+// GetCSSJsSelfHostThirdParty returns the value of CSSJsSelfHostThirdParty.
+func (s *PerfConfig) GetCSSJsSelfHostThirdParty() OptBool {
+	return s.CSSJsSelfHostThirdParty
+}
+
+// GetJsDelay returns the value of JsDelay.
+func (s *PerfConfig) GetJsDelay() OptBool {
+	return s.JsDelay
+}
+
+// GetJsDelayMethod returns the value of JsDelayMethod.
+func (s *PerfConfig) GetJsDelayMethod() OptString {
+	return s.JsDelayMethod
+}
+
+// GetJsDelayExcludes returns the value of JsDelayExcludes.
+func (s *PerfConfig) GetJsDelayExcludes() []string {
+	return s.JsDelayExcludes
+}
+
+// GetJsDelayThirdParty returns the value of JsDelayThirdParty.
+func (s *PerfConfig) GetJsDelayThirdParty() OptBool {
+	return s.JsDelayThirdParty
+}
+
+// GetJsDelayThirdPartyExcludes returns the value of JsDelayThirdPartyExcludes.
+func (s *PerfConfig) GetJsDelayThirdPartyExcludes() []string {
+	return s.JsDelayThirdPartyExcludes
+}
+
+// GetFontsDisplaySwap returns the value of FontsDisplaySwap.
+func (s *PerfConfig) GetFontsDisplaySwap() OptBool {
+	return s.FontsDisplaySwap
+}
+
+// GetFontsOptimizeGoogle returns the value of FontsOptimizeGoogle.
+func (s *PerfConfig) GetFontsOptimizeGoogle() OptBool {
+	return s.FontsOptimizeGoogle
+}
+
+// GetFontsPreload returns the value of FontsPreload.
+func (s *PerfConfig) GetFontsPreload() OptBool {
+	return s.FontsPreload
+}
+
+// GetLazyLoad returns the value of LazyLoad.
+func (s *PerfConfig) GetLazyLoad() OptBool {
+	return s.LazyLoad
+}
+
+// GetLazyLoadExclusions returns the value of LazyLoadExclusions.
+func (s *PerfConfig) GetLazyLoadExclusions() []string {
+	return s.LazyLoadExclusions
+}
+
+// GetProperlySizeImages returns the value of ProperlySizeImages.
+func (s *PerfConfig) GetProperlySizeImages() OptBool {
+	return s.ProperlySizeImages
+}
+
+// GetYoutubePlaceholder returns the value of YoutubePlaceholder.
+func (s *PerfConfig) GetYoutubePlaceholder() OptBool {
+	return s.YoutubePlaceholder
+}
+
+// GetSelfHostGravatars returns the value of SelfHostGravatars.
+func (s *PerfConfig) GetSelfHostGravatars() OptBool {
+	return s.SelfHostGravatars
+}
+
+// GetCDNEnabled returns the value of CDNEnabled.
+func (s *PerfConfig) GetCDNEnabled() OptBool {
+	return s.CDNEnabled
+}
+
+// GetCDNURL returns the value of CDNURL.
+func (s *PerfConfig) GetCDNURL() OptString {
+	return s.CDNURL
+}
+
+// GetCDNFileTypes returns the value of CDNFileTypes.
+func (s *PerfConfig) GetCDNFileTypes() OptString {
+	return s.CDNFileTypes
+}
+
+// GetCDNProvider returns the value of CDNProvider.
+func (s *PerfConfig) GetCDNProvider() OptString {
+	return s.CDNProvider
+}
+
+// GetCDNHasCredentials returns the value of CDNHasCredentials.
+func (s *PerfConfig) GetCDNHasCredentials() OptBool {
+	return s.CDNHasCredentials
+}
+
+// GetCDNCredentials returns the value of CDNCredentials.
+func (s *PerfConfig) GetCDNCredentials() OptCdnCredentials {
+	return s.CDNCredentials
+}
+
+// GetDbAutoClean returns the value of DbAutoClean.
+func (s *PerfConfig) GetDbAutoClean() OptBool {
+	return s.DbAutoClean
+}
+
+// GetDbAutoCleanInterval returns the value of DbAutoCleanInterval.
+func (s *PerfConfig) GetDbAutoCleanInterval() OptString {
+	return s.DbAutoCleanInterval
+}
+
+// GetDbPostRevisions returns the value of DbPostRevisions.
+func (s *PerfConfig) GetDbPostRevisions() OptBool {
+	return s.DbPostRevisions
+}
+
+// GetDbPostAutoDrafts returns the value of DbPostAutoDrafts.
+func (s *PerfConfig) GetDbPostAutoDrafts() OptBool {
+	return s.DbPostAutoDrafts
+}
+
+// GetDbPostTrashed returns the value of DbPostTrashed.
+func (s *PerfConfig) GetDbPostTrashed() OptBool {
+	return s.DbPostTrashed
+}
+
+// GetDbCommentsSpam returns the value of DbCommentsSpam.
+func (s *PerfConfig) GetDbCommentsSpam() OptBool {
+	return s.DbCommentsSpam
+}
+
+// GetDbCommentsTrashed returns the value of DbCommentsTrashed.
+func (s *PerfConfig) GetDbCommentsTrashed() OptBool {
+	return s.DbCommentsTrashed
+}
+
+// GetDbTransientsExpired returns the value of DbTransientsExpired.
+func (s *PerfConfig) GetDbTransientsExpired() OptBool {
+	return s.DbTransientsExpired
+}
+
+// GetDbOptimizeTables returns the value of DbOptimizeTables.
+func (s *PerfConfig) GetDbOptimizeTables() OptBool {
+	return s.DbOptimizeTables
+}
+
+// GetBloatDisableBlockCSS returns the value of BloatDisableBlockCSS.
+func (s *PerfConfig) GetBloatDisableBlockCSS() OptBool {
+	return s.BloatDisableBlockCSS
+}
+
+// GetBloatDisableDashicons returns the value of BloatDisableDashicons.
+func (s *PerfConfig) GetBloatDisableDashicons() OptBool {
+	return s.BloatDisableDashicons
+}
+
+// GetBloatDisableEmojis returns the value of BloatDisableEmojis.
+func (s *PerfConfig) GetBloatDisableEmojis() OptBool {
+	return s.BloatDisableEmojis
+}
+
+// GetBloatDisableJqueryMigrate returns the value of BloatDisableJqueryMigrate.
+func (s *PerfConfig) GetBloatDisableJqueryMigrate() OptBool {
+	return s.BloatDisableJqueryMigrate
+}
+
+// GetBloatDisableXMLRPC returns the value of BloatDisableXMLRPC.
+func (s *PerfConfig) GetBloatDisableXMLRPC() OptBool {
+	return s.BloatDisableXMLRPC
+}
+
+// GetBloatDisableRssFeed returns the value of BloatDisableRssFeed.
+func (s *PerfConfig) GetBloatDisableRssFeed() OptBool {
+	return s.BloatDisableRssFeed
+}
+
+// GetBloatDisableOembeds returns the value of BloatDisableOembeds.
+func (s *PerfConfig) GetBloatDisableOembeds() OptBool {
+	return s.BloatDisableOembeds
+}
+
+// GetBloatHeartbeatControl returns the value of BloatHeartbeatControl.
+func (s *PerfConfig) GetBloatHeartbeatControl() OptBool {
+	return s.BloatHeartbeatControl
+}
+
+// GetBloatPostRevisionsControl returns the value of BloatPostRevisionsControl.
+func (s *PerfConfig) GetBloatPostRevisionsControl() OptBool {
+	return s.BloatPostRevisionsControl
+}
+
+// GetServerSoftware returns the value of ServerSoftware.
+func (s *PerfConfig) GetServerSoftware() OptString {
+	return s.ServerSoftware
+}
+
+// GetDropinInstalled returns the value of DropinInstalled.
+func (s *PerfConfig) GetDropinInstalled() OptBool {
+	return s.DropinInstalled
+}
+
+// GetWpCacheConstantSet returns the value of WpCacheConstantSet.
+func (s *PerfConfig) GetWpCacheConstantSet() OptBool {
+	return s.WpCacheConstantSet
+}
+
+// GetHtaccessManaged returns the value of HtaccessManaged.
+func (s *PerfConfig) GetHtaccessManaged() OptBool {
+	return s.HtaccessManaged
+}
+
+// GetConfigVersion returns the value of ConfigVersion.
+func (s *PerfConfig) GetConfigVersion() OptInt {
+	return s.ConfigVersion
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *PerfConfig) GetUpdatedAt() OptDateTime {
+	return s.UpdatedAt
+}
+
+// SetCacheEnabled sets the value of CacheEnabled.
+func (s *PerfConfig) SetCacheEnabled(val OptBool) {
+	s.CacheEnabled = val
+}
+
+// SetCacheLoggedIn sets the value of CacheLoggedIn.
+func (s *PerfConfig) SetCacheLoggedIn(val OptBool) {
+	s.CacheLoggedIn = val
+}
+
+// SetCacheMobile sets the value of CacheMobile.
+func (s *PerfConfig) SetCacheMobile(val OptBool) {
+	s.CacheMobile = val
+}
+
+// SetCacheRefresh sets the value of CacheRefresh.
+func (s *PerfConfig) SetCacheRefresh(val OptBool) {
+	s.CacheRefresh = val
+}
+
+// SetCacheRefreshInterval sets the value of CacheRefreshInterval.
+func (s *PerfConfig) SetCacheRefreshInterval(val OptString) {
+	s.CacheRefreshInterval = val
+}
+
+// SetCacheLinkPrefetch sets the value of CacheLinkPrefetch.
+func (s *PerfConfig) SetCacheLinkPrefetch(val OptBool) {
+	s.CacheLinkPrefetch = val
+}
+
+// SetCacheBypassUrls sets the value of CacheBypassUrls.
+func (s *PerfConfig) SetCacheBypassUrls(val []string) {
+	s.CacheBypassUrls = val
+}
+
+// SetCacheBypassCookies sets the value of CacheBypassCookies.
+func (s *PerfConfig) SetCacheBypassCookies(val []string) {
+	s.CacheBypassCookies = val
+}
+
+// SetCacheIncludeQueries sets the value of CacheIncludeQueries.
+func (s *PerfConfig) SetCacheIncludeQueries(val []string) {
+	s.CacheIncludeQueries = val
+}
+
+// SetCacheIncludeCookies sets the value of CacheIncludeCookies.
+func (s *PerfConfig) SetCacheIncludeCookies(val []string) {
+	s.CacheIncludeCookies = val
+}
+
+// SetCSSJsMinify sets the value of CSSJsMinify.
+func (s *PerfConfig) SetCSSJsMinify(val OptBool) {
+	s.CSSJsMinify = val
+}
+
+// SetCSSRucss sets the value of CSSRucss.
+func (s *PerfConfig) SetCSSRucss(val OptBool) {
+	s.CSSRucss = val
+}
+
+// SetCSSRucssIncludeSelectors sets the value of CSSRucssIncludeSelectors.
+func (s *PerfConfig) SetCSSRucssIncludeSelectors(val []string) {
+	s.CSSRucssIncludeSelectors = val
+}
+
+// SetCSSJsSelfHostThirdParty sets the value of CSSJsSelfHostThirdParty.
+func (s *PerfConfig) SetCSSJsSelfHostThirdParty(val OptBool) {
+	s.CSSJsSelfHostThirdParty = val
+}
+
+// SetJsDelay sets the value of JsDelay.
+func (s *PerfConfig) SetJsDelay(val OptBool) {
+	s.JsDelay = val
+}
+
+// SetJsDelayMethod sets the value of JsDelayMethod.
+func (s *PerfConfig) SetJsDelayMethod(val OptString) {
+	s.JsDelayMethod = val
+}
+
+// SetJsDelayExcludes sets the value of JsDelayExcludes.
+func (s *PerfConfig) SetJsDelayExcludes(val []string) {
+	s.JsDelayExcludes = val
+}
+
+// SetJsDelayThirdParty sets the value of JsDelayThirdParty.
+func (s *PerfConfig) SetJsDelayThirdParty(val OptBool) {
+	s.JsDelayThirdParty = val
+}
+
+// SetJsDelayThirdPartyExcludes sets the value of JsDelayThirdPartyExcludes.
+func (s *PerfConfig) SetJsDelayThirdPartyExcludes(val []string) {
+	s.JsDelayThirdPartyExcludes = val
+}
+
+// SetFontsDisplaySwap sets the value of FontsDisplaySwap.
+func (s *PerfConfig) SetFontsDisplaySwap(val OptBool) {
+	s.FontsDisplaySwap = val
+}
+
+// SetFontsOptimizeGoogle sets the value of FontsOptimizeGoogle.
+func (s *PerfConfig) SetFontsOptimizeGoogle(val OptBool) {
+	s.FontsOptimizeGoogle = val
+}
+
+// SetFontsPreload sets the value of FontsPreload.
+func (s *PerfConfig) SetFontsPreload(val OptBool) {
+	s.FontsPreload = val
+}
+
+// SetLazyLoad sets the value of LazyLoad.
+func (s *PerfConfig) SetLazyLoad(val OptBool) {
+	s.LazyLoad = val
+}
+
+// SetLazyLoadExclusions sets the value of LazyLoadExclusions.
+func (s *PerfConfig) SetLazyLoadExclusions(val []string) {
+	s.LazyLoadExclusions = val
+}
+
+// SetProperlySizeImages sets the value of ProperlySizeImages.
+func (s *PerfConfig) SetProperlySizeImages(val OptBool) {
+	s.ProperlySizeImages = val
+}
+
+// SetYoutubePlaceholder sets the value of YoutubePlaceholder.
+func (s *PerfConfig) SetYoutubePlaceholder(val OptBool) {
+	s.YoutubePlaceholder = val
+}
+
+// SetSelfHostGravatars sets the value of SelfHostGravatars.
+func (s *PerfConfig) SetSelfHostGravatars(val OptBool) {
+	s.SelfHostGravatars = val
+}
+
+// SetCDNEnabled sets the value of CDNEnabled.
+func (s *PerfConfig) SetCDNEnabled(val OptBool) {
+	s.CDNEnabled = val
+}
+
+// SetCDNURL sets the value of CDNURL.
+func (s *PerfConfig) SetCDNURL(val OptString) {
+	s.CDNURL = val
+}
+
+// SetCDNFileTypes sets the value of CDNFileTypes.
+func (s *PerfConfig) SetCDNFileTypes(val OptString) {
+	s.CDNFileTypes = val
+}
+
+// SetCDNProvider sets the value of CDNProvider.
+func (s *PerfConfig) SetCDNProvider(val OptString) {
+	s.CDNProvider = val
+}
+
+// SetCDNHasCredentials sets the value of CDNHasCredentials.
+func (s *PerfConfig) SetCDNHasCredentials(val OptBool) {
+	s.CDNHasCredentials = val
+}
+
+// SetCDNCredentials sets the value of CDNCredentials.
+func (s *PerfConfig) SetCDNCredentials(val OptCdnCredentials) {
+	s.CDNCredentials = val
+}
+
+// SetDbAutoClean sets the value of DbAutoClean.
+func (s *PerfConfig) SetDbAutoClean(val OptBool) {
+	s.DbAutoClean = val
+}
+
+// SetDbAutoCleanInterval sets the value of DbAutoCleanInterval.
+func (s *PerfConfig) SetDbAutoCleanInterval(val OptString) {
+	s.DbAutoCleanInterval = val
+}
+
+// SetDbPostRevisions sets the value of DbPostRevisions.
+func (s *PerfConfig) SetDbPostRevisions(val OptBool) {
+	s.DbPostRevisions = val
+}
+
+// SetDbPostAutoDrafts sets the value of DbPostAutoDrafts.
+func (s *PerfConfig) SetDbPostAutoDrafts(val OptBool) {
+	s.DbPostAutoDrafts = val
+}
+
+// SetDbPostTrashed sets the value of DbPostTrashed.
+func (s *PerfConfig) SetDbPostTrashed(val OptBool) {
+	s.DbPostTrashed = val
+}
+
+// SetDbCommentsSpam sets the value of DbCommentsSpam.
+func (s *PerfConfig) SetDbCommentsSpam(val OptBool) {
+	s.DbCommentsSpam = val
+}
+
+// SetDbCommentsTrashed sets the value of DbCommentsTrashed.
+func (s *PerfConfig) SetDbCommentsTrashed(val OptBool) {
+	s.DbCommentsTrashed = val
+}
+
+// SetDbTransientsExpired sets the value of DbTransientsExpired.
+func (s *PerfConfig) SetDbTransientsExpired(val OptBool) {
+	s.DbTransientsExpired = val
+}
+
+// SetDbOptimizeTables sets the value of DbOptimizeTables.
+func (s *PerfConfig) SetDbOptimizeTables(val OptBool) {
+	s.DbOptimizeTables = val
+}
+
+// SetBloatDisableBlockCSS sets the value of BloatDisableBlockCSS.
+func (s *PerfConfig) SetBloatDisableBlockCSS(val OptBool) {
+	s.BloatDisableBlockCSS = val
+}
+
+// SetBloatDisableDashicons sets the value of BloatDisableDashicons.
+func (s *PerfConfig) SetBloatDisableDashicons(val OptBool) {
+	s.BloatDisableDashicons = val
+}
+
+// SetBloatDisableEmojis sets the value of BloatDisableEmojis.
+func (s *PerfConfig) SetBloatDisableEmojis(val OptBool) {
+	s.BloatDisableEmojis = val
+}
+
+// SetBloatDisableJqueryMigrate sets the value of BloatDisableJqueryMigrate.
+func (s *PerfConfig) SetBloatDisableJqueryMigrate(val OptBool) {
+	s.BloatDisableJqueryMigrate = val
+}
+
+// SetBloatDisableXMLRPC sets the value of BloatDisableXMLRPC.
+func (s *PerfConfig) SetBloatDisableXMLRPC(val OptBool) {
+	s.BloatDisableXMLRPC = val
+}
+
+// SetBloatDisableRssFeed sets the value of BloatDisableRssFeed.
+func (s *PerfConfig) SetBloatDisableRssFeed(val OptBool) {
+	s.BloatDisableRssFeed = val
+}
+
+// SetBloatDisableOembeds sets the value of BloatDisableOembeds.
+func (s *PerfConfig) SetBloatDisableOembeds(val OptBool) {
+	s.BloatDisableOembeds = val
+}
+
+// SetBloatHeartbeatControl sets the value of BloatHeartbeatControl.
+func (s *PerfConfig) SetBloatHeartbeatControl(val OptBool) {
+	s.BloatHeartbeatControl = val
+}
+
+// SetBloatPostRevisionsControl sets the value of BloatPostRevisionsControl.
+func (s *PerfConfig) SetBloatPostRevisionsControl(val OptBool) {
+	s.BloatPostRevisionsControl = val
+}
+
+// SetServerSoftware sets the value of ServerSoftware.
+func (s *PerfConfig) SetServerSoftware(val OptString) {
+	s.ServerSoftware = val
+}
+
+// SetDropinInstalled sets the value of DropinInstalled.
+func (s *PerfConfig) SetDropinInstalled(val OptBool) {
+	s.DropinInstalled = val
+}
+
+// SetWpCacheConstantSet sets the value of WpCacheConstantSet.
+func (s *PerfConfig) SetWpCacheConstantSet(val OptBool) {
+	s.WpCacheConstantSet = val
+}
+
+// SetHtaccessManaged sets the value of HtaccessManaged.
+func (s *PerfConfig) SetHtaccessManaged(val OptBool) {
+	s.HtaccessManaged = val
+}
+
+// SetConfigVersion sets the value of ConfigVersion.
+func (s *PerfConfig) SetConfigVersion(val OptInt) {
+	s.ConfigVersion = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *PerfConfig) SetUpdatedAt(val OptDateTime) {
+	s.UpdatedAt = val
+}
+
+func (*PerfConfig) putPerfConfigRes() {}
+
+// A page-cache purge request.
+// Ref: #/components/schemas/PurgeRequest
+type PurgeRequest struct {
+	// Purge the whole cache (`all`) or a single URL (`url`).
+	Scope PurgeRequestScope `json:"scope"`
+	// The single URL to purge when `scope` is `url`.
+	URL OptString `json:"url"`
+	// Additional URLs to purge.
+	Urls []string `json:"urls"`
+	// With `scope: all`, also clears every cached artifact. Requires the
+	// `site.cache.delete-everything` permission.
+	DeleteEverything OptBool `json:"delete_everything"`
+}
+
+// GetScope returns the value of Scope.
+func (s *PurgeRequest) GetScope() PurgeRequestScope {
+	return s.Scope
+}
+
+// GetURL returns the value of URL.
+func (s *PurgeRequest) GetURL() OptString {
+	return s.URL
+}
+
+// GetUrls returns the value of Urls.
+func (s *PurgeRequest) GetUrls() []string {
+	return s.Urls
+}
+
+// GetDeleteEverything returns the value of DeleteEverything.
+func (s *PurgeRequest) GetDeleteEverything() OptBool {
+	return s.DeleteEverything
+}
+
+// SetScope sets the value of Scope.
+func (s *PurgeRequest) SetScope(val PurgeRequestScope) {
+	s.Scope = val
+}
+
+// SetURL sets the value of URL.
+func (s *PurgeRequest) SetURL(val OptString) {
+	s.URL = val
+}
+
+// SetUrls sets the value of Urls.
+func (s *PurgeRequest) SetUrls(val []string) {
+	s.Urls = val
+}
+
+// SetDeleteEverything sets the value of DeleteEverything.
+func (s *PurgeRequest) SetDeleteEverything(val OptBool) {
+	s.DeleteEverything = val
+}
+
+// Purge the whole cache (`all`) or a single URL (`url`).
+type PurgeRequestScope string
+
+const (
+	PurgeRequestScopeAll PurgeRequestScope = "all"
+	PurgeRequestScopeURL PurgeRequestScope = "url"
+)
+
+// AllValues returns all PurgeRequestScope values.
+func (PurgeRequestScope) AllValues() []PurgeRequestScope {
+	return []PurgeRequestScope{
+		PurgeRequestScopeAll,
+		PurgeRequestScopeURL,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PurgeRequestScope) MarshalText() ([]byte, error) {
+	switch s {
+	case PurgeRequestScopeAll:
+		return []byte(s), nil
+	case PurgeRequestScopeURL:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PurgeRequestScope) UnmarshalText(data []byte) error {
+	switch PurgeRequestScope(data) {
+	case PurgeRequestScopeAll:
+		*s = PurgeRequestScopeAll
+		return nil
+	case PurgeRequestScopeURL:
+		*s = PurgeRequestScopeURL
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // Ref: #/components/schemas/Readiness
 type Readiness struct {
 	Status ReadinessStatus `json:"status"`
@@ -8975,6 +10171,140 @@ func (s *Role) UnmarshalText(data []byte) error {
 	default:
 		return errors.Errorf("invalid value: %q", data)
 	}
+}
+
+// Ref: #/components/schemas/RucssClearResult
+type RucssClearResult struct {
+	Ok      bool `json:"ok"`
+	Cleared int  `json:"cleared"`
+}
+
+// GetOk returns the value of Ok.
+func (s *RucssClearResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetCleared returns the value of Cleared.
+func (s *RucssClearResult) GetCleared() int {
+	return s.Cleared
+}
+
+// SetOk sets the value of Ok.
+func (s *RucssClearResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetCleared sets the value of Cleared.
+func (s *RucssClearResult) SetCleared(val int) {
+	s.Cleared = val
+}
+
+// One cached Used-CSS (RUCSS) result row.
+// Ref: #/components/schemas/RucssResult
+type RucssResult struct {
+	ID               OptString   `json:"id"`
+	StructureHash    OptString   `json:"structure_hash"`
+	URL              OptString   `json:"url"`
+	OriginalCSSBytes OptInt      `json:"original_css_bytes"`
+	UsedCSSBytes     OptInt      `json:"used_css_bytes"`
+	ReductionPct     OptFloat64  `json:"reduction_pct"`
+	UsedCSSS3Key     OptString   `json:"used_css_s3_key"`
+	LastUsedAt       OptDateTime `json:"last_used_at"`
+}
+
+// GetID returns the value of ID.
+func (s *RucssResult) GetID() OptString {
+	return s.ID
+}
+
+// GetStructureHash returns the value of StructureHash.
+func (s *RucssResult) GetStructureHash() OptString {
+	return s.StructureHash
+}
+
+// GetURL returns the value of URL.
+func (s *RucssResult) GetURL() OptString {
+	return s.URL
+}
+
+// GetOriginalCSSBytes returns the value of OriginalCSSBytes.
+func (s *RucssResult) GetOriginalCSSBytes() OptInt {
+	return s.OriginalCSSBytes
+}
+
+// GetUsedCSSBytes returns the value of UsedCSSBytes.
+func (s *RucssResult) GetUsedCSSBytes() OptInt {
+	return s.UsedCSSBytes
+}
+
+// GetReductionPct returns the value of ReductionPct.
+func (s *RucssResult) GetReductionPct() OptFloat64 {
+	return s.ReductionPct
+}
+
+// GetUsedCSSS3Key returns the value of UsedCSSS3Key.
+func (s *RucssResult) GetUsedCSSS3Key() OptString {
+	return s.UsedCSSS3Key
+}
+
+// GetLastUsedAt returns the value of LastUsedAt.
+func (s *RucssResult) GetLastUsedAt() OptDateTime {
+	return s.LastUsedAt
+}
+
+// SetID sets the value of ID.
+func (s *RucssResult) SetID(val OptString) {
+	s.ID = val
+}
+
+// SetStructureHash sets the value of StructureHash.
+func (s *RucssResult) SetStructureHash(val OptString) {
+	s.StructureHash = val
+}
+
+// SetURL sets the value of URL.
+func (s *RucssResult) SetURL(val OptString) {
+	s.URL = val
+}
+
+// SetOriginalCSSBytes sets the value of OriginalCSSBytes.
+func (s *RucssResult) SetOriginalCSSBytes(val OptInt) {
+	s.OriginalCSSBytes = val
+}
+
+// SetUsedCSSBytes sets the value of UsedCSSBytes.
+func (s *RucssResult) SetUsedCSSBytes(val OptInt) {
+	s.UsedCSSBytes = val
+}
+
+// SetReductionPct sets the value of ReductionPct.
+func (s *RucssResult) SetReductionPct(val OptFloat64) {
+	s.ReductionPct = val
+}
+
+// SetUsedCSSS3Key sets the value of UsedCSSS3Key.
+func (s *RucssResult) SetUsedCSSS3Key(val OptString) {
+	s.UsedCSSS3Key = val
+}
+
+// SetLastUsedAt sets the value of LastUsedAt.
+func (s *RucssResult) SetLastUsedAt(val OptDateTime) {
+	s.LastUsedAt = val
+}
+
+// Ref: #/components/schemas/RucssResultList
+type RucssResultList struct {
+	Items []RucssResult `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *RucssResultList) GetItems() []RucssResult {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *RucssResultList) SetItems(val []RucssResult) {
+	s.Items = val
 }
 
 // Ref: #/components/schemas/SecurityThresholds

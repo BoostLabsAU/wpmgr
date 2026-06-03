@@ -1879,6 +1879,250 @@ export type MediaJobDetail = MediaJob & {
   variants?: Array<MediaVariantResult>;
 };
 
+/**
+ * Write-only CDN credentials. Accepted on PUT /perf/config and NEVER
+ * returned by GET (the control plane decrypts server-side only).
+ *
+ */
+export type CdnCredentials = {
+  api_token: string;
+  zone_id?: string;
+  zone?: string;
+};
+
+/**
+ * The full per-site performance configuration. `cdn_credentials` is
+ * write-only (see CdnCredentials); `cdn_has_credentials` and the
+ * install-state fields (`server_software`, `dropin_installed`,
+ * `wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or
+ * agent-derived.
+ *
+ */
+export type PerfConfig = {
+  cache_enabled?: boolean;
+  cache_logged_in?: boolean;
+  cache_mobile?: boolean;
+  cache_refresh?: boolean;
+  cache_refresh_interval?: string;
+  cache_link_prefetch?: boolean;
+  cache_bypass_urls?: Array<string>;
+  cache_bypass_cookies?: Array<string>;
+  cache_include_queries?: Array<string>;
+  cache_include_cookies?: Array<string>;
+  css_js_minify?: boolean;
+  css_rucss?: boolean;
+  css_rucss_include_selectors?: Array<string>;
+  css_js_self_host_third_party?: boolean;
+  js_delay?: boolean;
+  js_delay_method?: string;
+  js_delay_excludes?: Array<string>;
+  js_delay_third_party?: boolean;
+  js_delay_third_party_excludes?: Array<string>;
+  fonts_display_swap?: boolean;
+  fonts_optimize_google?: boolean;
+  fonts_preload?: boolean;
+  lazy_load?: boolean;
+  lazy_load_exclusions?: Array<string>;
+  properly_size_images?: boolean;
+  youtube_placeholder?: boolean;
+  self_host_gravatars?: boolean;
+  cdn_enabled?: boolean;
+  cdn_url?: string;
+  cdn_file_types?: string;
+  cdn_provider?: string;
+  readonly cdn_has_credentials?: boolean;
+  db_auto_clean?: boolean;
+  db_auto_clean_interval?: string;
+  db_post_revisions?: boolean;
+  db_post_auto_drafts?: boolean;
+  db_post_trashed?: boolean;
+  db_comments_spam?: boolean;
+  db_comments_trashed?: boolean;
+  db_transients_expired?: boolean;
+  db_optimize_tables?: boolean;
+  bloat_disable_block_css?: boolean;
+  bloat_disable_dashicons?: boolean;
+  bloat_disable_emojis?: boolean;
+  bloat_disable_jquery_migrate?: boolean;
+  bloat_disable_xml_rpc?: boolean;
+  bloat_disable_rss_feed?: boolean;
+  bloat_disable_oembeds?: boolean;
+  bloat_heartbeat_control?: boolean;
+  bloat_post_revisions_control?: boolean;
+  readonly server_software?: string;
+  readonly dropin_installed?: boolean;
+  readonly wp_cache_constant_set?: boolean;
+  readonly htaccess_managed?: boolean;
+  readonly config_version?: number;
+  readonly updated_at?: string;
+};
+
+/**
+ * The latest cache gauges the agent reported for a site.
+ */
+export type CacheStats = {
+  cached_pages_count?: number;
+  cache_size_bytes?: number;
+  last_purged_at?: string;
+  last_purge_kind?: string;
+  last_preload_at?: string;
+  preload_pending?: number;
+  preload_total?: number;
+  reported_at?: string;
+};
+
+/**
+ * A page-cache purge request.
+ */
+export type PurgeRequest = {
+  /**
+   * Purge the whole cache (`all`) or a single URL (`url`).
+   */
+  scope: "all" | "url";
+  /**
+   * The single URL to purge when `scope` is `url`.
+   */
+  url?: string;
+  /**
+   * Additional URLs to purge.
+   */
+  urls?: Array<string>;
+  /**
+   * With `scope: all`, also clears every cached artifact. Requires the
+   * `site.cache.delete-everything` permission.
+   *
+   */
+  delete_everything?: boolean;
+};
+
+/**
+ * The `{ok, detail}` acknowledgement returned by the cache action
+ * endpoints (purge / preload / enable / disable). `ok` is false when the
+ * agent rejected the action (still HTTP 200).
+ *
+ */
+export type PerfActionResult = {
+  ok: boolean;
+  detail?: string;
+  purge_id?: string;
+};
+
+/**
+ * The acknowledgement returned by the database-cleanup endpoint.
+ */
+export type DbCleanResult = {
+  ok: boolean;
+  detail?: string;
+  rows_cleaned?: number;
+};
+
+/**
+ * One cached Used-CSS (RUCSS) result row.
+ */
+export type RucssResult = {
+  id?: string;
+  structure_hash?: string;
+  url?: string;
+  original_css_bytes?: number;
+  used_css_bytes?: number;
+  reduction_pct?: number;
+  used_css_s3_key?: string;
+  last_used_at?: string;
+};
+
+export type RucssResultList = {
+  items?: Array<RucssResult>;
+};
+
+export type RucssClearResult = {
+  ok: boolean;
+  cleared: number;
+};
+
+export type BulkPurgeRequest = {
+  site_ids: Array<string>;
+};
+
+export type BulkConfigRequest = {
+  site_ids: Array<string>;
+  preset: "safe" | "balanced" | "aggressive";
+};
+
+/**
+ * One per-site result in a portfolio bulk-cache response.
+ */
+export type BulkResult = {
+  site_id: string;
+  ok: boolean;
+  detail: string;
+  config_version?: number;
+};
+
+export type BulkResultList = {
+  results?: Array<BulkResult>;
+};
+
+/**
+ * The full per-site performance configuration. `cdn_credentials` is
+ * write-only (see CdnCredentials); `cdn_has_credentials` and the
+ * install-state fields (`server_software`, `dropin_installed`,
+ * `wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or
+ * agent-derived.
+ *
+ */
+export type PerfConfigWritable = {
+  cache_enabled?: boolean;
+  cache_logged_in?: boolean;
+  cache_mobile?: boolean;
+  cache_refresh?: boolean;
+  cache_refresh_interval?: string;
+  cache_link_prefetch?: boolean;
+  cache_bypass_urls?: Array<string>;
+  cache_bypass_cookies?: Array<string>;
+  cache_include_queries?: Array<string>;
+  cache_include_cookies?: Array<string>;
+  css_js_minify?: boolean;
+  css_rucss?: boolean;
+  css_rucss_include_selectors?: Array<string>;
+  css_js_self_host_third_party?: boolean;
+  js_delay?: boolean;
+  js_delay_method?: string;
+  js_delay_excludes?: Array<string>;
+  js_delay_third_party?: boolean;
+  js_delay_third_party_excludes?: Array<string>;
+  fonts_display_swap?: boolean;
+  fonts_optimize_google?: boolean;
+  fonts_preload?: boolean;
+  lazy_load?: boolean;
+  lazy_load_exclusions?: Array<string>;
+  properly_size_images?: boolean;
+  youtube_placeholder?: boolean;
+  self_host_gravatars?: boolean;
+  cdn_enabled?: boolean;
+  cdn_url?: string;
+  cdn_file_types?: string;
+  cdn_provider?: string;
+  cdn_credentials?: CdnCredentials;
+  db_auto_clean?: boolean;
+  db_auto_clean_interval?: string;
+  db_post_revisions?: boolean;
+  db_post_auto_drafts?: boolean;
+  db_post_trashed?: boolean;
+  db_comments_spam?: boolean;
+  db_comments_trashed?: boolean;
+  db_transients_expired?: boolean;
+  db_optimize_tables?: boolean;
+  bloat_disable_block_css?: boolean;
+  bloat_disable_dashicons?: boolean;
+  bloat_disable_emojis?: boolean;
+  bloat_disable_jquery_migrate?: boolean;
+  bloat_disable_xml_rpc?: boolean;
+  bloat_disable_rss_feed?: boolean;
+  bloat_disable_oembeds?: boolean;
+  bloat_heartbeat_control?: boolean;
+  bloat_post_revisions_control?: boolean;
+};
+
 export type Limit = number;
 
 export type Offset = number;
@@ -4735,3 +4979,256 @@ export type PutSiteLoginBrandResponses = {
 
 export type PutSiteLoginBrandResponse =
   PutSiteLoginBrandResponses[keyof PutSiteLoginBrandResponses];
+
+export type GetPerfConfigData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/config";
+};
+
+export type GetPerfConfigResponses = {
+  /**
+   * Current performance config
+   */
+  200: PerfConfig;
+};
+
+export type GetPerfConfigResponse =
+  GetPerfConfigResponses[keyof GetPerfConfigResponses];
+
+export type PutPerfConfigData = {
+  body: PerfConfigWritable;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/config";
+};
+
+export type PutPerfConfigErrors = {
+  /**
+   * Validation error
+   */
+  422: Error;
+};
+
+export type PutPerfConfigError = PutPerfConfigErrors[keyof PutPerfConfigErrors];
+
+export type PutPerfConfigResponses = {
+  /**
+   * Stored performance config
+   */
+  200: PerfConfig;
+};
+
+export type PutPerfConfigResponse =
+  PutPerfConfigResponses[keyof PutPerfConfigResponses];
+
+export type GetCacheStatsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/cache/stats";
+};
+
+export type GetCacheStatsResponses = {
+  /**
+   * Latest cache gauges
+   */
+  200: CacheStats;
+};
+
+export type GetCacheStatsResponse =
+  GetCacheStatsResponses[keyof GetCacheStatsResponses];
+
+export type PurgeCacheData = {
+  body: PurgeRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/cache/purge";
+};
+
+export type PurgeCacheErrors = {
+  /**
+   * delete-everything requires the cache delete-all permission
+   */
+  403: Error;
+};
+
+export type PurgeCacheError = PurgeCacheErrors[keyof PurgeCacheErrors];
+
+export type PurgeCacheResponses = {
+  /**
+   * Purge acknowledged (ok may be false on agent rejection)
+   */
+  200: PerfActionResult;
+};
+
+export type PurgeCacheResponse = PurgeCacheResponses[keyof PurgeCacheResponses];
+
+export type PreloadCacheData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/cache/preload";
+};
+
+export type PreloadCacheResponses = {
+  /**
+   * Preload acknowledged
+   */
+  200: PerfActionResult;
+};
+
+export type PreloadCacheResponse =
+  PreloadCacheResponses[keyof PreloadCacheResponses];
+
+export type EnableCacheData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/cache/enable";
+};
+
+export type EnableCacheResponses = {
+  /**
+   * Enable acknowledged
+   */
+  200: PerfActionResult;
+};
+
+export type EnableCacheResponse =
+  EnableCacheResponses[keyof EnableCacheResponses];
+
+export type DisableCacheData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/cache/disable";
+};
+
+export type DisableCacheResponses = {
+  /**
+   * Disable acknowledged
+   */
+  200: PerfActionResult;
+};
+
+export type DisableCacheResponse =
+  DisableCacheResponses[keyof DisableCacheResponses];
+
+export type CleanDatabaseData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/clean";
+};
+
+export type CleanDatabaseResponses = {
+  /**
+   * Database cleanup acknowledged
+   */
+  200: DbCleanResult;
+};
+
+export type CleanDatabaseResponse =
+  CleanDatabaseResponses[keyof CleanDatabaseResponses];
+
+export type ListRucssResultsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    limit?: number;
+    offset?: number;
+  };
+  url: "/api/v1/sites/{siteId}/perf/rucss/results";
+};
+
+export type ListRucssResultsResponses = {
+  /**
+   * A page of cached RUCSS results
+   */
+  200: RucssResultList;
+};
+
+export type ListRucssResultsResponse =
+  ListRucssResultsResponses[keyof ListRucssResultsResponses];
+
+export type ClearRucssData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/rucss/clear";
+};
+
+export type ClearRucssResponses = {
+  /**
+   * Cleared
+   */
+  200: RucssClearResult;
+};
+
+export type ClearRucssResponse = ClearRucssResponses[keyof ClearRucssResponses];
+
+export type BulkPurgeCacheData = {
+  body: BulkPurgeRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/cache/bulk-purge";
+};
+
+export type BulkPurgeCacheResponses = {
+  /**
+   * Per-site purge results
+   */
+  200: BulkResultList;
+};
+
+export type BulkPurgeCacheResponse =
+  BulkPurgeCacheResponses[keyof BulkPurgeCacheResponses];
+
+export type BulkConfigCacheData = {
+  body: BulkConfigRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/cache/bulk-config";
+};
+
+export type BulkConfigCacheErrors = {
+  /**
+   * Invalid preset
+   */
+  422: Error;
+};
+
+export type BulkConfigCacheError =
+  BulkConfigCacheErrors[keyof BulkConfigCacheErrors];
+
+export type BulkConfigCacheResponses = {
+  /**
+   * Per-site apply results
+   */
+  200: BulkResultList;
+};
+
+export type BulkConfigCacheResponse =
+  BulkConfigCacheResponses[keyof BulkConfigCacheResponses];

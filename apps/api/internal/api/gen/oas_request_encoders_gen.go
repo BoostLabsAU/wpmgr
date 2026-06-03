@@ -210,6 +210,34 @@ func encodeArchiveSiteRequest(
 	return nil
 }
 
+func encodeBulkConfigCacheRequest(
+	req *BulkConfigRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeBulkPurgeCacheRequest(
+	req *BulkPurgeRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeCreateApiKeyRequest(
 	req *ApiKeyCreate,
 	r *http.Request,
@@ -486,6 +514,20 @@ func encodePatchSiteErrorConfigRequest(
 	return nil
 }
 
+func encodePurgeCacheRequest(
+	req *PurgeRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodePutAlertConfigRequest(
 	req *AlertConfigUpdate,
 	r *http.Request,
@@ -502,6 +544,20 @@ func encodePutAlertConfigRequest(
 
 func encodePutBackupScheduleRequest(
 	req *BackupScheduleUpdate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePutPerfConfigRequest(
+	req *PerfConfig,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

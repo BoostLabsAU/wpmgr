@@ -199,12 +199,59 @@ func (UnimplementedHandler) BeginReEnrollment(ctx context.Context, params BeginR
 	return r, ht.ErrNotImplemented
 }
 
+// BulkConfigCache implements bulkConfigCache operation.
+//
+// Spreads a preset's toggles (`safe`, `balanced`, or `aggressive`) onto
+// each site's existing config without clobbering its per-site include or
+// bypass lists. Each site id is checked against the caller's allowlist
+// independently. Requires the `site.perf.config` permission.
+//
+// PUT /api/v1/cache/bulk-config
+func (UnimplementedHandler) BulkConfigCache(ctx context.Context, req *BulkConfigRequest) (r BulkConfigCacheRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// BulkPurgeCache implements bulkPurgeCache operation.
+//
+// Purges the whole cache for each site in `site_ids`. Each site id is
+// checked against the caller's collaborator allowlist independently; sites
+// the caller cannot access (or that fail) are returned with `ok: false`
+// and a `detail` rather than failing the whole call. Requires the
+// `site.cache.purge` permission.
+//
+// POST /api/v1/cache/bulk-purge
+func (UnimplementedHandler) BulkPurgeCache(ctx context.Context, req *BulkPurgeRequest) (r *BulkResultList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // CancelMedia implements cancelMedia operation.
 //
 // Cancel all in-flight media jobs for a site.
 //
 // POST /api/v1/sites/{siteId}/media/cancel
 func (UnimplementedHandler) CancelMedia(ctx context.Context, params CancelMediaParams) (r *CancelMediaOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// CleanDatabase implements cleanDatabase operation.
+//
+// Runs the site's configured database cleanup (revisions, auto-drafts,
+// trashed posts, spam/trashed comments, expired transients, table
+// optimization) immediately. Returns an `{ok, detail, rows_cleaned}` ack.
+// Requires the `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/db/clean
+func (UnimplementedHandler) CleanDatabase(ctx context.Context, params CleanDatabaseParams) (r *DbCleanResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ClearRucss implements clearRucss operation.
+//
+// Clears every cached RUCSS result for the site. Returns the number
+// cleared. Requires the `site.perf.config` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/rucss/clear
+func (UnimplementedHandler) ClearRucss(ctx context.Context, params ClearRucssParams) (r *RucssClearResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -400,6 +447,27 @@ func (UnimplementedHandler) DeleteSiteShare(ctx context.Context, params DeleteSi
 	return r, ht.ErrNotImplemented
 }
 
+// DisableCache implements disableCache operation.
+//
+// Turns off agent-side page caching. Returns an `{ok, detail}` ack.
+// Requires the `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/cache/disable
+func (UnimplementedHandler) DisableCache(ctx context.Context, params DisableCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// EnableCache implements enableCache operation.
+//
+// Turns on agent-side page caching. Returns an `{ok, detail}` ack;
+// the authoritative install state re-reads via the config query on the
+// `cache.enabled` SSE event. Requires the `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/cache/enable
+func (UnimplementedHandler) EnableCache(ctx context.Context, params EnableCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // Enroll implements enroll operation.
 //
 // Called by an agent (NOT an authenticated control-plane user) to enroll a
@@ -463,6 +531,17 @@ func (UnimplementedHandler) GetBackupSqlInspection(ctx context.Context, params G
 	return r, ht.ErrNotImplemented
 }
 
+// GetCacheStats implements getCacheStats operation.
+//
+// Returns the most recent cache gauges the agent reported (cached page
+// count, on-disk cache size, last purge/preload timestamps, preload
+// progress). Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/cache/stats
+func (UnimplementedHandler) GetCacheStats(ctx context.Context, params GetCacheStatsParams) (r *CacheStats, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetHealthz implements getHealthz operation.
 //
 // Liveness probe.
@@ -487,6 +566,20 @@ func (UnimplementedHandler) GetMe(ctx context.Context) (r GetMeRes, _ error) {
 //
 // GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 func (UnimplementedHandler) GetMediaJob(ctx context.Context, params GetMediaJobParams) (r *MediaJobDetail, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetPerfConfig implements getPerfConfig operation.
+//
+// Returns the full per-site performance config. CDN credentials are
+// WRITE-ONLY and are never returned; `cdn_has_credentials` is the
+// read-only "a credential is set" flag. The `server_software`,
+// `dropin_installed`, `wp_cache_constant_set`, and `htaccess_managed`
+// fields are agent-reported install state.
+// Requires the `site.perf.config` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/config
+func (UnimplementedHandler) GetPerfConfig(ctx context.Context, params GetPerfConfigParams) (r *PerfConfig, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -684,6 +777,17 @@ func (UnimplementedHandler) ListMembers(ctx context.Context, params ListMembersP
 	return r, ht.ErrNotImplemented
 }
 
+// ListRucssResults implements listRucssResults operation.
+//
+// Returns a page of the site's cached Remove-Unused-CSS results (one row
+// per page structure hash, with original/used byte sizes and the
+// reduction percentage). Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/rucss/results
+func (UnimplementedHandler) ListRucssResults(ctx context.Context, params ListRucssResultsParams) (r *RucssResultList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListSharedWithMe implements listSharedWithMe operation.
 //
 // List sites shared to the authenticated user (any logged-in user).
@@ -855,6 +959,31 @@ func (UnimplementedHandler) PatchSiteErrorConfig(ctx context.Context, req *SiteE
 	return r, ht.ErrNotImplemented
 }
 
+// PreloadCache implements preloadCache operation.
+//
+// Triggers the agent to begin warming the page cache. Returns an
+// `{ok, detail}` ack; preload progress lands via the `cache.preload.*`
+// SSE events. Requires the `site.cache.purge` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/cache/preload
+func (UnimplementedHandler) PreloadCache(ctx context.Context, params PreloadCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PurgeCache implements purgeCache operation.
+//
+// Purges the whole cache (`scope: all`), a single URL (`scope: url` with
+// `url`), or a list of URLs (`urls`). Setting `delete_everything: true`
+// with `scope: all` additionally clears every cached artifact and requires
+// the higher `site.cache.delete-everything` permission. The normal purge
+// requires `site.cache.purge`. An agent rejection is returned as HTTP 200
+// with `ok: false` and a `detail`.
+//
+// POST /api/v1/sites/{siteId}/perf/cache/purge
+func (UnimplementedHandler) PurgeCache(ctx context.Context, req *PurgeRequest, params PurgeCacheParams) (r PurgeCacheRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // PutAlertConfig implements putAlertConfig operation.
 //
 // Sets the email recipients, webhook URL + signing secret, and enabled flag
@@ -872,6 +1001,20 @@ func (UnimplementedHandler) PutAlertConfig(ctx context.Context, req *AlertConfig
 //
 // PUT /api/v1/sites/{siteId}/backup-schedule
 func (UnimplementedHandler) PutBackupSchedule(ctx context.Context, req *BackupScheduleUpdate, params PutBackupScheduleParams) (r PutBackupScheduleRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutPerfConfig implements putPerfConfig operation.
+//
+// Stores the new performance config and pushes it to the agent. If the
+// agent push fails after a successful store, HTTP 200 is still returned
+// with the stored config and the push error is surfaced in the
+// `X-Agent-Push-Warning` response header. `cdn_credentials`, when present,
+// is encrypted server-side and never echoed back. Requires the
+// `site.perf.config` permission.
+//
+// PUT /api/v1/sites/{siteId}/perf/config
+func (UnimplementedHandler) PutPerfConfig(ctx context.Context, req *PerfConfig, params PutPerfConfigParams) (r PutPerfConfigRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

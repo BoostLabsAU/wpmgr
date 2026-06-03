@@ -73,6 +73,8 @@ tags:
     description: Ed25519 signed agent-to-control-plane endpoints (metadata, heartbeat, diagnostics, backups).
   - name: loginbrand
     description: Per-site wp-login whitelabeling (logo, link, message).
+  - name: performance
+    description: Per-site Performance Suite (page cache, CSS/JS optimization, RUCSS, CDN, database cleanup) plus portfolio-wide bulk cache actions.
 paths:
   /healthz:
     get:
@@ -2900,6 +2902,281 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+
+  # --- Performance Suite (ADR-046 / m36) --------------------------------------
+  # Operator-facing dashboard routes. Auth is the cookie session + per-site
+  # collaborator gate + per-route RBAC, applied by the hand-rolled Gin handler
+  # (apps/api/internal/perf/handler.go); the ogen-generated server interface for
+  # these operations is intentionally unused (ogen's router is never mounted in
+  # this codebase — see internal/server/server.go). These paths exist so the
+  # hey-api TS client (@wpmgr/api) is generated for them, ending the
+  # path/shape drift between the dashboard and the backend.
+  /api/v1/sites/{siteId}/perf/config:
+    get:
+      operationId: getPerfConfig
+      summary: Get the Performance Suite config for a site
+      description: |
+        Returns the full per-site performance config. CDN credentials are
+        WRITE-ONLY and are never returned; `cdn_has_credentials` is the
+        read-only "a credential is set" flag. The `server_software`,
+        `dropin_installed`, `wp_cache_constant_set`, and `htaccess_managed`
+        fields are agent-reported install state.
+        Requires the `site.perf.config` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Current performance config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfConfig"
+    put:
+      operationId: putPerfConfig
+      summary: Save (and push to agent) the Performance Suite config
+      description: |
+        Stores the new performance config and pushes it to the agent. If the
+        agent push fails after a successful store, HTTP 200 is still returned
+        with the stored config and the push error is surfaced in the
+        `X-Agent-Push-Warning` response header. `cdn_credentials`, when present,
+        is encrypted server-side and never echoed back. Requires the
+        `site.perf.config` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PerfConfig"
+      responses:
+        "200":
+          description: Stored performance config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfConfig"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/perf/cache/stats:
+    get:
+      operationId: getCacheStats
+      summary: Get the latest cache gauges for a site
+      description: |
+        Returns the most recent cache gauges the agent reported (cached page
+        count, on-disk cache size, last purge/preload timestamps, preload
+        progress). Requires the `site:read` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Latest cache gauges
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CacheStats"
+  /api/v1/sites/{siteId}/perf/cache/purge:
+    post:
+      operationId: purgeCache
+      summary: Purge the page cache for a site
+      description: |
+        Purges the whole cache (`scope: all`), a single URL (`scope: url` with
+        `url`), or a list of URLs (`urls`). Setting `delete_everything: true`
+        with `scope: all` additionally clears every cached artifact and requires
+        the higher `site.cache.delete-everything` permission. The normal purge
+        requires `site.cache.purge`. An agent rejection is returned as HTTP 200
+        with `ok: false` and a `detail`.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PurgeRequest"
+      responses:
+        "200":
+          description: Purge acknowledged (ok may be false on agent rejection)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+        "403":
+          description: delete-everything requires the cache delete-all permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/perf/cache/preload:
+    post:
+      operationId: preloadCache
+      summary: Start the cache preload pass for a site
+      description: |
+        Triggers the agent to begin warming the page cache. Returns an
+        `{ok, detail}` ack; preload progress lands via the `cache.preload.*`
+        SSE events. Requires the `site.cache.purge` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Preload acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/cache/enable:
+    post:
+      operationId: enableCache
+      summary: Enable page caching at the server for a site
+      description: |
+        Turns on agent-side page caching. Returns an `{ok, detail}` ack;
+        the authoritative install state re-reads via the config query on the
+        `cache.enabled` SSE event. Requires the `site.cache.manage` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Enable acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/cache/disable:
+    post:
+      operationId: disableCache
+      summary: Disable page caching at the server for a site
+      description: |
+        Turns off agent-side page caching. Returns an `{ok, detail}` ack.
+        Requires the `site.cache.manage` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Disable acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/db/clean:
+    post:
+      operationId: cleanDatabase
+      summary: Run the configured database cleanup now for a site
+      description: |
+        Runs the site's configured database cleanup (revisions, auto-drafts,
+        trashed posts, spam/trashed comments, expired transients, table
+        optimization) immediately. Returns an `{ok, detail, rows_cleaned}` ack.
+        Requires the `site.cache.manage` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Database cleanup acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DbCleanResult"
+  /api/v1/sites/{siteId}/perf/rucss/results:
+    get:
+      operationId: listRucssResults
+      summary: List cached Used-CSS (RUCSS) results for a site
+      description: |
+        Returns a page of the site's cached Remove-Unused-CSS results (one row
+        per page structure hash, with original/used byte sizes and the
+        reduction percentage). Requires the `site:read` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of cached RUCSS results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RucssResultList"
+  /api/v1/sites/{siteId}/perf/rucss/clear:
+    post:
+      operationId: clearRucss
+      summary: Drop all cached Used-CSS results for a site
+      description: |
+        Clears every cached RUCSS result for the site. Returns the number
+        cleared. Requires the `site.perf.config` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Cleared
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RucssClearResult"
+  /api/v1/cache/bulk-purge:
+    post:
+      operationId: bulkPurgeCache
+      summary: Purge the page cache across many sites
+      description: |
+        Purges the whole cache for each site in `site_ids`. Each site id is
+        checked against the caller's collaborator allowlist independently; sites
+        the caller cannot access (or that fail) are returned with `ok: false`
+        and a `detail` rather than failing the whole call. Requires the
+        `site.cache.purge` permission.
+      tags: [performance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkPurgeRequest"
+      responses:
+        "200":
+          description: Per-site purge results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResultList"
+  /api/v1/cache/bulk-config:
+    put:
+      operationId: bulkConfigCache
+      summary: Apply a performance preset across many sites
+      description: |
+        Spreads a preset's toggles (`safe`, `balanced`, or `aggressive`) onto
+        each site's existing config without clobbering its per-site include or
+        bypass lists. Each site id is checked against the caller's allowlist
+        independently. Requires the `site.perf.config` permission.
+      tags: [performance]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkConfigRequest"
+      responses:
+        "200":
+          description: Per-site apply results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResultList"
+        "422":
+          description: Invalid preset
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 components:
   parameters:
     Limit:
@@ -5519,3 +5796,200 @@ components:
         - type: object
           properties:
             variants: { type: array, items: { $ref: "#/components/schemas/MediaVariantResult" } }
+
+    # --- Performance Suite (ADR-046 / m36) ------------------------------------
+    # These mirror the hand-rolled Go DTOs in apps/api/internal/perf/dto.go.
+    CdnCredentials:
+      type: object
+      description: |
+        Write-only CDN credentials. Accepted on PUT /perf/config and NEVER
+        returned by GET (the control plane decrypts server-side only).
+      required: [api_token]
+      properties:
+        api_token: { type: string }
+        zone_id: { type: string }
+        zone: { type: string }
+    PerfConfig:
+      type: object
+      description: |
+        The full per-site performance configuration. `cdn_credentials` is
+        write-only (see CdnCredentials); `cdn_has_credentials` and the
+        install-state fields (`server_software`, `dropin_installed`,
+        `wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or
+        agent-derived.
+      properties:
+        # Caching
+        cache_enabled: { type: boolean }
+        cache_logged_in: { type: boolean }
+        cache_mobile: { type: boolean }
+        cache_refresh: { type: boolean }
+        cache_refresh_interval: { type: string }
+        cache_link_prefetch: { type: boolean }
+        cache_bypass_urls: { type: array, items: { type: string } }
+        cache_bypass_cookies: { type: array, items: { type: string } }
+        cache_include_queries: { type: array, items: { type: string } }
+        cache_include_cookies: { type: array, items: { type: string } }
+        # CSS / JS
+        css_js_minify: { type: boolean }
+        css_rucss: { type: boolean }
+        css_rucss_include_selectors: { type: array, items: { type: string } }
+        css_js_self_host_third_party: { type: boolean }
+        js_delay: { type: boolean }
+        js_delay_method: { type: string }
+        js_delay_excludes: { type: array, items: { type: string } }
+        js_delay_third_party: { type: boolean }
+        js_delay_third_party_excludes: { type: array, items: { type: string } }
+        # Fonts
+        fonts_display_swap: { type: boolean }
+        fonts_optimize_google: { type: boolean }
+        fonts_preload: { type: boolean }
+        # Media / lazy-load
+        lazy_load: { type: boolean }
+        lazy_load_exclusions: { type: array, items: { type: string } }
+        properly_size_images: { type: boolean }
+        youtube_placeholder: { type: boolean }
+        self_host_gravatars: { type: boolean }
+        # CDN
+        cdn_enabled: { type: boolean }
+        cdn_url: { type: string }
+        cdn_file_types: { type: string }
+        cdn_provider: { type: string }
+        cdn_has_credentials: { type: boolean, readOnly: true }
+        cdn_credentials:
+          allOf: [{ $ref: "#/components/schemas/CdnCredentials" }]
+          writeOnly: true
+        # Database cleanup
+        db_auto_clean: { type: boolean }
+        db_auto_clean_interval: { type: string }
+        db_post_revisions: { type: boolean }
+        db_post_auto_drafts: { type: boolean }
+        db_post_trashed: { type: boolean }
+        db_comments_spam: { type: boolean }
+        db_comments_trashed: { type: boolean }
+        db_transients_expired: { type: boolean }
+        db_optimize_tables: { type: boolean }
+        # Bloat removal
+        bloat_disable_block_css: { type: boolean }
+        bloat_disable_dashicons: { type: boolean }
+        bloat_disable_emojis: { type: boolean }
+        bloat_disable_jquery_migrate: { type: boolean }
+        bloat_disable_xml_rpc: { type: boolean }
+        bloat_disable_rss_feed: { type: boolean }
+        bloat_disable_oembeds: { type: boolean }
+        bloat_heartbeat_control: { type: boolean }
+        bloat_post_revisions_control: { type: boolean }
+        # Server / install state (read-only, agent-reported)
+        server_software: { type: string, readOnly: true }
+        dropin_installed: { type: boolean, readOnly: true }
+        wp_cache_constant_set: { type: boolean, readOnly: true }
+        htaccess_managed: { type: boolean, readOnly: true }
+        config_version: { type: integer, readOnly: true }
+        updated_at: { type: string, format: date-time, readOnly: true }
+    CacheStats:
+      type: object
+      description: The latest cache gauges the agent reported for a site.
+      properties:
+        cached_pages_count: { type: integer }
+        cache_size_bytes: { type: integer, format: int64 }
+        last_purged_at: { type: string, format: date-time }
+        last_purge_kind: { type: string }
+        last_preload_at: { type: string, format: date-time }
+        preload_pending: { type: integer }
+        preload_total: { type: integer }
+        reported_at: { type: string, format: date-time }
+    PurgeRequest:
+      type: object
+      description: A page-cache purge request.
+      required: [scope]
+      properties:
+        scope:
+          type: string
+          enum: [all, url]
+          description: Purge the whole cache (`all`) or a single URL (`url`).
+        url:
+          type: string
+          description: The single URL to purge when `scope` is `url`.
+        urls:
+          type: array
+          items: { type: string }
+          description: Additional URLs to purge.
+        delete_everything:
+          type: boolean
+          description: |
+            With `scope: all`, also clears every cached artifact. Requires the
+            `site.cache.delete-everything` permission.
+    PerfActionResult:
+      type: object
+      description: |
+        The `{ok, detail}` acknowledgement returned by the cache action
+        endpoints (purge / preload / enable / disable). `ok` is false when the
+        agent rejected the action (still HTTP 200).
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        detail: { type: string }
+        purge_id: { type: string, format: uuid }
+    DbCleanResult:
+      type: object
+      description: The acknowledgement returned by the database-cleanup endpoint.
+      required: [ok]
+      properties:
+        ok: { type: boolean }
+        detail: { type: string }
+        rows_cleaned: { type: integer }
+    RucssResult:
+      type: object
+      description: One cached Used-CSS (RUCSS) result row.
+      properties:
+        id: { type: string }
+        structure_hash: { type: string }
+        url: { type: string }
+        original_css_bytes: { type: integer }
+        used_css_bytes: { type: integer }
+        reduction_pct: { type: number, format: double }
+        used_css_s3_key: { type: string }
+        last_used_at: { type: string, format: date-time }
+    RucssResultList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/RucssResult" }
+    RucssClearResult:
+      type: object
+      required: [ok, cleared]
+      properties:
+        ok: { type: boolean }
+        cleared: { type: integer }
+    BulkPurgeRequest:
+      type: object
+      required: [site_ids]
+      properties:
+        site_ids:
+          type: array
+          items: { type: string, format: uuid }
+    BulkConfigRequest:
+      type: object
+      required: [site_ids, preset]
+      properties:
+        site_ids:
+          type: array
+          items: { type: string, format: uuid }
+        preset:
+          type: string
+          enum: [safe, balanced, aggressive]
+    BulkResult:
+      type: object
+      description: One per-site result in a portfolio bulk-cache response.
+      required: [site_id, ok, detail]
+      properties:
+        site_id: { type: string }
+        ok: { type: boolean }
+        detail: { type: string }
+        config_version: { type: integer }
+    BulkResultList:
+      type: object
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/BulkResult" }

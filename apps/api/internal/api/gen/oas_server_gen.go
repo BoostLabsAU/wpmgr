@@ -149,12 +149,47 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/enrollment-codes
 	BeginReEnrollment(ctx context.Context, params BeginReEnrollmentParams) (BeginReEnrollmentRes, error)
+	// BulkConfigCache implements bulkConfigCache operation.
+	//
+	// Spreads a preset's toggles (`safe`, `balanced`, or `aggressive`) onto
+	// each site's existing config without clobbering its per-site include or
+	// bypass lists. Each site id is checked against the caller's allowlist
+	// independently. Requires the `site.perf.config` permission.
+	//
+	// PUT /api/v1/cache/bulk-config
+	BulkConfigCache(ctx context.Context, req *BulkConfigRequest) (BulkConfigCacheRes, error)
+	// BulkPurgeCache implements bulkPurgeCache operation.
+	//
+	// Purges the whole cache for each site in `site_ids`. Each site id is
+	// checked against the caller's collaborator allowlist independently; sites
+	// the caller cannot access (or that fail) are returned with `ok: false`
+	// and a `detail` rather than failing the whole call. Requires the
+	// `site.cache.purge` permission.
+	//
+	// POST /api/v1/cache/bulk-purge
+	BulkPurgeCache(ctx context.Context, req *BulkPurgeRequest) (*BulkResultList, error)
 	// CancelMedia implements cancelMedia operation.
 	//
 	// Cancel all in-flight media jobs for a site.
 	//
 	// POST /api/v1/sites/{siteId}/media/cancel
 	CancelMedia(ctx context.Context, params CancelMediaParams) (*CancelMediaOK, error)
+	// CleanDatabase implements cleanDatabase operation.
+	//
+	// Runs the site's configured database cleanup (revisions, auto-drafts,
+	// trashed posts, spam/trashed comments, expired transients, table
+	// optimization) immediately. Returns an `{ok, detail, rows_cleaned}` ack.
+	// Requires the `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/clean
+	CleanDatabase(ctx context.Context, params CleanDatabaseParams) (*DbCleanResult, error)
+	// ClearRucss implements clearRucss operation.
+	//
+	// Clears every cached RUCSS result for the site. Returns the number
+	// cleared. Requires the `site.perf.config` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/rucss/clear
+	ClearRucss(ctx context.Context, params ClearRucssParams) (*RucssClearResult, error)
 	// CreateApiKey implements createApiKey operation.
 	//
 	// Create an API key (admin+); the secret is shown once.
@@ -299,6 +334,21 @@ type Handler interface {
 	//
 	// DELETE /api/v1/sites/{siteId}/shares/{userId}
 	DeleteSiteShare(ctx context.Context, params DeleteSiteShareParams) (DeleteSiteShareRes, error)
+	// DisableCache implements disableCache operation.
+	//
+	// Turns off agent-side page caching. Returns an `{ok, detail}` ack.
+	// Requires the `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/cache/disable
+	DisableCache(ctx context.Context, params DisableCacheParams) (*PerfActionResult, error)
+	// EnableCache implements enableCache operation.
+	//
+	// Turns on agent-side page caching. Returns an `{ok, detail}` ack;
+	// the authoritative install state re-reads via the config query on the
+	// `cache.enabled` SSE event. Requires the `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/cache/enable
+	EnableCache(ctx context.Context, params EnableCacheParams) (*PerfActionResult, error)
 	// Enroll implements enroll operation.
 	//
 	// Called by an agent (NOT an authenticated control-plane user) to enroll a
@@ -347,6 +397,14 @@ type Handler interface {
 	//
 	// GET /api/v1/backups/{snapshotId}/sql-inspection
 	GetBackupSqlInspection(ctx context.Context, params GetBackupSqlInspectionParams) (GetBackupSqlInspectionRes, error)
+	// GetCacheStats implements getCacheStats operation.
+	//
+	// Returns the most recent cache gauges the agent reported (cached page
+	// count, on-disk cache size, last purge/preload timestamps, preload
+	// progress). Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/cache/stats
+	GetCacheStats(ctx context.Context, params GetCacheStatsParams) (*CacheStats, error)
 	// GetHealthz implements getHealthz operation.
 	//
 	// Liveness probe.
@@ -365,6 +423,17 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 	GetMediaJob(ctx context.Context, params GetMediaJobParams) (*MediaJobDetail, error)
+	// GetPerfConfig implements getPerfConfig operation.
+	//
+	// Returns the full per-site performance config. CDN credentials are
+	// WRITE-ONLY and are never returned; `cdn_has_credentials` is the
+	// read-only "a credential is set" flag. The `server_software`,
+	// `dropin_installed`, `wp_cache_constant_set`, and `htaccess_managed`
+	// fields are agent-reported install state.
+	// Requires the `site.perf.config` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/config
+	GetPerfConfig(ctx context.Context, params GetPerfConfigParams) (*PerfConfig, error)
 	// GetReadyz implements getReadyz operation.
 	//
 	// Returns 200 when the service can serve traffic (DB reachable).
@@ -502,6 +571,14 @@ type Handler interface {
 	//
 	// GET /api/v1/members
 	ListMembers(ctx context.Context, params ListMembersParams) (ListMembersRes, error)
+	// ListRucssResults implements listRucssResults operation.
+	//
+	// Returns a page of the site's cached Remove-Unused-CSS results (one row
+	// per page structure hash, with original/used byte sizes and the
+	// reduction percentage). Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/rucss/results
+	ListRucssResults(ctx context.Context, params ListRucssResultsParams) (*RucssResultList, error)
 	// ListSharedWithMe implements listSharedWithMe operation.
 	//
 	// List sites shared to the authenticated user (any logged-in user).
@@ -625,6 +702,25 @@ type Handler interface {
 	//
 	// PATCH /api/v1/sites/{siteId}/errors/config
 	PatchSiteErrorConfig(ctx context.Context, req *SiteErrorConfigUpdate, params PatchSiteErrorConfigParams) (PatchSiteErrorConfigRes, error)
+	// PreloadCache implements preloadCache operation.
+	//
+	// Triggers the agent to begin warming the page cache. Returns an
+	// `{ok, detail}` ack; preload progress lands via the `cache.preload.*`
+	// SSE events. Requires the `site.cache.purge` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/cache/preload
+	PreloadCache(ctx context.Context, params PreloadCacheParams) (*PerfActionResult, error)
+	// PurgeCache implements purgeCache operation.
+	//
+	// Purges the whole cache (`scope: all`), a single URL (`scope: url` with
+	// `url`), or a list of URLs (`urls`). Setting `delete_everything: true`
+	// with `scope: all` additionally clears every cached artifact and requires
+	// the higher `site.cache.delete-everything` permission. The normal purge
+	// requires `site.cache.purge`. An agent rejection is returned as HTTP 200
+	// with `ok: false` and a `detail`.
+	//
+	// POST /api/v1/sites/{siteId}/perf/cache/purge
+	PurgeCache(ctx context.Context, req *PurgeRequest, params PurgeCacheParams) (PurgeCacheRes, error)
 	// PutAlertConfig implements putAlertConfig operation.
 	//
 	// Sets the email recipients, webhook URL + signing secret, and enabled flag
@@ -639,6 +735,17 @@ type Handler interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-schedule
 	PutBackupSchedule(ctx context.Context, req *BackupScheduleUpdate, params PutBackupScheduleParams) (PutBackupScheduleRes, error)
+	// PutPerfConfig implements putPerfConfig operation.
+	//
+	// Stores the new performance config and pushes it to the agent. If the
+	// agent push fails after a successful store, HTTP 200 is still returned
+	// with the stored config and the push error is surfaced in the
+	// `X-Agent-Push-Warning` response header. `cdn_credentials`, when present,
+	// is encrypted server-side and never echoed back. Requires the
+	// `site.perf.config` permission.
+	//
+	// PUT /api/v1/sites/{siteId}/perf/config
+	PutPerfConfig(ctx context.Context, req *PerfConfig, params PutPerfConfigParams) (PutPerfConfigRes, error)
 	// PutSiteLoginBrand implements putSiteLoginBrand operation.
 	//
 	// Stores the new login brand config and pushes it to the agent via the

@@ -5,7 +5,15 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { client } from "@wpmgr/api";
+import {
+  getCacheStats,
+  purgeCache,
+  preloadCache,
+  enableCache,
+  disableCache,
+  cleanDatabase,
+  clearRucss,
+} from "@wpmgr/api";
 
 import { toast } from "@/components/toast";
 import { toError } from "@/features/auth/use-auth";
@@ -14,46 +22,42 @@ import { perfKeys } from "../perf-keys";
 import type { CacheStats, PerfActionResult, PurgeBody } from "../types";
 
 // Cache-stats query + the cache action mutations (purge / preload / enable /
-// disable / db-clean / rucss-clear). All hand-rolled routes (NOT in the
-// generated SDK); raw client.* + toError, mirroring features/admin/use-admin.ts.
+// disable / db-clean / rucss-clear). All routes now flow through the generated
+// @wpmgr/api SDK fns (canonical paths owned by openapi.yaml) instead of inline
+// `/api/v1/...` URL strings, so the frontend can no longer drift on the path.
+// Pattern mirrors features/sites/use-login-brand.ts (generated SDK fn +
+// `{ data, error }` + `toError`).
 //
 // The actions DON'T optimistically write — they return an {ok,detail} ack and
 // the authoritative state lands via the cache.* / db.clean.completed SSE events
 // (usePerfEvents invalidates the stats query). Each mutation toasts on error.
 
-function base(siteId: string): string {
-  return `/api/v1/sites/${encodeURIComponent(siteId)}/perf`;
-}
-
-/** Fetch the latest cache gauges (GET /cache/stats). */
+/** Fetch the latest cache gauges (GET /perf/cache/stats). */
 export function useCacheStats(
   siteId: string,
 ): UseQueryResult<CacheStats, Error> {
   return useQuery({
     queryKey: perfKeys.stats(siteId),
     queryFn: async () => {
-      const r = await client.get({ url: `${base(siteId)}/cache/stats` });
-      if (r.error) throw toError(r.error);
-      if (!r.data) throw new Error("Empty response");
-      return r.data as CacheStats;
+      const { data, error } = await getCacheStats({ path: { siteId } });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data as CacheStats;
     },
     staleTime: 10_000,
   });
 }
 
-/** POST /cache/purge — purge all, a single URL, or delete-everything (admin). */
+/** POST /perf/cache/purge — purge all, a single URL, or delete-everything (admin). */
 export function usePurgeCache(
   siteId: string,
 ): UseMutationResult<PerfActionResult, Error, PurgeBody> {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (body: PurgeBody) => {
-      const r = await client.post({
-        url: `${base(siteId)}/cache/purge`,
-        body,
-      });
-      if (r.error) throw toError(r.error);
-      return (r.data as PerfActionResult) ?? { ok: false };
+      const { data, error } = await purgeCache({ path: { siteId }, body });
+      if (error) throw toError(error);
+      return (data as PerfActionResult) ?? { ok: false };
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: perfKeys.stats(siteId) });
@@ -63,16 +67,16 @@ export function usePurgeCache(
   });
 }
 
-/** POST /cache/preload — start the cache preload pass. */
+/** POST /perf/cache/preload — start the cache preload pass. */
 export function usePreloadCache(
   siteId: string,
 ): UseMutationResult<PerfActionResult, Error, void> {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const r = await client.post({ url: `${base(siteId)}/cache/preload` });
-      if (r.error) throw toError(r.error);
-      return (r.data as PerfActionResult) ?? { ok: false };
+      const { data, error } = await preloadCache({ path: { siteId } });
+      if (error) throw toError(error);
+      return (data as PerfActionResult) ?? { ok: false };
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: perfKeys.stats(siteId) });
@@ -82,18 +86,18 @@ export function usePreloadCache(
   });
 }
 
-/** POST /cache/enable | /cache/disable — toggle page caching at the server. */
+/** POST /perf/cache/enable | /perf/cache/disable — toggle page caching. */
 export function useToggleCache(
   siteId: string,
 ): UseMutationResult<PerfActionResult, Error, boolean> {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (enable: boolean) => {
-      const r = await client.post({
-        url: `${base(siteId)}/cache/${enable ? "enable" : "disable"}`,
-      });
-      if (r.error) throw toError(r.error);
-      return (r.data as PerfActionResult) ?? { ok: false };
+      const { data, error } = enable
+        ? await enableCache({ path: { siteId } })
+        : await disableCache({ path: { siteId } });
+      if (error) throw toError(error);
+      return (data as PerfActionResult) ?? { ok: false };
     },
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: perfKeys.config(siteId) });
@@ -104,15 +108,15 @@ export function useToggleCache(
   });
 }
 
-/** POST /db/clean — run the configured database cleanup now. */
+/** POST /perf/db/clean — run the configured database cleanup now. */
 export function useDbClean(
   siteId: string,
 ): UseMutationResult<PerfActionResult, Error, void> {
   return useMutation({
     mutationFn: async () => {
-      const r = await client.post({ url: `${base(siteId)}/db/clean` });
-      if (r.error) throw toError(r.error);
-      return (r.data as PerfActionResult) ?? { ok: false };
+      const { data, error } = await cleanDatabase({ path: { siteId } });
+      if (error) throw toError(error);
+      return (data as PerfActionResult) ?? { ok: false };
     },
     onError: (err) =>
       toast.error("Could not clean the database.", {
@@ -121,19 +125,21 @@ export function useDbClean(
   });
 }
 
-/** POST /rucss/clear — drop all cached Used-CSS results for the site. */
+/** POST /perf/rucss/clear — drop all cached Used-CSS results for the site. */
 export function useClearRucss(
   siteId: string,
 ): UseMutationResult<{ ok: boolean; cleared: number }, Error, void> {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async () => {
-      const r = await client.post({ url: `${base(siteId)}/rucss/clear` });
-      if (r.error) throw toError(r.error);
-      return (r.data as { ok: boolean; cleared: number }) ?? {
-        ok: false,
-        cleared: 0,
-      };
+      const { data, error } = await clearRucss({ path: { siteId } });
+      if (error) throw toError(error);
+      return (
+        (data as { ok: boolean; cleared: number }) ?? {
+          ok: false,
+          cleared: 0,
+        }
+      );
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });

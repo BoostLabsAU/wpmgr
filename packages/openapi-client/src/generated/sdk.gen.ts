@@ -48,8 +48,17 @@ import type {
   BeginReEnrollmentData,
   BeginReEnrollmentErrors,
   BeginReEnrollmentResponses,
+  BulkConfigCacheData,
+  BulkConfigCacheErrors,
+  BulkConfigCacheResponses,
+  BulkPurgeCacheData,
+  BulkPurgeCacheResponses,
   CancelMediaData,
   CancelMediaResponses,
+  CleanDatabaseData,
+  CleanDatabaseResponses,
+  ClearRucssData,
+  ClearRucssResponses,
   CreateApiKeyData,
   CreateApiKeyErrors,
   CreateApiKeyResponses,
@@ -97,6 +106,10 @@ import type {
   DeleteSiteShareData,
   DeleteSiteShareErrors,
   DeleteSiteShareResponses,
+  DisableCacheData,
+  DisableCacheResponses,
+  EnableCacheData,
+  EnableCacheResponses,
   EnrollData,
   EnrollErrors,
   EnrollResponses,
@@ -111,6 +124,8 @@ import type {
   GetBackupSqlInspectionData,
   GetBackupSqlInspectionErrors,
   GetBackupSqlInspectionResponses,
+  GetCacheStatsData,
+  GetCacheStatsResponses,
   GetHealthzData,
   GetHealthzResponses,
   GetMeData,
@@ -118,6 +133,8 @@ import type {
   GetMediaJobResponses,
   GetMeErrors,
   GetMeResponses,
+  GetPerfConfigData,
+  GetPerfConfigResponses,
   GetReadyzData,
   GetReadyzErrors,
   GetReadyzResponses,
@@ -169,6 +186,8 @@ import type {
   ListMembersData,
   ListMembersErrors,
   ListMembersResponses,
+  ListRucssResultsData,
+  ListRucssResultsResponses,
   ListSharedWithMeData,
   ListSharedWithMeErrors,
   ListSharedWithMeResponses,
@@ -209,12 +228,20 @@ import type {
   PatchSiteErrorConfigData,
   PatchSiteErrorConfigErrors,
   PatchSiteErrorConfigResponses,
+  PreloadCacheData,
+  PreloadCacheResponses,
+  PurgeCacheData,
+  PurgeCacheErrors,
+  PurgeCacheResponses,
   PutAlertConfigData,
   PutAlertConfigErrors,
   PutAlertConfigResponses,
   PutBackupScheduleData,
   PutBackupScheduleErrors,
   PutBackupScheduleResponses,
+  PutPerfConfigData,
+  PutPerfConfigErrors,
+  PutPerfConfigResponses,
   PutSiteLoginBrandData,
   PutSiteLoginBrandErrors,
   PutSiteLoginBrandResponses,
@@ -2154,6 +2181,239 @@ export const putSiteLoginBrand = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/api/v1/sites/{siteId}/login-brand",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get the Performance Suite config for a site
+ *
+ * Returns the full per-site performance config. CDN credentials are
+ * WRITE-ONLY and are never returned; `cdn_has_credentials` is the
+ * read-only "a credential is set" flag. The `server_software`,
+ * `dropin_installed`, `wp_cache_constant_set`, and `htaccess_managed`
+ * fields are agent-reported install state.
+ * Requires the `site.perf.config` permission.
+ *
+ */
+export const getPerfConfig = <ThrowOnError extends boolean = false>(
+  options: Options<GetPerfConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<GetPerfConfigResponses, unknown, ThrowOnError>(
+    { url: "/api/v1/sites/{siteId}/perf/config", ...options },
+  );
+
+/**
+ * Save (and push to agent) the Performance Suite config
+ *
+ * Stores the new performance config and pushes it to the agent. If the
+ * agent push fails after a successful store, HTTP 200 is still returned
+ * with the stored config and the push error is surfaced in the
+ * `X-Agent-Push-Warning` response header. `cdn_credentials`, when present,
+ * is encrypted server-side and never echoed back. Requires the
+ * `site.perf.config` permission.
+ *
+ */
+export const putPerfConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutPerfConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutPerfConfigResponses,
+    PutPerfConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get the latest cache gauges for a site
+ *
+ * Returns the most recent cache gauges the agent reported (cached page
+ * count, on-disk cache size, last purge/preload timestamps, preload
+ * progress). Requires the `site:read` permission.
+ *
+ */
+export const getCacheStats = <ThrowOnError extends boolean = false>(
+  options: Options<GetCacheStatsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<GetCacheStatsResponses, unknown, ThrowOnError>(
+    { url: "/api/v1/sites/{siteId}/perf/cache/stats", ...options },
+  );
+
+/**
+ * Purge the page cache for a site
+ *
+ * Purges the whole cache (`scope: all`), a single URL (`scope: url` with
+ * `url`), or a list of URLs (`urls`). Setting `delete_everything: true`
+ * with `scope: all` additionally clears every cached artifact and requires
+ * the higher `site.cache.delete-everything` permission. The normal purge
+ * requires `site.cache.purge`. An agent rejection is returned as HTTP 200
+ * with `ok: false` and a `detail`.
+ *
+ */
+export const purgeCache = <ThrowOnError extends boolean = false>(
+  options: Options<PurgeCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    PurgeCacheResponses,
+    PurgeCacheErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/cache/purge",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Start the cache preload pass for a site
+ *
+ * Triggers the agent to begin warming the page cache. Returns an
+ * `{ok, detail}` ack; preload progress lands via the `cache.preload.*`
+ * SSE events. Requires the `site.cache.purge` permission.
+ *
+ */
+export const preloadCache = <ThrowOnError extends boolean = false>(
+  options: Options<PreloadCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<PreloadCacheResponses, unknown, ThrowOnError>(
+    { url: "/api/v1/sites/{siteId}/perf/cache/preload", ...options },
+  );
+
+/**
+ * Enable page caching at the server for a site
+ *
+ * Turns on agent-side page caching. Returns an `{ok, detail}` ack;
+ * the authoritative install state re-reads via the config query on the
+ * `cache.enabled` SSE event. Requires the `site.cache.manage` permission.
+ *
+ */
+export const enableCache = <ThrowOnError extends boolean = false>(
+  options: Options<EnableCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<EnableCacheResponses, unknown, ThrowOnError>({
+    url: "/api/v1/sites/{siteId}/perf/cache/enable",
+    ...options,
+  });
+
+/**
+ * Disable page caching at the server for a site
+ *
+ * Turns off agent-side page caching. Returns an `{ok, detail}` ack.
+ * Requires the `site.cache.manage` permission.
+ *
+ */
+export const disableCache = <ThrowOnError extends boolean = false>(
+  options: Options<DisableCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<DisableCacheResponses, unknown, ThrowOnError>(
+    { url: "/api/v1/sites/{siteId}/perf/cache/disable", ...options },
+  );
+
+/**
+ * Run the configured database cleanup now for a site
+ *
+ * Runs the site's configured database cleanup (revisions, auto-drafts,
+ * trashed posts, spam/trashed comments, expired transients, table
+ * optimization) immediately. Returns an `{ok, detail, rows_cleaned}` ack.
+ * Requires the `site.cache.manage` permission.
+ *
+ */
+export const cleanDatabase = <ThrowOnError extends boolean = false>(
+  options: Options<CleanDatabaseData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CleanDatabaseResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/db/clean", ...options });
+
+/**
+ * List cached Used-CSS (RUCSS) results for a site
+ *
+ * Returns a page of the site's cached Remove-Unused-CSS results (one row
+ * per page structure hash, with original/used byte sizes and the
+ * reduction percentage). Requires the `site:read` permission.
+ *
+ */
+export const listRucssResults = <ThrowOnError extends boolean = false>(
+  options: Options<ListRucssResultsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListRucssResultsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/rucss/results", ...options });
+
+/**
+ * Drop all cached Used-CSS results for a site
+ *
+ * Clears every cached RUCSS result for the site. Returns the number
+ * cleared. Requires the `site.perf.config` permission.
+ *
+ */
+export const clearRucss = <ThrowOnError extends boolean = false>(
+  options: Options<ClearRucssData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<ClearRucssResponses, unknown, ThrowOnError>({
+    url: "/api/v1/sites/{siteId}/perf/rucss/clear",
+    ...options,
+  });
+
+/**
+ * Purge the page cache across many sites
+ *
+ * Purges the whole cache for each site in `site_ids`. Each site id is
+ * checked against the caller's collaborator allowlist independently; sites
+ * the caller cannot access (or that fail) are returned with `ok: false`
+ * and a `detail` rather than failing the whole call. Requires the
+ * `site.cache.purge` permission.
+ *
+ */
+export const bulkPurgeCache = <ThrowOnError extends boolean = false>(
+  options: Options<BulkPurgeCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    BulkPurgeCacheResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/cache/bulk-purge",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Apply a performance preset across many sites
+ *
+ * Spreads a preset's toggles (`safe`, `balanced`, or `aggressive`) onto
+ * each site's existing config without clobbering its per-site include or
+ * bypass lists. Each site id is checked against the caller's allowlist
+ * independently. Requires the `site.perf.config` permission.
+ *
+ */
+export const bulkConfigCache = <ThrowOnError extends boolean = false>(
+  options: Options<BulkConfigCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    BulkConfigCacheResponses,
+    BulkConfigCacheErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/cache/bulk-config",
     ...options,
     headers: {
       "Content-Type": "application/json",

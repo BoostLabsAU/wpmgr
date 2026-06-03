@@ -61,6 +61,10 @@ type BeginReEnrollmentRes interface {
 	beginReEnrollmentRes()
 }
 
+type BulkConfigCacheRes interface {
+	bulkConfigCacheRes()
+}
+
 type CreateApiKeyRes interface {
 	createApiKeyRes()
 }
@@ -229,12 +233,20 @@ type PatchSiteErrorConfigRes interface {
 	patchSiteErrorConfigRes()
 }
 
+type PurgeCacheRes interface {
+	purgeCacheRes()
+}
+
 type PutAlertConfigRes interface {
 	putAlertConfigRes()
 }
 
 type PutBackupScheduleRes interface {
 	putBackupScheduleRes()
+}
+
+type PutPerfConfigRes interface {
+	putPerfConfigRes()
 }
 
 type PutSiteLoginBrandRes interface {

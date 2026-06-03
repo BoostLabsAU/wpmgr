@@ -3703,3 +3703,638 @@ export const MediaJobDetailSchema = {
     },
   ],
 } as const;
+
+export const CdnCredentialsSchema = {
+  type: "object",
+  description:
+    "Write-only CDN credentials. Accepted on PUT /perf/config and NEVER\nreturned by GET (the control plane decrypts server-side only).\n",
+  required: ["api_token"],
+  properties: {
+    api_token: {
+      type: "string",
+    },
+    zone_id: {
+      type: "string",
+    },
+    zone: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const PerfConfigSchema = {
+  type: "object",
+  description:
+    "The full per-site performance configuration. `cdn_credentials` is\nwrite-only (see CdnCredentials); `cdn_has_credentials` and the\ninstall-state fields (`server_software`, `dropin_installed`,\n`wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or\nagent-derived.\n",
+  properties: {
+    cache_enabled: {
+      type: "boolean",
+    },
+    cache_logged_in: {
+      type: "boolean",
+    },
+    cache_mobile: {
+      type: "boolean",
+    },
+    cache_refresh: {
+      type: "boolean",
+    },
+    cache_refresh_interval: {
+      type: "string",
+    },
+    cache_link_prefetch: {
+      type: "boolean",
+    },
+    cache_bypass_urls: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_bypass_cookies: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_include_queries: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_include_cookies: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    css_js_minify: {
+      type: "boolean",
+    },
+    css_rucss: {
+      type: "boolean",
+    },
+    css_rucss_include_selectors: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    css_js_self_host_third_party: {
+      type: "boolean",
+    },
+    js_delay: {
+      type: "boolean",
+    },
+    js_delay_method: {
+      type: "string",
+    },
+    js_delay_excludes: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    js_delay_third_party: {
+      type: "boolean",
+    },
+    js_delay_third_party_excludes: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    fonts_display_swap: {
+      type: "boolean",
+    },
+    fonts_optimize_google: {
+      type: "boolean",
+    },
+    fonts_preload: {
+      type: "boolean",
+    },
+    lazy_load: {
+      type: "boolean",
+    },
+    lazy_load_exclusions: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    properly_size_images: {
+      type: "boolean",
+    },
+    youtube_placeholder: {
+      type: "boolean",
+    },
+    self_host_gravatars: {
+      type: "boolean",
+    },
+    cdn_enabled: {
+      type: "boolean",
+    },
+    cdn_url: {
+      type: "string",
+    },
+    cdn_file_types: {
+      type: "string",
+    },
+    cdn_provider: {
+      type: "string",
+    },
+    cdn_has_credentials: {
+      type: "boolean",
+      readOnly: true,
+    },
+    db_auto_clean: {
+      type: "boolean",
+    },
+    db_auto_clean_interval: {
+      type: "string",
+    },
+    db_post_revisions: {
+      type: "boolean",
+    },
+    db_post_auto_drafts: {
+      type: "boolean",
+    },
+    db_post_trashed: {
+      type: "boolean",
+    },
+    db_comments_spam: {
+      type: "boolean",
+    },
+    db_comments_trashed: {
+      type: "boolean",
+    },
+    db_transients_expired: {
+      type: "boolean",
+    },
+    db_optimize_tables: {
+      type: "boolean",
+    },
+    bloat_disable_block_css: {
+      type: "boolean",
+    },
+    bloat_disable_dashicons: {
+      type: "boolean",
+    },
+    bloat_disable_emojis: {
+      type: "boolean",
+    },
+    bloat_disable_jquery_migrate: {
+      type: "boolean",
+    },
+    bloat_disable_xml_rpc: {
+      type: "boolean",
+    },
+    bloat_disable_rss_feed: {
+      type: "boolean",
+    },
+    bloat_disable_oembeds: {
+      type: "boolean",
+    },
+    bloat_heartbeat_control: {
+      type: "boolean",
+    },
+    bloat_post_revisions_control: {
+      type: "boolean",
+    },
+    server_software: {
+      type: "string",
+      readOnly: true,
+    },
+    dropin_installed: {
+      type: "boolean",
+      readOnly: true,
+    },
+    wp_cache_constant_set: {
+      type: "boolean",
+      readOnly: true,
+    },
+    htaccess_managed: {
+      type: "boolean",
+      readOnly: true,
+    },
+    config_version: {
+      type: "integer",
+      readOnly: true,
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+      readOnly: true,
+    },
+  },
+} as const;
+
+export const CacheStatsSchema = {
+  type: "object",
+  description: "The latest cache gauges the agent reported for a site.",
+  properties: {
+    cached_pages_count: {
+      type: "integer",
+    },
+    cache_size_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    last_purged_at: {
+      type: "string",
+      format: "date-time",
+    },
+    last_purge_kind: {
+      type: "string",
+    },
+    last_preload_at: {
+      type: "string",
+      format: "date-time",
+    },
+    preload_pending: {
+      type: "integer",
+    },
+    preload_total: {
+      type: "integer",
+    },
+    reported_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PurgeRequestSchema = {
+  type: "object",
+  description: "A page-cache purge request.",
+  required: ["scope"],
+  properties: {
+    scope: {
+      type: "string",
+      enum: ["all", "url"],
+      description: "Purge the whole cache (`all`) or a single URL (`url`).",
+    },
+    url: {
+      type: "string",
+      description: "The single URL to purge when `scope` is `url`.",
+    },
+    urls: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description: "Additional URLs to purge.",
+    },
+    delete_everything: {
+      type: "boolean",
+      description:
+        "With `scope: all`, also clears every cached artifact. Requires the\n`site.cache.delete-everything` permission.\n",
+    },
+  },
+} as const;
+
+export const PerfActionResultSchema = {
+  type: "object",
+  description:
+    "The `{ok, detail}` acknowledgement returned by the cache action\nendpoints (purge / preload / enable / disable). `ok` is false when the\nagent rejected the action (still HTTP 200).\n",
+  required: ["ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+    },
+    purge_id: {
+      type: "string",
+      format: "uuid",
+    },
+  },
+} as const;
+
+export const DbCleanResultSchema = {
+  type: "object",
+  description: "The acknowledgement returned by the database-cleanup endpoint.",
+  required: ["ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+    },
+    rows_cleaned: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const RucssResultSchema = {
+  type: "object",
+  description: "One cached Used-CSS (RUCSS) result row.",
+  properties: {
+    id: {
+      type: "string",
+    },
+    structure_hash: {
+      type: "string",
+    },
+    url: {
+      type: "string",
+    },
+    original_css_bytes: {
+      type: "integer",
+    },
+    used_css_bytes: {
+      type: "integer",
+    },
+    reduction_pct: {
+      type: "number",
+      format: "double",
+    },
+    used_css_s3_key: {
+      type: "string",
+    },
+    last_used_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const RucssResultListSchema = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/RucssResult",
+      },
+    },
+  },
+} as const;
+
+export const RucssClearResultSchema = {
+  type: "object",
+  required: ["ok", "cleared"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    cleared: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const BulkPurgeRequestSchema = {
+  type: "object",
+  required: ["site_ids"],
+  properties: {
+    site_ids: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "uuid",
+      },
+    },
+  },
+} as const;
+
+export const BulkConfigRequestSchema = {
+  type: "object",
+  required: ["site_ids", "preset"],
+  properties: {
+    site_ids: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "uuid",
+      },
+    },
+    preset: {
+      type: "string",
+      enum: ["safe", "balanced", "aggressive"],
+    },
+  },
+} as const;
+
+export const BulkResultSchema = {
+  type: "object",
+  description: "One per-site result in a portfolio bulk-cache response.",
+  required: ["site_id", "ok", "detail"],
+  properties: {
+    site_id: {
+      type: "string",
+    },
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+    },
+    config_version: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const BulkResultListSchema = {
+  type: "object",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/BulkResult",
+      },
+    },
+  },
+} as const;
+
+export const PerfConfigWritableSchema = {
+  type: "object",
+  description:
+    "The full per-site performance configuration. `cdn_credentials` is\nwrite-only (see CdnCredentials); `cdn_has_credentials` and the\ninstall-state fields (`server_software`, `dropin_installed`,\n`wp_cache_constant_set`, `htaccess_managed`) are read-only / server- or\nagent-derived.\n",
+  properties: {
+    cache_enabled: {
+      type: "boolean",
+    },
+    cache_logged_in: {
+      type: "boolean",
+    },
+    cache_mobile: {
+      type: "boolean",
+    },
+    cache_refresh: {
+      type: "boolean",
+    },
+    cache_refresh_interval: {
+      type: "string",
+    },
+    cache_link_prefetch: {
+      type: "boolean",
+    },
+    cache_bypass_urls: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_bypass_cookies: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_include_queries: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    cache_include_cookies: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    css_js_minify: {
+      type: "boolean",
+    },
+    css_rucss: {
+      type: "boolean",
+    },
+    css_rucss_include_selectors: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    css_js_self_host_third_party: {
+      type: "boolean",
+    },
+    js_delay: {
+      type: "boolean",
+    },
+    js_delay_method: {
+      type: "string",
+    },
+    js_delay_excludes: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    js_delay_third_party: {
+      type: "boolean",
+    },
+    js_delay_third_party_excludes: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    fonts_display_swap: {
+      type: "boolean",
+    },
+    fonts_optimize_google: {
+      type: "boolean",
+    },
+    fonts_preload: {
+      type: "boolean",
+    },
+    lazy_load: {
+      type: "boolean",
+    },
+    lazy_load_exclusions: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+    },
+    properly_size_images: {
+      type: "boolean",
+    },
+    youtube_placeholder: {
+      type: "boolean",
+    },
+    self_host_gravatars: {
+      type: "boolean",
+    },
+    cdn_enabled: {
+      type: "boolean",
+    },
+    cdn_url: {
+      type: "string",
+    },
+    cdn_file_types: {
+      type: "string",
+    },
+    cdn_provider: {
+      type: "string",
+    },
+    cdn_credentials: {
+      allOf: [
+        {
+          $ref: "#/components/schemas/CdnCredentials",
+        },
+      ],
+      writeOnly: true,
+    },
+    db_auto_clean: {
+      type: "boolean",
+    },
+    db_auto_clean_interval: {
+      type: "string",
+    },
+    db_post_revisions: {
+      type: "boolean",
+    },
+    db_post_auto_drafts: {
+      type: "boolean",
+    },
+    db_post_trashed: {
+      type: "boolean",
+    },
+    db_comments_spam: {
+      type: "boolean",
+    },
+    db_comments_trashed: {
+      type: "boolean",
+    },
+    db_transients_expired: {
+      type: "boolean",
+    },
+    db_optimize_tables: {
+      type: "boolean",
+    },
+    bloat_disable_block_css: {
+      type: "boolean",
+    },
+    bloat_disable_dashicons: {
+      type: "boolean",
+    },
+    bloat_disable_emojis: {
+      type: "boolean",
+    },
+    bloat_disable_jquery_migrate: {
+      type: "boolean",
+    },
+    bloat_disable_xml_rpc: {
+      type: "boolean",
+    },
+    bloat_disable_rss_feed: {
+      type: "boolean",
+    },
+    bloat_disable_oembeds: {
+      type: "boolean",
+    },
+    bloat_heartbeat_control: {
+      type: "boolean",
+    },
+    bloat_post_revisions_control: {
+      type: "boolean",
+    },
+  },
+} as const;

@@ -7402,6 +7402,682 @@ func (s *BackupSnapshotStatus) UnmarshalJSON(data []byte) error {
 }
 
 // Encode implements json.Marshaler.
+func (s *BulkConfigRequest) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *BulkConfigRequest) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("site_ids")
+		e.ArrStart()
+		for _, elem := range s.SiteIds {
+			json.EncodeUUID(e, elem)
+		}
+		e.ArrEnd()
+	}
+	{
+		e.FieldStart("preset")
+		s.Preset.Encode(e)
+	}
+}
+
+var jsonFieldsNameOfBulkConfigRequest = [2]string{
+	0: "site_ids",
+	1: "preset",
+}
+
+// Decode decodes BulkConfigRequest from json.
+func (s *BulkConfigRequest) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode BulkConfigRequest to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "site_ids":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				s.SiteIds = make([]uuid.UUID, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem uuid.UUID
+					v, err := json.DecodeUUID(d)
+					elem = v
+					if err != nil {
+						return err
+					}
+					s.SiteIds = append(s.SiteIds, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_ids\"")
+			}
+		case "preset":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				if err := s.Preset.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"preset\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode BulkConfigRequest")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfBulkConfigRequest) {
+					name = jsonFieldsNameOfBulkConfigRequest[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *BulkConfigRequest) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *BulkConfigRequest) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes BulkConfigRequestPreset as json.
+func (s BulkConfigRequestPreset) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes BulkConfigRequestPreset from json.
+func (s *BulkConfigRequestPreset) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode BulkConfigRequestPreset to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch BulkConfigRequestPreset(v) {
+	case BulkConfigRequestPresetSafe:
+		*s = BulkConfigRequestPresetSafe
+	case BulkConfigRequestPresetBalanced:
+		*s = BulkConfigRequestPresetBalanced
+	case BulkConfigRequestPresetAggressive:
+		*s = BulkConfigRequestPresetAggressive
+	default:
+		*s = BulkConfigRequestPreset(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s BulkConfigRequestPreset) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *BulkConfigRequestPreset) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *BulkPurgeRequest) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *BulkPurgeRequest) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("site_ids")
+		e.ArrStart()
+		for _, elem := range s.SiteIds {
+			json.EncodeUUID(e, elem)
+		}
+		e.ArrEnd()
+	}
+}
+
+var jsonFieldsNameOfBulkPurgeRequest = [1]string{
+	0: "site_ids",
+}
+
+// Decode decodes BulkPurgeRequest from json.
+func (s *BulkPurgeRequest) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode BulkPurgeRequest to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "site_ids":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				s.SiteIds = make([]uuid.UUID, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem uuid.UUID
+					v, err := json.DecodeUUID(d)
+					elem = v
+					if err != nil {
+						return err
+					}
+					s.SiteIds = append(s.SiteIds, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_ids\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode BulkPurgeRequest")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000001,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfBulkPurgeRequest) {
+					name = jsonFieldsNameOfBulkPurgeRequest[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *BulkPurgeRequest) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *BulkPurgeRequest) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *BulkResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *BulkResult) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("site_id")
+		e.Str(s.SiteID)
+	}
+	{
+		e.FieldStart("ok")
+		e.Bool(s.Ok)
+	}
+	{
+		e.FieldStart("detail")
+		e.Str(s.Detail)
+	}
+	{
+		if s.ConfigVersion.Set {
+			e.FieldStart("config_version")
+			s.ConfigVersion.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfBulkResult = [4]string{
+	0: "site_id",
+	1: "ok",
+	2: "detail",
+	3: "config_version",
+}
+
+// Decode decodes BulkResult from json.
+func (s *BulkResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode BulkResult to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "site_id":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Str()
+				s.SiteID = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_id\"")
+			}
+		case "ok":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := d.Bool()
+				s.Ok = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ok\"")
+			}
+		case "detail":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Str()
+				s.Detail = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"detail\"")
+			}
+		case "config_version":
+			if err := func() error {
+				s.ConfigVersion.Reset()
+				if err := s.ConfigVersion.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"config_version\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode BulkResult")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000111,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfBulkResult) {
+					name = jsonFieldsNameOfBulkResult[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *BulkResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *BulkResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *BulkResultList) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *BulkResultList) encodeFields(e *jx.Encoder) {
+	{
+		if s.Results != nil {
+			e.FieldStart("results")
+			e.ArrStart()
+			for _, elem := range s.Results {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+}
+
+var jsonFieldsNameOfBulkResultList = [1]string{
+	0: "results",
+}
+
+// Decode decodes BulkResultList from json.
+func (s *BulkResultList) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode BulkResultList to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "results":
+			if err := func() error {
+				s.Results = make([]BulkResult, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem BulkResult
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Results = append(s.Results, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"results\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode BulkResultList")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *BulkResultList) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *BulkResultList) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *CacheStats) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *CacheStats) encodeFields(e *jx.Encoder) {
+	{
+		if s.CachedPagesCount.Set {
+			e.FieldStart("cached_pages_count")
+			s.CachedPagesCount.Encode(e)
+		}
+	}
+	{
+		if s.CacheSizeBytes.Set {
+			e.FieldStart("cache_size_bytes")
+			s.CacheSizeBytes.Encode(e)
+		}
+	}
+	{
+		if s.LastPurgedAt.Set {
+			e.FieldStart("last_purged_at")
+			s.LastPurgedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.LastPurgeKind.Set {
+			e.FieldStart("last_purge_kind")
+			s.LastPurgeKind.Encode(e)
+		}
+	}
+	{
+		if s.LastPreloadAt.Set {
+			e.FieldStart("last_preload_at")
+			s.LastPreloadAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.PreloadPending.Set {
+			e.FieldStart("preload_pending")
+			s.PreloadPending.Encode(e)
+		}
+	}
+	{
+		if s.PreloadTotal.Set {
+			e.FieldStart("preload_total")
+			s.PreloadTotal.Encode(e)
+		}
+	}
+	{
+		if s.ReportedAt.Set {
+			e.FieldStart("reported_at")
+			s.ReportedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+}
+
+var jsonFieldsNameOfCacheStats = [8]string{
+	0: "cached_pages_count",
+	1: "cache_size_bytes",
+	2: "last_purged_at",
+	3: "last_purge_kind",
+	4: "last_preload_at",
+	5: "preload_pending",
+	6: "preload_total",
+	7: "reported_at",
+}
+
+// Decode decodes CacheStats from json.
+func (s *CacheStats) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode CacheStats to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "cached_pages_count":
+			if err := func() error {
+				s.CachedPagesCount.Reset()
+				if err := s.CachedPagesCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cached_pages_count\"")
+			}
+		case "cache_size_bytes":
+			if err := func() error {
+				s.CacheSizeBytes.Reset()
+				if err := s.CacheSizeBytes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_size_bytes\"")
+			}
+		case "last_purged_at":
+			if err := func() error {
+				s.LastPurgedAt.Reset()
+				if err := s.LastPurgedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_purged_at\"")
+			}
+		case "last_purge_kind":
+			if err := func() error {
+				s.LastPurgeKind.Reset()
+				if err := s.LastPurgeKind.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_purge_kind\"")
+			}
+		case "last_preload_at":
+			if err := func() error {
+				s.LastPreloadAt.Reset()
+				if err := s.LastPreloadAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_preload_at\"")
+			}
+		case "preload_pending":
+			if err := func() error {
+				s.PreloadPending.Reset()
+				if err := s.PreloadPending.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"preload_pending\"")
+			}
+		case "preload_total":
+			if err := func() error {
+				s.PreloadTotal.Reset()
+				if err := s.PreloadTotal.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"preload_total\"")
+			}
+		case "reported_at":
+			if err := func() error {
+				s.ReportedAt.Reset()
+				if err := s.ReportedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"reported_at\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode CacheStats")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *CacheStats) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *CacheStats) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
 func (s *CancelMediaOK) Encode(e *jx.Encoder) {
 	e.ObjStart()
 	s.encodeFields(e)
@@ -7477,6 +8153,136 @@ func (s *CancelMediaOK) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *CancelMediaOK) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *CdnCredentials) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *CdnCredentials) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("api_token")
+		e.Str(s.APIToken)
+	}
+	{
+		if s.ZoneID.Set {
+			e.FieldStart("zone_id")
+			s.ZoneID.Encode(e)
+		}
+	}
+	{
+		if s.Zone.Set {
+			e.FieldStart("zone")
+			s.Zone.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfCdnCredentials = [3]string{
+	0: "api_token",
+	1: "zone_id",
+	2: "zone",
+}
+
+// Decode decodes CdnCredentials from json.
+func (s *CdnCredentials) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode CdnCredentials to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "api_token":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Str()
+				s.APIToken = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"api_token\"")
+			}
+		case "zone_id":
+			if err := func() error {
+				s.ZoneID.Reset()
+				if err := s.ZoneID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"zone_id\"")
+			}
+		case "zone":
+			if err := func() error {
+				s.Zone.Reset()
+				if err := s.Zone.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"zone\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode CdnCredentials")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000001,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfCdnCredentials) {
+					name = jsonFieldsNameOfCdnCredentials[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *CdnCredentials) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *CdnCredentials) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -8554,6 +9360,136 @@ func (s *CreateTenantUnprocessableEntity) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *CreateTenantUnprocessableEntity) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *DbCleanResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *DbCleanResult) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("ok")
+		e.Bool(s.Ok)
+	}
+	{
+		if s.Detail.Set {
+			e.FieldStart("detail")
+			s.Detail.Encode(e)
+		}
+	}
+	{
+		if s.RowsCleaned.Set {
+			e.FieldStart("rows_cleaned")
+			s.RowsCleaned.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfDbCleanResult = [3]string{
+	0: "ok",
+	1: "detail",
+	2: "rows_cleaned",
+}
+
+// Decode decodes DbCleanResult from json.
+func (s *DbCleanResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode DbCleanResult to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "ok":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.Ok = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ok\"")
+			}
+		case "detail":
+			if err := func() error {
+				s.Detail.Reset()
+				if err := s.Detail.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"detail\"")
+			}
+		case "rows_cleaned":
+			if err := func() error {
+				s.RowsCleaned.Reset()
+				if err := s.RowsCleaned.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rows_cleaned\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode DbCleanResult")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000001,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfDbCleanResult) {
+					name = jsonFieldsNameOfDbCleanResult[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *DbCleanResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *DbCleanResult) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -13957,6 +14893,39 @@ func (s *OptBool) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes CdnCredentials as json.
+func (o OptCdnCredentials) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes CdnCredentials from json.
+func (o *OptCdnCredentials) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptCdnCredentials to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptCdnCredentials) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptCdnCredentials) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes time.Time as json.
 func (o OptDateTime) Encode(e *jx.Encoder, format func(*jx.Encoder, time.Time)) {
 	if !o.Set {
@@ -14022,6 +14991,41 @@ func (s OptErrorDetails) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptErrorDetails) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes float64 as json.
+func (o OptFloat64) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Float64(float64(o.Value))
+}
+
+// Decode decodes float64 from json.
+func (o *OptFloat64) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptFloat64 to nil")
+	}
+	o.Set = true
+	v, err := d.Float64()
+	if err != nil {
+		return err
+	}
+	o.Value = float64(v)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptFloat64) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptFloat64) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -16766,6 +17770,1453 @@ func (s *PatchSiteErrorConfigNotFound) UnmarshalJSON(data []byte) error {
 }
 
 // Encode implements json.Marshaler.
+func (s *PerfActionResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *PerfActionResult) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("ok")
+		e.Bool(s.Ok)
+	}
+	{
+		if s.Detail.Set {
+			e.FieldStart("detail")
+			s.Detail.Encode(e)
+		}
+	}
+	{
+		if s.PurgeID.Set {
+			e.FieldStart("purge_id")
+			s.PurgeID.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfPerfActionResult = [3]string{
+	0: "ok",
+	1: "detail",
+	2: "purge_id",
+}
+
+// Decode decodes PerfActionResult from json.
+func (s *PerfActionResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode PerfActionResult to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "ok":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.Ok = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ok\"")
+			}
+		case "detail":
+			if err := func() error {
+				s.Detail.Reset()
+				if err := s.Detail.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"detail\"")
+			}
+		case "purge_id":
+			if err := func() error {
+				s.PurgeID.Reset()
+				if err := s.PurgeID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"purge_id\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode PerfActionResult")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000001,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfPerfActionResult) {
+					name = jsonFieldsNameOfPerfActionResult[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *PerfActionResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *PerfActionResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *PerfConfig) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *PerfConfig) encodeFields(e *jx.Encoder) {
+	{
+		if s.CacheEnabled.Set {
+			e.FieldStart("cache_enabled")
+			s.CacheEnabled.Encode(e)
+		}
+	}
+	{
+		if s.CacheLoggedIn.Set {
+			e.FieldStart("cache_logged_in")
+			s.CacheLoggedIn.Encode(e)
+		}
+	}
+	{
+		if s.CacheMobile.Set {
+			e.FieldStart("cache_mobile")
+			s.CacheMobile.Encode(e)
+		}
+	}
+	{
+		if s.CacheRefresh.Set {
+			e.FieldStart("cache_refresh")
+			s.CacheRefresh.Encode(e)
+		}
+	}
+	{
+		if s.CacheRefreshInterval.Set {
+			e.FieldStart("cache_refresh_interval")
+			s.CacheRefreshInterval.Encode(e)
+		}
+	}
+	{
+		if s.CacheLinkPrefetch.Set {
+			e.FieldStart("cache_link_prefetch")
+			s.CacheLinkPrefetch.Encode(e)
+		}
+	}
+	{
+		if s.CacheBypassUrls != nil {
+			e.FieldStart("cache_bypass_urls")
+			e.ArrStart()
+			for _, elem := range s.CacheBypassUrls {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.CacheBypassCookies != nil {
+			e.FieldStart("cache_bypass_cookies")
+			e.ArrStart()
+			for _, elem := range s.CacheBypassCookies {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.CacheIncludeQueries != nil {
+			e.FieldStart("cache_include_queries")
+			e.ArrStart()
+			for _, elem := range s.CacheIncludeQueries {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.CacheIncludeCookies != nil {
+			e.FieldStart("cache_include_cookies")
+			e.ArrStart()
+			for _, elem := range s.CacheIncludeCookies {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.CSSJsMinify.Set {
+			e.FieldStart("css_js_minify")
+			s.CSSJsMinify.Encode(e)
+		}
+	}
+	{
+		if s.CSSRucss.Set {
+			e.FieldStart("css_rucss")
+			s.CSSRucss.Encode(e)
+		}
+	}
+	{
+		if s.CSSRucssIncludeSelectors != nil {
+			e.FieldStart("css_rucss_include_selectors")
+			e.ArrStart()
+			for _, elem := range s.CSSRucssIncludeSelectors {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.CSSJsSelfHostThirdParty.Set {
+			e.FieldStart("css_js_self_host_third_party")
+			s.CSSJsSelfHostThirdParty.Encode(e)
+		}
+	}
+	{
+		if s.JsDelay.Set {
+			e.FieldStart("js_delay")
+			s.JsDelay.Encode(e)
+		}
+	}
+	{
+		if s.JsDelayMethod.Set {
+			e.FieldStart("js_delay_method")
+			s.JsDelayMethod.Encode(e)
+		}
+	}
+	{
+		if s.JsDelayExcludes != nil {
+			e.FieldStart("js_delay_excludes")
+			e.ArrStart()
+			for _, elem := range s.JsDelayExcludes {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.JsDelayThirdParty.Set {
+			e.FieldStart("js_delay_third_party")
+			s.JsDelayThirdParty.Encode(e)
+		}
+	}
+	{
+		if s.JsDelayThirdPartyExcludes != nil {
+			e.FieldStart("js_delay_third_party_excludes")
+			e.ArrStart()
+			for _, elem := range s.JsDelayThirdPartyExcludes {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.FontsDisplaySwap.Set {
+			e.FieldStart("fonts_display_swap")
+			s.FontsDisplaySwap.Encode(e)
+		}
+	}
+	{
+		if s.FontsOptimizeGoogle.Set {
+			e.FieldStart("fonts_optimize_google")
+			s.FontsOptimizeGoogle.Encode(e)
+		}
+	}
+	{
+		if s.FontsPreload.Set {
+			e.FieldStart("fonts_preload")
+			s.FontsPreload.Encode(e)
+		}
+	}
+	{
+		if s.LazyLoad.Set {
+			e.FieldStart("lazy_load")
+			s.LazyLoad.Encode(e)
+		}
+	}
+	{
+		if s.LazyLoadExclusions != nil {
+			e.FieldStart("lazy_load_exclusions")
+			e.ArrStart()
+			for _, elem := range s.LazyLoadExclusions {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.ProperlySizeImages.Set {
+			e.FieldStart("properly_size_images")
+			s.ProperlySizeImages.Encode(e)
+		}
+	}
+	{
+		if s.YoutubePlaceholder.Set {
+			e.FieldStart("youtube_placeholder")
+			s.YoutubePlaceholder.Encode(e)
+		}
+	}
+	{
+		if s.SelfHostGravatars.Set {
+			e.FieldStart("self_host_gravatars")
+			s.SelfHostGravatars.Encode(e)
+		}
+	}
+	{
+		if s.CDNEnabled.Set {
+			e.FieldStart("cdn_enabled")
+			s.CDNEnabled.Encode(e)
+		}
+	}
+	{
+		if s.CDNURL.Set {
+			e.FieldStart("cdn_url")
+			s.CDNURL.Encode(e)
+		}
+	}
+	{
+		if s.CDNFileTypes.Set {
+			e.FieldStart("cdn_file_types")
+			s.CDNFileTypes.Encode(e)
+		}
+	}
+	{
+		if s.CDNProvider.Set {
+			e.FieldStart("cdn_provider")
+			s.CDNProvider.Encode(e)
+		}
+	}
+	{
+		if s.CDNHasCredentials.Set {
+			e.FieldStart("cdn_has_credentials")
+			s.CDNHasCredentials.Encode(e)
+		}
+	}
+	{
+		if s.CDNCredentials.Set {
+			e.FieldStart("cdn_credentials")
+			s.CDNCredentials.Encode(e)
+		}
+	}
+	{
+		if s.DbAutoClean.Set {
+			e.FieldStart("db_auto_clean")
+			s.DbAutoClean.Encode(e)
+		}
+	}
+	{
+		if s.DbAutoCleanInterval.Set {
+			e.FieldStart("db_auto_clean_interval")
+			s.DbAutoCleanInterval.Encode(e)
+		}
+	}
+	{
+		if s.DbPostRevisions.Set {
+			e.FieldStart("db_post_revisions")
+			s.DbPostRevisions.Encode(e)
+		}
+	}
+	{
+		if s.DbPostAutoDrafts.Set {
+			e.FieldStart("db_post_auto_drafts")
+			s.DbPostAutoDrafts.Encode(e)
+		}
+	}
+	{
+		if s.DbPostTrashed.Set {
+			e.FieldStart("db_post_trashed")
+			s.DbPostTrashed.Encode(e)
+		}
+	}
+	{
+		if s.DbCommentsSpam.Set {
+			e.FieldStart("db_comments_spam")
+			s.DbCommentsSpam.Encode(e)
+		}
+	}
+	{
+		if s.DbCommentsTrashed.Set {
+			e.FieldStart("db_comments_trashed")
+			s.DbCommentsTrashed.Encode(e)
+		}
+	}
+	{
+		if s.DbTransientsExpired.Set {
+			e.FieldStart("db_transients_expired")
+			s.DbTransientsExpired.Encode(e)
+		}
+	}
+	{
+		if s.DbOptimizeTables.Set {
+			e.FieldStart("db_optimize_tables")
+			s.DbOptimizeTables.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableBlockCSS.Set {
+			e.FieldStart("bloat_disable_block_css")
+			s.BloatDisableBlockCSS.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableDashicons.Set {
+			e.FieldStart("bloat_disable_dashicons")
+			s.BloatDisableDashicons.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableEmojis.Set {
+			e.FieldStart("bloat_disable_emojis")
+			s.BloatDisableEmojis.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableJqueryMigrate.Set {
+			e.FieldStart("bloat_disable_jquery_migrate")
+			s.BloatDisableJqueryMigrate.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableXMLRPC.Set {
+			e.FieldStart("bloat_disable_xml_rpc")
+			s.BloatDisableXMLRPC.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableRssFeed.Set {
+			e.FieldStart("bloat_disable_rss_feed")
+			s.BloatDisableRssFeed.Encode(e)
+		}
+	}
+	{
+		if s.BloatDisableOembeds.Set {
+			e.FieldStart("bloat_disable_oembeds")
+			s.BloatDisableOembeds.Encode(e)
+		}
+	}
+	{
+		if s.BloatHeartbeatControl.Set {
+			e.FieldStart("bloat_heartbeat_control")
+			s.BloatHeartbeatControl.Encode(e)
+		}
+	}
+	{
+		if s.BloatPostRevisionsControl.Set {
+			e.FieldStart("bloat_post_revisions_control")
+			s.BloatPostRevisionsControl.Encode(e)
+		}
+	}
+	{
+		if s.ServerSoftware.Set {
+			e.FieldStart("server_software")
+			s.ServerSoftware.Encode(e)
+		}
+	}
+	{
+		if s.DropinInstalled.Set {
+			e.FieldStart("dropin_installed")
+			s.DropinInstalled.Encode(e)
+		}
+	}
+	{
+		if s.WpCacheConstantSet.Set {
+			e.FieldStart("wp_cache_constant_set")
+			s.WpCacheConstantSet.Encode(e)
+		}
+	}
+	{
+		if s.HtaccessManaged.Set {
+			e.FieldStart("htaccess_managed")
+			s.HtaccessManaged.Encode(e)
+		}
+	}
+	{
+		if s.ConfigVersion.Set {
+			e.FieldStart("config_version")
+			s.ConfigVersion.Encode(e)
+		}
+	}
+	{
+		if s.UpdatedAt.Set {
+			e.FieldStart("updated_at")
+			s.UpdatedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+}
+
+var jsonFieldsNameOfPerfConfig = [57]string{
+	0:  "cache_enabled",
+	1:  "cache_logged_in",
+	2:  "cache_mobile",
+	3:  "cache_refresh",
+	4:  "cache_refresh_interval",
+	5:  "cache_link_prefetch",
+	6:  "cache_bypass_urls",
+	7:  "cache_bypass_cookies",
+	8:  "cache_include_queries",
+	9:  "cache_include_cookies",
+	10: "css_js_minify",
+	11: "css_rucss",
+	12: "css_rucss_include_selectors",
+	13: "css_js_self_host_third_party",
+	14: "js_delay",
+	15: "js_delay_method",
+	16: "js_delay_excludes",
+	17: "js_delay_third_party",
+	18: "js_delay_third_party_excludes",
+	19: "fonts_display_swap",
+	20: "fonts_optimize_google",
+	21: "fonts_preload",
+	22: "lazy_load",
+	23: "lazy_load_exclusions",
+	24: "properly_size_images",
+	25: "youtube_placeholder",
+	26: "self_host_gravatars",
+	27: "cdn_enabled",
+	28: "cdn_url",
+	29: "cdn_file_types",
+	30: "cdn_provider",
+	31: "cdn_has_credentials",
+	32: "cdn_credentials",
+	33: "db_auto_clean",
+	34: "db_auto_clean_interval",
+	35: "db_post_revisions",
+	36: "db_post_auto_drafts",
+	37: "db_post_trashed",
+	38: "db_comments_spam",
+	39: "db_comments_trashed",
+	40: "db_transients_expired",
+	41: "db_optimize_tables",
+	42: "bloat_disable_block_css",
+	43: "bloat_disable_dashicons",
+	44: "bloat_disable_emojis",
+	45: "bloat_disable_jquery_migrate",
+	46: "bloat_disable_xml_rpc",
+	47: "bloat_disable_rss_feed",
+	48: "bloat_disable_oembeds",
+	49: "bloat_heartbeat_control",
+	50: "bloat_post_revisions_control",
+	51: "server_software",
+	52: "dropin_installed",
+	53: "wp_cache_constant_set",
+	54: "htaccess_managed",
+	55: "config_version",
+	56: "updated_at",
+}
+
+// Decode decodes PerfConfig from json.
+func (s *PerfConfig) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode PerfConfig to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "cache_enabled":
+			if err := func() error {
+				s.CacheEnabled.Reset()
+				if err := s.CacheEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_enabled\"")
+			}
+		case "cache_logged_in":
+			if err := func() error {
+				s.CacheLoggedIn.Reset()
+				if err := s.CacheLoggedIn.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_logged_in\"")
+			}
+		case "cache_mobile":
+			if err := func() error {
+				s.CacheMobile.Reset()
+				if err := s.CacheMobile.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_mobile\"")
+			}
+		case "cache_refresh":
+			if err := func() error {
+				s.CacheRefresh.Reset()
+				if err := s.CacheRefresh.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_refresh\"")
+			}
+		case "cache_refresh_interval":
+			if err := func() error {
+				s.CacheRefreshInterval.Reset()
+				if err := s.CacheRefreshInterval.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_refresh_interval\"")
+			}
+		case "cache_link_prefetch":
+			if err := func() error {
+				s.CacheLinkPrefetch.Reset()
+				if err := s.CacheLinkPrefetch.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_link_prefetch\"")
+			}
+		case "cache_bypass_urls":
+			if err := func() error {
+				s.CacheBypassUrls = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.CacheBypassUrls = append(s.CacheBypassUrls, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_bypass_urls\"")
+			}
+		case "cache_bypass_cookies":
+			if err := func() error {
+				s.CacheBypassCookies = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.CacheBypassCookies = append(s.CacheBypassCookies, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_bypass_cookies\"")
+			}
+		case "cache_include_queries":
+			if err := func() error {
+				s.CacheIncludeQueries = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.CacheIncludeQueries = append(s.CacheIncludeQueries, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_include_queries\"")
+			}
+		case "cache_include_cookies":
+			if err := func() error {
+				s.CacheIncludeCookies = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.CacheIncludeCookies = append(s.CacheIncludeCookies, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cache_include_cookies\"")
+			}
+		case "css_js_minify":
+			if err := func() error {
+				s.CSSJsMinify.Reset()
+				if err := s.CSSJsMinify.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"css_js_minify\"")
+			}
+		case "css_rucss":
+			if err := func() error {
+				s.CSSRucss.Reset()
+				if err := s.CSSRucss.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"css_rucss\"")
+			}
+		case "css_rucss_include_selectors":
+			if err := func() error {
+				s.CSSRucssIncludeSelectors = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.CSSRucssIncludeSelectors = append(s.CSSRucssIncludeSelectors, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"css_rucss_include_selectors\"")
+			}
+		case "css_js_self_host_third_party":
+			if err := func() error {
+				s.CSSJsSelfHostThirdParty.Reset()
+				if err := s.CSSJsSelfHostThirdParty.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"css_js_self_host_third_party\"")
+			}
+		case "js_delay":
+			if err := func() error {
+				s.JsDelay.Reset()
+				if err := s.JsDelay.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"js_delay\"")
+			}
+		case "js_delay_method":
+			if err := func() error {
+				s.JsDelayMethod.Reset()
+				if err := s.JsDelayMethod.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"js_delay_method\"")
+			}
+		case "js_delay_excludes":
+			if err := func() error {
+				s.JsDelayExcludes = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.JsDelayExcludes = append(s.JsDelayExcludes, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"js_delay_excludes\"")
+			}
+		case "js_delay_third_party":
+			if err := func() error {
+				s.JsDelayThirdParty.Reset()
+				if err := s.JsDelayThirdParty.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"js_delay_third_party\"")
+			}
+		case "js_delay_third_party_excludes":
+			if err := func() error {
+				s.JsDelayThirdPartyExcludes = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.JsDelayThirdPartyExcludes = append(s.JsDelayThirdPartyExcludes, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"js_delay_third_party_excludes\"")
+			}
+		case "fonts_display_swap":
+			if err := func() error {
+				s.FontsDisplaySwap.Reset()
+				if err := s.FontsDisplaySwap.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"fonts_display_swap\"")
+			}
+		case "fonts_optimize_google":
+			if err := func() error {
+				s.FontsOptimizeGoogle.Reset()
+				if err := s.FontsOptimizeGoogle.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"fonts_optimize_google\"")
+			}
+		case "fonts_preload":
+			if err := func() error {
+				s.FontsPreload.Reset()
+				if err := s.FontsPreload.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"fonts_preload\"")
+			}
+		case "lazy_load":
+			if err := func() error {
+				s.LazyLoad.Reset()
+				if err := s.LazyLoad.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lazy_load\"")
+			}
+		case "lazy_load_exclusions":
+			if err := func() error {
+				s.LazyLoadExclusions = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.LazyLoadExclusions = append(s.LazyLoadExclusions, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lazy_load_exclusions\"")
+			}
+		case "properly_size_images":
+			if err := func() error {
+				s.ProperlySizeImages.Reset()
+				if err := s.ProperlySizeImages.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"properly_size_images\"")
+			}
+		case "youtube_placeholder":
+			if err := func() error {
+				s.YoutubePlaceholder.Reset()
+				if err := s.YoutubePlaceholder.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"youtube_placeholder\"")
+			}
+		case "self_host_gravatars":
+			if err := func() error {
+				s.SelfHostGravatars.Reset()
+				if err := s.SelfHostGravatars.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"self_host_gravatars\"")
+			}
+		case "cdn_enabled":
+			if err := func() error {
+				s.CDNEnabled.Reset()
+				if err := s.CDNEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_enabled\"")
+			}
+		case "cdn_url":
+			if err := func() error {
+				s.CDNURL.Reset()
+				if err := s.CDNURL.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_url\"")
+			}
+		case "cdn_file_types":
+			if err := func() error {
+				s.CDNFileTypes.Reset()
+				if err := s.CDNFileTypes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_file_types\"")
+			}
+		case "cdn_provider":
+			if err := func() error {
+				s.CDNProvider.Reset()
+				if err := s.CDNProvider.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_provider\"")
+			}
+		case "cdn_has_credentials":
+			if err := func() error {
+				s.CDNHasCredentials.Reset()
+				if err := s.CDNHasCredentials.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_has_credentials\"")
+			}
+		case "cdn_credentials":
+			if err := func() error {
+				s.CDNCredentials.Reset()
+				if err := s.CDNCredentials.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cdn_credentials\"")
+			}
+		case "db_auto_clean":
+			if err := func() error {
+				s.DbAutoClean.Reset()
+				if err := s.DbAutoClean.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_auto_clean\"")
+			}
+		case "db_auto_clean_interval":
+			if err := func() error {
+				s.DbAutoCleanInterval.Reset()
+				if err := s.DbAutoCleanInterval.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_auto_clean_interval\"")
+			}
+		case "db_post_revisions":
+			if err := func() error {
+				s.DbPostRevisions.Reset()
+				if err := s.DbPostRevisions.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_post_revisions\"")
+			}
+		case "db_post_auto_drafts":
+			if err := func() error {
+				s.DbPostAutoDrafts.Reset()
+				if err := s.DbPostAutoDrafts.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_post_auto_drafts\"")
+			}
+		case "db_post_trashed":
+			if err := func() error {
+				s.DbPostTrashed.Reset()
+				if err := s.DbPostTrashed.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_post_trashed\"")
+			}
+		case "db_comments_spam":
+			if err := func() error {
+				s.DbCommentsSpam.Reset()
+				if err := s.DbCommentsSpam.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_comments_spam\"")
+			}
+		case "db_comments_trashed":
+			if err := func() error {
+				s.DbCommentsTrashed.Reset()
+				if err := s.DbCommentsTrashed.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_comments_trashed\"")
+			}
+		case "db_transients_expired":
+			if err := func() error {
+				s.DbTransientsExpired.Reset()
+				if err := s.DbTransientsExpired.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_transients_expired\"")
+			}
+		case "db_optimize_tables":
+			if err := func() error {
+				s.DbOptimizeTables.Reset()
+				if err := s.DbOptimizeTables.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"db_optimize_tables\"")
+			}
+		case "bloat_disable_block_css":
+			if err := func() error {
+				s.BloatDisableBlockCSS.Reset()
+				if err := s.BloatDisableBlockCSS.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_block_css\"")
+			}
+		case "bloat_disable_dashicons":
+			if err := func() error {
+				s.BloatDisableDashicons.Reset()
+				if err := s.BloatDisableDashicons.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_dashicons\"")
+			}
+		case "bloat_disable_emojis":
+			if err := func() error {
+				s.BloatDisableEmojis.Reset()
+				if err := s.BloatDisableEmojis.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_emojis\"")
+			}
+		case "bloat_disable_jquery_migrate":
+			if err := func() error {
+				s.BloatDisableJqueryMigrate.Reset()
+				if err := s.BloatDisableJqueryMigrate.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_jquery_migrate\"")
+			}
+		case "bloat_disable_xml_rpc":
+			if err := func() error {
+				s.BloatDisableXMLRPC.Reset()
+				if err := s.BloatDisableXMLRPC.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_xml_rpc\"")
+			}
+		case "bloat_disable_rss_feed":
+			if err := func() error {
+				s.BloatDisableRssFeed.Reset()
+				if err := s.BloatDisableRssFeed.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_rss_feed\"")
+			}
+		case "bloat_disable_oembeds":
+			if err := func() error {
+				s.BloatDisableOembeds.Reset()
+				if err := s.BloatDisableOembeds.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_disable_oembeds\"")
+			}
+		case "bloat_heartbeat_control":
+			if err := func() error {
+				s.BloatHeartbeatControl.Reset()
+				if err := s.BloatHeartbeatControl.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_heartbeat_control\"")
+			}
+		case "bloat_post_revisions_control":
+			if err := func() error {
+				s.BloatPostRevisionsControl.Reset()
+				if err := s.BloatPostRevisionsControl.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bloat_post_revisions_control\"")
+			}
+		case "server_software":
+			if err := func() error {
+				s.ServerSoftware.Reset()
+				if err := s.ServerSoftware.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"server_software\"")
+			}
+		case "dropin_installed":
+			if err := func() error {
+				s.DropinInstalled.Reset()
+				if err := s.DropinInstalled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"dropin_installed\"")
+			}
+		case "wp_cache_constant_set":
+			if err := func() error {
+				s.WpCacheConstantSet.Reset()
+				if err := s.WpCacheConstantSet.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"wp_cache_constant_set\"")
+			}
+		case "htaccess_managed":
+			if err := func() error {
+				s.HtaccessManaged.Reset()
+				if err := s.HtaccessManaged.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"htaccess_managed\"")
+			}
+		case "config_version":
+			if err := func() error {
+				s.ConfigVersion.Reset()
+				if err := s.ConfigVersion.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"config_version\"")
+			}
+		case "updated_at":
+			if err := func() error {
+				s.UpdatedAt.Reset()
+				if err := s.UpdatedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"updated_at\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode PerfConfig")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *PerfConfig) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *PerfConfig) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *PurgeRequest) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *PurgeRequest) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("scope")
+		s.Scope.Encode(e)
+	}
+	{
+		if s.URL.Set {
+			e.FieldStart("url")
+			s.URL.Encode(e)
+		}
+	}
+	{
+		if s.Urls != nil {
+			e.FieldStart("urls")
+			e.ArrStart()
+			for _, elem := range s.Urls {
+				e.Str(elem)
+			}
+			e.ArrEnd()
+		}
+	}
+	{
+		if s.DeleteEverything.Set {
+			e.FieldStart("delete_everything")
+			s.DeleteEverything.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfPurgeRequest = [4]string{
+	0: "scope",
+	1: "url",
+	2: "urls",
+	3: "delete_everything",
+}
+
+// Decode decodes PurgeRequest from json.
+func (s *PurgeRequest) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode PurgeRequest to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "scope":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				if err := s.Scope.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"scope\"")
+			}
+		case "url":
+			if err := func() error {
+				s.URL.Reset()
+				if err := s.URL.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"url\"")
+			}
+		case "urls":
+			if err := func() error {
+				s.Urls = make([]string, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem string
+					v, err := d.Str()
+					elem = string(v)
+					if err != nil {
+						return err
+					}
+					s.Urls = append(s.Urls, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"urls\"")
+			}
+		case "delete_everything":
+			if err := func() error {
+				s.DeleteEverything.Reset()
+				if err := s.DeleteEverything.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"delete_everything\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode PurgeRequest")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000001,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfPurgeRequest) {
+					name = jsonFieldsNameOfPurgeRequest[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *PurgeRequest) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *PurgeRequest) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes PurgeRequestScope as json.
+func (s PurgeRequestScope) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes PurgeRequestScope from json.
+func (s *PurgeRequestScope) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode PurgeRequestScope to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch PurgeRequestScope(v) {
+	case PurgeRequestScopeAll:
+		*s = PurgeRequestScopeAll
+	case PurgeRequestScopeURL:
+		*s = PurgeRequestScopeURL
+	default:
+		*s = PurgeRequestScope(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s PurgeRequestScope) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *PurgeRequestScope) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
 func (s *Readiness) Encode(e *jx.Encoder) {
 	e.ObjStart()
 	s.encodeFields(e)
@@ -17712,6 +20163,375 @@ func (s Role) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *Role) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RucssClearResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RucssClearResult) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("ok")
+		e.Bool(s.Ok)
+	}
+	{
+		e.FieldStart("cleared")
+		e.Int(s.Cleared)
+	}
+}
+
+var jsonFieldsNameOfRucssClearResult = [2]string{
+	0: "ok",
+	1: "cleared",
+}
+
+// Decode decodes RucssClearResult from json.
+func (s *RucssClearResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RucssClearResult to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "ok":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.Ok = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ok\"")
+			}
+		case "cleared":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := d.Int()
+				s.Cleared = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"cleared\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RucssClearResult")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfRucssClearResult) {
+					name = jsonFieldsNameOfRucssClearResult[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RucssClearResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RucssClearResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RucssResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RucssResult) encodeFields(e *jx.Encoder) {
+	{
+		if s.ID.Set {
+			e.FieldStart("id")
+			s.ID.Encode(e)
+		}
+	}
+	{
+		if s.StructureHash.Set {
+			e.FieldStart("structure_hash")
+			s.StructureHash.Encode(e)
+		}
+	}
+	{
+		if s.URL.Set {
+			e.FieldStart("url")
+			s.URL.Encode(e)
+		}
+	}
+	{
+		if s.OriginalCSSBytes.Set {
+			e.FieldStart("original_css_bytes")
+			s.OriginalCSSBytes.Encode(e)
+		}
+	}
+	{
+		if s.UsedCSSBytes.Set {
+			e.FieldStart("used_css_bytes")
+			s.UsedCSSBytes.Encode(e)
+		}
+	}
+	{
+		if s.ReductionPct.Set {
+			e.FieldStart("reduction_pct")
+			s.ReductionPct.Encode(e)
+		}
+	}
+	{
+		if s.UsedCSSS3Key.Set {
+			e.FieldStart("used_css_s3_key")
+			s.UsedCSSS3Key.Encode(e)
+		}
+	}
+	{
+		if s.LastUsedAt.Set {
+			e.FieldStart("last_used_at")
+			s.LastUsedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+}
+
+var jsonFieldsNameOfRucssResult = [8]string{
+	0: "id",
+	1: "structure_hash",
+	2: "url",
+	3: "original_css_bytes",
+	4: "used_css_bytes",
+	5: "reduction_pct",
+	6: "used_css_s3_key",
+	7: "last_used_at",
+}
+
+// Decode decodes RucssResult from json.
+func (s *RucssResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RucssResult to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "id":
+			if err := func() error {
+				s.ID.Reset()
+				if err := s.ID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"id\"")
+			}
+		case "structure_hash":
+			if err := func() error {
+				s.StructureHash.Reset()
+				if err := s.StructureHash.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"structure_hash\"")
+			}
+		case "url":
+			if err := func() error {
+				s.URL.Reset()
+				if err := s.URL.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"url\"")
+			}
+		case "original_css_bytes":
+			if err := func() error {
+				s.OriginalCSSBytes.Reset()
+				if err := s.OriginalCSSBytes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"original_css_bytes\"")
+			}
+		case "used_css_bytes":
+			if err := func() error {
+				s.UsedCSSBytes.Reset()
+				if err := s.UsedCSSBytes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"used_css_bytes\"")
+			}
+		case "reduction_pct":
+			if err := func() error {
+				s.ReductionPct.Reset()
+				if err := s.ReductionPct.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"reduction_pct\"")
+			}
+		case "used_css_s3_key":
+			if err := func() error {
+				s.UsedCSSS3Key.Reset()
+				if err := s.UsedCSSS3Key.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"used_css_s3_key\"")
+			}
+		case "last_used_at":
+			if err := func() error {
+				s.LastUsedAt.Reset()
+				if err := s.LastUsedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_used_at\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RucssResult")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RucssResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RucssResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RucssResultList) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RucssResultList) encodeFields(e *jx.Encoder) {
+	{
+		if s.Items != nil {
+			e.FieldStart("items")
+			e.ArrStart()
+			for _, elem := range s.Items {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+}
+
+var jsonFieldsNameOfRucssResultList = [1]string{
+	0: "items",
+}
+
+// Decode decodes RucssResultList from json.
+func (s *RucssResultList) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RucssResultList to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "items":
+			if err := func() error {
+				s.Items = make([]RucssResult, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem RucssResult
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Items = append(s.Items, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"items\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RucssResultList")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RucssResultList) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RucssResultList) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
