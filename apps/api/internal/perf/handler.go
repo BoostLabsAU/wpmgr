@@ -49,16 +49,18 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/perf/config", authz.RequirePermission(authz.PermSitePerfConfig), h.getConfig)
 	g.PUT("/perf/config", authz.RequirePermission(authz.PermSitePerfConfig), h.putConfig)
 
-	g.GET("/cache/stats", authz.RequirePermission(authz.PermSiteRead), h.getCacheStats)
-	g.POST("/cache/purge", authz.RequirePermission(authz.PermSiteCachePurge), h.purge)
-	g.POST("/cache/preload", authz.RequirePermission(authz.PermSiteCachePurge), h.preload)
-	g.POST("/cache/enable", authz.RequirePermission(authz.PermSiteCacheManage), h.enable)
-	g.POST("/cache/disable", authz.RequirePermission(authz.PermSiteCacheManage), h.disable)
+	// All per-site perf routes live under the /perf/ namespace (the dashboard
+	// builds every URL as /sites/{id}/perf + suffix).
+	g.GET("/perf/cache/stats", authz.RequirePermission(authz.PermSiteRead), h.getCacheStats)
+	g.POST("/perf/cache/purge", authz.RequirePermission(authz.PermSiteCachePurge), h.purge)
+	g.POST("/perf/cache/preload", authz.RequirePermission(authz.PermSiteCachePurge), h.preload)
+	g.POST("/perf/cache/enable", authz.RequirePermission(authz.PermSiteCacheManage), h.enable)
+	g.POST("/perf/cache/disable", authz.RequirePermission(authz.PermSiteCacheManage), h.disable)
 
-	g.POST("/db/clean", authz.RequirePermission(authz.PermSiteCacheManage), h.dbClean)
+	g.POST("/perf/db/clean", authz.RequirePermission(authz.PermSiteCacheManage), h.dbClean)
 
-	g.GET("/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
-	g.POST("/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
+	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
+	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
 
 	// Portfolio bulk routes. RequireSiteAccess is enforced PER-SITE inside the
 	// handlers (each site_id is checked against the principal's allowlist) since
