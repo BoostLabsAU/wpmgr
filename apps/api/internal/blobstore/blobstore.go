@@ -245,13 +245,32 @@ func (s *Store) Head(ctx context.Context, key string) (exists bool, size int64, 
 
 // Delete removes an object. Deleting a missing key is not an error (S3 idempotent
 // delete semantics).
+//
+// Routes through a presigned DELETE (plain HTTP): aws-sdk-go-v2's live
+// DeleteObject is rejected by GCS's S3-compatible API with SignatureDoesNotMatch,
+// exactly like Get/Put — which is why the RUCSS source-bundle cleanup logged a
+// delete failure after an otherwise-successful compute. A 404/204 are both
+// success (idempotent delete). Presigned SigV4 is accepted on every backend.
 func (s *Store) Delete(ctx context.Context, key string) error {
-	_, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+	url, err := s.presigner.PresignDeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(s.bucket),
 		Key:    aws.String(key),
-	})
+	}, s3.WithPresignExpires(60*time.Second))
+	if err != nil {
+		return fmt.Errorf("blobstore: presign delete %q: %w", key, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, url.URL, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := presignFetchClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("blobstore: delete %q: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	// 204 No Content (deleted), 200 OK, and 404 Not Found are all success.
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNotFound {
+		return fmt.Errorf("blobstore: delete %q: unexpected status %d", key, resp.StatusCode)
 	}
 	return nil
 }
