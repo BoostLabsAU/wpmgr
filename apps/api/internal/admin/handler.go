@@ -33,6 +33,38 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.PATCH("/users/:userId", h.setStatus)
 	g.POST("/users/:userId/resend-verification", h.resendVerification)
 	g.GET("/sites/:siteId/tenancy", h.siteTenancy)
+	g.POST("/sites/:siteId/grant-self-membership", h.grantSelfMembership)
+}
+
+// grantSelfMembership re-attaches the calling superadmin as an OWNER of the org
+// that owns the given site (idempotent). Use to recover from a recovery-induced
+// org split where the superadmin's account landed in a different org than the
+// site. Superadmin-gated; only ever adds the CALLER (never an arbitrary user) to
+// the SITE's own org (never an arbitrary tenant).
+func (h *Handler) grantSelfMembership(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	tenantID, tenantName, added, err := h.svc.GrantSelfOwnerMembership(c.Request.Context(), p.UserID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":          true,
+		"tenant_id":   tenantID,
+		"tenant_name": tenantName,
+		"added":       added,
+		"detail": func() string {
+			if added {
+				return "Added you as owner of " + tenantName + ". Switch to that organization to see the site's data."
+			}
+			return "You are already a member of " + tenantName + "."
+		}(),
+	})
 }
 
 // siteTenancy is a read-only diagnostic: it returns where a site + its perf data

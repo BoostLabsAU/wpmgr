@@ -90,6 +90,10 @@ func (f *fakeStore) SiteTenancy(_ context.Context, _, siteID uuid.UUID) (SiteTen
 	return SiteTenancyReport{SiteID: siteID}, nil
 }
 
+func (f *fakeStore) GrantSelfOwnerMembership(_ context.Context, _, _ uuid.UUID) (uuid.UUID, string, bool, error) {
+	return uuid.New(), "Test Org", true, nil
+}
+
 func newService(f *fakeStore) *Service {
 	return &Service{repo: f}
 }

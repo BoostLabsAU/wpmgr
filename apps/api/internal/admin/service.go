@@ -27,12 +27,19 @@ type userStore interface {
 	SoleTenants(ctx context.Context, userID uuid.UUID) ([]OrphanTenant, error)
 	DeleteEmptyTenant(ctx context.Context, tenantID uuid.UUID) (bool, error)
 	SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error)
+	GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid.UUID) (uuid.UUID, string, bool, error)
 }
 
 // SiteTenancy returns a read-only diagnostic comparing where a site + its perf
 // data live vs the requesting superadmin's org memberships.
 func (s *Service) SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error) {
 	return s.repo.SiteTenancy(ctx, userID, siteID)
+}
+
+// GrantSelfOwnerMembership re-attaches the calling superadmin as an owner of the
+// org that owns siteID (idempotent). Returns the tenant + whether a row was added.
+func (s *Service) GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid.UUID) (uuid.UUID, string, bool, error) {
+	return s.repo.GrantSelfOwnerMembership(ctx, userID, siteID)
 }
 
 // Service implements the superadmin business logic.

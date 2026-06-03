@@ -284,6 +284,48 @@ func (r *Repo) SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteT
 	return rep, nil
 }
 
+// GrantSelfOwnerMembership adds userID as an 'owner' member of the tenant that
+// owns siteID, idempotently. Returns the tenant id/name and whether a row was
+// actually inserted. Used to re-attach a superadmin to a site's org after a
+// recovery left their account in a different org. The site-tenant lookup runs
+// cross-tenant under InAgentTx; the INSERT runs under InTenantTx(siteTenant) so
+// the memberships tenant_isolation WITH CHECK (tenant_id = app.tenant_id) passes.
+func (r *Repo) GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid.UUID) (uuid.UUID, string, bool, error) {
+	var tenantID uuid.UUID
+	var tenantName string
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT s.tenant_id, t.name FROM sites s JOIN tenants t ON t.id = s.tenant_id WHERE s.id = $1`,
+			siteID,
+		).Scan(&tenantID, &tenantName)
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return uuid.Nil, "", false, domain.NotFound("site_not_found", "site not found")
+		}
+		return uuid.Nil, "", false, domain.Internal("admin_resolve_site_tenant_failed", "failed to resolve site tenant").WithCause(err)
+	}
+
+	var added bool
+	err = r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		ct, ierr := tx.Exec(ctx,
+			`INSERT INTO memberships (user_id, tenant_id, role)
+			 SELECT $1, $2, 'owner'
+			 WHERE NOT EXISTS (SELECT 1 FROM memberships WHERE user_id = $1 AND tenant_id = $2)`,
+			userID, tenantID,
+		)
+		if ierr != nil {
+			return ierr
+		}
+		added = ct.RowsAffected() > 0
+		return nil
+	})
+	if err != nil {
+		return uuid.Nil, "", false, domain.Internal("admin_grant_membership_failed", "failed to add membership").WithCause(err)
+	}
+	return tenantID, tenantName, added, nil
+}
+
 // collectRefs runs a (tenant_id, name, role) query and returns the refs.
 func collectRefs(ctx context.Context, tx pgx.Tx, sql string, arg uuid.UUID) ([]TenancyRef, error) {
 	rows, err := tx.Query(ctx, sql, arg)
