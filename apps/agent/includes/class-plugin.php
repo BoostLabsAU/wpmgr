@@ -38,6 +38,14 @@ use WPMgr\Agent\Commands\SyncMediaConfigCommand;
 use WPMgr\Agent\Commands\SyncSecurityConfigCommand;
 use WPMgr\Agent\Commands\UnblockIpCommand;
 use WPMgr\Agent\Commands\UpdateCommand;
+use WPMgr\Agent\Commands\CacheEnableCommand;
+use WPMgr\Agent\Commands\CacheDisableCommand;
+use WPMgr\Agent\Commands\CachePurgeCommand;
+use WPMgr\Agent\Commands\CachePreloadCommand;
+use WPMgr\Agent\Commands\PerfConfigUpdateCommand;
+use WPMgr\Agent\Commands\DbCleanCommand;
+use WPMgr\Agent\Cache\CacheManager;
+use WPMgr\Agent\Optimizer\Bloat;
 use WPMgr\Agent\Diagnostics\SizeProbe;
 use WPMgr\Agent\Media\DiskWriter;
 use WPMgr\Agent\Media\HtaccessInstaller;
@@ -153,6 +161,15 @@ final class Plugin
     private AutoOptimizeUpload $autoOptimizeUpload;
 
     /**
+     * Phase 3 — page-cache orchestrator. Owns the cache config, the request-path
+     * hooks (output-buffer writer, auto-purge, role cookie, refresh cron), and
+     * the high-level enable/disable/purge/preload/applyConfig operations the
+     * cache command handlers call. Constructed BEFORE commands() so the handlers
+     * can hold a reference; its registerHooks() is wired in registerHooks().
+     */
+    private CacheManager $cacheManager;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -214,6 +231,13 @@ final class Plugin
             $this->settings,
             fn (string $path, array $payload): array => $this->shipPayload($path, $payload)
         );
+
+        // Phase 3 — page-cache orchestrator. Must exist BEFORE commands() so the
+        // six cache command handlers (cache_enable/disable/purge/preload,
+        // perf_config_update) can hold a reference. Default-constructed (it
+        // builds its own WP_CACHE editor / drop-in installer / .htaccess manager
+        // / nginx helper); inert until a cache_enable command flips it on.
+        $this->cacheManager     = new CacheManager();
 
         $this->router           = new Router($this->connector, $this->commands());
         $this->admin            = new Admin($this->settings, $this->enrollment, $this->keystore, $this->lifecycle, $this->updateChecker);
@@ -356,6 +380,22 @@ final class Plugin
         add_action(AutoOptimizeUpload::HOOK_DRAIN, [$this, 'drainAutoOptimize']);
 
         $this->scheduler->registerHooks();
+
+        // Phase 3 — page-cache request hooks. registerHooks() reads the cache
+        // config once: it always arms the login role-cookie + the preload cron +
+        // the refresh-cron schedule, and ONLY opens the output-buffer writer +
+        // auto-purge hooks when caching is actually enabled (an inert site pays
+        // just a single option read). Self-skips on preload warming requests.
+        $this->cacheManager->registerHooks();
+
+        // Phase 4 — bloat-removal hooks. Unlike the rest of the optimizer (which
+        // runs inside the cache writer's ob_start on a MISS), de-bloat must
+        // UN-register core actions/filters at the right phase so the unwanted
+        // markup is never emitted. We bind on `init`; Bloat::register() reads the
+        // perf config once and no-ops entirely when no toggle is enabled, so an
+        // inert site pays just a single option read. A real method (not a
+        // closure) keeps the hook table serialization-safe.
+        add_action('init', [$this, 'registerBloatHooks'], 0);
 
         // ADR-037 Sprint 2 — diagnostics cron handler. Scheduler::scheduleEvents
         // sets up the cron event; the handler runs the on-demand DiagnosticsCommand
@@ -623,6 +663,21 @@ final class Plugin
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(ReplayCache::HOOK_PRUNE);
         }
+
+        // Phase 3 — page-cache teardown. Cleanly reverse every server-side
+        // artefact (.htaccess block, advanced-cache.php drop-in, the WP_CACHE
+        // define) and purge the disk cache, so a deactivated plugin never leaves
+        // an orphaned drop-in trying to serve from an empty cache. disable() is
+        // idempotent and best-effort; a failure here must not block deactivation.
+        try {
+            $this->cacheManager->disable();
+        } catch (\Throwable $e) {
+            // Swallow — deactivation must always complete.
+        }
+        if (function_exists('wp_clear_scheduled_hook')) {
+            wp_clear_scheduled_hook(\WPMgr\Agent\Cache\Preload::HOOK);
+            wp_clear_scheduled_hook(\WPMgr\Agent\Cache\CacheRefreshCron::HOOK);
+        }
     }
 
     /**
@@ -818,6 +873,20 @@ final class Plugin
             new MediaRestoreCommand($mediaUploader),
             new MediaDeleteOriginalsCommand($mediaUploader),
             new MediaStatsCommand(),
+            // Phase 3 — page-caching engine. The six CP->agent commands all share
+            // the single CacheManager orchestrator:
+            //   cache_enable        -> WP_CACHE define + drop-in + .htaccess block
+            //   cache_disable       -> reverse all three cleanly + purge
+            //   cache_purge         -> all | per-URL
+            //   cache_preload       -> queue background warm (desktop+mobile UA)
+            //   perf_config_update  -> re-render drop-in config + .htaccess mobile flag
+            //   db_clean            -> Phase 4 stub (signed surface wired now)
+            new CacheEnableCommand($this->cacheManager),
+            new CacheDisableCommand($this->cacheManager),
+            new CachePurgeCommand($this->cacheManager),
+            new CachePreloadCommand($this->cacheManager),
+            new PerfConfigUpdateCommand($this->cacheManager),
+            new DbCleanCommand(),
         ];
     }
 
@@ -1213,6 +1282,21 @@ final class Plugin
     public function drainAutoOptimize(): void
     {
         $this->autoOptimizeUpload->drain();
+    }
+
+    /**
+     * Phase 4 — bind the enabled de-bloat hooks. Bound to `init` (priority 0) so
+     * the per-toggle remove_action/add_filter calls land before core enqueues
+     * the targeted scripts/styles. Bloat::register() self-no-ops when no toggle
+     * is enabled (single perf-config read), so an inert site is unaffected. A
+     * real public method (not a closure) keeps the hook table serialization-safe
+     * on hosts that persist it via object cache.
+     *
+     * @return void
+     */
+    public function registerBloatHooks(): void
+    {
+        (new Bloat())->register();
     }
 
     /**

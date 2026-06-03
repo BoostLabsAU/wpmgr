@@ -99,6 +99,25 @@ const (
 	EventMediaDeleteOriginalsCompleted = "media.delete_originals.completed"
 	EventMediaJobFailed                = "media.job.failed"
 	EventMediaAssetDeleted             = "media.asset.deleted"
+
+	// Performance Suite (ADR-046) event types, published on the shared tenant
+	// SSE bus and filtered by site_id. The frontend must add these strings to
+	// SITE_EVENT_TYPES in use-site-events.ts to receive them.
+	EventRucssCompleted = "rucss.completed"
+	EventRucssFailed    = "rucss.failed"
+
+	// Cache / perf-config lifecycle events (Phase 6). Emitted by the perf service
+	// at the corresponding orchestration points.
+	EventCacheEnabled          = "cache.enabled"
+	EventCacheDisabled         = "cache.disabled"
+	EventCachePurgeStarted     = "cache.purge.started"
+	EventCachePurgeCompleted   = "cache.purge.completed"
+	EventCachePreloadStarted   = "cache.preload.started"
+	EventCachePreloadProgress  = "cache.preload.progress"
+	EventCachePreloadCompleted = "cache.preload.completed"
+	EventCacheStatsUpdated     = "cache.stats.updated"
+	EventPerfConfigUpdated     = "perf.config.updated"
+	EventDbCleanCompleted      = "db.clean.completed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

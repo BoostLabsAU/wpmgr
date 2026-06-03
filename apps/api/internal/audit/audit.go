@@ -99,6 +99,19 @@ const (
 	// auto-optimize settings (ADR-044). Metadata: site_id,
 	// auto_optimize_enabled, auto_target_format, auto_target_quality.
 	ActionMediaSettingsUpdated = "media.settings.updated"
+
+	// Performance Suite (ADR-046). Cache enable/disable/purge and perf-config
+	// saves are operator actions (ActorUser); the IRREVERSIBLE delete-everything
+	// is recorded with ActorUser + the actor id so the hash chain attributes the
+	// destructive consent (mirrors ActionMediaDeleteOriginalsConfirmed). Metadata
+	// carries site_id plus the relevant fields (e.g. kind, urls_count, changed
+	// config keys, db cleanup counts).
+	ActionCacheEnabled          = "site.cache.enabled"
+	ActionCacheDisabled         = "site.cache.disabled"
+	ActionCachePurged           = "site.cache.purged"
+	ActionCacheDeleteEverything = "site.cache.delete_everything"
+	ActionPerfConfigUpdated     = "site.perf.config.updated"
+	ActionDbCleaned             = "site.db.cleaned"
 )
 
 // Entry is one audit record.

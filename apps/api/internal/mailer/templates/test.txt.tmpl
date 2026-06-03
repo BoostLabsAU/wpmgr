@@ -1,0 +1,18 @@
+{{.ProductName}} — SMTP test successful
+========================================
+
+This is a test message from {{.ProductName}}. If you're reading it, your
+outbound email is configured correctly and delivery is working end to end.
+
+Delivered to: {{.RecipientEmail}}
+
+No action is needed. {{.ProductName}} can now send password resets,
+security notices, invitations, and alerts to your team.
+
+If you didn't trigger this test, you can safely ignore this email.
+
+--
+{{.ProductName}} — fleet control for WordPress
+{{if .FooterNote}}{{.FooterNote}}
+{{end}}Need help? Contact {{.SupportEmail}}.
+(c) {{.Year}} {{.ProductName}}.

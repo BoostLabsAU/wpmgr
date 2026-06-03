@@ -2,12 +2,15 @@ package auth
 
 import (
 	"context"
+	"net/netip"
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/audit"
 	"github.com/mosamlife/wpmgr/apps/api/internal/authz"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
@@ -18,6 +21,10 @@ type Service struct {
 	repo      *Repo
 	audit     *audit.Recorder
 	validator *domain.Validator
+	// Wired post-River via SetMailer (ADR-045 Phase 2). nil-safe.
+	email   EmailEnqueuer
+	baseURL string
+	limiter RateLimiter
 }
 
 // NewService builds an auth Service.
@@ -68,6 +75,15 @@ func (s *Service) Login(ctx context.Context, email, password string) (LoginResul
 	if !match {
 		s.recordLogin(ctx, memberships, u.ID, audit.ActionLoginFailure)
 		return LoginResult{}, domain.Unauthorized("invalid_credentials", "invalid email or password")
+	}
+
+	// Account-status gate (ADR-045 Phase 3). Only reached after the password is
+	// verified correct, so it does not leak account existence to an attacker.
+	switch u.Status {
+	case "pending":
+		return LoginResult{}, domain.Forbidden("email_not_verified", "please verify your email address before signing in")
+	case "disabled":
+		return LoginResult{}, domain.Forbidden("account_disabled", "this account is disabled")
 	}
 
 	_ = s.repo.TouchLogin(ctx, u.ID)
@@ -405,17 +421,28 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, currentP
 	if !match {
 		return domain.Unauthorized("invalid_current_password", "current password is incorrect")
 	}
-	if len(newPwd) < 8 {
-		return domain.Validation("new_password_too_short", "new password must be at least 8 characters")
+	if len(newPwd) < minPasswordLen {
+		return domain.Validation("new_password_too_short", "new password must be at least 12 characters")
 	}
-	if len(newPwd) > 200 {
+	if len(newPwd) > maxPasswordLen {
 		return domain.Validation("new_password_too_long", "new password must be 200 characters or fewer")
 	}
 	hash, err := HashPassword(newPwd)
 	if err != nil {
 		return domain.Internal("password_hash_failed", "failed to hash new password").WithCause(err)
 	}
-	return s.repo.UpdatePasswordHash(ctx, userID, hash)
+	// UpdatePasswordHash stamps password_changed_at, which invalidates this
+	// user's OTHER sessions on their next request (ADR-045 Phase 2). The current
+	// session keeps working (its auth_at is refreshed below).
+	if err := s.repo.UpdatePasswordHash(ctx, userID, hash); err != nil {
+		return err
+	}
+	// Best-effort: burn any outstanding reset tokens + notify the account owner.
+	_ = s.repo.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).InvalidateUserPasswordResetTokens(ctx, userID)
+	})
+	s.sendPasswordChanged(ctx, userID, netip.Addr{})
+	return nil
 }
 
 // ActorInfo holds the resolved identity fields for a triggered_by actor.

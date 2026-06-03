@@ -247,6 +247,42 @@ func (s *Store) List(ctx context.Context, prefix string) ([]string, error) {
 	return keys, nil
 }
 
+// ObjectInfo is a listed object's key plus its server-recorded last-modified
+// time. Used by age-based reapers (e.g. the RUCSS source-bundle backstop
+// sweeper) that need to delete objects older than a TTL.
+type ObjectInfo struct {
+	Key          string
+	LastModified time.Time
+}
+
+// ListWithModified returns objects under a prefix with their LastModified times
+// (paginated internally). An object whose server time is unknown reports the
+// zero time. Used by the RUCSS source-bundle backstop sweeper.
+func (s *Store) ListWithModified(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	var out []ObjectInfo
+	p := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(s.bucket),
+		Prefix: aws.String(prefix),
+	})
+	for p.HasMorePages() {
+		page, err := p.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("blobstore: list %q: %w", prefix, err)
+		}
+		for _, o := range page.Contents {
+			if o.Key == nil {
+				continue
+			}
+			info := ObjectInfo{Key: *o.Key}
+			if o.LastModified != nil {
+				info.LastModified = *o.LastModified
+			}
+			out = append(out, info)
+		}
+	}
+	return out, nil
+}
+
 // PresignPut mints a time-bounded presigned PUT URL for key so a client (the
 // agent) can upload ciphertext bytes directly to storage. The returned URL is a
 // bearer credential — never log it.

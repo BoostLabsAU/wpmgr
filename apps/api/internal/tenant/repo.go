@@ -2,6 +2,8 @@ package tenant
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 
 	"github.com/google/uuid"
@@ -45,15 +47,32 @@ func NewRepo(pool *db.Pool) Repo {
 }
 
 func (r *pgRepo) Create(ctx context.Context, in CreateInput) (Tenant, error) {
-	row, err := r.q.CreateTenant(ctx, sqlc.CreateTenantParams{Name: in.Name, Slug: in.Slug})
-	if err != nil {
+	// Tenant slugs are globally unique. Auto-uniquify on collision (the slug is
+	// an internal identifier) so duplicate/concurrent creates never hard-fail —
+	// defense-in-depth beyond callers that pre-derive a unique slug. The first
+	// attempt uses the requested slug verbatim; retries append a random suffix.
+	base := in.Slug
+	if len(base) > 50 {
+		base = base[:50]
+	}
+	for attempt := 0; attempt < 5; attempt++ {
+		slug := in.Slug
+		if attempt > 0 {
+			suf := make([]byte, 3)
+			_, _ = rand.Read(suf)
+			slug = base + "-" + hex.EncodeToString(suf)
+		}
+		row, err := r.q.CreateTenant(ctx, sqlc.CreateTenantParams{Name: in.Name, Slug: slug})
+		if err == nil {
+			return toModel(row), nil
+		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23505" {
-			return Tenant{}, domain.Conflict("tenant_slug_exists", "a tenant with this slug already exists").WithCause(err)
+			continue // slug taken — retry with a fresh random suffix
 		}
 		return Tenant{}, domain.Internal("tenant_create_failed", "failed to create tenant").WithCause(err)
 	}
-	return toModel(row), nil
+	return Tenant{}, domain.Conflict("tenant_slug_exists", "could not allocate a unique tenant slug")
 }
 
 func (r *pgRepo) GetForUser(ctx context.Context, id, userID uuid.UUID) (Tenant, error) {

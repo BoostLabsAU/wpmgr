@@ -261,6 +261,14 @@ CREATE POLICY memberships_tenant_isolation ON memberships
 CREATE POLICY memberships_self_read ON memberships
     FOR SELECT
     USING (user_id = nullif(current_setting('app.user_id', true), '')::uuid);
+-- m34: read-only cross-tenant SELECT for the app.agent scope (set by InAgentTx),
+-- mirroring sites_agent. Lets backend-only paths — notably the superadmin
+-- orphaned-org cleanup on user delete — see membership counts across tenants to
+-- decide which now-memberless orgs are safe to remove. SELECT-only: no
+-- cross-tenant writes.
+CREATE POLICY memberships_agent ON memberships
+    FOR SELECT
+    USING (current_setting('app.agent', true) = 'on');
 
 ALTER TABLE api_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE api_keys FORCE ROW LEVEL SECURITY;
@@ -283,6 +291,70 @@ ALTER TABLE audit_log FORCE ROW LEVEL SECURITY;
 CREATE POLICY audit_log_tenant_isolation ON audit_log
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+-- admin_delete_empty_tenant (m35): SECURITY DEFINER helper for the superadmin
+-- orphaned-org cleanup. Verified prod failure (Cloud SQL log): a direct
+-- "DELETE FROM tenants" by wpmgr_app cascades to the RI delete
+-- 'DELETE FROM ONLY public.audit_log WHERE $1 = tenant_id' and fails with
+-- "permission denied for table audit_log" (42501), because audit_log is
+-- insert-only for wpmgr_app (m1 revokes UPDATE/DELETE/TRUNCATE — it is
+-- tamper-evident) and that cascade is privilege-checked against the caller.
+--
+-- This function runs as its OWNER (the migration role, which retains DELETE on
+-- audit_log) and removes the tenant's audit rows EXPLICITLY first, so the tenant
+-- delete's ON DELETE CASCADE never has to touch audit_log — making the delete
+-- correct regardless of whether the FK cascade is privilege-checked against the
+-- caller or the owner, and WITHOUT granting wpmgr_app any standing delete on
+-- audit_log. app.agent='on' (set in-body, NOT via a function SET clause — that
+-- would require superuser ownership or GRANT SET ON PARAMETER and abort the
+-- migration under the prod non-superuser owner) lets the emptiness checks see
+-- rows across tenants under FORCE RLS (memberships_agent + sites_agent);
+-- app.tenant_id is scoped locally around the audit_log delete so
+-- the audit_log_tenant_isolation USING clause matches the target rows when the
+-- owner is itself subject to FORCE RLS. search_path is pinned. EXECUTE is granted
+-- only to wpmgr_app (in the migration). Note: deleting an orphaned org also
+-- discards any pending invitations to it (invitations cascades from tenants) —
+-- acceptable, since the org's only member was just deleted. Guards: removes a
+-- tenant ONLY when it has zero memberships and zero sites. Returns whether a
+-- tenant row was deleted.
+CREATE OR REPLACE FUNCTION admin_delete_empty_tenant(p_tenant_id uuid)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+    v_count integer;
+BEGIN
+    -- app.agent='on' makes the emptiness checks see rows across tenants under
+    -- FORCE RLS. Set in-body (set_config needs no special privilege; InAgentTx
+    -- uses it too), NOT as a function SET clause — a SET clause on the custom
+    -- app.agent placeholder GUC requires superuser ownership / GRANT SET ON
+    -- PARAMETER, which the prod non-superuser owner lacks and which would abort
+    -- this CREATE FUNCTION and roll back the migration.
+    PERFORM set_config('app.agent', 'on', true);
+    IF EXISTS (SELECT 1 FROM memberships m WHERE m.tenant_id = p_tenant_id)
+       OR EXISTS (SELECT 1 FROM sites s WHERE s.tenant_id = p_tenant_id) THEN
+        RETURN false;
+    END IF;
+    -- Explicitly remove the tenant's append-only audit rows as the function owner
+    -- (which keeps DELETE on audit_log). app.tenant_id is scoped to this tenant so
+    -- the FORCE-RLS USING clause matches; reset immediately after. Doing this
+    -- before the tenant delete keeps audit_log out of the cascade entirely.
+    PERFORM set_config('app.tenant_id', p_tenant_id::text, true);
+    DELETE FROM audit_log WHERE tenant_id = p_tenant_id;
+    PERFORM set_config('app.tenant_id', '', true);
+    -- Now delete the tenant; remaining cascades hit only tables the owner may
+    -- delete and no longer include any audit_log rows.
+    DELETE FROM tenants t WHERE t.id = p_tenant_id;
+    GET DIAGNOSTICS v_count = ROW_COUNT;
+    RETURN v_count > 0;
+END;
+$$;
+-- Mirror the migration's grants so this reference stays faithful (the runtime DB
+-- is built from migrations, not this file): the function is NOT PUBLIC-callable.
+REVOKE ALL ON FUNCTION admin_delete_empty_tenant(uuid) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION admin_delete_empty_tenant(uuid) TO wpmgr_app;
 
 -- ---------------------------------------------------------------------------
 -- pairing_codes  (M2 — agent enrollment)
@@ -1009,5 +1081,356 @@ CREATE POLICY site_events_tenant_isolation ON site_events
     WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 -- M21 follow-up: the cross-tenant ring-buffer prune runs under app.agent='on'.
 CREATE POLICY site_events_agent ON site_events
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- smtp_settings  (m30 / ADR-045 — UI-configured instance SMTP)
+-- ---------------------------------------------------------------------------
+-- A SINGLE instance-level SMTP relay, configured by an owner in the UI instead
+-- of env vars. Exactly one row exists: the `singleton` column is constant true
+-- and UNIQUE, so an INSERT of a second row violates the constraint and an upsert
+-- always targets the same row. The relay password is age(X25519)-encrypted at
+-- rest in `password_enc` (the same secret-at-rest pattern as site destinations,
+-- internal/cryptbox); the API never echoes it back. Instance-global, so NOT
+-- tenant-scoped: the only RLS escape is app.agent='on', set by the settings
+-- handler (which is already gated at the HTTP layer by PermSMTPManage) and by
+-- the mailer's resolver at send time, both via Pool.InAgentTx.
+CREATE TABLE smtp_settings (
+    id                 uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    singleton          boolean     NOT NULL DEFAULT true,
+    enabled            boolean     NOT NULL DEFAULT false,
+    host               text        NOT NULL DEFAULT '',
+    port               integer     NOT NULL DEFAULT 587,
+    username           text        NOT NULL DEFAULT '',
+    password_enc       bytea,
+    from_address       text        NOT NULL DEFAULT '',
+    from_name          text        NOT NULL DEFAULT '',
+    tls_mode           text        NOT NULL DEFAULT 'starttls'
+        CHECK (tls_mode IN ('starttls', 'tls', 'none')),
+    allow_insecure_tls boolean     NOT NULL DEFAULT false,
+    updated_by         uuid        REFERENCES users (id) ON DELETE SET NULL,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX smtp_settings_singleton_key ON smtp_settings (singleton);
+
+ALTER TABLE smtp_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE smtp_settings FORCE ROW LEVEL SECURITY;
+-- Instance-global infra row: readable/writable only under app.agent='on' (set by
+-- Pool.InAgentTx). HTTP-layer PermSMTPManage gating is the real access control.
+CREATE POLICY smtp_settings_agent ON smtp_settings
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- email_log  (m30 / ADR-045 — transactional email audit + retry ledger)
+-- ---------------------------------------------------------------------------
+-- One row per outbound transactional email. tenant_id is NULL for instance/auth
+-- mail (password reset, activation) that is sent before any tenant scope exists.
+-- NEVER store the rendered body or any token here — only the subject + template
+-- name. The send_email River worker flips status pending -> sent|failed.
+CREATE TABLE email_log (
+    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     uuid        REFERENCES tenants (id) ON DELETE CASCADE,
+    to_addresses  text[]      NOT NULL,
+    subject       text        NOT NULL,
+    template      text        NOT NULL,
+    status        text        NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'sent', 'failed')),
+    error         text,
+    attempts      integer     NOT NULL DEFAULT 0,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    sent_at       timestamptz
+);
+
+CREATE INDEX email_log_tenant_created_idx ON email_log (tenant_id, created_at DESC);
+CREATE INDEX email_log_status_failed_idx ON email_log (status) WHERE status = 'failed';
+
+ALTER TABLE email_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_log FORCE ROW LEVEL SECURITY;
+-- Tenant-scoped rows (tenant_id set) are isolated to their tenant for a future
+-- per-tenant email-log UI.
+CREATE POLICY email_log_tenant_isolation ON email_log
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+-- The send_email worker (and auth mail with tenant_id NULL) read/write under
+-- app.agent='on' regardless of tenant.
+CREATE POLICY email_log_agent ON email_log
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- password_changed_at  (m31 / ADR-045 Phase 2 — session invalidation)
+-- ---------------------------------------------------------------------------
+-- Set whenever a user's password changes (reset or change). The Authenticator
+-- rejects any session whose login timestamp predates this, the only portable
+-- way to invalidate a user's OTHER sessions given the SCS/Redis store cannot
+-- enumerate per-user sessions. NULL = never changed (no invalidation).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS password_changed_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- password_reset_tokens  (m31 / ADR-045 Phase 2)
+-- ---------------------------------------------------------------------------
+-- One row per issued reset link. token_hash is sha256(raw token) (the raw token
+-- lives only in the emailed URL). Single-use + short TTL + atomically consumed.
+-- Keyed on user_id (not tenant); the unauthenticated forgot/reset flow reads and
+-- writes under app.agent='on' (Pool.InAgentTx), pre-tenant.
+CREATE TABLE password_reset_tokens (
+    id           uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id      uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token_hash   bytea       NOT NULL,
+    expires_at   timestamptz NOT NULL,
+    used_at      timestamptz,
+    attempts     integer     NOT NULL DEFAULT 0,
+    requested_ip inet,
+    created_at   timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX password_reset_tokens_token_hash_key ON password_reset_tokens (token_hash);
+CREATE INDEX password_reset_tokens_user_active_idx ON password_reset_tokens (user_id) WHERE used_at IS NULL;
+
+ALTER TABLE password_reset_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE password_reset_tokens FORCE ROW LEVEL SECURITY;
+CREATE POLICY password_reset_tokens_agent ON password_reset_tokens
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- users: status + email_verified_at  (m32 / ADR-045 Phase 3 — open signup)
+-- ---------------------------------------------------------------------------
+-- status 'pending' = self-registered but not yet email-verified (cannot log in);
+-- 'active' = usable; 'disabled' = soft-locked. email_verified_at is set when an
+-- invited/self-serve user activates, or at trusted bootstrap/OIDC sign-in.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS status text NOT NULL DEFAULT 'active'
+    CHECK (status IN ('active', 'pending', 'disabled'));
+ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified_at timestamptz;
+
+-- ---------------------------------------------------------------------------
+-- email_verification_tokens  (m32 / ADR-045 Phase 3)
+-- ---------------------------------------------------------------------------
+-- Same hashed/TTL/single-use model as password_reset_tokens but purpose=verify.
+-- Consumed under app.agent='on' (pre-tenant, unauthenticated activation).
+CREATE TABLE email_verification_tokens (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token_hash  bytea       NOT NULL,
+    expires_at  timestamptz NOT NULL,
+    used_at     timestamptz,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX email_verification_tokens_token_hash_key ON email_verification_tokens (token_hash);
+CREATE INDEX email_verification_tokens_user_active_idx ON email_verification_tokens (user_id) WHERE used_at IS NULL;
+
+ALTER TABLE email_verification_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_verification_tokens FORCE ROW LEVEL SECURITY;
+CREATE POLICY email_verification_tokens_agent ON email_verification_tokens
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- m33 — superadmin flag. Written only by the boot seeder; never by any API.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS is_superadmin boolean NOT NULL DEFAULT false;
+
+-- ---------------------------------------------------------------------------
+-- Performance Suite  (m36 / ADR-046)
+-- ---------------------------------------------------------------------------
+-- Agent-side page cache + asset optimization config, cache stats/purge audit,
+-- and pure-Go RUCSS (Used CSS) results/jobs. Every table is tenant-scoped with
+-- a tenant_isolation policy (operator/API path) + an app.agent policy
+-- (cross-tenant worker/agent path). No _site_scope RESTRICTIVE policy:
+-- collaborator gating is done in-app via authz.RequireSiteAccess(:siteId) on
+-- the routes (m23 precedent). updated_at is set by repo code (no trigger).
+
+-- site_perf_config — one row per site (PK = site_id). The full performance
+-- configuration the agent reads on the request fast-path; the CP is the source
+-- of truth, the agent mirrors it via a sync_perf_config command.
+CREATE TABLE site_perf_config (
+    site_id                       uuid        PRIMARY KEY REFERENCES sites (id) ON DELETE CASCADE,
+    tenant_id                     uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    -- Caching
+    cache_enabled                 boolean     NOT NULL DEFAULT false,
+    cache_logged_in               boolean     NOT NULL DEFAULT false,
+    cache_mobile                  boolean     NOT NULL DEFAULT false,
+    cache_refresh                 boolean     NOT NULL DEFAULT false,
+    cache_refresh_interval        text        NOT NULL DEFAULT '2hours',
+    cache_link_prefetch           boolean     NOT NULL DEFAULT true,
+    cache_bypass_urls             text[]      NOT NULL DEFAULT '{}',
+    cache_bypass_cookies          text[]      NOT NULL DEFAULT '{}',
+    cache_include_queries         text[]      NOT NULL DEFAULT '{}',
+    cache_include_cookies         text[]      NOT NULL DEFAULT '{}',
+    -- CSS / JS
+    css_js_minify                 boolean     NOT NULL DEFAULT true,
+    css_rucss                     boolean     NOT NULL DEFAULT false,
+    css_rucss_include_selectors   text[]      NOT NULL DEFAULT '{}',
+    css_js_self_host_third_party  boolean     NOT NULL DEFAULT false,
+    js_delay                      boolean     NOT NULL DEFAULT false,
+    js_delay_method               text        NOT NULL DEFAULT 'defer',
+    js_delay_excludes             text[]      NOT NULL DEFAULT '{}',
+    js_delay_third_party          boolean     NOT NULL DEFAULT false,
+    js_delay_third_party_excludes text[]      NOT NULL DEFAULT '{}',
+    -- Fonts
+    fonts_display_swap            boolean     NOT NULL DEFAULT true,
+    fonts_optimize_google         boolean     NOT NULL DEFAULT false,
+    fonts_preload                 boolean     NOT NULL DEFAULT false,
+    -- Media / lazy-load
+    lazy_load                     boolean     NOT NULL DEFAULT true,
+    lazy_load_exclusions          text[]      NOT NULL DEFAULT '{}',
+    properly_size_images          boolean     NOT NULL DEFAULT true,
+    youtube_placeholder           boolean     NOT NULL DEFAULT false,
+    self_host_gravatars           boolean     NOT NULL DEFAULT false,
+    -- CDN
+    cdn_enabled                   boolean     NOT NULL DEFAULT false,
+    cdn_url                       text,
+    cdn_file_types                text        NOT NULL DEFAULT 'all',
+    cdn_provider                  text,
+    cdn_credentials_encrypted     bytea,
+    -- Database cleanup
+    db_auto_clean                 boolean     NOT NULL DEFAULT false,
+    db_auto_clean_interval        text        NOT NULL DEFAULT 'weekly',
+    db_post_revisions             boolean     NOT NULL DEFAULT false,
+    db_post_auto_drafts           boolean     NOT NULL DEFAULT false,
+    db_post_trashed               boolean     NOT NULL DEFAULT false,
+    db_comments_spam              boolean     NOT NULL DEFAULT false,
+    db_comments_trashed           boolean     NOT NULL DEFAULT false,
+    db_transients_expired         boolean     NOT NULL DEFAULT false,
+    db_optimize_tables            boolean     NOT NULL DEFAULT false,
+    -- Bloat removal
+    bloat_disable_block_css       boolean     NOT NULL DEFAULT false,
+    bloat_disable_dashicons       boolean     NOT NULL DEFAULT false,
+    bloat_disable_emojis          boolean     NOT NULL DEFAULT false,
+    bloat_disable_jquery_migrate  boolean     NOT NULL DEFAULT false,
+    bloat_disable_xml_rpc         boolean     NOT NULL DEFAULT false,
+    bloat_disable_rss_feed        boolean     NOT NULL DEFAULT false,
+    bloat_disable_oembeds         boolean     NOT NULL DEFAULT false,
+    bloat_heartbeat_control       boolean     NOT NULL DEFAULT false,
+    bloat_post_revisions_control  boolean     NOT NULL DEFAULT false,
+    -- Server / install state (agent-reported)
+    server_software               text,
+    dropin_installed              boolean     NOT NULL DEFAULT false,
+    wp_cache_constant_set         boolean     NOT NULL DEFAULT false,
+    htaccess_managed              boolean     NOT NULL DEFAULT false,
+    config_version                integer     NOT NULL DEFAULT 1,
+    created_at                    timestamptz NOT NULL DEFAULT now(),
+    updated_at                    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX site_perf_config_tenant_idx ON site_perf_config (tenant_id);
+
+ALTER TABLE site_perf_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_perf_config FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_perf_config_tenant_isolation ON site_perf_config
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY site_perf_config_agent ON site_perf_config
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_cache_stats — latest cache gauges the agent reports (overwritten in place).
+CREATE TABLE site_cache_stats (
+    site_id            uuid        PRIMARY KEY REFERENCES sites (id) ON DELETE CASCADE,
+    tenant_id          uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    cached_pages_count integer     NOT NULL DEFAULT 0,
+    cache_size_bytes   bigint      NOT NULL DEFAULT 0,
+    last_purged_at     timestamptz,
+    last_purge_kind    text,
+    last_preload_at    timestamptz,
+    preload_pending    integer     NOT NULL DEFAULT 0,
+    preload_total      integer     NOT NULL DEFAULT 0,
+    reported_at        timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX site_cache_stats_tenant_idx ON site_cache_stats (tenant_id);
+
+ALTER TABLE site_cache_stats ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_cache_stats FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_cache_stats_tenant_isolation ON site_cache_stats
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY site_cache_stats_agent ON site_cache_stats
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- cache_purge_audit — append-style log of every purge (operator or system).
+CREATE TABLE cache_purge_audit (
+    id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id           uuid        NOT NULL REFERENCES sites (id) ON DELETE CASCADE,
+    kind              text        NOT NULL,
+    initiator_user_id uuid        REFERENCES users (id) ON DELETE SET NULL,
+    target_urls       text[]      NOT NULL DEFAULT '{}',
+    urls_count        integer     NOT NULL DEFAULT 0,
+    created_at        timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_cache_purge_site ON cache_purge_audit (site_id, created_at DESC);
+CREATE INDEX cache_purge_audit_tenant_idx ON cache_purge_audit (tenant_id);
+
+ALTER TABLE cache_purge_audit ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cache_purge_audit FORCE ROW LEVEL SECURITY;
+CREATE POLICY cache_purge_audit_tenant_isolation ON cache_purge_audit
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY cache_purge_audit_agent ON cache_purge_audit
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- rucss_results — per (site, structure_hash) Used-CSS result; the CSS itself
+-- lives in object storage (used_css_s3_key). UNIQUE(site_id, structure_hash).
+CREATE TABLE rucss_results (
+    id                 uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id          uuid          NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id            uuid          NOT NULL REFERENCES sites (id) ON DELETE CASCADE,
+    structure_hash     text          NOT NULL,
+    url                text,
+    original_css_bytes integer,
+    used_css_bytes     integer,
+    reduction_pct      numeric(5,2),
+    used_css_s3_key    text          NOT NULL,
+    selectors_total    integer,
+    selectors_kept     integer,
+    selectors_dropped  integer,
+    compute_ms         integer,
+    created_at         timestamptz   NOT NULL DEFAULT now(),
+    last_used_at       timestamptz   NOT NULL DEFAULT now(),
+    CONSTRAINT rucss_results_site_hash_uniq UNIQUE (site_id, structure_hash)
+);
+
+CREATE INDEX idx_rucss_results_site ON rucss_results (site_id, last_used_at DESC);
+CREATE INDEX rucss_results_tenant_idx ON rucss_results (tenant_id);
+
+ALTER TABLE rucss_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rucss_results FORCE ROW LEVEL SECURITY;
+CREATE POLICY rucss_results_tenant_isolation ON rucss_results
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY rucss_results_agent ON rucss_results
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- rucss_jobs — one RUCSS compute job (id is a ULID, text). Tracks the lifecycle.
+CREATE TABLE rucss_jobs (
+    id             text        PRIMARY KEY,
+    tenant_id      uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id        uuid        NOT NULL REFERENCES sites (id) ON DELETE CASCADE,
+    structure_hash text,
+    url            text,
+    state          text        NOT NULL DEFAULT 'queued',
+    error_reason   text,
+    result_id      uuid        REFERENCES rucss_results (id) ON DELETE SET NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    completed_at   timestamptz
+);
+
+CREATE INDEX idx_rucss_jobs_site_state ON rucss_jobs (site_id, state);
+CREATE INDEX rucss_jobs_tenant_idx ON rucss_jobs (tenant_id);
+
+ALTER TABLE rucss_jobs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rucss_jobs FORCE ROW LEVEL SECURITY;
+CREATE POLICY rucss_jobs_tenant_isolation ON rucss_jobs
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY rucss_jobs_agent ON rucss_jobs
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');

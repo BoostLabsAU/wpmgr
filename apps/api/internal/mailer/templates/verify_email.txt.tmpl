@@ -1,0 +1,20 @@
+Verify your email address for {{.ProductName}}
+===============================================
+
+Hi {{.Name}},
+
+Confirm your email address to activate your {{.ProductName}} account
+using this link:
+
+{{.VerifyURL}}
+
+This link expires in {{.ExpiresHours}} hours.
+
+If you didn't create a {{.ProductName}} account, you can safely ignore
+this email.
+
+--
+{{.ProductName}} — fleet control for WordPress
+{{if .FooterNote}}{{.FooterNote}}
+{{end}}Need help? Contact {{.SupportEmail}}.
+(c) {{.Year}} {{.ProductName}}.

@@ -16,6 +16,10 @@ import (
 const (
 	sessKeyUserID         = "user_id"
 	sessKeyActiveTenantID = "active_tenant_id"
+	// sessKeyAuthAt holds the RFC3339 timestamp the session authenticated. The
+	// Authenticator rejects sessions whose auth_at predates the user's
+	// password_changed_at (ADR-045 Phase 2 session invalidation).
+	sessKeyAuthAt = "auth_at"
 	// sessKeyOAuthState/Nonce/Verifier hold the transient OIDC handshake values.
 	sessKeyOAuthState    = "oauth_state"
 	sessKeyOAuthNonce    = "oauth_nonce"
@@ -183,12 +187,35 @@ func (m *SessionManager) Login(ctx context.Context, userID, activeTenant uuid.UU
 	}
 	m.scs.Put(ctx, sessKeyUserID, userID.String())
 	m.scs.Put(ctx, sessKeyActiveTenantID, activeTenant.String())
+	m.scs.Put(ctx, sessKeyAuthAt, time.Now().UTC().Format(time.RFC3339))
 	return nil
 }
 
 // SetActiveTenant updates the active tenant on the current session.
 func (m *SessionManager) SetActiveTenant(ctx context.Context, tenantID uuid.UUID) {
 	m.scs.Put(ctx, sessKeyActiveTenantID, tenantID.String())
+}
+
+// AuthAt returns the session's authentication timestamp (zero time when absent,
+// e.g. sessions created before this field existed). The Authenticator compares
+// it against the user's password_changed_at to reject stale sessions.
+func (m *SessionManager) AuthAt(ctx context.Context) time.Time {
+	s := m.scs.GetString(ctx, sessKeyAuthAt)
+	if s == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// RefreshAuthAt re-stamps the current session's auth time to now. Called after a
+// successful change-password so the acting user's own session survives the
+// password_changed_at invalidation that logs out their other sessions.
+func (m *SessionManager) RefreshAuthAt(ctx context.Context) {
+	m.scs.Put(ctx, sessKeyAuthAt, time.Now().UTC().Format(time.RFC3339))
 }
 
 // Destroy logs the user out by discarding the session.

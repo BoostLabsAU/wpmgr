@@ -21,18 +21,48 @@ type Mailer interface {
 	Send(ctx context.Context, recipients []string, subject, body string) error
 }
 
+// ShareEnqueuer enqueues a branded transactional email (ADR-045 mailer).
+// Satisfied by *mailer.Enqueuer; declared here so sharing does not import
+// mailer. When set, it supersedes the legacy plaintext Mailer.
+type ShareEnqueuer interface {
+	Enqueue(ctx context.Context, tenantID uuid.UUID, recipients []string, template string, data map[string]any) error
+}
+
 // Service implements site-share CRUD and share-invitation flow.
 type Service struct {
 	pool     *db.Pool
 	authRepo *auth.Repo
 	audit    *audit.Recorder
-	mailer   Mailer // may be nil (SMTP unconfigured)
-	baseURL  string // PUBLIC_BASE_URL for accept links
+	mailer   Mailer        // legacy plaintext fallback; may be nil
+	enqueuer ShareEnqueuer // ADR-045 branded mailer; preferred when set
+	baseURL  string        // PUBLIC_BASE_URL for accept links
 }
 
 // NewService builds a sharing Service.
 func NewService(pool *db.Pool, authRepo *auth.Repo, rec *audit.Recorder, mailer Mailer, baseURL string) *Service {
 	return &Service{pool: pool, authRepo: authRepo, audit: rec, mailer: mailer, baseURL: baseURL}
+}
+
+// SetShareEnqueuer wires the ADR-045 branded mailer (post-River). When set, site
+// shares notify the grantee by email: a "site_invite" link for a new user, or a
+// "site_shared" notification for an existing one (who gets access immediately).
+func (s *Service) SetShareEnqueuer(e ShareEnqueuer) { s.enqueuer = e }
+
+// siteName best-effort resolves a site's display name for share emails.
+func (s *Service) siteName(ctx context.Context, tenantID, siteID uuid.UUID) string {
+	var name string
+	_ = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT name FROM sites WHERE id = $1 AND tenant_id = $2", siteID, tenantID).Scan(&name)
+	})
+	return name
+}
+
+// inviterName best-effort resolves the granting user's display name.
+func (s *Service) inviterName(ctx context.Context, actorID uuid.UUID) string {
+	if u, err := s.authRepo.GetUserByID(ctx, actorID); err == nil && u.Name != "" {
+		return u.Name
+	}
+	return "A teammate"
 }
 
 // ListForSite returns all shares for a site (tenant-scoped), each enriched with
@@ -139,6 +169,18 @@ func (s *Service) Grant(ctx context.Context, tenantID, siteID uuid.UUID, in Gran
 		Metadata:   map[string]any{"grantee_id": u.ID.String(), "role": in.Role},
 	})
 
+	// The grantee already has an account and immediate access, so notify them by
+	// email that a site was shared with them (with a link to view it). Best-effort.
+	if s.enqueuer != nil {
+		_ = s.enqueuer.Enqueue(ctx, uuid.Nil, []string{u.Email}, "site_shared", map[string]any{
+			"Name":         u.Name,
+			"InviterName":  s.inviterName(ctx, in.ActorID),
+			"SiteName":     s.siteName(ctx, tenantID, siteID),
+			"Role":         in.Role,
+			"DashboardURL": s.baseURL + "/shared-with-me",
+		})
+	}
+
 	return GrantResult{Share: &share}, nil
 }
 
@@ -212,20 +254,25 @@ func (s *Service) createSiteInvitation(ctx context.Context, tenantID, siteID uui
 		Metadata:   map[string]any{"email": in.Email, "role": in.Role, "invitation_id": inv.ID.String()},
 	})
 
-	// Send email best-effort.
-	var returnLink string
-	if s.mailer != nil {
+	// Send the branded site-invite email when the ADR-045 mailer is wired,
+	// else fall back to the legacy plaintext mailer. ALWAYS return the accept
+	// link so the admin can copy/hand-deliver it (the invitee sets their own
+	// password at /accept).
+	if s.enqueuer != nil {
+		_ = s.enqueuer.Enqueue(ctx, uuid.Nil, []string{in.Email}, "site_invite", map[string]any{
+			"Name":         "there",
+			"InviterName":  s.inviterName(ctx, in.ActorID),
+			"SiteName":     s.siteName(ctx, tenantID, siteID),
+			"Role":         in.Role,
+			"AcceptURL":    acceptLink,
+			"ExpiresHours": "168",
+		})
+	} else if s.mailer != nil {
 		body := "You have been invited to collaborate on a site.\n\nAccept your invitation here:\n" + acceptLink + "\n\nThis link expires in 7 days and is single-use."
-		if err := s.mailer.Send(ctx, []string{in.Email}, "You have been invited to a site", body); err != nil {
-			// Email failed but SMTP is configured: return link as fallback.
-			returnLink = acceptLink
-		}
-	} else {
-		// SMTP not configured: return link directly.
-		returnLink = acceptLink
+		_ = s.mailer.Send(ctx, []string{in.Email}, "You have been invited to a site", body)
 	}
 
-	return GrantResult{Invited: true, AcceptLink: returnLink}, nil
+	return GrantResult{Invited: true, AcceptLink: acceptLink}, nil
 }
 
 // Revoke removes a site share (immediate).

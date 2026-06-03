@@ -13,6 +13,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	mediasvc "github.com/mosamlife/wpmgr/apps/api/internal/media/service"
+	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
@@ -306,6 +307,26 @@ func (a *mediaSiteAdapter) GetMediaSiteInfo(ctx context.Context, tenantID, siteI
 }
 
 var _ mediasvc.SiteLookup = (*mediaSiteAdapter)(nil)
+
+// perfSiteAdapter resolves a site's agent URL for the Performance Suite service
+// (ADR-046). Keeps the perf package free of a site import.
+type perfSiteAdapter struct {
+	svc *site.Service
+}
+
+func newPerfSiteAdapter(svc *site.Service) *perfSiteAdapter {
+	return &perfSiteAdapter{svc: svc}
+}
+
+func (a *perfSiteAdapter) GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, error) {
+	s, err := a.svc.Get(ctx, tenantID, siteID)
+	if err != nil {
+		return "", err
+	}
+	return s.URL, nil
+}
+
+var _ perf.SiteLookup = (*perfSiteAdapter)(nil)
 
 // activitySecurityAlerter is the seam between the activity log and the EXISTING
 // uptime alert Dispatcher (ADR-037 Sprint 3): a high-severity activity event

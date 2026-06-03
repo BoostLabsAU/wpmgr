@@ -444,6 +444,7 @@ export type User = {
   created_at: string;
   updated_at: string;
   last_login_at?: string;
+  is_superadmin?: boolean;
 };
 
 export type Membership = {

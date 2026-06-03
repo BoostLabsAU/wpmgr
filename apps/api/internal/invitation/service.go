@@ -30,6 +30,14 @@ type Mailer interface {
 	Send(ctx context.Context, recipients []string, subject, body string) error
 }
 
+// InviteEnqueuer enqueues a branded transactional email (the "invite" template)
+// via the ADR-045 mailer. Satisfied by *mailer.Enqueuer; declared here so the
+// invitation package does not import mailer. When set, it supersedes the legacy
+// plaintext Mailer for org invitations.
+type InviteEnqueuer interface {
+	Enqueue(ctx context.Context, tenantID uuid.UUID, recipients []string, template string, data map[string]any) error
+}
+
 // SessionStarter establishes a session for a newly accepted invitation.
 type SessionStarter interface {
 	Login(ctx context.Context, userID, tenantID uuid.UUID) error
@@ -41,13 +49,27 @@ type Service struct {
 	authRepo *auth.Repo
 	audit    *audit.Recorder
 	sessions SessionStarter
-	mailer   Mailer // may be nil
+	mailer   Mailer         // legacy plaintext fallback; may be nil
+	enqueuer InviteEnqueuer // ADR-045 branded mailer; preferred when set
 	baseURL  string
 }
 
 // NewService builds an invitation Service.
 func NewService(pool *db.Pool, authRepo *auth.Repo, rec *audit.Recorder, sessions SessionStarter, mailer Mailer, baseURL string) *Service {
 	return &Service{pool: pool, authRepo: authRepo, audit: rec, sessions: sessions, mailer: mailer, baseURL: baseURL}
+}
+
+// SetInviteEnqueuer wires the ADR-045 branded mailer (post-River). When set, org
+// invitations send the "invite" template instead of the legacy plaintext email.
+func (s *Service) SetInviteEnqueuer(e InviteEnqueuer) { s.enqueuer = e }
+
+// tenantName best-effort resolves an org's display name for the invite email.
+func (s *Service) tenantName(ctx context.Context, tenantID uuid.UUID) string {
+	var name string
+	_ = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT name FROM tenants WHERE id = $1", tenantID).Scan(&name)
+	})
+	return name
 }
 
 // CreateOrgInvitation creates a scope=org invitation token and sends an accept
@@ -102,15 +124,28 @@ func (s *Service) CreateOrgInvitation(ctx context.Context, tenantID, actorID uui
 	})
 
 	link := s.baseURL + "/accept?token=" + rawToken
-	if s.mailer != nil {
-		body := "You have been invited to join an organisation.\n\nAccept your invitation here:\n" + link + "\n\nThis link expires in 7 days and is single-use."
-		if err := s.mailer.Send(ctx, []string{email}, "You have been invited to an organisation", body); err != nil {
-			// SMTP configured but failed: return link as fallback.
-			return link, nil
+
+	// Send the branded invite email when the ADR-045 mailer is wired; otherwise
+	// fall back to the legacy plaintext mailer. Either way we ALWAYS return the
+	// accept link so an admin can hand-deliver it (e.g. before SMTP is
+	// configured, or to copy it directly) — ADR-045 addendum G7.
+	if s.enqueuer != nil {
+		inviterName := "A teammate"
+		if u, uerr := s.authRepo.GetUserByID(ctx, actorID); uerr == nil && strings.TrimSpace(u.Name) != "" {
+			inviterName = u.Name
 		}
-		return "", nil // email sent; do not leak link in the response
+		_ = s.enqueuer.Enqueue(ctx, uuid.Nil, []string{email}, "invite", map[string]any{
+			"Name":         "there",
+			"InviterName":  inviterName,
+			"OrgName":      s.tenantName(ctx, tenantID),
+			"Role":         role,
+			"AcceptURL":    link,
+			"ExpiresHours": "168",
+		})
+	} else if s.mailer != nil {
+		body := "You have been invited to join an organisation.\n\nAccept your invitation here:\n" + link + "\n\nThis link expires in 7 days and is single-use."
+		_ = s.mailer.Send(ctx, []string{email}, "You have been invited to an organisation", body)
 	}
-	// SMTP unconfigured: return link directly (self-host mode).
 	return link, nil
 }
 

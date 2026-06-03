@@ -36,8 +36,10 @@ export interface MemberList {
 }
 
 export interface InviteMemberResult {
-  /** Present when the invitee is a new user — the one-time accept link. */
-  accept_link?: string;
+  email: string;
+  role: MemberRole;
+  /** The tokenized accept link. Always returned so the admin can copy/hand-deliver it. */
+  accept_link: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +133,7 @@ export function useRemoveMember(): UseMutationResult<
 export function useInviteMember(): UseMutationResult<
   InviteMemberResult,
   Error,
-  { email: string; name?: string; password?: string; role: MemberRole }
+  { email: string; role: MemberRole }
 > {
   const queryClient = useQueryClient();
   return useMutation({
@@ -142,7 +144,7 @@ export function useInviteMember(): UseMutationResult<
         headers: { "Content-Type": "application/json" },
       });
       if (result.error !== undefined) throw toError(result.error);
-      return result.data ?? {};
+      return result.data as InviteMemberResult;
     },
     onSuccess: (_data) => {
       void queryClient.invalidateQueries({ queryKey: memberKeys.list() });

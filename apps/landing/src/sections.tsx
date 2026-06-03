@@ -24,6 +24,8 @@ import {
   MEDIA_STEPS,
   NAV,
   OPEN_SOURCE,
+  PERFORMANCE,
+  PERFORMANCE_STEPS,
   SECURITY,
   SITE,
   STATS,
@@ -291,6 +293,54 @@ export function MediaHow() {
         </Reveal>
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {MEDIA_STEPS.steps.map((s, i) => (
+            <Reveal key={s.n} delay={(i % 4) * 0.05}>
+              <StepCard n={s.n} icon={s.icon} title={s.title} desc={s.desc} />
+            </Reveal>
+          ))}
+        </div>
+      </Container>
+    </Section>
+  );
+}
+
+export function PerformanceSpotlight() {
+  return (
+    <Section id="performance" tone="muted">
+      <Container className="grid items-center gap-12 lg:grid-cols-2">
+        <Reveal className="flex flex-col gap-6">
+          <Eyebrow>{PERFORMANCE.eyebrow}</Eyebrow>
+          <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">{PERFORMANCE.heading}</h2>
+          <p className="text-lg leading-relaxed text-muted-foreground">{PERFORMANCE.subhead}</p>
+          <div className="grid gap-3 text-sm leading-relaxed text-muted-foreground">
+            {PERFORMANCE.bodyLines.map((b) => (
+              <p key={b}>{b}</p>
+            ))}
+          </div>
+          <div>
+            <CTAButton cta={{ ...PERFORMANCE.cta, variant: "secondary" }} />
+          </div>
+        </Reveal>
+        <Reveal delay={0.1}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {PERFORMANCE.chips.map((c) => (
+              <ProofChip key={c.value} icon={c.icon} value={c.value} label={c.label} />
+            ))}
+          </div>
+        </Reveal>
+      </Container>
+    </Section>
+  );
+}
+
+export function PerformanceHow() {
+  return (
+    <Section id="performance-how">
+      <Container className="flex flex-col gap-10">
+        <Reveal>
+          <SectionHeading align="left" eyebrow={PERFORMANCE_STEPS.eyebrow} title={PERFORMANCE_STEPS.heading} lead={PERFORMANCE_STEPS.subhead} />
+        </Reveal>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {PERFORMANCE_STEPS.steps.map((s, i) => (
             <Reveal key={s.n} delay={(i % 4) * 0.05}>
               <StepCard n={s.n} icon={s.icon} title={s.title} desc={s.desc} />
             </Reveal>

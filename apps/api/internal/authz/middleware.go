@@ -141,6 +141,7 @@ var orgLevelPerms = map[Permission]struct{}{
 	PermAPIKeyManage: {},
 	PermAuditRead:    {},
 	PermTenantManage: {},
+	PermSMTPManage:   {},
 }
 
 // RequirePermission aborts unless the principal's role holds the permission.

@@ -70,7 +70,8 @@ final class PluginActivationTest extends TestCase
         // activation deterministic regardless of suite ordering.
         foreach (['add_action', 'add_filter', 'register_activation_hook',
                   'register_deactivation_hook', 'wp_schedule_single_event',
-                  'spawn_cron'] as $fn) {
+                  'spawn_cron', 'wp_next_scheduled', 'wp_schedule_event',
+                  'wp_get_scheduled_event', 'wp_clear_scheduled_hook'] as $fn) {
             Functions\when($fn)->justReturn(true);
         }
         Functions\when('is_admin')->justReturn(false);

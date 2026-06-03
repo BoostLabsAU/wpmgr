@@ -7,9 +7,258 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
+
+const adminDeleteEmptyTenant = `-- name: AdminDeleteEmptyTenant :one
+SELECT admin_delete_empty_tenant($1) AS deleted
+`
+
+// Deletes a tenant ONLY if it has no memberships and no sites, returning whether
+// a row was removed. Delegates to the SECURITY DEFINER admin_delete_empty_tenant
+// function: the tenant's ON DELETE CASCADE reaches audit_log, which wpmgr_app may
+// NOT delete (insert-only), so a direct DELETE fails 42501. The function runs as
+// its owner (which keeps DELETE on audit_log) and pins app.agent='on' so its
+// emptiness checks see rows under FORCE RLS.
+func (q *Queries) AdminDeleteEmptyTenant(ctx context.Context, tenantID uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, adminDeleteEmptyTenant, tenantID)
+	var deleted bool
+	err := row.Scan(&deleted)
+	return deleted, err
+}
+
+const adminDeleteUser = `-- name: AdminDeleteUser :execrows
+DELETE FROM users WHERE id = $1
+`
+
+func (q *Queries) AdminDeleteUser(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, adminDeleteUser, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const adminGetUserByID = `-- name: AdminGetUserByID :one
+SELECT id, email, name, status, email_verified_at IS NOT NULL AS email_verified,
+       created_at, last_login_at, is_superadmin
+FROM users WHERE id = $1
+`
+
+type AdminGetUserByIDRow struct {
+	ID            uuid.UUID          `json:"id"`
+	Email         string             `json:"email"`
+	Name          string             `json:"name"`
+	Status        string             `json:"status"`
+	EmailVerified interface{}        `json:"email_verified"`
+	CreatedAt     time.Time          `json:"created_at"`
+	LastLoginAt   pgtype.Timestamptz `json:"last_login_at"`
+	IsSuperadmin  bool               `json:"is_superadmin"`
+}
+
+// Lightweight superadmin fetch that includes is_superadmin.
+func (q *Queries) AdminGetUserByID(ctx context.Context, id uuid.UUID) (AdminGetUserByIDRow, error) {
+	row := q.db.QueryRow(ctx, adminGetUserByID, id)
+	var i AdminGetUserByIDRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.Status,
+		&i.EmailVerified,
+		&i.CreatedAt,
+		&i.LastLoginAt,
+		&i.IsSuperadmin,
+	)
+	return i, err
+}
+
+const adminInstanceStats = `-- name: AdminInstanceStats :one
+SELECT
+    (SELECT COUNT(*) FROM users)       AS user_count,
+    (SELECT COUNT(*) FROM tenants)     AS org_count,
+    (SELECT COUNT(*) FROM sites)       AS site_count
+`
+
+type AdminInstanceStatsRow struct {
+	UserCount int64 `json:"user_count"`
+	OrgCount  int64 `json:"org_count"`
+	SiteCount int64 `json:"site_count"`
+}
+
+func (q *Queries) AdminInstanceStats(ctx context.Context) (AdminInstanceStatsRow, error) {
+	row := q.db.QueryRow(ctx, adminInstanceStats)
+	var i AdminInstanceStatsRow
+	err := row.Scan(&i.UserCount, &i.OrgCount, &i.SiteCount)
+	return i, err
+}
+
+const adminListUsers = `-- name: AdminListUsers :many
+SELECT
+    u.id,
+    u.email,
+    u.name,
+    u.status,
+    u.email_verified_at IS NOT NULL   AS email_verified,
+    u.created_at,
+    u.last_login_at,
+    u.is_superadmin,
+    COUNT(m.tenant_id)::bigint        AS org_count
+FROM users u
+LEFT JOIN memberships m ON m.user_id = u.id
+WHERE ($1::text IS NULL
+    OR u.email ILIKE '%' || $1 || '%'
+    OR u.name  ILIKE '%' || $1 || '%')
+GROUP BY u.id
+ORDER BY u.created_at DESC, u.id DESC
+LIMIT  $2
+OFFSET $3
+`
+
+type AdminListUsersParams struct {
+	Column1 string `json:"column_1"`
+	Limit   int32  `json:"limit"`
+	Offset  int32  `json:"offset"`
+}
+
+type AdminListUsersRow struct {
+	ID            uuid.UUID          `json:"id"`
+	Email         string             `json:"email"`
+	Name          string             `json:"name"`
+	Status        string             `json:"status"`
+	EmailVerified interface{}        `json:"email_verified"`
+	CreatedAt     time.Time          `json:"created_at"`
+	LastLoginAt   pgtype.Timestamptz `json:"last_login_at"`
+	IsSuperadmin  bool               `json:"is_superadmin"`
+	OrgCount      int64              `json:"org_count"`
+}
+
+// List all users across the instance with org_count (number of memberships).
+// search filters email or name case-insensitively; pass NULL to list all.
+// Ordered by created_at DESC, id DESC (stable keyset). Used only by the
+// superadmin area; it bypasses the tenant-scoped InTenantTx path.
+func (q *Queries) AdminListUsers(ctx context.Context, arg AdminListUsersParams) ([]AdminListUsersRow, error) {
+	rows, err := q.db.Query(ctx, adminListUsers, arg.Column1, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminListUsersRow
+	for rows.Next() {
+		var i AdminListUsersRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Email,
+			&i.Name,
+			&i.Status,
+			&i.EmailVerified,
+			&i.CreatedAt,
+			&i.LastLoginAt,
+			&i.IsSuperadmin,
+			&i.OrgCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const adminSetSuperadminByEmail = `-- name: AdminSetSuperadminByEmail :exec
+UPDATE users SET is_superadmin = true WHERE email = $1
+`
+
+// Boot seeder only. Sets is_superadmin=true for an email if the user exists.
+// No-op for unknown emails.
+func (q *Queries) AdminSetSuperadminByEmail(ctx context.Context, email string) error {
+	_, err := q.db.Exec(ctx, adminSetSuperadminByEmail, email)
+	return err
+}
+
+const adminSetUserStatus = `-- name: AdminSetUserStatus :one
+UPDATE users SET status = $2, updated_at = now()
+WHERE id = $1
+RETURNING id, email, name, status, email_verified_at IS NOT NULL AS email_verified,
+          created_at, last_login_at, is_superadmin
+`
+
+type AdminSetUserStatusParams struct {
+	ID     uuid.UUID `json:"id"`
+	Status string    `json:"status"`
+}
+
+type AdminSetUserStatusRow struct {
+	ID            uuid.UUID          `json:"id"`
+	Email         string             `json:"email"`
+	Name          string             `json:"name"`
+	Status        string             `json:"status"`
+	EmailVerified interface{}        `json:"email_verified"`
+	CreatedAt     time.Time          `json:"created_at"`
+	LastLoginAt   pgtype.Timestamptz `json:"last_login_at"`
+	IsSuperadmin  bool               `json:"is_superadmin"`
+}
+
+func (q *Queries) AdminSetUserStatus(ctx context.Context, arg AdminSetUserStatusParams) (AdminSetUserStatusRow, error) {
+	row := q.db.QueryRow(ctx, adminSetUserStatus, arg.ID, arg.Status)
+	var i AdminSetUserStatusRow
+	err := row.Scan(
+		&i.ID,
+		&i.Email,
+		&i.Name,
+		&i.Status,
+		&i.EmailVerified,
+		&i.CreatedAt,
+		&i.LastLoginAt,
+		&i.IsSuperadmin,
+	)
+	return i, err
+}
+
+const adminUserSoleTenants = `-- name: AdminUserSoleTenants :many
+SELECT m.tenant_id,
+       t.name AS tenant_name,
+       (SELECT COUNT(*) FROM sites s WHERE s.tenant_id = m.tenant_id)::bigint AS site_count
+FROM memberships m
+JOIN tenants t ON t.id = m.tenant_id
+WHERE m.tenant_id IN (SELECT m2.tenant_id FROM memberships m2 WHERE m2.user_id = $1)
+GROUP BY m.tenant_id, t.name
+HAVING COUNT(DISTINCT m.user_id) = 1
+`
+
+type AdminUserSoleTenantsRow struct {
+	TenantID   uuid.UUID `json:"tenant_id"`
+	TenantName string    `json:"tenant_name"`
+	SiteCount  int64     `json:"site_count"`
+}
+
+// Tenants where @user_id is the ONLY member (so deleting them orphans the org),
+// with each tenant's name + site count. Run under Pool.InAgentTx
+// (memberships_agent + sites_agent) so the cross-tenant read is allowed.
+func (q *Queries) AdminUserSoleTenants(ctx context.Context, userID uuid.UUID) ([]AdminUserSoleTenantsRow, error) {
+	rows, err := q.db.Query(ctx, adminUserSoleTenants, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AdminUserSoleTenantsRow
+	for rows.Next() {
+		var i AdminUserSoleTenantsRow
+		if err := rows.Scan(&i.TenantID, &i.TenantName, &i.SiteCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
 
 const countUsers = `-- name: CountUsers :one
 SELECT count(*) FROM users
@@ -25,7 +274,7 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, oidc_subject, oidc_issuer, name)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at
+RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin
 `
 
 type CreateUserParams struct {
@@ -55,12 +304,16 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
+		&i.PasswordChangedAt,
+		&i.Status,
+		&i.EmailVerifiedAt,
+		&i.IsSuperadmin,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at FROM users WHERE email = $1
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -76,12 +329,16 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
+		&i.PasswordChangedAt,
+		&i.Status,
+		&i.EmailVerifiedAt,
+		&i.IsSuperadmin,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at FROM users WHERE id = $1
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -97,12 +354,16 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
+		&i.PasswordChangedAt,
+		&i.Status,
+		&i.EmailVerifiedAt,
+		&i.IsSuperadmin,
 	)
 	return i, err
 }
 
 const getUserByOIDC = `-- name: GetUserByOIDC :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2
 `
 
 type GetUserByOIDCParams struct {
@@ -123,15 +384,31 @@ func (q *Queries) GetUserByOIDC(ctx context.Context, arg GetUserByOIDCParams) (U
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
+		&i.PasswordChangedAt,
+		&i.Status,
+		&i.EmailVerifiedAt,
+		&i.IsSuperadmin,
 	)
 	return i, err
+}
+
+const getUserPasswordChangedAt = `-- name: GetUserPasswordChangedAt :one
+SELECT password_changed_at FROM users WHERE id = $1
+`
+
+// Lightweight per-request lookup for the session reject-stale check.
+func (q *Queries) GetUserPasswordChangedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, getUserPasswordChangedAt, id)
+	var password_changed_at pgtype.Timestamptz
+	err := row.Scan(&password_changed_at)
+	return password_changed_at, err
 }
 
 const linkUserOIDC = `-- name: LinkUserOIDC :one
 UPDATE users
 SET oidc_issuer = $2, oidc_subject = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at
+RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin
 `
 
 type LinkUserOIDCParams struct {
@@ -153,12 +430,16 @@ func (q *Queries) LinkUserOIDC(ctx context.Context, arg LinkUserOIDCParams) (Use
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.LastLoginAt,
+		&i.PasswordChangedAt,
+		&i.Status,
+		&i.EmailVerifiedAt,
+		&i.IsSuperadmin,
 	)
 	return i, err
 }
 
 const setUserPasswordHash = `-- name: SetUserPasswordHash :exec
-UPDATE users SET password_hash = $2, updated_at = now() WHERE id = $1
+UPDATE users SET password_hash = $2, password_changed_at = now(), updated_at = now() WHERE id = $1
 `
 
 type SetUserPasswordHashParams struct {
@@ -166,6 +447,8 @@ type SetUserPasswordHashParams struct {
 	PasswordHash *string   `json:"password_hash"`
 }
 
+// Stamps password_changed_at so the Authenticator invalidates the user's other
+// sessions (ADR-045 Phase 2).
 func (q *Queries) SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error {
 	_, err := q.db.Exec(ctx, setUserPasswordHash, arg.ID, arg.PasswordHash)
 	return err

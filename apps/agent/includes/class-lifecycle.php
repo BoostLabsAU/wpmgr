@@ -345,6 +345,9 @@ final class Lifecycle
             wp_clear_scheduled_hook(Scheduler::HOOK_SIZES);
             wp_clear_scheduled_hook(Scheduler::HOOK_ACTIVITY_SHIP);
             wp_clear_scheduled_hook(Scheduler::HOOK_ERRORS_SHIP);
+            // Phase 3 — page-cache cron events.
+            wp_clear_scheduled_hook(\WPMgr\Agent\Cache\Preload::HOOK);
+            wp_clear_scheduled_hook(\WPMgr\Agent\Cache\CacheRefreshCron::HOOK);
         }
     }
 
@@ -423,6 +426,12 @@ final class Lifecycle
             Admin::OPTION_CONNECTION_KEY,
             Schema::OPTION_DB_VERSION,
             self::OPTION_REVOKED,
+            // Phase 3 — page-cache options.
+            \WPMgr\Agent\Cache\CacheManager::OPTION_CONFIG,
+            \WPMgr\Agent\Cache\CacheManager::OPTION_LAST_ERROR,
+            \WPMgr\Agent\Cache\CacheManager::OPTION_STATS,
+            \WPMgr\Agent\Cache\NginxHelper::OPTION_NGINX_NOTICE,
+            'wpmgr_cache_preload_queue',
         ];
     }
 }

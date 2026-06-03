@@ -215,7 +215,16 @@
 - [ ] M8 — Polish & launch (audit log, V0 release)
 - [ ] User approval to proceed
 
-## Phase 6 — V1
+## Phase 6 — Performance Suite
+- [ ] M5.5 — Performance Suite (ADR-046): agent-side disk page cache + asset optimization + pure-Go RUCSS on the control plane
+  - [ ] **Phase 1-2** — ADR + data model: ADR-046 locked; migration `20260603080000_m36_perf_suite.sql` (`site_perf_config`/`site_cache_stats`/`cache_purge_audit`/`rucss_results`/`rucss_jobs`, FORCE RLS + `app.agent` policy, no triggers) + `db/query/perf.sql` sqlc queries + RBAC perms (`site.cache.manage`/`.purge`/`site.perf.config` operator+, `site.cache.delete-everything` admin+) + audit constants
+  - [ ] **6.1 Caching (agent)** — standard `WP_CACHE` advanced-cache drop-in (per-host filename quirks) + disk cache store/serve + `.htaccess`/nginx serve rules + `cache_*` commands (enable/disable/purge/preload) + cache stats on heartbeat/metadata + drop-in install/uninstall on activate/deactivate + owned-options + schema/cron teardown
+  - [ ] **6.2 Optimization (agent)** — minify CSS/JS (`matthiasmullie/minify`) + JS delay/defer + font display-swap/preload + lazy-load + properly-sized images + self-host third-party + bloat removal + CDN rewrite (Cache-Tag/CDN-Cache-Control headers) + DB auto-clean (revisions/drafts/trashed/transients/optimize) + `sync_perf_config` command
+  - [ ] **6.3 Pure-Go RUCSS (control plane)** — `internal/perf` RUCSS engine (`x/net/html` + `tdewolff/parse/v2/css` + `cascadia`, NO headless Chrome) + per-site safelist + runtime-state pseudos always kept + structure-hash cache (`rucss_results`/`rucss_jobs`) + River compute worker + used-CSS to object storage + agent fetch-by-hash + graceful degradation (CP unreachable → serve full CSS, never block)
+  - [ ] **6.4 Dashboard** — site-detail **Cache** + **Optimize** tabs + autosave settings panels + cache stats/metrics + purge/preload actions + delete-everything (type-hostname, admin+) + `perf.*` SSE events; `impeccable detect` clean
+  - [ ] Security review + tests (agent PHPUnit + CP Go testcontainers Postgres/RUCSS golden-file) + docs (landing `content.ts` + root `CHANGELOG.md`)
+
+## Phase 7 — V1
 - [ ] M9 — Visual regression
 - [ ] M10 — AI update advisor
 - [ ] M11 — Real-time backup (DynSync)
@@ -226,7 +235,7 @@
 - [ ] M16 — Hosted SaaS launch
 - [ ] User approval to proceed
 
-## Phase 7 — V2
+## Phase 8 — V2
 - [ ] M17 — Terraform provider
 - [ ] M18 — GitOps update flow
 - [ ] M19 — Vulnerability auto-patching

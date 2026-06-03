@@ -87,6 +87,17 @@ func (a *Authenticator) Authenticate() gin.HandlerFunc {
 			return
 		}
 
+		// ADR-045 Phase 2 — reject sessions older than the user's last password
+		// change. This is how a reset/change invalidates the user's OTHER
+		// sessions (the SCS/Redis store cannot enumerate per-user sessions). A
+		// session predating password_changed_at is treated as logged out.
+		if changedAt, hasChanged := a.authSvc.PasswordChangedAt(ctx, userID); hasChanged {
+			if a.sessions.AuthAt(ctx).Before(changedAt) {
+				c.Next()
+				return
+			}
+		}
+
 		// Allow a session caller to select an alternate tenant they belong to.
 		if override := c.GetHeader(HeaderTenantOverride); override != "" {
 			if tid, err := uuid.Parse(override); err == nil {

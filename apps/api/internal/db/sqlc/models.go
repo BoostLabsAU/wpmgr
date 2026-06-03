@@ -163,6 +163,39 @@ type BackupSnapshot struct {
 	UpdatedAt         time.Time          `json:"updated_at"`
 }
 
+type CachePurgeAudit struct {
+	ID              uuid.UUID   `json:"id"`
+	TenantID        uuid.UUID   `json:"tenant_id"`
+	SiteID          uuid.UUID   `json:"site_id"`
+	Kind            string      `json:"kind"`
+	InitiatorUserID pgtype.UUID `json:"initiator_user_id"`
+	TargetUrls      []string    `json:"target_urls"`
+	UrlsCount       int32       `json:"urls_count"`
+	CreatedAt       time.Time   `json:"created_at"`
+}
+
+type EmailLog struct {
+	ID          uuid.UUID          `json:"id"`
+	TenantID    pgtype.UUID        `json:"tenant_id"`
+	ToAddresses []string           `json:"to_addresses"`
+	Subject     string             `json:"subject"`
+	Template    string             `json:"template"`
+	Status      string             `json:"status"`
+	Error       *string            `json:"error"`
+	Attempts    int32              `json:"attempts"`
+	CreatedAt   time.Time          `json:"created_at"`
+	SentAt      pgtype.Timestamptz `json:"sent_at"`
+}
+
+type EmailVerificationToken struct {
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
+	TokenHash []byte             `json:"token_hash"`
+	ExpiresAt time.Time          `json:"expires_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt time.Time          `json:"created_at"`
+}
+
 type Invitation struct {
 	ID             uuid.UUID          `json:"id"`
 	TenantID       uuid.UUID          `json:"tenant_id"`
@@ -203,6 +236,48 @@ type PairingCode struct {
 	SiteID         pgtype.UUID        `json:"site_id"`
 	ConsumedFromIp *netip.Addr        `json:"consumed_from_ip"`
 	CreatedAt      time.Time          `json:"created_at"`
+}
+
+type PasswordResetToken struct {
+	ID          uuid.UUID          `json:"id"`
+	UserID      uuid.UUID          `json:"user_id"`
+	TokenHash   []byte             `json:"token_hash"`
+	ExpiresAt   time.Time          `json:"expires_at"`
+	UsedAt      pgtype.Timestamptz `json:"used_at"`
+	Attempts    int32              `json:"attempts"`
+	RequestedIp *netip.Addr        `json:"requested_ip"`
+	CreatedAt   time.Time          `json:"created_at"`
+}
+
+type RucssJob struct {
+	ID            string             `json:"id"`
+	TenantID      uuid.UUID          `json:"tenant_id"`
+	SiteID        uuid.UUID          `json:"site_id"`
+	StructureHash *string            `json:"structure_hash"`
+	Url           *string            `json:"url"`
+	State         string             `json:"state"`
+	ErrorReason   *string            `json:"error_reason"`
+	ResultID      pgtype.UUID        `json:"result_id"`
+	CreatedAt     time.Time          `json:"created_at"`
+	CompletedAt   pgtype.Timestamptz `json:"completed_at"`
+}
+
+type RucssResult struct {
+	ID               uuid.UUID      `json:"id"`
+	TenantID         uuid.UUID      `json:"tenant_id"`
+	SiteID           uuid.UUID      `json:"site_id"`
+	StructureHash    string         `json:"structure_hash"`
+	Url              *string        `json:"url"`
+	OriginalCssBytes *int32         `json:"original_css_bytes"`
+	UsedCssBytes     *int32         `json:"used_css_bytes"`
+	ReductionPct     pgtype.Numeric `json:"reduction_pct"`
+	UsedCssS3Key     string         `json:"used_css_s3_key"`
+	SelectorsTotal   *int32         `json:"selectors_total"`
+	SelectorsKept    *int32         `json:"selectors_kept"`
+	SelectorsDropped *int32         `json:"selectors_dropped"`
+	ComputeMs        *int32         `json:"compute_ms"`
+	CreatedAt        time.Time      `json:"created_at"`
+	LastUsedAt       time.Time      `json:"last_used_at"`
 }
 
 type Site struct {
@@ -249,6 +324,19 @@ type SiteAlertState struct {
 	UpdatedAt       time.Time          `json:"updated_at"`
 }
 
+type SiteCacheStat struct {
+	SiteID           uuid.UUID          `json:"site_id"`
+	TenantID         uuid.UUID          `json:"tenant_id"`
+	CachedPagesCount int32              `json:"cached_pages_count"`
+	CacheSizeBytes   int64              `json:"cache_size_bytes"`
+	LastPurgedAt     pgtype.Timestamptz `json:"last_purged_at"`
+	LastPurgeKind    *string            `json:"last_purge_kind"`
+	LastPreloadAt    pgtype.Timestamptz `json:"last_preload_at"`
+	PreloadPending   int32              `json:"preload_pending"`
+	PreloadTotal     int32              `json:"preload_total"`
+	ReportedAt       time.Time          `json:"reported_at"`
+}
+
 type SiteConnectionHistory struct {
 	ID          uuid.UUID   `json:"id"`
 	TenantID    uuid.UUID   `json:"tenant_id"`
@@ -269,6 +357,68 @@ type SiteEvent struct {
 	Type      string      `json:"type"`
 	Data      []byte      `json:"data"`
 	CreatedAt time.Time   `json:"created_at"`
+}
+
+type SitePerfConfig struct {
+	SiteID                    uuid.UUID `json:"site_id"`
+	TenantID                  uuid.UUID `json:"tenant_id"`
+	CacheEnabled              bool      `json:"cache_enabled"`
+	CacheLoggedIn             bool      `json:"cache_logged_in"`
+	CacheMobile               bool      `json:"cache_mobile"`
+	CacheRefresh              bool      `json:"cache_refresh"`
+	CacheRefreshInterval      string    `json:"cache_refresh_interval"`
+	CacheLinkPrefetch         bool      `json:"cache_link_prefetch"`
+	CacheBypassUrls           []string  `json:"cache_bypass_urls"`
+	CacheBypassCookies        []string  `json:"cache_bypass_cookies"`
+	CacheIncludeQueries       []string  `json:"cache_include_queries"`
+	CacheIncludeCookies       []string  `json:"cache_include_cookies"`
+	CssJsMinify               bool      `json:"css_js_minify"`
+	CssRucss                  bool      `json:"css_rucss"`
+	CssRucssIncludeSelectors  []string  `json:"css_rucss_include_selectors"`
+	CssJsSelfHostThirdParty   bool      `json:"css_js_self_host_third_party"`
+	JsDelay                   bool      `json:"js_delay"`
+	JsDelayMethod             string    `json:"js_delay_method"`
+	JsDelayExcludes           []string  `json:"js_delay_excludes"`
+	JsDelayThirdParty         bool      `json:"js_delay_third_party"`
+	JsDelayThirdPartyExcludes []string  `json:"js_delay_third_party_excludes"`
+	FontsDisplaySwap          bool      `json:"fonts_display_swap"`
+	FontsOptimizeGoogle       bool      `json:"fonts_optimize_google"`
+	FontsPreload              bool      `json:"fonts_preload"`
+	LazyLoad                  bool      `json:"lazy_load"`
+	LazyLoadExclusions        []string  `json:"lazy_load_exclusions"`
+	ProperlySizeImages        bool      `json:"properly_size_images"`
+	YoutubePlaceholder        bool      `json:"youtube_placeholder"`
+	SelfHostGravatars         bool      `json:"self_host_gravatars"`
+	CdnEnabled                bool      `json:"cdn_enabled"`
+	CdnUrl                    *string   `json:"cdn_url"`
+	CdnFileTypes              string    `json:"cdn_file_types"`
+	CdnProvider               *string   `json:"cdn_provider"`
+	CdnCredentialsEncrypted   []byte    `json:"cdn_credentials_encrypted"`
+	DbAutoClean               bool      `json:"db_auto_clean"`
+	DbAutoCleanInterval       string    `json:"db_auto_clean_interval"`
+	DbPostRevisions           bool      `json:"db_post_revisions"`
+	DbPostAutoDrafts          bool      `json:"db_post_auto_drafts"`
+	DbPostTrashed             bool      `json:"db_post_trashed"`
+	DbCommentsSpam            bool      `json:"db_comments_spam"`
+	DbCommentsTrashed         bool      `json:"db_comments_trashed"`
+	DbTransientsExpired       bool      `json:"db_transients_expired"`
+	DbOptimizeTables          bool      `json:"db_optimize_tables"`
+	BloatDisableBlockCss      bool      `json:"bloat_disable_block_css"`
+	BloatDisableDashicons     bool      `json:"bloat_disable_dashicons"`
+	BloatDisableEmojis        bool      `json:"bloat_disable_emojis"`
+	BloatDisableJqueryMigrate bool      `json:"bloat_disable_jquery_migrate"`
+	BloatDisableXmlRpc        bool      `json:"bloat_disable_xml_rpc"`
+	BloatDisableRssFeed       bool      `json:"bloat_disable_rss_feed"`
+	BloatDisableOembeds       bool      `json:"bloat_disable_oembeds"`
+	BloatHeartbeatControl     bool      `json:"bloat_heartbeat_control"`
+	BloatPostRevisionsControl bool      `json:"bloat_post_revisions_control"`
+	ServerSoftware            *string   `json:"server_software"`
+	DropinInstalled           bool      `json:"dropin_installed"`
+	WpCacheConstantSet        bool      `json:"wp_cache_constant_set"`
+	HtaccessManaged           bool      `json:"htaccess_managed"`
+	ConfigVersion             int32     `json:"config_version"`
+	CreatedAt                 time.Time `json:"created_at"`
+	UpdatedAt                 time.Time `json:"updated_at"`
 }
 
 type SiteShare struct {
@@ -298,6 +448,23 @@ type SiteUptimeProbe struct {
 	TlsIssuer  string             `json:"tls_issuer"`
 	TlsSubject string             `json:"tls_subject"`
 	ErrorText  string             `json:"error_text"`
+}
+
+type SmtpSetting struct {
+	ID               uuid.UUID   `json:"id"`
+	Singleton        bool        `json:"singleton"`
+	Enabled          bool        `json:"enabled"`
+	Host             string      `json:"host"`
+	Port             int32       `json:"port"`
+	Username         string      `json:"username"`
+	PasswordEnc      []byte      `json:"password_enc"`
+	FromAddress      string      `json:"from_address"`
+	FromName         string      `json:"from_name"`
+	TlsMode          string      `json:"tls_mode"`
+	AllowInsecureTls bool        `json:"allow_insecure_tls"`
+	UpdatedBy        pgtype.UUID `json:"updated_by"`
+	CreatedAt        time.Time   `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
 }
 
 type Tenant struct {
@@ -339,13 +506,17 @@ type UpdateTask struct {
 }
 
 type User struct {
-	ID           uuid.UUID          `json:"id"`
-	Email        string             `json:"email"`
-	PasswordHash *string            `json:"password_hash"`
-	OidcSubject  *string            `json:"oidc_subject"`
-	OidcIssuer   *string            `json:"oidc_issuer"`
-	Name         string             `json:"name"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-	LastLoginAt  pgtype.Timestamptz `json:"last_login_at"`
+	ID                uuid.UUID          `json:"id"`
+	Email             string             `json:"email"`
+	PasswordHash      *string            `json:"password_hash"`
+	OidcSubject       *string            `json:"oidc_subject"`
+	OidcIssuer        *string            `json:"oidc_issuer"`
+	Name              string             `json:"name"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+	LastLoginAt       pgtype.Timestamptz `json:"last_login_at"`
+	PasswordChangedAt pgtype.Timestamptz `json:"password_changed_at"`
+	Status            string             `json:"status"`
+	EmailVerifiedAt   pgtype.Timestamptz `json:"email_verified_at"`
+	IsSuperadmin      bool               `json:"is_superadmin"`
 }

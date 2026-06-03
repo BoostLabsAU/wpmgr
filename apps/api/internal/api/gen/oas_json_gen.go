@@ -27704,15 +27704,22 @@ func (s *User) encodeFields(e *jx.Encoder) {
 			s.LastLoginAt.Encode(e, json.EncodeDateTime)
 		}
 	}
+	{
+		if s.IsSuperadmin.Set {
+			e.FieldStart("is_superadmin")
+			s.IsSuperadmin.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfUser = [6]string{
+var jsonFieldsNameOfUser = [7]string{
 	0: "id",
 	1: "email",
 	2: "name",
 	3: "created_at",
 	4: "updated_at",
 	5: "last_login_at",
+	6: "is_superadmin",
 }
 
 // Decode decodes User from json.
@@ -27793,6 +27800,16 @@ func (s *User) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"last_login_at\"")
+			}
+		case "is_superadmin":
+			if err := func() error {
+				s.IsSuperadmin.Reset()
+				if err := s.IsSuperadmin.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"is_superadmin\"")
 			}
 		default:
 			return d.Skip()

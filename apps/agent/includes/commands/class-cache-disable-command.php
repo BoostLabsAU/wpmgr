@@ -1,0 +1,61 @@
+<?php
+/**
+ * CacheDisableCommand — turns page caching off and cleanly reverses every
+ * server-side change (.htaccess block, drop-in, WP_CACHE define) and purges the
+ * cache.
+ *
+ * Wire contract (CP → agent):
+ *   POST /wp-json/wpmgr/v1/command/cache_disable
+ *   Authorization: Bearer <Ed25519 JWT, cmd="cache_disable", aud=<siteId>>
+ *   Body: {}
+ *
+ * Response: { "ok": <bool>, "detail": "<text>", "steps": {...} }
+ *
+ * @package WPMgr\Agent\Commands
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Commands;
+
+use WPMgr\Agent\Cache\CacheManager;
+
+/**
+ * Disables the page cache and reverses all artefacts.
+ */
+final class CacheDisableCommand implements CommandInterface
+{
+    private CacheManager $cache;
+
+    /**
+     * @param CacheManager $cache Page-cache orchestrator.
+     */
+    public function __construct(CacheManager $cache)
+    {
+        $this->cache = $cache;
+    }
+
+    /**
+     * {@inheritDoc}
+     */
+    public function name(): string
+    {
+        return 'cache_disable';
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * @param array<string,mixed> $claims Validated JWT claims (unused).
+     * @param array<string,mixed> $params Request body (ignored).
+     * @return array{ok:bool,detail:string,steps?:array<string,bool>}
+     */
+    public function execute(array $claims, array $params): array
+    {
+        try {
+            return $this->cache->disable();
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'cache disable failed'];
+        }
+    }
+}

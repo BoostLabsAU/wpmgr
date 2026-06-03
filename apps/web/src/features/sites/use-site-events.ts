@@ -57,6 +57,23 @@ const SITE_EVENT_TYPES = [
   "media.delete_originals.completed",
   "media.job.failed",
   "media.asset.deleted",
+  // Performance Suite (Phase 7 / m36). Published on this SAME shared tenant bus
+  // (filtered by site_id), mirroring the Go constants in
+  // apps/api/internal/site/connection.go. As with media.*, any cache.*/rucss.*/
+  // db.*/perf.* type MISSING from this array is silently dropped by the
+  // z.enum(SITE_EVENT_TYPES) frame validation before it reaches usePerfEvents.
+  "cache.enabled",
+  "cache.disabled",
+  "cache.purge.started",
+  "cache.purge.completed",
+  "cache.preload.started",
+  "cache.preload.progress",
+  "cache.preload.completed",
+  "cache.stats.updated",
+  "perf.config.updated",
+  "db.clean.completed",
+  "rucss.completed",
+  "rucss.failed",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

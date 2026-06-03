@@ -5,10 +5,14 @@ package main
 
 import (
 	"context"
+	crand "crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -20,6 +24,7 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/activity"
+	"github.com/mosamlife/wpmgr/apps/api/internal/admin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/apikey"
@@ -36,6 +41,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
 	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
+	"github.com/mosamlife/wpmgr/apps/api/internal/mailer"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
@@ -43,9 +49,14 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/metrics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
+	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	rucssrepo "github.com/mosamlife/wpmgr/apps/api/internal/rucss/repo"
+	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
+	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server"
+	"github.com/mosamlife/wpmgr/apps/api/internal/settings"
 	"github.com/mosamlife/wpmgr/apps/api/internal/sharing"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
@@ -113,6 +124,101 @@ func run() error {
 		migPool.Close()
 		return err
 	}
+
+	// Seed superadmin accounts from WPMGR_SUPERADMIN_EMAILS (comma-separated).
+	// Additive: sets is_superadmin=true for existing accounts; no-op for unknown
+	// emails. Never auto-demotes. Done before closing migPool (owner DSN, bypasses
+	// RLS). Runs after migrations so the is_superadmin column is guaranteed to exist.
+	if raw := os.Getenv("WPMGR_SUPERADMIN_EMAILS"); raw != "" {
+		saBaseURL := strings.TrimRight(os.Getenv("WPMGR_PUBLIC_BASE_URL"), "/")
+		for _, email := range strings.Split(raw, ",") {
+			// Emails are persisted lowercased (normalizeEmail), so match
+			// case-insensitively.
+			email = strings.ToLower(strings.TrimSpace(email))
+			if email == "" {
+				continue
+			}
+			// Allowlisted superadmins are trusted at the infrastructure level, so
+			// also activate + mark them verified — they need not receive a
+			// verification email (their mailbox domain may not even accept mail).
+			tag, err := migPool.Pool.Exec(ctx,
+				`UPDATE users
+				    SET is_superadmin = true,
+				        status = 'active',
+				        email_verified_at = COALESCE(email_verified_at, now()),
+				        updated_at = now()
+				  WHERE lower(email) = $1`, email,
+			)
+			switch {
+			case err != nil:
+				logger.Warn("superadmin seed failed", slog.String("email", email), slog.Any("error", err))
+			case tag.RowsAffected() > 0:
+				logger.Info("superadmin granted to existing account", slog.String("email", email))
+			default:
+				// No account yet: create one (active + verified + superadmin) with
+				// a random password the operator never learns, and mint a one-time
+				// set-password link so they choose their own password. The link is
+				// logged because the account's mailbox may not accept mail.
+				if err := seedSuperadminAccount(ctx, migPool.Pool, logger, saBaseURL, email); err != nil {
+					logger.Warn("superadmin account create failed", slog.String("email", email), slog.Any("error", err))
+				}
+			}
+		}
+	}
+
+	// One-shot escape hatch: mint a fresh set-password link for these (existing)
+	// superadmin accounts and log it. Set this when an operator needs to (re)claim
+	// an account whose password is unknown — e.g. one seeded before a fix — then
+	// remove the env var so it does not mint a link on every boot.
+	if raw := os.Getenv("WPMGR_SUPERADMIN_RESET_EMAILS"); raw != "" {
+		rsBaseURL := strings.TrimRight(os.Getenv("WPMGR_PUBLIC_BASE_URL"), "/")
+		for _, email := range strings.Split(raw, ",") {
+			email = strings.ToLower(strings.TrimSpace(email))
+			if email == "" {
+				continue
+			}
+			var uid uuid.UUID
+			if err := migPool.Pool.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = $1`, email).Scan(&uid); err != nil {
+				logger.Warn("superadmin reset link: no account with that email", slog.String("email", email), slog.Any("error", err))
+				continue
+			}
+			if err := mintSetPasswordLink(ctx, migPool.Pool, logger, rsBaseURL, uid, email, "superadmin set-password requested"); err != nil {
+				logger.Warn("superadmin reset link failed", slog.String("email", email), slog.Any("error", err))
+			}
+		}
+	}
+
+	// One-shot account recovery: WPMGR_RECOVER_ACCOUNTS = "email:org[,email2:org2]"
+	// where org is a tenant slug or name. Recreates a deleted user (active +
+	// verified), attaches it to the EXISTING org as owner, and logs a one-time
+	// set-password link. Use this to recover an account whose org + sites are
+	// intact but whose user row was deleted. Idempotent. REMOVE the env after use —
+	// it re-mints a link on every boot otherwise.
+	if raw := os.Getenv("WPMGR_RECOVER_ACCOUNTS"); raw != "" {
+		rcBaseURL := strings.TrimRight(os.Getenv("WPMGR_PUBLIC_BASE_URL"), "/")
+		for _, entry := range strings.Split(raw, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			// Email cannot contain ':', so split on the first colon.
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) != 2 {
+				logger.Warn("recover account: bad entry, want email:org", slog.String("entry", entry))
+				continue
+			}
+			email := strings.ToLower(strings.TrimSpace(parts[0]))
+			orgRef := strings.TrimSpace(parts[1])
+			if email == "" || orgRef == "" {
+				logger.Warn("recover account: empty email or org", slog.String("entry", entry))
+				continue
+			}
+			if err := recoverAccountIntoOrg(ctx, migPool.Pool, logger, rcBaseURL, email, orgRef); err != nil {
+				logger.Warn("recover account failed", slog.String("email", email), slog.String("org", orgRef), slog.Any("error", err))
+			}
+		}
+	}
+
 	migPool.Close()
 	logger.Info("migrations applied")
 
@@ -354,12 +460,44 @@ func run() error {
 	// configuration ahead of enabling backups. The registry is bound to the
 	// backup service via SetRegistry below.
 	siteDestRepo := sitedestination.NewRepo(pool)
+	// ADR-045: refuse to boot in production without a stable age secret. An empty
+	// secret yields a fresh ephemeral key on every restart, which would orphan
+	// every stored SMTP password and site-destination secret (mirrors the
+	// session-secret guard).
+	if cfg.IsProduction() && strings.TrimSpace(os.Getenv("WPMGR_SITE_DEST_AGE_SECRET")) == "" {
+		return fmt.Errorf("WPMGR_SITE_DEST_AGE_SECRET is required in production: an empty secret uses an ephemeral key that orphans stored SMTP passwords and site-destination secrets on restart")
+	}
 	siteDestAgeID, err := sitedestination.NewAgeIdentity(os.Getenv("WPMGR_SITE_DEST_AGE_SECRET"))
 	if err != nil {
 		return fmt.Errorf("site destination age identity: %w", err)
 	}
 	siteDestSvc := sitedestination.NewService(siteDestRepo, siteDestAgeID, logger)
 	siteDestH := sitedestination.NewHandler(siteDestSvc, auditRec)
+
+	// ADR-045 — transactional mailer (UI-configured instance SMTP) + the SMTP
+	// settings domain. The mailer resolves its transport from the smtp_settings
+	// DB row first (age-decrypting the password with the shared cryptbox
+	// identity), falling back to the env SMTP config as a bootstrap default.
+	emailRenderer, err := mailer.NewTemplateRenderer()
+	if err != nil {
+		return fmt.Errorf("email templates: %w", err)
+	}
+	emailResolver := mailer.NewDBResolver(pool, siteDestAgeID, mailer.EnvSMTP{
+		Host:     cfg.SMTP.Host,
+		Port:     cfg.SMTP.Port,
+		Username: cfg.SMTP.Username,
+		Password: cfg.SMTP.Password,
+		From:     cfg.SMTP.From,
+		TLSMode:  cfg.SMTP.TLSMode,
+	})
+	supportEmail := os.Getenv("WPMGR_SUPPORT_EMAIL")
+	if supportEmail == "" {
+		supportEmail = "support@wpmgr.app"
+	}
+	mailerSvc := mailer.NewService(emailResolver, emailRenderer, pool, os.Getenv("WPMGR_PUBLIC_BASE_URL"), supportEmail, logger)
+	sendEmailWorker := mailer.NewSendEmailWorker(mailerSvc)
+	smtpSettingsSvc := settings.NewService(settings.NewRepo(pool), siteDestAgeID, mailerSvc, logger)
+	smtpSettingsH := settings.NewHandler(smtpSettingsSvc, auditRec)
 	if backupSvc != nil {
 		registry := blobstore.NewRegistry(nil, siteDestSvc) // defaultStore wired below
 		// Bind the legacy CP-global store as the registry's default. Built
@@ -421,16 +559,16 @@ func run() error {
 	uptimeRepo := uptime.NewRepo(pool)
 	uptimeSiteAdapter := newUptimeSiteAdapter(siteSvc)
 	uptimeProber := uptime.NewProber(ssrfClient, cfg.Uptime.ProbeTimeout)
-	var mailer uptime.Mailer
+	var uptimeMailer uptime.Mailer
 	if cfg.SMTP.Enabled() {
-		mailer = uptime.NewSMTPMailer(cfg.SMTP, logger)
+		uptimeMailer = uptime.NewSMTPMailer(cfg.SMTP, logger)
 		logger.Info("uptime alert email enabled", slog.String("smtp_host", cfg.SMTP.Host))
 	} else {
-		mailer = uptime.NewNoopMailer(logger)
+		uptimeMailer = uptime.NewNoopMailer(logger)
 		logger.Warn("WPMGR_SMTP_HOST is empty: uptime alert emails disabled (webhooks still fire)")
 	}
 	webhookPoster := uptime.NewSSRFWebhookPoster(ssrfClient)
-	uptimeDispatcher := uptime.NewDispatcher(mailer, webhookPoster, auditRec, logger)
+	uptimeDispatcher := uptime.NewDispatcher(uptimeMailer, webhookPoster, auditRec, logger)
 	uptimeWorker := uptime.NewProbeWorker(uptimeRepo, uptimeProber, metricsStore, uptimeDispatcher, uptimeSiteAdapter, logger, cfg.Uptime.ProbeConcurrency, cfg.Uptime.DownThreshold)
 	uptimeSvc := uptime.NewService(uptimeRepo, metricsStore, uptimeSiteAdapter)
 	uptimeH := uptime.NewHandler(uptimeSvc, auditRec)
@@ -561,6 +699,50 @@ func run() error {
 	mediaH := mediahandler.NewHandler(mediaSvc)
 	mediaAgentH := mediahandler.NewAgentHandler(mediaSvc)
 
+	// ---------------------------------------------------------------------------
+	// Performance Suite (ADR-046, Phase 6): RUCSS engine/worker + perf control
+	// plane. The RUCSS used-CSS objects + the agent-posted HTML/CSS source bundles
+	// reuse the same blobstore as the Media Optimizer (mediaStore). The RUCSS
+	// worker is constructed BEFORE startRiver (it needs the service, not the
+	// client); its enqueuer is wired after startRiver returns.
+	// ---------------------------------------------------------------------------
+	rucssRepo := rucssrepo.NewRepo(pool)
+	// rucssStore + bundle store are the same blobstore the Media Optimizer uses.
+	// A nil mediaStore (S3 not configured) leaves RUCSS degraded: the worker is
+	// not registered and the agent ingest endpoint keeps serving full CSS.
+	var (
+		rucssSvc         *rucssservice.Service
+		rucssBundleStore perf.RucssBundleStore
+		rucssWorker      *rucssworker.Worker
+		rucssSweepWorker *rucssworker.RucssSweepWorker
+	)
+	if mediaStore != nil {
+		rucssSvc = rucssservice.NewService(rucssRepo, mediaStore, clock, logger)
+		rucssBundleStore = mediaStore
+		rucssWorker = rucssworker.NewWorker(
+			rucssSvc,
+			perf.NewRucssSourceFetcher(rucssBundleStore),
+			rucssRepo,
+			siteEventsPub,
+			logger,
+		)
+		// FIX 1 backstop: reap orphaned source bundles (page HTML) under rucss-src/
+		// directly via the same blobstore the bundles live in.
+		rucssSweepWorker = rucssworker.NewRucssSweepWorker(mediaStore, rucssworker.RucssSweepMaxAge, logger)
+	}
+
+	perfRepo := perf.NewRepo(pool)
+	perfSvc := perf.NewService(perfRepo, siteDestAgeID, siteEventsPub, logger)
+	perfSiteAdapterImpl := newPerfSiteAdapter(siteSvc)
+	if perfCmd, ok := commander.(perf.AgentPerfClient); ok {
+		perfSvc.SetAgentClient(perfCmd, perfSiteAdapterImpl)
+		logger.Info("perf agent client wired")
+	} else {
+		logger.Warn("perf agent client not wired: CP->agent commander unavailable (signing key empty?)")
+	}
+	// CDN purge is best-effort over the shared SSRF-hardened client.
+	perfSvc.SetCDNPurger(perf.NewCDNPurger(ssrfClient))
+
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
 		healthInterval:         cfg.Agent.HealthInterval,
@@ -583,6 +765,13 @@ func run() error {
 		// S3 scan workers (nil when signing key is not configured).
 		scanRunWorker:    scanWorker,
 		scanHashGCWorker: scanHashGCWorker,
+		// ADR-045 — transactional email worker (always wired).
+		sendEmailWorker: sendEmailWorker,
+		// ADR-046 Performance Suite — RUCSS worker (nil when S3 not configured).
+		rucssWorker:        rucssWorker,
+		rucssQueueParallel: 4,
+		// FIX 1 backstop sweeper (nil when S3 not configured).
+		rucssSweepWorker: rucssSweepWorker,
 	})
 	if err != nil {
 		return err
@@ -617,6 +806,55 @@ func run() error {
 	// started. The enqueuer lives in the PURE media package (no encoder import),
 	// so this binary still has no CGO dependency.
 	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(riverClient))
+
+	// ADR-046 Performance Suite: wire the RUCSS enqueuer + perf ingest service
+	// now that River has started. The ingest service stashes the agent-posted
+	// HTML/CSS bundle in object storage and enqueues the rucss_process job (the
+	// agent never blocks). When S3 is not configured (rucssBundleStore == nil)
+	// the ingest service is built with nil plumbing and reports "not processing"
+	// so the agent keeps serving full CSS.
+	var rucssIngestSvc *perf.RucssIngestService
+	if rucssBundleStore != nil {
+		rucssEnqueuer := rucssworker.NewRiverEnqueuer(riverClient)
+		rucssIngestSvc = perf.NewRucssIngestService(rucssRepo, rucssBundleStore, rucssEnqueuer, clock, logger)
+	} else {
+		rucssIngestSvc = perf.NewRucssIngestService(rucssRepo, nil, nil, clock, logger)
+	}
+	// The operator-facing RUCSS results list reads through the rucss repo; map
+	// the rucss model.Result to the perf DTO here so the perf handler does not
+	// import the rucss model.
+	perfRucssReader := &perf.RucssResultsReader{
+		List: func(ctx context.Context, tenantID, siteID uuid.UUID, limit, offset int32) ([]perf.RucssResultDTO, error) {
+			rows, lerr := rucssRepo.ListForSite(ctx, tenantID, siteID, limit, offset)
+			if lerr != nil {
+				return nil, lerr
+			}
+			out := make([]perf.RucssResultDTO, 0, len(rows))
+			for _, r := range rows {
+				dto := perf.RucssResultDTO{
+					ID:            r.ID.String(),
+					StructureHash: r.StructureHash,
+					URL:           r.URL,
+					OriginalBytes: r.OriginalCSSBytes,
+					UsedBytes:     r.UsedCSSBytes,
+					ReductionPct:  r.ReductionPct,
+					S3Key:         r.UsedCSSS3Key,
+				}
+				if !r.LastUsedAt.IsZero() {
+					dto.LastUsedAt = r.LastUsedAt.UTC().Format(time.RFC3339)
+				}
+				out = append(out, dto)
+			}
+			return out, nil
+		},
+	}
+	perfH := perf.NewHandler(perfSvc, perfRucssReader, auditRec)
+	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc)
+
+	// ADR-045 Phase 2 — wire the auth service's transactional mailer (password
+	// reset link + change-password notification) + an in-memory rate limiter now
+	// that River has started.
+	authSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient), os.Getenv("WPMGR_PUBLIC_BASE_URL"), autologin.NewMemoryLimiter())
 
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout)
@@ -777,6 +1015,10 @@ func run() error {
 		sharingMailer = uptime.NewSMTPMailer(cfg.SMTP, logger)
 	}
 	sharingSvc := sharing.NewService(pool, authRepo, auditRec, sharingMailer, publicBaseURL)
+	// ADR-045 — site shares now notify the grantee by email via the DB-configured
+	// SMTP: a branded "site_invite" link for a new user, or a "site_shared"
+	// notification for an existing one (who gets immediate access).
+	sharingSvc.SetShareEnqueuer(mailer.NewEnqueuer(mailerSvc, riverClient))
 	sharingH := sharing.NewHandler(sharingSvc)
 
 	// Org handler: create org + activate.
@@ -789,7 +1031,17 @@ func run() error {
 		invitationMailer = uptime.NewSMTPMailer(cfg.SMTP, logger)
 	}
 	invitationSvc := invitation.NewService(pool, authRepo, auditRec, sessions, invitationMailer, publicBaseURL)
+	// ADR-045 Phase 3 — org invitations send the branded "invite" template via
+	// the DB-configured SMTP (the legacy env mailer is nil once SMTP moved to the
+	// UI), and always return the accept link.
+	invitationSvc.SetInviteEnqueuer(mailer.NewEnqueuer(mailerSvc, riverClient))
 	invitationH := invitation.NewHandler(invitationSvc)
+
+	// m33 — superadmin instance-management area.
+	// authSvc satisfies admin.VerificationResender via ResendVerificationByID.
+	adminRepo := admin.NewRepo(pool)
+	adminSvc := admin.NewService(adminRepo, authSvc)
+	adminH := admin.NewHandler(adminSvc, pool)
 
 	// ADR-042 — CP-driven agent self-update manifest handler. Needs object
 	// storage (to read agent-releases/latest.json + presign the package) AND the
@@ -846,7 +1098,7 @@ func run() error {
 		Sessions:        sessions,
 		Auth:            authn,
 		AuthH:           auth.NewHandler(authSvc, sessions, oidcProvider, newTenant),
-		MembersH:        auth.NewMembersHandler(authSvc),
+		MembersH:        auth.NewMembersHandler(authSvc, invitationSvc),
 		APIKeyH:         apikey.NewHandler(apiKeySvc, auditRec),
 		AuditH:          audit.NewHandler(auditRec),
 		TenantH:         tenant.NewHandler(tenantSvc, auditRec),
@@ -863,6 +1115,8 @@ func run() error {
 		AgentH:          agentH,
 		UpdateAgentH:    updateAgentH,
 		SiteDestH:       siteDestH,
+		// ADR-045 — instance SMTP settings.
+		SettingsH: smtpSettingsH,
 		// ADR-037 Sprint 2 wiring.
 		DiagnosticsH:      diagnosticsH,
 		DiagnosticsAgentH: diagnosticsAgentH,
@@ -888,6 +1142,11 @@ func run() error {
 		// M23 — Media Optimizer.
 		MediaH:      mediaH,
 		MediaAgentH: mediaAgentH,
+		// m36 / ADR-046 — Performance Suite.
+		PerfH:      perfH,
+		PerfAgentH: perfAgentH,
+		// m33 — superadmin instance-management area.
+		AdminH:      adminH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})
@@ -954,6 +1213,133 @@ func agentSigningPublicKey(cfg config.AgentConfig) (string, error) {
 }
 
 // migrateRiver applies River's own schema using the migration-owner pool.
+// seedSuperadminAccount provisions a superadmin account that does not exist yet
+// (the operator could not self-register, e.g. their mailbox domain does not
+// accept mail). It creates the user as active + email-verified + is_superadmin
+// with a RANDOM password no one is told, then mints a one-time, 24h
+// password-reset token and logs the set-password URL so the operator chooses
+// their own password. Runs on the owner pool (superuser, bypasses RLS).
+func seedSuperadminAccount(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, baseURL, email string) error {
+	pwBuf := make([]byte, 24)
+	if _, err := crand.Read(pwBuf); err != nil {
+		return fmt.Errorf("random password: %w", err)
+	}
+	hash, err := auth.HashPassword(base64.RawURLEncoding.EncodeToString(pwBuf))
+	if err != nil {
+		return fmt.Errorf("hash password: %w", err)
+	}
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx,
+		`INSERT INTO users (email, password_hash, name, status, email_verified_at, is_superadmin)
+		 VALUES ($1, $2, '', 'active', now(), true)
+		 RETURNING id`, email, hash).Scan(&userID); err != nil {
+		return fmt.Errorf("insert user: %w", err)
+	}
+	return mintSetPasswordLink(ctx, pool, logger, baseURL, userID, email, "superadmin account CREATED")
+}
+
+// mintSetPasswordLink writes a one-time, 24h password-reset token for an account
+// and logs the set-password URL. password_reset_tokens has FORCE RLS gated on
+// app.agent='on', and the owner role does not bypass RLS, so the insert must run
+// inside a transaction that sets the GUC.
+func mintSetPasswordLink(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, baseURL string, userID uuid.UUID, email, label string) error {
+	tokBuf := make([]byte, 32)
+	if _, err := crand.Read(tokBuf); err != nil {
+		return fmt.Errorf("random token: %w", err)
+	}
+	rawTok := base64.RawURLEncoding.EncodeToString(tokBuf)
+	sum := sha256.Sum256([]byte(rawTok))
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.agent', 'on', true)"); err != nil {
+		return fmt.Errorf("set app.agent: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at)
+		 VALUES ($1, $2, now() + interval '24 hours')`, userID, sum[:]); err != nil {
+		return fmt.Errorf("insert reset token: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit: %w", err)
+	}
+
+	logger.Warn(label+" — set your password via this one-time link (valid 24h)",
+		slog.String("email", email),
+		slog.String("set_password_url", baseURL+"/reset-password?token="+rawTok))
+	return nil
+}
+
+// recoverAccountIntoOrg recreates a (possibly deleted) user and attaches it as
+// OWNER of an existing org identified by slug or name, then mints a one-time
+// set-password link. It recovers an account whose org + sites are still intact
+// but whose user row (and thus membership) was deleted. Idempotent: an existing
+// user is reactivated; an existing membership is upgraded to owner. Runs on the
+// owner pool. tenants + users have no RLS, but memberships has FORCE RLS gated on
+// app.tenant_id, and the owner role does not bypass it, so the membership INSERT
+// sets the GUC inside its tx (mirrors mintSetPasswordLink).
+func recoverAccountIntoOrg(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, baseURL, email, orgRef string) error {
+	var tenantID uuid.UUID
+	var tenantName string
+	if err := pool.QueryRow(ctx,
+		`SELECT id, name FROM tenants WHERE slug = $1 OR lower(name) = lower($1) ORDER BY created_at LIMIT 1`,
+		orgRef).Scan(&tenantID, &tenantName); err != nil {
+		return fmt.Errorf("resolve org %q: %w", orgRef, err)
+	}
+
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = $1`, email).Scan(&userID); err != nil {
+		// No account: create one (active + verified) with a random password the
+		// operator never learns — they set their own via the link below.
+		pwBuf := make([]byte, 24)
+		if _, rerr := crand.Read(pwBuf); rerr != nil {
+			return fmt.Errorf("random password: %w", rerr)
+		}
+		hash, herr := auth.HashPassword(base64.RawURLEncoding.EncodeToString(pwBuf))
+		if herr != nil {
+			return fmt.Errorf("hash password: %w", herr)
+		}
+		if ierr := pool.QueryRow(ctx,
+			`INSERT INTO users (email, password_hash, name, status, email_verified_at)
+			 VALUES ($1, $2, '', 'active', now()) RETURNING id`, email, hash).Scan(&userID); ierr != nil {
+			return fmt.Errorf("create user: %w", ierr)
+		}
+		logger.Info("recover account: user created", slog.String("email", email))
+	} else {
+		if _, uerr := pool.Exec(ctx,
+			`UPDATE users SET status = 'active', email_verified_at = COALESCE(email_verified_at, now()), updated_at = now()
+			 WHERE id = $1`, userID); uerr != nil {
+			return fmt.Errorf("reactivate user: %w", uerr)
+		}
+		logger.Info("recover account: existing user reactivated", slog.String("email", email))
+	}
+
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
+		return fmt.Errorf("set app.tenant_id: %w", err)
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO memberships (tenant_id, user_id, role) VALUES ($1, $2, 'owner')
+		 ON CONFLICT (user_id, tenant_id) DO UPDATE SET role = 'owner', updated_at = now()`,
+		tenantID, userID); err != nil {
+		return fmt.Errorf("attach membership: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit membership: %w", err)
+	}
+	logger.Info("recover account: attached as owner",
+		slog.String("email", email), slog.String("org", tenantName), slog.String("tenant_id", tenantID.String()))
+
+	return mintSetPasswordLink(ctx, pool, logger, baseURL, userID, email, "account recovery requested")
+}
+
 func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
 	if err != nil {
@@ -992,6 +1378,15 @@ type riverDeps struct {
 	// S3 — Malware / File-Integrity Scan workers (nil when signing key empty).
 	scanRunWorker    *scan.ScanRunWorker
 	scanHashGCWorker *scan.HashGCWorker
+	// ADR-045 — transactional email worker (reset / activation / invite sends).
+	sendEmailWorker *mailer.SendEmailWorker
+	// ADR-046 Performance Suite — pure-Go RUCSS computation worker (nil when S3
+	// is not configured; the agent ingest endpoint then serves full CSS).
+	rucssWorker        *rucssworker.Worker
+	rucssQueueParallel int
+	// FIX 1 backstop: reaps orphaned RUCSS source bundles (page HTML stashed on a
+	// cache miss whose job never ran). nil when S3 is not configured.
+	rucssSweepWorker *rucssworker.RucssSweepWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -1009,6 +1404,9 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 	if d.refreshWorker != nil {
 		river.AddWorker(workers, d.refreshWorker)
 	}
+	if d.sendEmailWorker != nil {
+		river.AddWorker(workers, d.sendEmailWorker)
+	}
 
 	interval := d.healthInterval
 	if interval <= 0 {
@@ -1021,6 +1419,9 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 
 	queues := map[string]river.QueueConfig{
 		river.QueueDefault: {MaxWorkers: 5},
+		// ADR-045 — dedicated email queue so a slow SMTP relay can't starve
+		// other work.
+		mailer.EmailQueue: {MaxWorkers: 2},
 		// M23 Media Optimizer (ADR-043): the API does NOT register the
 		// media_encode queue — it only client.Inserts model.EncodeArgs, and Insert
 		// works for any queue name without registering it. River REJECTS a
@@ -1155,6 +1556,32 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics, river.NewPeriodicJob(
 			river.PeriodicInterval(time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return scan.HashGCArgs{}, nil },
+			nil,
+		))
+	}
+
+	// ADR-046 Performance Suite — pure-Go RUCSS computation worker on its own
+	// bounded queue. A purge is CPU-bound (HTML parse + cascadia matching), so a
+	// small worker pool keeps an agent burst from starving other work.
+	if d.rucssWorker != nil {
+		rucssworker.RegisterWorker(workers, d.rucssWorker)
+		for q, cfg := range rucssworker.Queues(d.rucssQueueParallel) {
+			queues[q] = cfg
+		}
+	}
+
+	// FIX 1 backstop: a periodic sweeper that reaps orphaned RUCSS source bundles
+	// (page HTML) under "rucss-src/" older than ~60s — the safety net for jobs
+	// whose inline self-delete never ran (enqueue failed / River row lost). Runs
+	// on the default queue every 30s (half the max-age window so an orphan is
+	// reaped within at most ~90s). An object-storage lifecycle rule on the bucket
+	// is the recommended alternative on managed S3/GCS; this exists so the
+	// guarantee also holds on lifecycle-less backends (SeaweedFS/MinIO).
+	if d.rucssSweepWorker != nil {
+		rucssworker.RegisterSweepWorker(workers, d.rucssSweepWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(30*time.Second),
+			func() (river.JobArgs, *river.InsertOpts) { return rucssworker.RucssSweepArgs{}, nil },
 			nil,
 		))
 	}

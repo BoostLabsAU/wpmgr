@@ -1,0 +1,137 @@
+<?php
+/**
+ * CacheWriter tests on a temp-dir cache fixture: a cacheable anonymous HTML GET
+ * is written as a gzip file at the deterministic key path; non-cacheable
+ * requests (logged-in w/o logged-in caching, non-200, non-HTML) write nothing;
+ * the written bytes are valid gzip of the original body.
+ *
+ * @package WPMgr\Agent\Tests
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Tests;
+
+use WPMgr\Agent\Cache\CacheConfig;
+use WPMgr\Agent\Cache\CacheWriter;
+use Yoast\PHPUnitPolyfills\TestCases\TestCase;
+
+/**
+ * @covers \WPMgr\Agent\Cache\CacheWriter
+ */
+final class CacheWriterTest extends TestCase
+{
+    private const HTML = '<!DOCTYPE html><html><body>hello world</body></html>';
+
+    private string $root = '';
+
+    protected function set_up(): void
+    {
+        parent::set_up();
+        $this->root = sys_get_temp_dir() . '/wpmgr-writer-' . uniqid('', true) . '/cache/wpmgr';
+    }
+
+    protected function tear_down(): void
+    {
+        $base = dirname(dirname($this->root));
+        $this->rrmdir($base);
+        parent::tear_down();
+    }
+
+    private function rrmdir(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        foreach (scandir($dir) ?: [] as $e) {
+            if ($e === '.' || $e === '..') {
+                continue;
+            }
+            $p = $dir . '/' . $e;
+            is_dir($p) ? $this->rrmdir($p) : @unlink($p);
+        }
+        @rmdir($dir);
+    }
+
+    private function writer(array $configOver = []): CacheWriter
+    {
+        $config = new CacheConfig(array_merge(['enabled' => true], $configOver));
+        return new CacheWriter($config, $this->root);
+    }
+
+    private function ctx(array $over = []): array
+    {
+        return array_merge([
+            'url'               => '/about/',
+            'uri_path'          => '/about/',
+            'host'              => 'example.com',
+            'method'            => 'GET',
+            'user_agent'        => 'Mozilla/5.0 (desktop)',
+            'cookies'           => [],
+            'query'             => [],
+            'is_admin'          => false,
+            'is_ajax'           => false,
+            'status'            => 200,
+            'logged_in'         => false,
+            'cache_logged_in'   => false,
+            'password_required' => false,
+        ], $over);
+    }
+
+    public function test_writes_gzip_file_for_cacheable_request(): void
+    {
+        $written = $this->writer()->maybeWrite(self::HTML, $this->ctx());
+        $this->assertTrue($written);
+
+        $path = $this->root . '/example.com/about/index.html.gz';
+        $this->assertFileExists($path);
+
+        $raw = (string) file_get_contents($path);
+        $this->assertSame(self::HTML, gzdecode($raw), 'stored bytes must be gzip of the original body');
+    }
+
+    public function test_disabled_config_writes_nothing(): void
+    {
+        $written = $this->writer(['enabled' => false])->maybeWrite(self::HTML, $this->ctx());
+        $this->assertFalse($written);
+        $this->assertFileDoesNotExist($this->root . '/example.com/about/index.html.gz');
+    }
+
+    public function test_logged_in_without_logged_in_caching_writes_nothing(): void
+    {
+        $ctx = $this->ctx(['logged_in' => true, 'cookies' => ['wordpress_logged_in_x' => '1']]);
+        $written = $this->writer()->maybeWrite(self::HTML, $ctx);
+        $this->assertFalse($written);
+    }
+
+    public function test_non_200_writes_nothing(): void
+    {
+        $written = $this->writer()->maybeWrite(self::HTML, $this->ctx(['status' => 404]));
+        $this->assertFalse($written);
+    }
+
+    public function test_non_html_writes_nothing(): void
+    {
+        $written = $this->writer()->maybeWrite('{"json":true}', $this->ctx());
+        $this->assertFalse($written);
+    }
+
+    public function test_query_variant_path(): void
+    {
+        $ctx = $this->ctx(['query' => ['lang' => 'fr'], 'url' => '/about/?lang=fr']);
+        $written = $this->writer()->maybeWrite(self::HTML, $ctx);
+        $this->assertTrue($written);
+
+        // The file name carries a query hash segment, not a bare index.
+        $files = glob($this->root . '/example.com/about/index-*.html.gz');
+        $this->assertNotEmpty($files);
+    }
+
+    public function test_mobile_variant_path(): void
+    {
+        $ctx = $this->ctx(['user_agent' => 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)']);
+        $written = $this->writer(['cache_mobile' => true])->maybeWrite(self::HTML, $ctx);
+        $this->assertTrue($written);
+        $this->assertFileExists($this->root . '/example.com/about/index-mobile.html.gz');
+    }
+}

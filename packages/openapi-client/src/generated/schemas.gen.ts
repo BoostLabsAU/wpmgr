@@ -943,6 +943,9 @@ export const UserSchema = {
       type: "string",
       format: "date-time",
     },
+    is_superadmin: {
+      type: "boolean",
+    },
   },
 } as const;
 

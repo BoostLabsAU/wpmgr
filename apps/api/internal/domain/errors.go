@@ -40,6 +40,10 @@ const (
 	// KindRateLimited indicates the request exceeded a per-key rate-limit budget
 	// (HTTP 429). Carries the retry budget in the message.
 	KindRateLimited
+	// KindTooLarge indicates the request body exceeded a hard size limit (HTTP
+	// 413). Used by streaming ingest endpoints (e.g. the RUCSS multipart) that
+	// reject oversize parts BEFORE buffering them.
+	KindTooLarge
 )
 
 // Error is a domain error carrying a Kind, a stable machine code, a
@@ -123,6 +127,12 @@ func RateLimited(code, msg string) *Error {
 	return &Error{Kind: KindRateLimited, Code: code, Message: msg}
 }
 
+// TooLarge builds a KindTooLarge error (HTTP 413). Use for ingest endpoints
+// that reject an oversize request body/part before buffering it.
+func TooLarge(code, msg string) *Error {
+	return &Error{Kind: KindTooLarge, Code: code, Message: msg}
+}
+
 // HTTPStatus maps an error to an HTTP status code. Non-domain errors are 500.
 func HTTPStatus(err error) int {
 	var de *Error
@@ -146,6 +156,8 @@ func HTTPStatus(err error) int {
 			return http.StatusGone
 		case KindRateLimited:
 			return http.StatusTooManyRequests
+		case KindTooLarge:
+			return http.StatusRequestEntityTooLarge
 		default:
 			return http.StatusInternalServerError
 		}

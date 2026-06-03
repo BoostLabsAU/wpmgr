@@ -18,6 +18,7 @@ export const SITE = {
 export const NAV = {
   links: [
     { label: "Features", href: "#features" },
+    { label: "Performance", href: "#performance" },
     { label: "Media", href: "#media" },
     { label: "How it works", href: "#how-it-works" },
     { label: "Open source", href: "#open-source" },
@@ -27,7 +28,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "First public release, v0.12",
+  badge: "v0.15.0",
   heading: "Run your whole WordPress fleet from one dashboard you actually own",
   subhead:
     "WPMgr is the open-source, self-hostable control panel for everyone managing one site or a hundred. Enroll, monitor, update, back up, optimize images, and lock down every site from a single screen, on infrastructure you control, with a signed agent you can audit line by line.",
@@ -103,10 +104,34 @@ export const FEATURES = {
         "Scan core files against the official WordPress checksums and flag anything modified, missing, or injected. Block brute-force logins in escalating steps without locking out real admins, allow or deny by IP with a safety rail for your own IP, and whitelabel the login page.",
     },
     {
+      icon: "Zap",
+      title: "Performance and caching",
+      desc:
+        "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. A failed optimization never breaks the page.",
+    },
+    {
       icon: "Users",
       title: "Team and access",
       desc:
         "Four roles from owner to viewer, so each person gets exactly the access they need. Share one site with a collaborator who can never see the rest of your fleet, sign in with email, or with your company's single sign-on (OIDC), and keep a tamper-evident audit log of every action.",
+    },
+    {
+      icon: "Mail",
+      title: "Email in minutes",
+      desc:
+        "Configure your own SMTP server in Settings and send a test message before saving. Credentials are encrypted at rest so the control plane never stores a plain-text password. All transactional email flows, including password resets and verification codes, route through the server you choose.",
+    },
+    {
+      icon: "KeyRound",
+      title: "Self-serve account recovery",
+      desc:
+        "Users reset a forgotten password or change an existing one without opening a support ticket. A change immediately signs out every other active session so a compromised credential cannot be quietly reused. The full flow works from any device with no admin involvement.",
+    },
+    {
+      icon: "UserPlus",
+      title: "Open sign up with verification",
+      desc:
+        "New users register with their email address and receive a verification link before gaining access. No manual account provisioning by an admin. The sign-up gate is configurable so you can keep it open for team growth or lock it down when you are done onboarding.",
     },
   ],
 };
@@ -177,6 +202,61 @@ export const MEDIA_STEPS = {
       title: "Revert anytime",
       desc:
         "Changed your mind, or a single image looks off? Restore puts every archived original back, full image and all thumbnails, and rewrites the URLs in your content. Nothing about optimization is a one-way door.",
+    },
+  ],
+};
+
+export const PERFORMANCE = {
+  eyebrow: "Performance Suite",
+  heading: "Faster pages, on by the toggle, never at the cost of the page",
+  subhead:
+    "Turn on full-page caching and asset optimization and WPMgr serves your anonymous pages from disk and ships only the assets each page needs. Every step is per site or across your whole portfolio, and a failed optimization always falls back to the original.",
+  bodyLines: [
+    "Page caching serves pre-gzipped HTML straight from disk, with logged-in, per-role, mobile, and per-query variants, bypass rules for cart and checkout, scheduled refresh, automatic purge on content changes, and a preload warmer. The server fast-path installs itself on Apache and ships a paste-in snippet for nginx.",
+    "Remove Unused CSS is computed by WPMgr's own engine with no headless browser and no third-party service. Interactive states stay intact, a per-site safelist covers anything added by scripts, and on a cache miss the full CSS is served so rendering is never blocked.",
+  ],
+  chips: [
+    { icon: "Gauge", value: "From disk", label: "Anonymous pages served as pre-gzipped HTML, no PHP on a hit" },
+    { icon: "Scissors", value: "Unused CSS", label: "Stripped and inlined, full CSS served on any miss" },
+    { icon: "ShieldOff", value: "No browser", label: "Pure-Go engine, no headless Chrome and no third-party service" },
+    { icon: "ToggleLeft", value: "Per site", label: "Off until you turn it on, with safe, balanced, and aggressive presets" },
+  ],
+  cta: { label: "See the dashboard", href: SITE.dashboard, icon: "ArrowRight" },
+};
+
+export const PERFORMANCE_STEPS = {
+  eyebrow: "Under the hood",
+  heading: "What the Performance Suite turns on",
+  subhead:
+    "Four layers, each on its own toggle, all degrading safely. Turn on what you need and leave the rest off.",
+  steps: [
+    {
+      n: "1",
+      icon: "Zap",
+      title: "Cache pages to disk",
+      desc:
+        "Anonymous pages are stored as pre-gzipped HTML and served straight from disk on a hit, with variants for logged-in users, roles, mobile, and query strings, plus bypass rules so cart and checkout pages stay dynamic.",
+    },
+    {
+      n: "2",
+      icon: "Scissors",
+      title: "Trim CSS and JS",
+      desc:
+        "Minify CSS and JS, delay scripts until interaction, and strip the CSS a page does not use. Remove Unused CSS runs on WPMgr's own engine and always serves full CSS when a result is not ready yet.",
+    },
+    {
+      n: "3",
+      icon: "ImageDown",
+      title: "Lighten the front end",
+      desc:
+        "Lazy-load images with width, height, and srcset preserved, swap in fonts without blocking text, remove front-end bloat, and rewrite asset URLs to your CDN with credentials encrypted at rest.",
+    },
+    {
+      n: "4",
+      icon: "Gauge",
+      title: "Manage it like a fleet",
+      desc:
+        "Save the config for one site, purge the cache across many at once, or apply a safe, balanced, or aggressive preset to a whole group in one run. Live status and stats stream to the dashboard with no refresh.",
     },
   ],
 };

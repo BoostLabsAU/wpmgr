@@ -9,8 +9,11 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as VerifyEmailRouteImport } from './routes/verify-email'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as RegisterRouteImport } from './routes/register'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as AcceptRouteImport } from './routes/accept'
 import { Route as AuthedRouteImport } from './routes/_authed'
 import { Route as IndexRouteImport } from './routes/index'
@@ -20,11 +23,13 @@ import { Route as AuthedSharedWithMeRouteImport } from './routes/_authed/shared-
 import { Route as AuthedPerformanceRouteImport } from './routes/_authed/performance'
 import { Route as AuthedMigrationsRouteImport } from './routes/_authed/migrations'
 import { Route as AuthedAuditRouteImport } from './routes/_authed/audit'
+import { Route as AuthedAdminRouteImport } from './routes/_authed/admin'
 import { Route as AuthedUpdatesIndexRouteImport } from './routes/_authed/updates/index'
 import { Route as AuthedSitesIndexRouteImport } from './routes/_authed/sites/index'
 import { Route as AuthedBackupsIndexRouteImport } from './routes/_authed/backups/index'
 import { Route as AuthedUpdatesRunIdRouteImport } from './routes/_authed/updates/$runId'
 import { Route as AuthedSitesSiteIdRouteImport } from './routes/_authed/sites/$siteId'
+import { Route as AuthedSettingsSmtpRouteImport } from './routes/_authed/settings/smtp'
 import { Route as AuthedSettingsOrganizationRouteImport } from './routes/_authed/settings/organization'
 import { Route as AuthedSettingsMembersRouteImport } from './routes/_authed/settings/members'
 import { Route as AuthedSettingsDestinationsRouteImport } from './routes/_authed/settings/destinations'
@@ -38,12 +43,24 @@ import { Route as AuthedSitesSiteIdIndexRouteImport } from './routes/_authed/sit
 import { Route as AuthedSitesSiteIdUpdatesRouteImport } from './routes/_authed/sites/$siteId.updates'
 import { Route as AuthedSitesSiteIdSettingsRouteImport } from './routes/_authed/sites/$siteId.settings'
 import { Route as AuthedSitesSiteIdSecurityRouteImport } from './routes/_authed/sites/$siteId.security'
+import { Route as AuthedSitesSiteIdOptimizeRouteImport } from './routes/_authed/sites/$siteId.optimize'
 import { Route as AuthedSitesSiteIdMediaRouteImport } from './routes/_authed/sites/$siteId.media'
 import { Route as AuthedSitesSiteIdHealthRouteImport } from './routes/_authed/sites/$siteId.health'
 import { Route as AuthedSitesSiteIdErrorsRouteImport } from './routes/_authed/sites/$siteId.errors'
+import { Route as AuthedSitesSiteIdCacheRouteImport } from './routes/_authed/sites/$siteId.cache'
 import { Route as AuthedSitesSiteIdBackupsRouteImport } from './routes/_authed/sites/$siteId.backups'
 import { Route as AuthedSitesSiteIdActivityRouteImport } from './routes/_authed/sites/$siteId.activity'
 
+const VerifyEmailRoute = VerifyEmailRouteImport.update({
+  id: '/verify-email',
+  path: '/verify-email',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RegisterRoute = RegisterRouteImport.update({
   id: '/register',
   path: '/register',
@@ -52,6 +69,11 @@ const RegisterRoute = RegisterRouteImport.update({
 const LoginRoute = LoginRouteImport.update({
   id: '/login',
   path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
+  id: '/forgot-password',
+  path: '/forgot-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AcceptRoute = AcceptRouteImport.update({
@@ -98,6 +120,11 @@ const AuthedAuditRoute = AuthedAuditRouteImport.update({
   path: '/audit',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedAdminRoute = AuthedAdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedUpdatesIndexRoute = AuthedUpdatesIndexRouteImport.update({
   id: '/updates/',
   path: '/updates/',
@@ -121,6 +148,11 @@ const AuthedUpdatesRunIdRoute = AuthedUpdatesRunIdRouteImport.update({
 const AuthedSitesSiteIdRoute = AuthedSitesSiteIdRouteImport.update({
   id: '/sites/$siteId',
   path: '/sites/$siteId',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedSettingsSmtpRoute = AuthedSettingsSmtpRouteImport.update({
+  id: '/settings/smtp',
+  path: '/settings/smtp',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedSettingsOrganizationRoute =
@@ -193,6 +225,12 @@ const AuthedSitesSiteIdSecurityRoute =
     path: '/security',
     getParentRoute: () => AuthedSitesSiteIdRoute,
   } as any)
+const AuthedSitesSiteIdOptimizeRoute =
+  AuthedSitesSiteIdOptimizeRouteImport.update({
+    id: '/optimize',
+    path: '/optimize',
+    getParentRoute: () => AuthedSitesSiteIdRoute,
+  } as any)
 const AuthedSitesSiteIdMediaRoute = AuthedSitesSiteIdMediaRouteImport.update({
   id: '/media',
   path: '/media',
@@ -206,6 +244,11 @@ const AuthedSitesSiteIdHealthRoute = AuthedSitesSiteIdHealthRouteImport.update({
 const AuthedSitesSiteIdErrorsRoute = AuthedSitesSiteIdErrorsRouteImport.update({
   id: '/errors',
   path: '/errors',
+  getParentRoute: () => AuthedSitesSiteIdRoute,
+} as any)
+const AuthedSitesSiteIdCacheRoute = AuthedSitesSiteIdCacheRouteImport.update({
+  id: '/cache',
+  path: '/cache',
   getParentRoute: () => AuthedSitesSiteIdRoute,
 } as any)
 const AuthedSitesSiteIdBackupsRoute =
@@ -224,8 +267,12 @@ const AuthedSitesSiteIdActivityRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/accept': typeof AcceptRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/verify-email': typeof VerifyEmailRoute
+  '/admin': typeof AuthedAdminRoute
   '/audit': typeof AuthedAuditRoute
   '/migrations': typeof AuthedMigrationsRoute
   '/performance': typeof AuthedPerformanceRoute
@@ -241,6 +288,7 @@ export interface FileRoutesByFullPath {
   '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/backups/': typeof AuthedBackupsIndexRoute
@@ -248,9 +296,11 @@ export interface FileRoutesByFullPath {
   '/updates/': typeof AuthedUpdatesIndexRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
+  '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
+  '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
   '/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
@@ -259,8 +309,12 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/accept': typeof AcceptRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/verify-email': typeof VerifyEmailRoute
+  '/admin': typeof AuthedAdminRoute
   '/audit': typeof AuthedAuditRoute
   '/migrations': typeof AuthedMigrationsRoute
   '/performance': typeof AuthedPerformanceRoute
@@ -276,15 +330,18 @@ export interface FileRoutesByTo {
   '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/backups': typeof AuthedBackupsIndexRoute
   '/sites': typeof AuthedSitesIndexRoute
   '/updates': typeof AuthedUpdatesIndexRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
+  '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
+  '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
   '/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
@@ -295,8 +352,12 @@ export interface FileRoutesById {
   '/': typeof IndexRoute
   '/_authed': typeof AuthedRouteWithChildren
   '/accept': typeof AcceptRoute
+  '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
   '/register': typeof RegisterRoute
+  '/reset-password': typeof ResetPasswordRoute
+  '/verify-email': typeof VerifyEmailRoute
+  '/_authed/admin': typeof AuthedAdminRoute
   '/_authed/audit': typeof AuthedAuditRoute
   '/_authed/migrations': typeof AuthedMigrationsRoute
   '/_authed/performance': typeof AuthedPerformanceRoute
@@ -312,6 +373,7 @@ export interface FileRoutesById {
   '/_authed/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/_authed/settings/members': typeof AuthedSettingsMembersRoute
   '/_authed/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/_authed/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/_authed/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/_authed/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/_authed/backups/': typeof AuthedBackupsIndexRoute
@@ -319,9 +381,11 @@ export interface FileRoutesById {
   '/_authed/updates/': typeof AuthedUpdatesIndexRoute
   '/_authed/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/_authed/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
+  '/_authed/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/_authed/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/_authed/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/_authed/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
+  '/_authed/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/_authed/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/_authed/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
   '/_authed/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
@@ -332,8 +396,12 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/accept'
+    | '/forgot-password'
     | '/login'
     | '/register'
+    | '/reset-password'
+    | '/verify-email'
+    | '/admin'
     | '/audit'
     | '/migrations'
     | '/performance'
@@ -349,6 +417,7 @@ export interface FileRouteTypes {
     | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
+    | '/settings/smtp'
     | '/sites/$siteId'
     | '/updates/$runId'
     | '/backups/'
@@ -356,9 +425,11 @@ export interface FileRouteTypes {
     | '/updates/'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
+    | '/sites/$siteId/cache'
     | '/sites/$siteId/errors'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
+    | '/sites/$siteId/optimize'
     | '/sites/$siteId/security'
     | '/sites/$siteId/settings'
     | '/sites/$siteId/updates'
@@ -367,8 +438,12 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/accept'
+    | '/forgot-password'
     | '/login'
     | '/register'
+    | '/reset-password'
+    | '/verify-email'
+    | '/admin'
     | '/audit'
     | '/migrations'
     | '/performance'
@@ -384,15 +459,18 @@ export interface FileRouteTypes {
     | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
+    | '/settings/smtp'
     | '/updates/$runId'
     | '/backups'
     | '/sites'
     | '/updates'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
+    | '/sites/$siteId/cache'
     | '/sites/$siteId/errors'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
+    | '/sites/$siteId/optimize'
     | '/sites/$siteId/security'
     | '/sites/$siteId/settings'
     | '/sites/$siteId/updates'
@@ -402,8 +480,12 @@ export interface FileRouteTypes {
     | '/'
     | '/_authed'
     | '/accept'
+    | '/forgot-password'
     | '/login'
     | '/register'
+    | '/reset-password'
+    | '/verify-email'
+    | '/_authed/admin'
     | '/_authed/audit'
     | '/_authed/migrations'
     | '/_authed/performance'
@@ -419,6 +501,7 @@ export interface FileRouteTypes {
     | '/_authed/settings/destinations'
     | '/_authed/settings/members'
     | '/_authed/settings/organization'
+    | '/_authed/settings/smtp'
     | '/_authed/sites/$siteId'
     | '/_authed/updates/$runId'
     | '/_authed/backups/'
@@ -426,9 +509,11 @@ export interface FileRouteTypes {
     | '/_authed/updates/'
     | '/_authed/sites/$siteId/activity'
     | '/_authed/sites/$siteId/backups'
+    | '/_authed/sites/$siteId/cache'
     | '/_authed/sites/$siteId/errors'
     | '/_authed/sites/$siteId/health'
     | '/_authed/sites/$siteId/media'
+    | '/_authed/sites/$siteId/optimize'
     | '/_authed/sites/$siteId/security'
     | '/_authed/sites/$siteId/settings'
     | '/_authed/sites/$siteId/updates'
@@ -439,12 +524,29 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   AcceptRoute: typeof AcceptRoute
+  ForgotPasswordRoute: typeof ForgotPasswordRoute
   LoginRoute: typeof LoginRoute
   RegisterRoute: typeof RegisterRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
+  VerifyEmailRoute: typeof VerifyEmailRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/verify-email': {
+      id: '/verify-email'
+      path: '/verify-email'
+      fullPath: '/verify-email'
+      preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/register': {
       id: '/register'
       path: '/register'
@@ -457,6 +559,13 @@ declare module '@tanstack/react-router' {
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/forgot-password': {
+      id: '/forgot-password'
+      path: '/forgot-password'
+      fullPath: '/forgot-password'
+      preLoaderRoute: typeof ForgotPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/accept': {
@@ -522,6 +631,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAuditRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/admin': {
+      id: '/_authed/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AuthedAdminRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/updates/': {
       id: '/_authed/updates/'
       path: '/updates'
@@ -555,6 +671,13 @@ declare module '@tanstack/react-router' {
       path: '/sites/$siteId'
       fullPath: '/sites/$siteId'
       preLoaderRoute: typeof AuthedSitesSiteIdRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/settings/smtp': {
+      id: '/_authed/settings/smtp'
+      path: '/settings/smtp'
+      fullPath: '/settings/smtp'
+      preLoaderRoute: typeof AuthedSettingsSmtpRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/settings/organization': {
@@ -648,6 +771,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSitesSiteIdSecurityRouteImport
       parentRoute: typeof AuthedSitesSiteIdRoute
     }
+    '/_authed/sites/$siteId/optimize': {
+      id: '/_authed/sites/$siteId/optimize'
+      path: '/optimize'
+      fullPath: '/sites/$siteId/optimize'
+      preLoaderRoute: typeof AuthedSitesSiteIdOptimizeRouteImport
+      parentRoute: typeof AuthedSitesSiteIdRoute
+    }
     '/_authed/sites/$siteId/media': {
       id: '/_authed/sites/$siteId/media'
       path: '/media'
@@ -667,6 +797,13 @@ declare module '@tanstack/react-router' {
       path: '/errors'
       fullPath: '/sites/$siteId/errors'
       preLoaderRoute: typeof AuthedSitesSiteIdErrorsRouteImport
+      parentRoute: typeof AuthedSitesSiteIdRoute
+    }
+    '/_authed/sites/$siteId/cache': {
+      id: '/_authed/sites/$siteId/cache'
+      path: '/cache'
+      fullPath: '/sites/$siteId/cache'
+      preLoaderRoute: typeof AuthedSitesSiteIdCacheRouteImport
       parentRoute: typeof AuthedSitesSiteIdRoute
     }
     '/_authed/sites/$siteId/backups': {
@@ -689,9 +826,11 @@ declare module '@tanstack/react-router' {
 interface AuthedSitesSiteIdRouteChildren {
   AuthedSitesSiteIdActivityRoute: typeof AuthedSitesSiteIdActivityRoute
   AuthedSitesSiteIdBackupsRoute: typeof AuthedSitesSiteIdBackupsRoute
+  AuthedSitesSiteIdCacheRoute: typeof AuthedSitesSiteIdCacheRoute
   AuthedSitesSiteIdErrorsRoute: typeof AuthedSitesSiteIdErrorsRoute
   AuthedSitesSiteIdHealthRoute: typeof AuthedSitesSiteIdHealthRoute
   AuthedSitesSiteIdMediaRoute: typeof AuthedSitesSiteIdMediaRoute
+  AuthedSitesSiteIdOptimizeRoute: typeof AuthedSitesSiteIdOptimizeRoute
   AuthedSitesSiteIdSecurityRoute: typeof AuthedSitesSiteIdSecurityRoute
   AuthedSitesSiteIdSettingsRoute: typeof AuthedSitesSiteIdSettingsRoute
   AuthedSitesSiteIdUpdatesRoute: typeof AuthedSitesSiteIdUpdatesRoute
@@ -701,9 +840,11 @@ interface AuthedSitesSiteIdRouteChildren {
 const AuthedSitesSiteIdRouteChildren: AuthedSitesSiteIdRouteChildren = {
   AuthedSitesSiteIdActivityRoute: AuthedSitesSiteIdActivityRoute,
   AuthedSitesSiteIdBackupsRoute: AuthedSitesSiteIdBackupsRoute,
+  AuthedSitesSiteIdCacheRoute: AuthedSitesSiteIdCacheRoute,
   AuthedSitesSiteIdErrorsRoute: AuthedSitesSiteIdErrorsRoute,
   AuthedSitesSiteIdHealthRoute: AuthedSitesSiteIdHealthRoute,
   AuthedSitesSiteIdMediaRoute: AuthedSitesSiteIdMediaRoute,
+  AuthedSitesSiteIdOptimizeRoute: AuthedSitesSiteIdOptimizeRoute,
   AuthedSitesSiteIdSecurityRoute: AuthedSitesSiteIdSecurityRoute,
   AuthedSitesSiteIdSettingsRoute: AuthedSitesSiteIdSettingsRoute,
   AuthedSitesSiteIdUpdatesRoute: AuthedSitesSiteIdUpdatesRoute,
@@ -714,6 +855,7 @@ const AuthedSitesSiteIdRouteWithChildren =
   AuthedSitesSiteIdRoute._addFileChildren(AuthedSitesSiteIdRouteChildren)
 
 interface AuthedRouteChildren {
+  AuthedAdminRoute: typeof AuthedAdminRoute
   AuthedAuditRoute: typeof AuthedAuditRoute
   AuthedMigrationsRoute: typeof AuthedMigrationsRoute
   AuthedPerformanceRoute: typeof AuthedPerformanceRoute
@@ -729,6 +871,7 @@ interface AuthedRouteChildren {
   AuthedSettingsDestinationsRoute: typeof AuthedSettingsDestinationsRoute
   AuthedSettingsMembersRoute: typeof AuthedSettingsMembersRoute
   AuthedSettingsOrganizationRoute: typeof AuthedSettingsOrganizationRoute
+  AuthedSettingsSmtpRoute: typeof AuthedSettingsSmtpRoute
   AuthedSitesSiteIdRoute: typeof AuthedSitesSiteIdRouteWithChildren
   AuthedUpdatesRunIdRoute: typeof AuthedUpdatesRunIdRoute
   AuthedBackupsIndexRoute: typeof AuthedBackupsIndexRoute
@@ -737,6 +880,7 @@ interface AuthedRouteChildren {
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
+  AuthedAdminRoute: AuthedAdminRoute,
   AuthedAuditRoute: AuthedAuditRoute,
   AuthedMigrationsRoute: AuthedMigrationsRoute,
   AuthedPerformanceRoute: AuthedPerformanceRoute,
@@ -752,6 +896,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedSettingsDestinationsRoute: AuthedSettingsDestinationsRoute,
   AuthedSettingsMembersRoute: AuthedSettingsMembersRoute,
   AuthedSettingsOrganizationRoute: AuthedSettingsOrganizationRoute,
+  AuthedSettingsSmtpRoute: AuthedSettingsSmtpRoute,
   AuthedSitesSiteIdRoute: AuthedSitesSiteIdRouteWithChildren,
   AuthedUpdatesRunIdRoute: AuthedUpdatesRunIdRoute,
   AuthedBackupsIndexRoute: AuthedBackupsIndexRoute,
@@ -766,8 +911,11 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthedRoute: AuthedRouteWithChildren,
   AcceptRoute: AcceptRoute,
+  ForgotPasswordRoute: ForgotPasswordRoute,
   LoginRoute: LoginRoute,
   RegisterRoute: RegisterRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
+  VerifyEmailRoute: VerifyEmailRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

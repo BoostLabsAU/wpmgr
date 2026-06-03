@@ -31,15 +31,25 @@ type memberListDTO struct {
 	Items []memberDTO `json:"items"`
 }
 
+// OrgInviter creates a tokenized org invitation (the invitee sets their own
+// password via the emailed /accept link) and returns that accept link. Satisfied
+// by *invitation.Service; declared here so this package does not import
+// invitation (which already imports auth — avoids a cycle). ADR-045 Phase 3.
+type OrgInviter interface {
+	CreateOrgInvitation(ctx context.Context, tenantID, actorID uuid.UUID, actorRole authz.Role, email, role string) (acceptLink string, err error)
+}
+
 // MembersHandler serves tenant member management under /api/v1/members.
 // Reads require viewer+; mutations require admin+ (enforced via middleware).
 type MembersHandler struct {
-	svc *Service
+	svc     *Service
+	inviter OrgInviter
 }
 
-// NewMembersHandler builds a MembersHandler.
-func NewMembersHandler(svc *Service) *MembersHandler {
-	return &MembersHandler{svc: svc}
+// NewMembersHandler builds a MembersHandler. inviter wires the tokenized
+// email-invite flow (nil falls back to the legacy password-in-body invite).
+func NewMembersHandler(svc *Service, inviter OrgInviter) *MembersHandler {
+	return &MembersHandler{svc: svc, inviter: inviter}
 }
 
 // Register mounts member routes with per-route RBAC.
@@ -106,6 +116,26 @@ func (h *MembersHandler) invite(c *gin.Context) {
 		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
 		return
 	}
+
+	// ADR-045 Phase 3 — tokenized email invite: the teammate gets an emailed
+	// /accept link and sets their OWN password. The membership is created when
+	// they accept, so we return the invitation details + the accept link (which
+	// the admin can also hand-deliver). The legacy password-in-body path is kept
+	// only as a fallback when no inviter is wired.
+	if h.inviter != nil {
+		role := body.Role
+		if role == "" {
+			role = string(authz.RoleViewer)
+		}
+		link, err := h.inviter.CreateOrgInvitation(c.Request.Context(), p.TenantID, p.UserID, authz.Role(p.Role), body.Email, role)
+		if err != nil {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusCreated, gin.H{"email": body.Email, "role": role, "accept_link": link})
+		return
+	}
+
 	_, m, err := h.svc.Invite(c.Request.Context(), p.TenantID, p.UserID, authz.Role(p.Role), InviteInput{
 		Email:    body.Email,
 		Password: body.Password,

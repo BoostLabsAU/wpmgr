@@ -43,6 +43,15 @@ func TestAllows(t *testing.T) {
 		{"operator cannot autologin", RoleOperator, PermSiteAutologin, false},
 		{"admin can autologin", RoleAdmin, PermSiteAutologin, true},
 		{"owner can autologin", RoleOwner, PermSiteAutologin, true},
+		// Performance Suite perms (ADR-046): cache manage/purge + perf config are
+		// operator+; delete-everything is admin+ (destructive).
+		{"viewer cannot manage cache", RoleViewer, PermSiteCacheManage, false},
+		{"operator can manage cache", RoleOperator, PermSiteCacheManage, true},
+		{"operator can purge cache", RoleOperator, PermSiteCachePurge, true},
+		{"operator can save perf config", RoleOperator, PermSitePerfConfig, true},
+		{"operator cannot delete everything", RoleOperator, PermSiteCacheDeleteAll, false},
+		{"admin can delete everything", RoleAdmin, PermSiteCacheDeleteAll, true},
+		{"owner can delete everything", RoleOwner, PermSiteCacheDeleteAll, true},
 		{"unknown role denied", Role("bogus"), PermSiteRead, false},
 	}
 	for _, tt := range tests {

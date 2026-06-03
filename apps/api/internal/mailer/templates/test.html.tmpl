@@ -1,0 +1,15 @@
+{{template "header" .}}
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 18px 0;"><tr>
+            <td style="background:#E6F4F3;border-radius:6px;padding:5px 11px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;font-weight:700;letter-spacing:0.6px;text-transform:uppercase;color:#0E7C8B;">&#10003;&nbsp;&nbsp;Success</td>
+          </tr></table>
+          <h1 class="ink" style="margin:0 0 14px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:24px;line-height:1.3;font-weight:700;color:#16302E;">Your SMTP setup is working</h1>
+          <p class="body" style="margin:0 0 16px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#3A4A48;">This is a test message from {{.ProductName}}. If you're reading it, your outbound email is configured correctly and delivery is working end to end.</p>
+          <p class="body" style="margin:0 0 24px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#3A4A48;">No action is needed. {{.ProductName}} can now send password resets, security notices, invitations, and alerts to your team.</p>
+          <table role="presentation" class="band" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#E6F4F3;border:1px solid #D8E2E1;border-radius:10px;margin:0 0 8px 0;">
+            <tr>
+              <td class="k" style="padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#6B7280;width:130px;">Delivered to</td>
+              <td style="padding:14px 16px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#16302E;font-weight:600;word-break:break-all;">{{.RecipientEmail}}</td>
+            </tr>
+          </table>
+          <p class="muted" style="margin:18px 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#6B7280;">If you didn't trigger this test, you can safely ignore this email.</p>
+{{template "footer" .}}

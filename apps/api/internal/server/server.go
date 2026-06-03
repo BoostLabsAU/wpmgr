@@ -13,6 +13,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/activity"
+	"github.com/mosamlife/wpmgr/apps/api/internal/admin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/api/gen"
 	"github.com/mosamlife/wpmgr/apps/api/internal/apikey"
@@ -29,8 +30,10 @@ import (
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
+	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
+	"github.com/mosamlife/wpmgr/apps/api/internal/settings"
 	"github.com/mosamlife/wpmgr/apps/api/internal/sharing"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
@@ -42,17 +45,17 @@ import (
 
 // Deps are the server's wired dependencies.
 type Deps struct {
-	Config       config.Config
-	Logger       *slog.Logger
-	Pool         *db.Pool
-	Sessions     *auth.SessionManager
-	Auth         *middleware.Authenticator
-	AuthH        *auth.Handler
-	MembersH     *auth.MembersHandler
-	APIKeyH      *apikey.Handler
-	AuditH       *audit.Handler
-	TenantH      *tenant.Handler
-	SiteH        *site.Handler
+	Config   config.Config
+	Logger   *slog.Logger
+	Pool     *db.Pool
+	Sessions *auth.SessionManager
+	Auth     *middleware.Authenticator
+	AuthH    *auth.Handler
+	MembersH *auth.MembersHandler
+	APIKeyH  *apikey.Handler
+	AuditH   *audit.Handler
+	TenantH  *tenant.Handler
+	SiteH    *site.Handler
 	// SiteEventsH serves the M21 tenant-scoped connection-lifecycle SSE stream at
 	// GET /api/v1/sites/events (ADR-038). nil ⇒ the route is not mounted.
 	SiteEventsH  *siteevents.Handler
@@ -77,6 +80,9 @@ type Deps struct {
 	// SiteDestH serves the ADR-036 P1 per-site destinations CRUD under
 	// /api/v1/sites/{siteId}/destinations.
 	SiteDestH *sitedestination.Handler
+	// SettingsH serves the ADR-045 instance SMTP settings under
+	// /api/v1/settings/smtp (GET/PUT/test). nil ⇒ routes not mounted.
+	SettingsH *settings.Handler
 	// ADR-037 Sprint 2 — diagnostics + php-error monitor.
 	// DiagnosticsH serves the operator-facing GETs + silence/refresh under
 	// /api/v1/sites/{siteId}/(diagnostics|errors).
@@ -124,6 +130,16 @@ type Deps struct {
 	// agent-authenticated /agent/v1/media/... callbacks. Either may be nil.
 	MediaH      *mediahandler.Handler
 	MediaAgentH *mediahandler.AgentHandler
+	// m36 / ADR-046 — Performance Suite. PerfH serves the operator-facing
+	// /api/v1/sites/{siteId}/perf|cache|db|rucss/... routes + the portfolio
+	// /api/v1/cache/* bulk routes; PerfAgentH serves the agent-authenticated
+	// /agent/v1/cache/* + /agent/v1/perf/* + /agent/v1/rucss callbacks. Either
+	// may be nil.
+	PerfH      *perf.Handler
+	PerfAgentH *perf.AgentHandler
+	// AdminH serves the superadmin instance-management area under
+	// /api/v1/admin. nil ⇒ routes not mounted.
+	AdminH      *admin.Handler
 	ServiceName string
 	Version     string
 }
@@ -221,12 +237,28 @@ func New(deps Deps) *Server {
 		if deps.MediaAgentH != nil {
 			deps.MediaAgentH.Register(agentGroup)
 		}
+		// m36 / ADR-046 — Performance Suite agent callbacks: cache stats report,
+		// perf config-ack, and the RUCSS multipart ingest. Same Ed25519
+		// signed-request auth; the RUCSS endpoint additionally asserts the body's
+		// site_id matches the JWT-bound site.
+		if deps.PerfAgentH != nil {
+			deps.PerfAgentH.Register(agentGroup)
+		}
 	}
 
 	// Everything under /api/v1 requires an authenticated principal with an
 	// active tenant; finer per-route RBAC is applied by each handler.
 	v1 := engine.Group("/api/v1")
 	v1.Use(authz.RequireAuth(), authz.RequireTenant())
+
+	// Org routes require auth but NOT an active tenant: a user creates (or lists,
+	// or activates) their FIRST organisation precisely when they have none yet
+	// (e.g. a former site-collaborator whose access was revoked). RequireTenant
+	// would 403 them out of the create-org onboarding. Each org handler does its
+	// own per-org membership/role authorization, so dropping the tenant gate here
+	// opens no hole. (ADR-045 Phase 3 onboarding.)
+	v1Auth := engine.Group("/api/v1")
+	v1Auth.Use(authz.RequireAuth())
 	deps.TenantH.Register(v1)
 	deps.SiteH.Register(v1)
 	// M21 — tenant-scoped connection-lifecycle SSE stream (GET /sites/events).
@@ -239,6 +271,10 @@ func New(deps Deps) *Server {
 	if deps.SiteDestH != nil {
 		// ADR-036 P1 storage adapter: per-site destination management.
 		deps.SiteDestH.Register(v1)
+	}
+	if deps.SettingsH != nil {
+		// ADR-045 — instance SMTP settings + send-test.
+		deps.SettingsH.Register(v1)
 	}
 	if deps.UpdateH != nil {
 		deps.UpdateH.Register(v1)
@@ -284,9 +320,10 @@ func New(deps Deps) *Server {
 	if deps.ScheduleRunH != nil {
 		deps.ScheduleRunH.Register(v1)
 	}
-	// M5.7 — Orgs + Sharing.
+	// M5.7 — Orgs + Sharing. Org routes mount on the auth-only group so a
+	// tenant-less user can create/list/activate their first org (see v1Auth).
 	if deps.OrgH != nil {
-		deps.OrgH.Register(v1)
+		deps.OrgH.Register(v1Auth)
 	}
 	if deps.SharingH != nil {
 		deps.SharingH.Register(v1)
@@ -294,6 +331,16 @@ func New(deps Deps) *Server {
 	// M23 — operator-facing Media Optimizer dashboard routes.
 	if deps.MediaH != nil {
 		deps.MediaH.Register(v1)
+	}
+	// m36 / ADR-046 — operator-facing Performance Suite dashboard routes +
+	// portfolio bulk cache routes.
+	if deps.PerfH != nil {
+		deps.PerfH.Register(v1)
+	}
+
+	// m33 — superadmin instance-management area (auth-only, not tenant-gated).
+	if deps.AdminH != nil {
+		deps.AdminH.Register(v1Auth)
 	}
 
 	return s

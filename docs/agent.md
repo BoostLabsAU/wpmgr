@@ -196,6 +196,117 @@ is not writable by the web user. Fix the permissions or paste the block manually
 between the markers — the install is idempotent and will leave a hand-placed
 block alone if it matches.
 
+## Page cache
+
+> **M36 / Phase 6 (Performance Suite).** The agent installs a standard WordPress
+> `WP_CACHE` drop-in and serves anonymous pages from disk. User guide:
+> [features/caching.md](./features/caching.md). Architecture:
+> [architecture/perf-suite.md](./architecture/perf-suite.md). Design:
+> [ADR-046](./adr/ADR-046-performance-suite-architecture.md).
+
+On `cache_enable` the agent sets `define('WP_CACHE', true)` in `wp-config.php`
+(atomic temp-file + rename), installs `wp-content/advanced-cache.php`, and on
+Apache splices a managed `# BEGIN WPMgr Cache` / `# END WPMgr Cache` block into
+the site-root `.htaccess`. Cached pages live at
+`wp-content/cache/wpmgr/<host>/<path>/<variant>.html.gz`. A served hit carries
+`x-wpmgr-cache: HIT`; a miss carries `MISS`.
+
+The PHP drop-in always serves a hit. A server-level fast-path can short-circuit
+to the static `.html.gz` **before** PHP loads.
+
+### nginx location snippet (manual — the agent never edits nginx config)
+
+nginx ignores `.htaccess`, so the agent **cannot** auto-install the fast-path. It
+detects nginx via `SERVER_SOFTWARE`, skips the file edit, and surfaces an admin
+notice with the equivalent `location` snippet to add inside your `server {}`
+block. Until you add it the PHP drop-in still serves every hit.
+
+```nginx
+# WPMgr Page Cache — nginx equivalent (add inside your server {} block manually).
+set $wpmgr_cache "";
+# Only consider the disk cache for anonymous, query-less, cacheable requests.
+if ($request_method ~ ^(GET|HEAD)$) { set $wpmgr_cache "M"; }
+if ($query_string != "") { set $wpmgr_cache ""; }
+if ($http_cookie ~* "wordpress_logged_in|wp-postpass|comment_author|woocommerce_items_in_cart") {
+    set $wpmgr_cache "";
+}
+if ($request_uri ~* "/wp-(admin|login|register|comments-post|cron|json)") {
+    set $wpmgr_cache "";
+}
+
+location / {
+    # Block direct hits on cache files.
+    location ~* /wp-content/cache/wpmgr/.*\.html\.gz$ { internal; }
+
+    # Serve the pre-gzipped page when a cache file exists and $wpmgr_cache == "M".
+    if (-f "$document_root/wp-content/cache/wpmgr/$host$uri/index.html.gz") {
+        set $wpmgr_cache "${wpmgr_cache}F";
+    }
+    if ($wpmgr_cache = "MF") {
+        add_header Content-Encoding gzip;
+        add_header X-WPMgr-Cache HIT;
+        add_header Cache-Control "no-cache, must-revalidate";
+        rewrite ^ /wp-content/cache/wpmgr/$host$uri/index.html.gz break;
+    }
+
+    try_files $uri $uri/ /index.php?$args;
+}
+```
+
+**Verify** the fast-path is taking effect: load a published page twice as an
+anonymous visitor, then check the response header.
+
+```bash
+curl -sI https://your-site.example/some-post/ | grep -i x-wpmgr
+# x-wpmgr-cache: HIT
+# x-wpmgr-source: Web Server   # nginx/Apache fast-path; "PHP" = drop-in served it
+```
+
+`x-wpmgr-source: PHP` means the drop-in served the hit (correct, just not the
+server fast-path) — recheck the snippet path and that the `.html.gz` exists on
+disk.
+
+### OpenLiteSpeed / LiteSpeed
+
+Detected via `LSWS_EDITION`. The agent **strips its own gzip/deflate section**
+from the `.htaccess` block, because the server already compresses and
+double-gzipping a `.html.gz` corrupts the response. The serve rules stay; the
+server handles compression. No action needed.
+
+### WP Engine / managed Atomic hosts
+
+These platforms ship their own `advanced-cache.php`. The agent detects them (the
+`Atomic_Persistent_Data` class) and installs **under the alternate filename**
+`wpmgr-advanced-cache.php` rather than clobbering the platform's drop-in,
+degrading to leave the platform-owned page cache in place where it is managed.
+
+### Troubleshooting
+
+**Cache not serving (every response is `MISS`).** Confirm the cache is enabled
+for the site, and that the request is actually cacheable: it must be an anonymous
+(no `wordpress_logged_in_*` cookie unless logged-in caching is on), query-less or
+known-query, GET request returning a full `<!DOCTYPE html>` page. Admin/auth/API
+paths, AJAX, POST, password-protected content, and a URL with an unknown query
+param are never cached by design. Check that
+`wp-content/cache/wpmgr/<host>/...` exists and is writable by the web user.
+
+**Drop-in conflicts ("another cache plugin owns advanced-cache.php").** The agent
+refuses to overwrite a foreign canonical `advanced-cache.php` it does not
+recognise as its own — that signals another caching plugin installed it. Disable
+or remove the other cache plugin (or its drop-in) and re-run **Enable cache**.
+The agent only deletes a drop-in it recognises as ours on disable/uninstall, so
+it never removes a competing plugin's file.
+
+**`WP_CACHE` not set / config not writable.** If `wp-config.php` (or its
+directory) is not writable by the web user, the agent refuses to write rather
+than risk a partial edit; the Cache tab shows `wp_cache_constant_set: false`. Fix
+the permissions or add `define('WP_CACHE', true);` manually, then re-run Enable.
+
+**Pages look stale.** Purge the site (Cache tab or
+`POST /api/v1/sites/{siteId}/cache/purge`). Auto-purge clears changed URLs on
+content edits; if it is not firing, confirm WP-Cron runs (see the no-cron caveat
+above) and consider a shorter refresh interval.
+
 ## Build the zip
 
 ```bash

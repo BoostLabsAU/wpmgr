@@ -13354,12 +13354,13 @@ func (s *UptimeSummaryItem) SetTLSExpiry(val OptDateTime) {
 
 // Ref: #/components/schemas/User
 type User struct {
-	ID          uuid.UUID   `json:"id"`
-	Email       string      `json:"email"`
-	Name        string      `json:"name"`
-	CreatedAt   time.Time   `json:"created_at"`
-	UpdatedAt   time.Time   `json:"updated_at"`
-	LastLoginAt OptDateTime `json:"last_login_at"`
+	ID           uuid.UUID   `json:"id"`
+	Email        string      `json:"email"`
+	Name         string      `json:"name"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
+	LastLoginAt  OptDateTime `json:"last_login_at"`
+	IsSuperadmin OptBool     `json:"is_superadmin"`
 }
 
 // GetID returns the value of ID.
@@ -13392,6 +13393,11 @@ func (s *User) GetLastLoginAt() OptDateTime {
 	return s.LastLoginAt
 }
 
+// GetIsSuperadmin returns the value of IsSuperadmin.
+func (s *User) GetIsSuperadmin() OptBool {
+	return s.IsSuperadmin
+}
+
 // SetID sets the value of ID.
 func (s *User) SetID(val uuid.UUID) {
 	s.ID = val
@@ -13420,6 +13426,11 @@ func (s *User) SetUpdatedAt(val time.Time) {
 // SetLastLoginAt sets the value of LastLoginAt.
 func (s *User) SetLastLoginAt(val OptDateTime) {
 	s.LastLoginAt = val
+}
+
+// SetIsSuperadmin sets the value of IsSuperadmin.
+func (s *User) SetIsSuperadmin(val OptBool) {
+	s.IsSuperadmin = val
 }
 
 type VerifyAuditForbidden Error

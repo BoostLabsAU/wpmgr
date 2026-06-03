@@ -68,6 +68,28 @@ const (
 	// operator-level PermSiteWrite that guards sync/optimize/restore) and paired
 	// with a type-the-hostname UI confirmation.
 	PermMediaDeleteOriginals Permission = "media:delete_originals"
+	// PermSMTPManage edits the instance-level SMTP relay (ADR-045): host/port/
+	// credentials/From + the send-test. It writes a stored secret and is the
+	// instance's mail transport, so it sits with PermTenantManage at owner-only.
+	PermSMTPManage Permission = "smtp:manage"
+	// PermSiteCacheManage enables/disables and reconfigures the agent-side page
+	// cache for a site (Performance Suite, ADR-046). Operator+ — the same
+	// site-management tier as PermSiteWrite; site-scoped (NOT in orgLevelPerms),
+	// so a collaborator with access to a site can manage that site's cache.
+	PermSiteCacheManage Permission = "site.cache.manage"
+	// PermSiteCachePurge triggers a cache purge/preload for a site (ADR-046).
+	// Operator+; site-scoped.
+	PermSiteCachePurge Permission = "site.cache.purge"
+	// PermSitePerfConfig saves the per-site performance configuration — minify,
+	// RUCSS, lazy-load, CDN, DB-clean, bloat removal (ADR-046). Operator+;
+	// site-scoped.
+	PermSitePerfConfig Permission = "site.perf.config"
+	// PermSiteCacheDeleteAll authorises the destructive "delete everything"
+	// cache action — drop the on-disk cache directory, the advanced-cache
+	// drop-in and the managed .htaccess block in one shot (ADR-046). Gated at
+	// admin+ (above the operator-level cache perms), mirroring the
+	// PermMediaDeleteOriginals destructive-action precedent.
+	PermSiteCacheDeleteAll Permission = "site.cache.delete-everything"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -85,6 +107,15 @@ var minRoleFor = map[Permission]Role{
 	PermSiteAutologin: RoleAdmin,
 	// Irreversible media original-deletion: admin+ (ADR-043 §6).
 	PermMediaDeleteOriginals: RoleAdmin,
+	// Instance SMTP transport + stored secret: owner-only (ADR-045).
+	PermSMTPManage: RoleOwner,
+	// Performance Suite (ADR-046). Cache enable/purge + perf config are
+	// site-management actions at operator+; the destructive delete-everything is
+	// admin+ (mirrors PermMediaDeleteOriginals).
+	PermSiteCacheManage:    RoleOperator,
+	PermSiteCachePurge:     RoleOperator,
+	PermSitePerfConfig:     RoleOperator,
+	PermSiteCacheDeleteAll: RoleAdmin,
 }
 
 // Allows reports whether role r is permitted to perform p.

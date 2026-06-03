@@ -10,6 +10,8 @@ import {
   MediaSpotlight,
   NavBar,
   OpenSource,
+  PerformanceHow,
+  PerformanceSpotlight,
   Security,
   Stats,
   TrustStrip,
@@ -25,6 +27,8 @@ export function App() {
         <Hero />
         <TrustStrip />
         <FeatureGrid />
+        <PerformanceSpotlight />
+        <PerformanceHow />
         <MediaSpotlight />
         <MediaHow />
         <HowItWorks />

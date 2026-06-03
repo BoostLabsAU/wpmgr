@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: WPMgr API
-  version: 0.12.7
+  version: 0.15.0
   description: |
     Control-plane REST API for **WPMgr**, the open-source, self-hostable
     WordPress fleet management platform (AGPL-3.0). One control plane enrolls,
@@ -3613,6 +3613,8 @@ components:
         last_login_at:
           type: string
           format: date-time
+        is_superadmin:
+          type: boolean
     Membership:
       type: object
       required: [user_id, tenant_id, role]

@@ -2,8 +2,10 @@ import { createFileRoute, redirect, useNavigate, Link } from "@tanstack/react-ro
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { AlertCircle, AlertTriangle, Globe } from "lucide-react";
+import { AlertCircle, AlertTriangle, MailCheck } from "lucide-react";
+import { useState } from "react";
 
+import { AuthLayout } from "@/components/layout/auth-layout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +16,12 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ensureMe, useLogin } from "@/features/auth/use-auth";
+import {
+  ensureMe,
+  useLogin,
+  useResendVerification,
+  EmailNotVerifiedError,
+} from "@/features/auth/use-auth";
 
 const searchSchema = z.object({
   // Where to land after a successful login (defaults to /sites).
@@ -44,10 +51,15 @@ function LoginPage() {
   const navigate = useNavigate();
   const search = Route.useSearch();
   const loginMutation = useLogin();
+  const resendMutation = useResendVerification();
+  // Tracks when login failed because the email is not yet verified.
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+  const [resendSent, setResendSent] = useState(false);
 
   const {
     register,
     handleSubmit,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<LoginValues>({
     resolver: zodResolver(loginSchema),
@@ -55,14 +67,29 @@ function LoginPage() {
   });
 
   const onSubmit = handleSubmit(async (values) => {
+    // Clear any previous unverified state when the user tries again.
+    setUnverifiedEmail(null);
+    setResendSent(false);
+
     await loginMutation.mutateAsync(values, {
       onSuccess: () => {
         void navigate({ to: search.redirect ?? "/sites" });
       },
-      // Swallow the rejection here; the error is rendered from mutation state.
-      onError: () => {},
+      onError: (err) => {
+        if (err instanceof EmailNotVerifiedError) {
+          setUnverifiedEmail(values.email);
+        }
+      },
     });
   });
+
+  function handleResend() {
+    const email = unverifiedEmail ?? getValues("email");
+    void resendMutation.mutateAsync(
+      { email },
+      { onError: () => {}, onSuccess: () => setResendSent(true) },
+    );
+  }
 
   // Begin OIDC login via a full-page redirect to the backend, which 302s to the
   // provider. If OIDC is unconfigured the backend returns 501; the user simply
@@ -72,18 +99,17 @@ function LoginPage() {
     window.location.href = "/api/auth/oidc/login";
   }
 
-  const serverError = loginMutation.isError ? loginMutation.error.message : null;
+  const isEmailNotVerified =
+    unverifiedEmail !== null ||
+    (loginMutation.isError && loginMutation.error instanceof EmailNotVerifiedError);
+
+  const serverError =
+    loginMutation.isError && !isEmailNotVerified
+      ? loginMutation.error.message
+      : null;
 
   return (
-    <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-[var(--color-background)] p-4">
-      {/* WPMgr wordmark — same Globe + text treatment as the sidebar BrandStrip */}
-      <div className="flex items-center gap-2">
-        <Globe aria-hidden="true" className="size-5 text-[var(--color-primary)]" />
-        <span className="text-sm font-semibold tracking-tight text-[var(--color-foreground)]">
-          WPMgr
-        </span>
-      </div>
-
+    <AuthLayout>
       <Card className="w-full max-w-sm">
         <CardHeader className="space-y-1">
           <CardTitle asChild>
@@ -114,6 +140,38 @@ function LoginPage() {
               </div>
             ) : null}
 
+            {isEmailNotVerified ? (
+              <div
+                role="alert"
+                className="flex items-start gap-2.5 rounded-md border border-[var(--color-primary)]/30 bg-[var(--color-card)] px-3 py-2.5"
+              >
+                <MailCheck
+                  aria-hidden="true"
+                  className="mt-0.5 size-4 shrink-0 text-[var(--color-primary)]"
+                />
+                <div className="space-y-1">
+                  <p className="text-sm text-[var(--color-foreground)]">
+                    Your email address hasn't been verified yet. Check your
+                    inbox for the verification link.
+                  </p>
+                  {resendSent ? (
+                    <p className="text-sm text-[var(--color-muted-foreground)]">
+                      Verification email sent.
+                    </p>
+                  ) : (
+                    <button
+                      type="button"
+                      className="text-sm text-[var(--color-foreground)] underline underline-offset-4 disabled:opacity-50"
+                      disabled={resendMutation.isPending}
+                      onClick={handleResend}
+                    >
+                      Resend verification email
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -137,7 +195,15 @@ function LoginPage() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">Password</Label>
+                <Link
+                  to="/forgot-password"
+                  className="text-xs text-[var(--color-muted-foreground)] underline underline-offset-4 hover:text-[var(--color-foreground)]"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <Input
                 id="password"
                 type="password"
@@ -185,16 +251,16 @@ function LoginPage() {
           </Button>
 
           <p className="mt-4 text-center text-xs text-[var(--color-muted-foreground)]">
-            First time here?{" "}
+            Don't have an account?{" "}
             <Link
               to="/register"
               className="text-[var(--color-foreground)] underline underline-offset-4"
             >
-              Set up the first account
+              Sign up
             </Link>
           </p>
         </CardContent>
       </Card>
-    </main>
+    </AuthLayout>
   );
 }

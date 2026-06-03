@@ -13,6 +13,30 @@ import (
 )
 
 type Querier interface {
+	// Deletes a tenant ONLY if it has no memberships and no sites, returning whether
+	// a row was removed. Delegates to the SECURITY DEFINER admin_delete_empty_tenant
+	// function: the tenant's ON DELETE CASCADE reaches audit_log, which wpmgr_app may
+	// NOT delete (insert-only), so a direct DELETE fails 42501. The function runs as
+	// its owner (which keeps DELETE on audit_log) and pins app.agent='on' so its
+	// emptiness checks see rows under FORCE RLS.
+	AdminDeleteEmptyTenant(ctx context.Context, tenantID uuid.UUID) (bool, error)
+	AdminDeleteUser(ctx context.Context, id uuid.UUID) (int64, error)
+	// Lightweight superadmin fetch that includes is_superadmin.
+	AdminGetUserByID(ctx context.Context, id uuid.UUID) (AdminGetUserByIDRow, error)
+	AdminInstanceStats(ctx context.Context) (AdminInstanceStatsRow, error)
+	// List all users across the instance with org_count (number of memberships).
+	// search filters email or name case-insensitively; pass NULL to list all.
+	// Ordered by created_at DESC, id DESC (stable keyset). Used only by the
+	// superadmin area; it bypasses the tenant-scoped InTenantTx path.
+	AdminListUsers(ctx context.Context, arg AdminListUsersParams) ([]AdminListUsersRow, error)
+	// Boot seeder only. Sets is_superadmin=true for an email if the user exists.
+	// No-op for unknown emails.
+	AdminSetSuperadminByEmail(ctx context.Context, email string) error
+	AdminSetUserStatus(ctx context.Context, arg AdminSetUserStatusParams) (AdminSetUserStatusRow, error)
+	// Tenants where @user_id is the ONLY member (so deleting them orphans the org),
+	// with each tenant's name + site count. Run under Pool.InAgentTx
+	// (memberships_agent + sites_agent) so the cross-tenant read is allowed.
+	AdminUserSoleTenants(ctx context.Context, userID uuid.UUID) ([]AdminUserSoleTenantsRow, error)
 	// Records that a scheduled backup was enqueued and advances next_run_at. The
 	// scheduler resolves the tenant from the due-row first, then advances within
 	// that tenant's scope (the per-tenant isolation policy permits the UPDATE).
@@ -44,8 +68,14 @@ type Querier interface {
 	// site_id check binds the consume to the agent's verified identity (anti
 	// cross-tenant replay).
 	ConsumeAutologinToken(ctx context.Context, arg ConsumeAutologinTokenParams) (ConsumeAutologinTokenRow, error)
+	// Atomically consume an unused, unexpired verification token.
+	ConsumeEmailVerificationToken(ctx context.Context, tokenHash []byte) (EmailVerificationToken, error)
 	// Enroll path (app.enroll GUC): mark consumed only if still unconsumed.
 	ConsumePairingCode(ctx context.Context, id uuid.UUID) (int64, error)
+	// Atomically consume a token: mark it used IFF it exists, is unused, and is not
+	// expired. Returns the row (incl. user_id) only when the consume succeeded, so
+	// the caller cannot distinguish wrong/expired/used by anything but "no row".
+	ConsumePasswordResetToken(ctx context.Context, tokenHash []byte) (PasswordResetToken, error)
 	// Enroll path (app.enroll GUC): the ATOMIC single-use consume. Marks the code
 	// consumed only if it is still unconsumed AND unexpired, recording the source
 	// IP. Exactly one concurrent caller wins (the conditional UPDATE is the lock);
@@ -148,6 +178,10 @@ type Querier interface {
 	// Runs tenant-scoped (the caller sets app.tenant_id before this query).
 	GetBackupSiteInfo(ctx context.Context, arg GetBackupSiteInfoParams) (GetBackupSiteInfoRow, error)
 	GetBackupSnapshot(ctx context.Context, arg GetBackupSnapshotParams) (BackupSnapshot, error)
+	// ---------------------------------------------------------------------------
+	// site_cache_stats
+	// ---------------------------------------------------------------------------
+	GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCacheStat, error)
 	// By-id load for the per-site invitation management routes (revoke/regenerate).
 	// Tenant isolation is enforced by RLS; the handler additionally verifies
 	// site_id + scope against the path before mutating.
@@ -159,6 +193,21 @@ type Querier interface {
 	// Enroll path (app.enroll GUC): resolve a presented code by its hash before the
 	// tenant is known.
 	GetPairingCodeByHash(ctx context.Context, codeHash string) (PairingCode, error)
+	// M36 Performance Suite queries (ADR-046). Every statement is tenant-scoped both
+	// explicitly (tenant_id in the WHERE/VALUES) and by RLS (the app.tenant_id
+	// policy / app.agent policy). The repo wraps each call in InTenantTx/InAgentTx —
+	// these queries never set GUCs themselves. updated_at is set here via now().
+	// ---------------------------------------------------------------------------
+	// site_perf_config
+	// ---------------------------------------------------------------------------
+	GetPerfConfig(ctx context.Context, siteID uuid.UUID) (SitePerfConfig, error)
+	GetRucssJob(ctx context.Context, arg GetRucssJobParams) (RucssJob, error)
+	// ---------------------------------------------------------------------------
+	// rucss_results
+	// ---------------------------------------------------------------------------
+	GetRucssResultByHash(ctx context.Context, arg GetRucssResultByHashParams) (RucssResult, error)
+	// Fetch the single instance SMTP row. Run under Pool.InAgentTx (app.agent='on').
+	GetSMTPSettings(ctx context.Context) (SmtpSetting, error)
 	GetScheduleRun(ctx context.Context, arg GetScheduleRunParams) (BackupScheduleRun, error)
 	GetSite(ctx context.Context, arg GetSiteParams) (Site, error)
 	// Cross-tenant read of one site's alert state (app.agent GUC) for the probe job.
@@ -204,6 +253,9 @@ type Querier interface {
 	GetUserByEmail(ctx context.Context, email string) (User, error)
 	GetUserByID(ctx context.Context, id uuid.UUID) (User, error)
 	GetUserByOIDC(ctx context.Context, arg GetUserByOIDCParams) (User, error)
+	// Lightweight per-request lookup for the session reject-stale check.
+	GetUserPasswordChangedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error)
+	IncrEmailAttempts(ctx context.Context, id uuid.UUID) error
 	IncrementChunkRefcount(ctx context.Context, arg IncrementChunkRefcountParams) (BackupChunk, error)
 	IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (Invitation, error)
 	// Enroll path (app.enroll GUC): record a failed validation attempt.
@@ -225,14 +277,32 @@ type Querier interface {
 	// Mint path (app.tenant_id). The id is the JWT jti (base64url 32B random).
 	InsertAutologinToken(ctx context.Context, arg InsertAutologinTokenParams) (AutologinToken, error)
 	// ---------------------------------------------------------------------------
+	// cache_purge_audit
+	// ---------------------------------------------------------------------------
+	InsertCachePurgeAudit(ctx context.Context, arg InsertCachePurgeAuditParams) (CachePurgeAudit, error)
+	// ---------------------------------------------------------------------------
 	// site_connection_history — append-only transition log (tenant-scoped).
 	// ---------------------------------------------------------------------------
 	InsertConnectionHistory(ctx context.Context, arg InsertConnectionHistoryParams) (SiteConnectionHistory, error)
+	// Record a queued email before enqueuing the send_email job. Run under
+	// Pool.InAgentTx (app.agent='on'); tenant_id may be NULL for auth mail.
+	InsertEmailLog(ctx context.Context, arg InsertEmailLogParams) (EmailLog, error)
+	// Run under Pool.InAgentTx (app.agent='on').
+	InsertEmailVerificationToken(ctx context.Context, arg InsertEmailVerificationTokenParams) (EmailVerificationToken, error)
+	// Record a new reset token. Run under Pool.InAgentTx (app.agent='on').
+	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
+	// ---------------------------------------------------------------------------
+	// rucss_jobs
+	// ---------------------------------------------------------------------------
+	InsertRucssJob(ctx context.Context, arg InsertRucssJobParams) (RucssJob, error)
 	// ---------------------------------------------------------------------------
 	// site_events — durable SSE journal (tenant-scoped insert/replay, cross-tenant
 	// prune). The app mints the ULID event_id; NOTIFY carries only the id.
 	// ---------------------------------------------------------------------------
 	InsertSiteEvent(ctx context.Context, arg InsertSiteEventParams) (SiteEvent, error)
+	InvalidateUserEmailVerificationTokens(ctx context.Context, userID uuid.UUID) error
+	// Burn all outstanding reset tokens for a user (after a successful reset/change).
+	InvalidateUserPasswordResetTokens(ctx context.Context, userID uuid.UUID) error
 	LinkUserOIDC(ctx context.Context, arg LinkUserOIDCParams) (User, error)
 	ListAPIKeys(ctx context.Context, arg ListAPIKeysParams) ([]ApiKey, error)
 	// Cross-tenant enumeration for the evaluator (app.agent GUC). Only enabled
@@ -247,6 +317,7 @@ type Querier interface {
 	// per site to apply the per-site monthly-archive rule).
 	ListBackupSiteIDsForTenant(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 	ListBackupSnapshotsForSite(ctx context.Context, arg ListBackupSnapshotsForSiteParams) ([]BackupSnapshot, error)
+	ListCachePurgeAuditForSite(ctx context.Context, arg ListCachePurgeAuditForSiteParams) ([]CachePurgeAudit, error)
 	// Completed snapshots for a site, newest first, used to compute the retention
 	// archive set (newest per calendar month).
 	ListCompletedSnapshotsForSite(ctx context.Context, arg ListCompletedSnapshotsForSiteParams) ([]ListCompletedSnapshotsForSiteRow, error)
@@ -293,6 +364,7 @@ type Querier interface {
 	// List pending (not yet accepted, not expired, not revoked) invitations for the
 	// current tenant.
 	ListPendingInvitations(ctx context.Context, tenantID uuid.UUID) ([]Invitation, error)
+	ListRucssResultsForSite(ctx context.Context, arg ListRucssResultsForSiteParams) ([]RucssResult, error)
 	// All runs for a site (upcoming + past), newest scheduled_for first.
 	ListScheduleRunsBySite(ctx context.Context, arg ListScheduleRunsBySiteParams) ([]BackupScheduleRun, error)
 	// Shared-with-me, ENRICHED with each site's url + name and the owning org's name.
@@ -339,6 +411,8 @@ type Querier interface {
 	// Idempotent: returns 0 if another path already marked it (safe).
 	MarkAutologinTokenConsumed(ctx context.Context, arg MarkAutologinTokenConsumedParams) (int64, error)
 	MarkBackupSnapshotRunning(ctx context.Context, arg MarkBackupSnapshotRunningParams) (BackupSnapshot, error)
+	MarkEmailFailed(ctx context.Context, arg MarkEmailFailedParams) error
+	MarkEmailSent(ctx context.Context, id uuid.UUID) error
 	MarkInvitationAccepted(ctx context.Context, arg MarkInvitationAcceptedParams) (Invitation, error)
 	// ---------------------------------------------------------------------------
 	// Connection-state transitions. Each writes connection_state plus the derived
@@ -364,6 +438,8 @@ type Querier interface {
 	// Marks a site unreachable. Runs under app.agent GUC (cross-tenant job).
 	MarkSiteUnreachable(ctx context.Context, id uuid.UUID) (int64, error)
 	MarkUpdateTaskRunning(ctx context.Context, arg MarkUpdateTaskRunningParams) (UpdateTask, error)
+	// Activate + mark verified (used on self-serve activation and trusted bootstrap).
+	MarkUserEmailVerified(ctx context.Context, id uuid.UUID) error
 	// Enroll path (app.enroll GUC): resolve whether a presented code is site-bound
 	// (returns its site_id) WITHOUT consuming it, so /enroll can route between the
 	// site-first consume and the legacy create-at-enroll flow. Does not leak: only
@@ -408,8 +484,12 @@ type Querier interface {
 	SetSiteHealthStatus(ctx context.Context, arg SetSiteHealthStatusParams) (int64, error)
 	SetSiteTags(ctx context.Context, arg SetSiteTagsParams) (Site, error)
 	SetUpdateRunStatus(ctx context.Context, arg SetUpdateRunStatusParams) (UpdateRun, error)
+	// Stamps password_changed_at so the Authenticator invalidates the user's other
+	// sessions (ADR-045 Phase 2).
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
+	SetUserPending(ctx context.Context, id uuid.UUID) error
 	TouchAPIKey(ctx context.Context, arg TouchAPIKeyParams) error
+	TouchRucssResultLastUsed(ctx context.Context, arg TouchRucssResultLastUsedParams) error
 	// ---------------------------------------------------------------------------
 	// Heartbeat liveness (tenant-scoped). Returns the current connection_state so
 	// the service can decide whether a recovery transition is needed and whether
@@ -429,6 +509,14 @@ type Querier interface {
 	// the body.
 	UpdateBackupSnapshotProgress(ctx context.Context, arg UpdateBackupSnapshotProgressParams) (BackupSnapshot, error)
 	UpdateMembershipRole(ctx context.Context, arg UpdateMembershipRoleParams) (Membership, error)
+	// The agent reports the server/install state it observed when applying config.
+	// Kept separate from UpsertPerfConfig so an operator's config save never
+	// overwrites agent-reported facts (and vice-versa). Runs under app.agent.
+	UpdatePerfInstallState(ctx context.Context, arg UpdatePerfInstallStateParams) (SitePerfConfig, error)
+	// Advance the job lifecycle (queued->running->done|failed). completed_at is set
+	// (to now()) only when @done is true; result_id/error_reason are passed through
+	// as the terminal state dictates.
+	UpdateRucssJobState(ctx context.Context, arg UpdateRucssJobStateParams) (RucssJob, error)
 	// Tenant-scoped metadata update (used by the agent path inside the resolved
 	// site's own tenant scope).
 	UpdateSiteMetadata(ctx context.Context, arg UpdateSiteMetadataParams) (Site, error)
@@ -451,9 +539,21 @@ type Querier interface {
 	// recompute it (only when timing fields actually change). This prevents a
 	// non-timing edit (e.g. retention_days change) from resetting the next run.
 	UpsertBackupSchedule(ctx context.Context, arg UpsertBackupScheduleParams) (BackupSchedule, error)
+	// The agent pushes the latest cache gauges; overwritten in place (no history).
+	UpsertCacheStats(ctx context.Context, arg UpsertCacheStatsParams) (SiteCacheStat, error)
 	// Tenant-create helper: insert an owner membership for the creator; on conflict
 	// (e.g. migration replay or second create attempt) update role to 'owner'.
 	UpsertOwnerMembership(ctx context.Context, arg UpsertOwnerMembershipParams) (Membership, error)
+	// Insert-or-update the per-site performance config. The agent install-state
+	// columns (server_software, dropin_installed, wp_cache_constant_set,
+	// htaccess_managed) are NOT touched here — those are reported by the agent via
+	// UpdatePerfInstallState — so an operator config save never clobbers them.
+	UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigParams) (SitePerfConfig, error)
+	UpsertRucssResult(ctx context.Context, arg UpsertRucssResultParams) (RucssResult, error)
+	// Insert-or-update the singleton row. password_enc uses a nil-sentinel:
+	// when @set_password is false the existing ciphertext is preserved, so editing
+	// other fields without re-entering the password keeps the stored secret.
+	UpsertSMTPSettings(ctx context.Context, arg UpsertSMTPSettingsParams) (SmtpSetting, error)
 	// M17 backup_schedule_runs queries. Mirrors the restore_runs query style.
 	// Every tenant-scoped method is called with app.tenant_id already set.
 	// The scheduler's cross-tenant materializer writes run under the agent context

@@ -10,8 +10,9 @@ import {
   type LucideIcon,
 } from "lucide-react";
 
+import { FleetHubLogo, Wordmark } from "@/components/brand/logo";
 import { useShellState } from "@/components/layout/app-shell-context";
-import { useMe, isOrgScoped } from "@/features/auth/use-auth";
+import { useMe, isOrgScoped, isSuperadmin } from "@/features/auth/use-auth";
 import { useSites } from "@/features/sites/use-sites";
 import { cn } from "@/lib/utils";
 
@@ -104,6 +105,7 @@ const SETTINGS_GROUP: NavGroup = {
     { label: "Organisation", to: "/settings/organization" },
     { label: "API keys", to: "/settings/api-keys" },
     { label: "Destinations", to: "/settings/destinations" },
+    { label: "Email / SMTP", to: "/settings/smtp" },
     { label: "Alerts", to: "/settings/alerts" },
     { label: "Members", to: "/settings/members" },
   ],
@@ -115,12 +117,21 @@ const SHARED_WITH_ME_GROUP: NavGroup = {
   to: "/shared-with-me",
 };
 
+// Superadmin-only nav entry. Only mounted in the sidebar JSX when
+// me.user.is_superadmin === true (checked via isSuperadmin helper).
+const ADMIN_GROUP: NavGroup = {
+  label: "Admin",
+  icon: Shield,
+  to: "/admin",
+};
+
 export function Sidebar() {
   const { collapsed, mobileOpen, setMobileOpen } = useShellState();
   const location = useLocation();
   const pathname = location.pathname;
   const { data: me } = useMe();
   const orgScoped = isOrgScoped(me);
+  const superadmin = isSuperadmin(me);
 
   // Live "Sites" count for the nav badge (active, non-archived) — shares the
   // sites-list query cache with the Sites page, so it's deduped. The other nav
@@ -174,37 +185,50 @@ export function Sidebar() {
         <BrandStrip collapsed={collapsed} />
 
         <div className="flex flex-1 flex-col overflow-y-auto px-2 py-3">
-          <ul className="flex flex-col gap-0.5">
-            {TOP_GROUPS.map((group) => {
-              // Inject the live Sites count; other groups carry no badge.
-              const g =
-                group.label === "Sites" && typeof sitesCount === "number"
-                  ? { ...group, count: sitesCount }
-                  : group;
-              return (
-                <li key={group.label}>
-                  <NavGroupItem group={g} pathname={pathname} collapsed={collapsed} />
+          {superadmin ? (
+            // Superadmin is monitoring-only: show ONLY the Admin area. They have
+            // no org and never manage sites/settings, so the rest of the nav is
+            // intentionally hidden.
+            <ul className="flex flex-col gap-0.5">
+              <li>
+                <NavGroupItem group={ADMIN_GROUP} pathname={pathname} collapsed={collapsed} />
+              </li>
+            </ul>
+          ) : (
+            <>
+              <ul className="flex flex-col gap-0.5">
+                {TOP_GROUPS.map((group) => {
+                  // Inject the live Sites count; other groups carry no badge.
+                  const g =
+                    group.label === "Sites" && typeof sitesCount === "number"
+                      ? { ...group, count: sitesCount }
+                      : group;
+                  return (
+                    <li key={group.label}>
+                      <NavGroupItem group={g} pathname={pathname} collapsed={collapsed} />
+                    </li>
+                  );
+                })}
+                {/* Shared with me — visible to all users. */}
+                <li>
+                  <NavGroupItem
+                    group={SHARED_WITH_ME_GROUP}
+                    pathname={pathname}
+                    collapsed={collapsed}
+                  />
                 </li>
-              );
-            })}
-            {/* Shared with me — visible to all users. */}
-            <li>
-              <NavGroupItem
-                group={SHARED_WITH_ME_GROUP}
-                pathname={pathname}
-                collapsed={collapsed}
-              />
-            </li>
-          </ul>
-          <ul className="mt-auto flex flex-col gap-0.5 pt-3">
-            <li>
-              <NavGroupItem
-                group={settingsGroup}
-                pathname={pathname}
-                collapsed={collapsed}
-              />
-            </li>
-          </ul>
+              </ul>
+              <ul className="mt-auto flex flex-col gap-0.5 pt-3">
+                <li>
+                  <NavGroupItem
+                    group={settingsGroup}
+                    pathname={pathname}
+                    collapsed={collapsed}
+                  />
+                </li>
+              </ul>
+            </>
+          )}
         </div>
       </nav>
     </>
@@ -224,8 +248,8 @@ function BrandStrip({ collapsed }: { collapsed: boolean }) {
         aria-label="WPMgr home"
         className="inline-flex items-center gap-2 rounded-md text-sm font-semibold tracking-tight text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       >
-        <Globe aria-hidden="true" className="size-5 text-primary" />
-        {collapsed ? null : <span>WPMgr</span>}
+        <FleetHubLogo size={20} />
+        {collapsed ? null : <Wordmark />}
       </Link>
     </div>
   );

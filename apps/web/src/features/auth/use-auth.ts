@@ -70,6 +70,14 @@ export function useMe(): UseQueryResult<Me | null, Error> {
   });
 }
 
+/** Raised when login is rejected because the email is not yet verified. */
+export class EmailNotVerifiedError extends Error {
+  constructor() {
+    super("email_not_verified");
+    this.name = "EmailNotVerifiedError";
+  }
+}
+
 export function useLogin(): UseMutationResult<Me, Error, LoginRequest> {
   const queryClient = useQueryClient();
   return useMutation({
@@ -77,6 +85,15 @@ export function useLogin(): UseMutationResult<Me, Error, LoginRequest> {
       const { data, error, response } = await login({ body });
       if (response?.status === 401) {
         throw new UnauthorizedError("Invalid email or password");
+      }
+      if (response?.status === 403) {
+        // Try to read the body code; if enumeration-safe backend always returns
+        // the same 403, check for the email_not_verified code.
+        const raw = error as unknown as Record<string, unknown> | null | undefined;
+        const code = raw && typeof raw["code"] === "string" ? raw["code"] : "";
+        if (code === "email_not_verified" || response.status === 403) {
+          throw new EmailNotVerifiedError();
+        }
       }
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response");
@@ -89,7 +106,19 @@ export function useLogin(): UseMutationResult<Me, Error, LoginRequest> {
   });
 }
 
-export function useRegister(): UseMutationResult<Me, Error, RegisterRequest> {
+/**
+ * Result shape for useRegister — covers both the first-account path (session
+ * established immediately) and the normal self-serve path (pending email
+ * verification, no session yet).
+ */
+export interface RegisterResult {
+  /** Present when the backend established a session (first account only). */
+  me?: Me;
+  /** True when the account was created but email verification is required. */
+  pending: boolean;
+}
+
+export function useRegister(): UseMutationResult<RegisterResult, Error, RegisterRequest> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (body: RegisterRequest) => {
@@ -101,11 +130,21 @@ export function useRegister(): UseMutationResult<Me, Error, RegisterRequest> {
         throw new Error("An account with that email already exists.");
       }
       if (error) throw toError(error);
-      if (!data) throw new Error("Empty response");
-      return data;
+
+      // Normal (non-first) self-serve signup: backend returns { ok: true, pending: true }
+      // without establishing a session.
+      const raw = data as unknown as Record<string, unknown> | null | undefined;
+      if (!raw || (raw["pending"] === true) || !("user" in raw && raw["user"])) {
+        return { pending: true };
+      }
+
+      // First-account path: backend returns the Me object + sets a session cookie.
+      return { me: data as unknown as Me, pending: false };
     },
-    onSuccess: (me) => {
-      queryClient.setQueryData(authKeys.me, me);
+    onSuccess: (result) => {
+      if (result.me) {
+        queryClient.setQueryData(authKeys.me, result.me);
+      }
     },
   });
 }
@@ -154,6 +193,152 @@ export function useUpdateProfile(): UseMutationResult<
   });
 }
 
+// ---------------------------------------------------------------------------
+// Password-reset mutations — unauthenticated, hand-rolled (not in generated SDK).
+// ---------------------------------------------------------------------------
+
+/**
+ * POST /auth/password/forgot
+ *
+ * Always returns 200 { ok: true } regardless of whether the address exists
+ * (prevents email enumeration). The caller should show a neutral confirmation
+ * without revealing whether the account was found.
+ */
+export function useForgotPassword(): UseMutationResult<void, Error, { email: string }> {
+  return useMutation({
+    mutationFn: async (body) => {
+      const result = await client.post({
+        url: "/auth/password/forgot",
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+      if (result.error !== undefined) throw toError(result.error);
+    },
+  });
+}
+
+/**
+ * The result shape surfaced to the caller so the page can branch on HTTP status
+ * without throwing. We surface the status rather than swallowing it into a
+ * catch block because 400 / 410 / 429 are all non-exceptional outcomes from the
+ * user's perspective — they need different UI messages, not a crash.
+ */
+export interface ResetPasswordResult {
+  /** HTTP status from the backend: 200 success | 400 bad token | 410 expired | 429 rate-limited. */
+  status: 200 | 400 | 410 | 429;
+}
+
+/**
+ * POST /auth/password/reset { token, password }
+ *
+ * Returns a `ResetPasswordResult` with the HTTP status rather than throwing on
+ * non-2xx (400/410/429) so the page can branch cleanly.
+ */
+export function useResetPassword(): UseMutationResult<
+  ResetPasswordResult,
+  Error,
+  { token: string; password: string }
+> {
+  return useMutation({
+    mutationFn: async (body) => {
+      const result = await client.post({
+        url: "/auth/password/reset",
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const status = result.response?.status;
+
+      if (status === 400 || status === 410 || status === 429) {
+        return { status } as ResetPasswordResult;
+      }
+
+      if (result.error !== undefined) throw toError(result.error);
+
+      return { status: 200 } as ResetPasswordResult;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Email-verification mutations — unauthenticated, hand-rolled.
+// ---------------------------------------------------------------------------
+
+/**
+ * The result shape for useVerifyEmail so the page can branch on HTTP status
+ * without throwing. 200 = verified + session established; 410 = invalid/expired
+ * token; 429 = rate-limited.
+ */
+export interface VerifyEmailResult {
+  status: 200 | 410 | 429;
+  /** Present only when status === 200 — the verified user, now logged in. */
+  me?: Me;
+}
+
+/**
+ * POST /auth/verify-email { token }
+ *
+ * On 200 the backend returns the Me object and sets a session cookie.
+ * On 410 the token is invalid or expired.
+ * On 429 too many verification attempts.
+ * Returns a VerifyEmailResult rather than throwing on non-2xx so the page can
+ * branch cleanly (same pattern as useResetPassword).
+ */
+export function useVerifyEmail(): UseMutationResult<
+  VerifyEmailResult,
+  Error,
+  { token: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const result = await client.post({
+        url: "/auth/verify-email",
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+
+      const status = result.response?.status;
+
+      if (status === 410 || status === 429) {
+        return { status } as VerifyEmailResult;
+      }
+
+      if (result.error !== undefined) throw toError(result.error);
+
+      const me = result.data as unknown as Me;
+      return { status: 200, me };
+    },
+    onSuccess: (result) => {
+      if (result.status === 200 && result.me) {
+        queryClient.setQueryData(authKeys.me, result.me);
+      }
+    },
+  });
+}
+
+/**
+ * POST /auth/verification/resend { email }
+ *
+ * Always returns 200 { ok: true } regardless of whether the email exists
+ * (enumeration-safe). The page shows a neutral confirmation.
+ */
+export function useResendVerification(): UseMutationResult<void, Error, { email: string }> {
+  return useMutation({
+    mutationFn: async (body) => {
+      const result = await client.post({
+        url: "/auth/verification/resend",
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+      // Always 200 — ignore errors to stay enumeration-safe.
+      if (result.error !== undefined && result.response?.status !== 200) {
+        throw toError(result.error);
+      }
+    },
+  });
+}
+
 /** POST /auth/me/password — change the account password. */
 export function useChangePassword(): UseMutationResult<
   void,
@@ -189,6 +374,15 @@ function isApiError(value: unknown): value is ApiError {
     "message" in value &&
     typeof value.message === "string"
   );
+}
+
+/**
+ * Whether the current user is a superadmin (instance-level).
+ * Reads `me.user.is_superadmin`; safe to call before the backend field ships
+ * (returns false when the flag is absent).
+ */
+export function isSuperadmin(me: Me | null | undefined): boolean {
+  return me?.user?.is_superadmin === true;
 }
 
 /**

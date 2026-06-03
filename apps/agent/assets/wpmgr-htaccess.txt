@@ -1,0 +1,67 @@
+# BEGIN WPMgr Cache
+# GZIP compression for text files: HTML, CSS, JS, XML, fonts.
+# This whole section is stripped on OpenLiteSpeed (LSWS_EDITION) where the
+# .gz handling and mod_deflate no-gzip directives conflict.
+<IfModule mod_deflate.c>
+	AddOutputFilterByType DEFLATE text/html text/plain text/css text/xml
+	AddOutputFilterByType DEFLATE text/javascript application/javascript application/json
+	AddOutputFilterByType DEFLATE application/xml application/rss+xml
+	AddOutputFilterByType DEFLATE font/woff2 font/ttf font/otf image/svg+xml
+	# Never double-gzip an already-gzipped .html.gz cache file.
+	SetEnvIfNoCase Request_URI \.gz$ no-gzip
+</IfModule>
+# End GZIP compression
+
+# Response headers for the cached .html.gz pages.
+<FilesMatch "\.html\.gz$">
+	<IfModule mod_headers.c>
+		Header set Content-Encoding "gzip"
+		Header set Content-Type "text/html; charset=UTF-8"
+		Header set Cache-Tag "HOSTNAME"
+		Header set CDN-Cache-Control "max-age=2592000"
+		Header set Cache-Control "no-cache, must-revalidate"
+		Header set x-wpmgr-cache "HIT"
+		Header set x-wpmgr-source "Web Server"
+	</IfModule>
+	# Fallback for servers without mod_headers.
+	<IfModule mod_mime.c>
+		AddType text/html .gz
+		AddCharset UTF-8 .gz
+		AddEncoding gzip .gz
+	</IfModule>
+</FilesMatch>
+
+# Serve cached pages straight from disk when present.
+<IfModule mod_rewrite.c>
+	RewriteEngine On
+	RewriteBase /
+
+	# Block direct hits on the cache directory.
+	RewriteCond %{THE_REQUEST} "/wp-content/cache/wpmgr/.*\.html\.gz" [NC]
+	RewriteRule ^ - [F]
+
+	# Mobile-caching flag. The HtaccessManager flips :0 to :1 when mobile
+	# caching is enabled; the serve rules below gate on it.
+	RewriteRule ^ - [E=MOBILE_CACHING_FLAG:0]
+
+	# Serve the mobile cache for mobile UAs when mobile caching is enabled.
+	RewriteCond %{REQUEST_METHOD} GET|HEAD
+	RewriteCond %{QUERY_STRING} =""
+	RewriteCond %{HTTP:Cookie} =""
+	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
+	RewriteCond %{HTTP_USER_AGENT} "android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos" [NC]
+	RewriteCond %{ENV:MOBILE_CACHING_FLAG} =1
+	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz -f
+	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz [L]
+
+	# Serve the desktop cache otherwise.
+	RewriteCond %{REQUEST_METHOD} GET|HEAD
+	RewriteCond %{QUERY_STRING} =""
+	RewriteCond %{HTTP:Cookie} =""
+	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
+	RewriteCond %{HTTP_USER_AGENT} "!(android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos)" [NC,OR]
+	RewriteCond %{ENV:MOBILE_CACHING_FLAG} !=1
+	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
+	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
+</IfModule>
+# END WPMgr Cache

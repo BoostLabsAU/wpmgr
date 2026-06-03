@@ -294,13 +294,8 @@ function InviteDialog({
         email: trimmedEmail,
         role,
       });
-      if (result.accept_link) {
-        setInviteLink(result.accept_link);
-        toast.success("Invitation created — copy the link below to share it.");
-      } else {
-        toast.success(`${trimmedEmail} has been invited as ${role}.`);
-        handleClose();
-      }
+      setInviteLink(result.accept_link);
+      toast.success(`Invitation sent to ${trimmedEmail}`);
     } catch (err) {
       setFormError(
         err instanceof Error ? err.message : "Could not send invitation",
@@ -368,7 +363,10 @@ function InviteDialog({
               aria-live="polite"
               className="space-y-2 rounded-lg border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/5 p-3"
             >
-              <p className="text-sm font-medium">Invite link (shown once)</p>
+              <p className="text-sm font-medium">Accept link</p>
+              <p className="text-xs text-muted-foreground">
+                {"They'll set their own password. You can also share this link directly. It expires in 7 days."}
+              </p>
               <div className="flex gap-2">
                 <Input
                   readOnly

@@ -8,8 +8,9 @@
     "ext-mysqli": "*",
     "ext-openssl": "*",
     "ext-sodium": "*",
+    "ext-zip": "*",
     "ext-zlib": "*",
-    "ext-zip": "*"
+    "matthiasmullie/minify": "^1.3"
   },
   "require-dev": {
     "brain/monkey": "^2.6",

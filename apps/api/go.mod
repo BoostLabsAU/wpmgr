@@ -9,6 +9,7 @@ require (
 	github.com/alexedwards/argon2id v1.0.0
 	github.com/alexedwards/scs/redisstore v0.0.0-20251002162104-209de6e426de
 	github.com/alexedwards/scs/v2 v2.9.0
+	github.com/andybalholm/cascadia v1.3.3
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.17
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.102.0
@@ -31,6 +32,7 @@ require (
 	github.com/oschwald/maxminddb-golang v1.13.1
 	github.com/riverqueue/river v0.38.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.38.0
+	github.com/tdewolff/parse/v2 v2.8.13
 	github.com/testcontainers/testcontainers-go v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/clickhouse v0.42.0
 	github.com/testcontainers/testcontainers-go/modules/minio v0.42.0
@@ -43,7 +45,9 @@ require (
 	go.opentelemetry.io/otel/metric v1.43.0
 	go.opentelemetry.io/otel/sdk v1.43.0
 	go.opentelemetry.io/otel/trace v1.43.0
+	golang.org/x/net v0.53.0
 	golang.org/x/oauth2 v0.36.0
+	golang.org/x/sync v0.20.0
 	golang.org/x/time v0.11.0
 )
 
@@ -187,8 +191,6 @@ require (
 	golang.org/x/crypto v0.50.0 // indirect
 	golang.org/x/exp v0.0.0-20250620022241-b7579e27df2b // indirect
 	golang.org/x/mod v0.36.0 // indirect
-	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/tools v0.44.0 // indirect

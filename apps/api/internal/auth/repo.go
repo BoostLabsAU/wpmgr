@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -49,6 +50,8 @@ func userToModel(u sqlc.User) User {
 		OIDCSubject:  deref(u.OidcSubject),
 		OIDCIssuer:   deref(u.OidcIssuer),
 		Name:         u.Name,
+		Status:       u.Status,
+		IsSuperadmin: u.IsSuperadmin,
 		CreatedAt:    u.CreatedAt,
 		UpdatedAt:    u.UpdatedAt,
 	}
@@ -155,13 +158,13 @@ func (r *Repo) TouchLogin(ctx context.Context, userID uuid.UUID) error {
 func (r *Repo) UpdateName(ctx context.Context, userID uuid.UUID, name string) (User, error) {
 	row := r.pool.QueryRow(ctx,
 		`UPDATE users SET name = $1, updated_at = now() WHERE id = $2
-		 RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at`,
+		 RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin`,
 		name, userID,
 	)
 	var u sqlc.User
 	if err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.OidcSubject, &u.OidcIssuer,
-		&u.Name, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt,
+		&u.Name, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.PasswordChangedAt, &u.Status, &u.EmailVerifiedAt, &u.IsSuperadmin,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return User{}, domain.NotFound("user_not_found", "user not found")
@@ -181,6 +184,30 @@ func (r *Repo) UpdatePasswordHash(ctx context.Context, userID uuid.UUID, hash st
 		return domain.Internal("password_update_failed", "failed to update password").WithCause(err)
 	}
 	return nil
+}
+
+// SetUserPending marks a self-registered account unverified (ADR-045 Phase 3).
+func (r *Repo) SetUserPending(ctx context.Context, userID uuid.UUID) error {
+	return r.q.SetUserPending(ctx, userID)
+}
+
+// MarkUserEmailVerified activates + verifies an account on activation/bootstrap.
+func (r *Repo) MarkUserEmailVerified(ctx context.Context, userID uuid.UUID) error {
+	return r.q.MarkUserEmailVerified(ctx, userID)
+}
+
+// GetUserPasswordChangedAt returns the user's last password-change time and
+// whether it is set. Used by the Authenticator to reject stale sessions
+// (ADR-045 Phase 2). users is not RLS-scoped, so this runs on the bare pool.
+func (r *Repo) GetUserPasswordChangedAt(ctx context.Context, userID uuid.UUID) (time.Time, bool, error) {
+	ts, err := r.q.GetUserPasswordChangedAt(ctx, userID)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if !ts.Valid {
+		return time.Time{}, false, nil
+	}
+	return ts.Time, true, nil
 }
 
 // UserBrief carries just the identity fields needed for actor resolution.

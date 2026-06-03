@@ -137,6 +137,11 @@ func (h *Handler) create(c *gin.Context) {
 		return
 	}
 
+	// Activate the new org on the session so the creator immediately lands in it
+	// (otherwise a tenant-less user would stay on the no-org onboarding screen
+	// until their next login). ADR-045 Phase 3 onboarding.
+	h.sessions.SetActiveTenant(c.Request.Context(), tenantID)
+
 	// Audit org.created.
 	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
 		TenantID:   tenantID,

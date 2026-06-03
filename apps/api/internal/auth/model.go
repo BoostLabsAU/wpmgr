@@ -17,6 +17,8 @@ type User struct {
 	OIDCSubject  string
 	OIDCIssuer   string
 	Name         string
+	Status       string // 'active' | 'pending' | 'disabled' (ADR-045 Phase 3)
+	IsSuperadmin bool   // instance-level; written only by boot seeder
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	LastLoginAt  *time.Time

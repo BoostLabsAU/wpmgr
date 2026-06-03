@@ -288,6 +288,87 @@ func (c *Client) SyncMediaConfig(ctx context.Context, siteID uuid.UUID, siteURL 
 	return out, nil
 }
 
+// SyncPerfConfig sends the signed `perf_config_update` command to the site's
+// agent, pushing the per-site performance config so the agent mirrors it on its
+// request fast-path (ADR-046). siteID is bound into the JWT's aud claim. CDN
+// credentials are NEVER included in the request — the control plane holds the
+// only decrypted copy. An ok=false response (HTTP 200) is treated as an error.
+func (c *Client) SyncPerfConfig(ctx context.Context, siteID uuid.UUID, siteURL string, req PerfConfigRequest) (PerfConfigResult, error) {
+	var out PerfConfigResult
+	if err := c.post(ctx, siteID, siteURL, "perf_config_update", req, &out); err != nil {
+		return PerfConfigResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("perf_config_update rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// CacheEnable sends the signed `cache_enable` command: install the cache
+// drop-in/.htaccess block and turn page caching on. siteID is bound into aud.
+func (c *Client) CacheEnable(ctx context.Context, siteID uuid.UUID, siteURL string, req CacheEnableRequest) (CacheEnableResult, error) {
+	var out CacheEnableResult
+	if err := c.post(ctx, siteID, siteURL, "cache_enable", req, &out); err != nil {
+		return CacheEnableResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("cache_enable rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// CacheDisable sends the signed `cache_disable` command: remove the cache
+// drop-in/.htaccess block and turn page caching off. siteID is bound into aud.
+func (c *Client) CacheDisable(ctx context.Context, siteID uuid.UUID, siteURL string, req CacheDisableRequest) (CacheDisableResult, error) {
+	var out CacheDisableResult
+	if err := c.post(ctx, siteID, siteURL, "cache_disable", req, &out); err != nil {
+		return CacheDisableResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("cache_disable rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// CachePurge sends the signed `cache_purge` command: purge the whole cache
+// (scope=all) or specific URLs (scope=url). siteID is bound into aud.
+func (c *Client) CachePurge(ctx context.Context, siteID uuid.UUID, siteURL string, req CachePurgeRequest) (CachePurgeResult, error) {
+	var out CachePurgeResult
+	if err := c.post(ctx, siteID, siteURL, "cache_purge", req, &out); err != nil {
+		return CachePurgeResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("cache_purge rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// CachePreload sends the signed `cache_preload` command: start a background
+// warm pass over the sitemap. siteID is bound into aud.
+func (c *Client) CachePreload(ctx context.Context, siteID uuid.UUID, siteURL string, req CachePreloadRequest) (CachePreloadResult, error) {
+	var out CachePreloadResult
+	if err := c.post(ctx, siteID, siteURL, "cache_preload", req, &out); err != nil {
+		return CachePreloadResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("cache_preload rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// DBClean sends the signed `db_clean` command: run the configured database
+// cleanup. siteID is bound into aud.
+func (c *Client) DBClean(ctx context.Context, siteID uuid.UUID, siteURL string, req DBCleanRequest) (DBCleanResult, error) {
+	var out DBCleanResult
+	if err := c.post(ctx, siteID, siteURL, "db_clean", req, &out); err != nil {
+		return DBCleanResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("db_clean rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
 // post mints a fresh JWT bound to siteID (aud) and command (cmd), POSTs body to
 // the named command endpoint at siteURL, and decodes the JSON response into
 // out. A non-2xx response is an error.

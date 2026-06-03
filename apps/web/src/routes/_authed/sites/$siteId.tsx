@@ -71,6 +71,11 @@ const TABS = [
   // ADR-043 — Media Optimizer tab. Route file:
   // apps/web/src/routes/_authed/sites/$siteId.media.tsx
   { to: "/sites/$siteId/media", label: "Media" },
+  // Phase 7 / m36 — Performance Suite tabs. Route files:
+  // apps/web/src/routes/_authed/sites/$siteId.cache.tsx
+  // apps/web/src/routes/_authed/sites/$siteId.optimize.tsx
+  { to: "/sites/$siteId/cache", label: "Cache" },
+  { to: "/sites/$siteId/optimize", label: "Optimize" },
   { to: "/sites/$siteId/security", label: "Security" },
   { to: "/sites/$siteId/activity", label: "Activity" },
   // ADR-037 Sprint 2 — PHP-error monitor tab. Route file:

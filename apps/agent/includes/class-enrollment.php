@@ -245,11 +245,21 @@ final class Enrollment
      *     php_memory:string,
      *     plugin_versions:array<string,string>,
      *     installed_updates_count:int,
-     *     multisite:bool
+     *     multisite:bool,
+     *     cache:array{enabled:bool,pages:int,bytes:int,conflicts:list<string>}
      * }
      */
     public function buildHeartbeatPayload(): array
     {
+        // Phase 3 — page-cache gauge. Reads the cheap persisted snapshot (page
+        // count + bytes), refreshed on every cache state change, so this never
+        // walks the cache dir on the 60s heartbeat tick. We extend it in-place
+        // with the live list of detected conflicting cache/optimization plugins
+        // (cheap defined()/class_exists() probes) so the CP can surface a
+        // double-caching conflict without a separate pull.
+        $cache = \WPMgr\Agent\Cache\CacheManager::snapshot();
+        $cache['conflicts'] = (new \WPMgr\Agent\Cache\ConflictDetect())->conflictSlugs();
+
         return [
             'site_id'                 => $this->settings->siteId(),
             'ts'                      => time(),
@@ -259,6 +269,7 @@ final class Enrollment
             'plugin_versions'         => $this->pluginVersions(),
             'installed_updates_count' => $this->installedUpdatesCount(),
             'multisite'               => function_exists('is_multisite') ? (bool) is_multisite() : false,
+            'cache'                   => $cache,
         ];
     }
 

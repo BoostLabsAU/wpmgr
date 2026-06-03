@@ -5,79 +5,27 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
-	"io"
 	"log/slog"
 	"strings"
 	"time"
 
-	"filippo.io/age"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/uuid"
 
+	"github.com/mosamlife/wpmgr/apps/api/internal/cryptbox"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
-// AgeIdentity wraps the CP's age X25519 identity used to age-encrypt customer
-// secrets at rest. We never ship the identity to the agent — only the public
-// recipient is exposed in the destination form for symmetry with the per-site
-// backup recipient. Encryption happens at write time (service.Create /
-// service.Update), decryption at read time (service.PresignableConfig).
-type AgeIdentity struct {
-	identity  *age.X25519Identity
-	recipient *age.X25519Recipient
-}
+// AgeIdentity is the CP's shared secret-at-rest identity. It moved to
+// internal/cryptbox so SMTP settings and future alert-channel secrets share one
+// encryption boundary; the alias + constructor re-export keep existing call
+// sites (and main.go wiring) unchanged.
+type AgeIdentity = cryptbox.AgeIdentity
 
-// NewAgeIdentity parses an age secret key (the AGE-SECRET-KEY-1... format) and
-// returns both the identity for decryption and its recipient for encryption.
-// An empty key produces a fresh ephemeral identity so dev startup succeeds; in
-// production the operator MUST supply a stable key or every CP restart
-// invalidates every stored secret.
-func NewAgeIdentity(secretKey string) (*AgeIdentity, error) {
-	if strings.TrimSpace(secretKey) == "" {
-		id, err := age.GenerateX25519Identity()
-		if err != nil {
-			return nil, fmt.Errorf("generate ephemeral age identity: %w", err)
-		}
-		return &AgeIdentity{identity: id, recipient: id.Recipient()}, nil
-	}
-	id, err := age.ParseX25519Identity(strings.TrimSpace(secretKey))
-	if err != nil {
-		return nil, fmt.Errorf("parse age identity: %w", err)
-	}
-	return &AgeIdentity{identity: id, recipient: id.Recipient()}, nil
-}
-
-// Encrypt age-encrypts plaintext for the wrapped recipient.
-func (a *AgeIdentity) Encrypt(plaintext []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w, err := age.Encrypt(&buf, a.recipient)
-	if err != nil {
-		return nil, fmt.Errorf("age encrypt: %w", err)
-	}
-	if _, err := w.Write(plaintext); err != nil {
-		return nil, fmt.Errorf("age write: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("age close: %w", err)
-	}
-	return buf.Bytes(), nil
-}
-
-// Decrypt age-decrypts ciphertext produced by Encrypt with the same identity.
-func (a *AgeIdentity) Decrypt(ciphertext []byte) ([]byte, error) {
-	r, err := age.Decrypt(bytes.NewReader(ciphertext), a.identity)
-	if err != nil {
-		return nil, fmt.Errorf("age decrypt: %w", err)
-	}
-	out, err := io.ReadAll(r)
-	if err != nil {
-		return nil, fmt.Errorf("age read: %w", err)
-	}
-	return out, nil
-}
+// NewAgeIdentity re-exports cryptbox.NewAgeIdentity.
+var NewAgeIdentity = cryptbox.NewAgeIdentity
 
 // Service orchestrates site-destination CRUD on top of Repo, the secret-at-
 // rest encryption, and S3 connection testing.
@@ -319,10 +267,10 @@ func (s *Service) testS3(ctx context.Context, in TestConnectionInput) TestConnec
 // in the destination form (operators can verify the encrypted-at-rest claim
 // out of band).
 func (s *Service) PublicRecipient() string {
-	if s == nil || s.age == nil || s.age.recipient == nil {
+	if s == nil {
 		return ""
 	}
-	return s.age.recipient.String()
+	return s.age.RecipientString()
 }
 
 // nonEmpty returns nil for empty strings (so the AWS SDK keeps its default

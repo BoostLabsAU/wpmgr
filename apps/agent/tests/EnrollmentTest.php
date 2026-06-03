@@ -102,6 +102,32 @@ final class EnrollmentTest extends TestCase
         $this->assertSame(base64_encode($raw), $payload['agent_public_key']);
     }
 
+    public function test_heartbeat_cache_gauge_carries_detected_conflicts(): void
+    {
+        // Simulate two conflicting cache plugins active (no process-wide constant).
+        \WPMgr\Agent\Cache\ConflictDetect::overrideDetectionForTests([
+            'wp-rocket'      => true,
+            'litespeed-cache' => true,
+        ]);
+
+        $payload = $this->enrollment->buildHeartbeatPayload();
+
+        $this->assertArrayHasKey('cache', $payload);
+        $this->assertArrayHasKey('conflicts', $payload['cache'], 'heartbeat cache gauge carries conflicts');
+        $this->assertContains('wp-rocket', $payload['cache']['conflicts']);
+        $this->assertContains('litespeed-cache', $payload['cache']['conflicts']);
+
+        \WPMgr\Agent\Cache\ConflictDetect::overrideDetectionForTests(null);
+    }
+
+    public function test_heartbeat_conflicts_empty_when_none_active(): void
+    {
+        \WPMgr\Agent\Cache\ConflictDetect::overrideDetectionForTests([]);
+        $payload = $this->enrollment->buildHeartbeatPayload();
+        $this->assertSame([], $payload['cache']['conflicts']);
+        \WPMgr\Agent\Cache\ConflictDetect::overrideDetectionForTests(null);
+    }
+
     public function test_successful_enroll_persists_site_id_and_cp_key(): void
     {
         $this->settings->setControlPlaneUrl('https://cp.example.test');

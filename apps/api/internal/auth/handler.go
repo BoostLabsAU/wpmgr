@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"net/http"
+	"net/netip"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -41,6 +42,12 @@ func (h *Handler) Register(r gin.IRouter) {
 	g.GET("/me", h.me)
 	g.PATCH("/me", h.updateProfile)
 	g.POST("/me/password", h.changePassword)
+	// ADR-045 Phase 2 — public, unauthenticated password reset.
+	g.POST("/password/forgot", h.forgotPassword)
+	g.POST("/password/reset", h.resetPassword)
+	// ADR-045 Phase 3 — public email verification for self-serve signup.
+	g.POST("/verify-email", h.verifyEmail)
+	g.POST("/verification/resend", h.resendVerification)
 	g.GET("/oidc/login", h.oidcLogin)
 	g.GET("/oidc/callback", h.oidcCallback)
 }
@@ -83,13 +90,53 @@ func (h *Handler) register(c *gin.Context) {
 		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
 		return
 	}
-	res, err := h.svc.Bootstrap(c.Request.Context(), RegisterInput{
+	in := RegisterInput{
 		Email:      body.Email,
 		Password:   body.Password,
 		Name:       body.Name,
 		TenantName: body.TenantName,
 		TenantSlug: body.TenantSlug,
-	}, h.newTenant)
+	}
+
+	// First account on a fresh install bootstraps frictionlessly (no SMTP exists
+	// yet): it is created verified + active and gets an immediate session. Every
+	// later signup is OPEN self-serve, returns a generic pending response, and
+	// must verify by email before logging in (ADR-045 Phase 3).
+	if count, _ := h.svc.CountUsers(c.Request.Context()); count == 0 {
+		res, err := h.svc.Bootstrap(c.Request.Context(), in, h.newTenant)
+		if err != nil {
+			httpx.Error(c, err)
+			return
+		}
+		if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
+			httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+			return
+		}
+		out := toMe(res.User, res.Memberships, res.ActiveTenant)
+		c.JSON(http.StatusCreated, &out)
+		return
+	}
+
+	if err := h.svc.RegisterSelfServe(c.Request.Context(), in, h.newTenant); err != nil {
+		// Only validation errors (weak password / bad email) surface; existence
+		// is never leaked.
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "pending": true})
+}
+
+// verifyEmail handles POST /auth/verify-email. Consumes the token, activates the
+// account, and establishes a session so the user lands logged in.
+func (h *Handler) verifyEmail(c *gin.Context) {
+	var body struct {
+		Token string `json:"token"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
+		return
+	}
+	res, err := h.svc.VerifyEmail(c.Request.Context(), body.Token)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -99,7 +146,20 @@ func (h *Handler) register(c *gin.Context) {
 		return
 	}
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
-	c.JSON(http.StatusCreated, &out)
+	c.JSON(http.StatusOK, &out)
+}
+
+// resendVerification handles POST /auth/verification/resend. ALWAYS 200 (generic).
+func (h *Handler) resendVerification(c *gin.Context) {
+	var body struct {
+		Email string `json:"email"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	_ = h.svc.ResendVerification(c.Request.Context(), body.Email)
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 func (h *Handler) logout(c *gin.Context) {
@@ -189,7 +249,59 @@ func (h *Handler) changePassword(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
+	// Keep THIS session alive (its auth_at now predates password_changed_at,
+	// which would otherwise log it out); other sessions are invalidated.
+	h.sessions.RefreshAuthAt(c.Request.Context())
 	c.Status(http.StatusNoContent)
+}
+
+// forgotPasswordBody is the request body for POST /auth/password/forgot.
+type forgotPasswordBody struct {
+	Email string `json:"email"`
+}
+
+// forgotPassword handles POST /auth/password/forgot. ALWAYS returns 200 {ok:true}
+// (enumeration-safe) whether or not the email maps to an account.
+func (h *Handler) forgotPassword(c *gin.Context) {
+	var body forgotPasswordBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		// Even a malformed body returns the generic OK shape (no oracle).
+		c.JSON(http.StatusOK, gin.H{"ok": true})
+		return
+	}
+	_ = h.svc.RequestPasswordReset(c.Request.Context(), body.Email, clientAddr(c))
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// resetPasswordBody is the request body for POST /auth/password/reset.
+type resetPasswordBody struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// resetPassword handles POST /auth/password/reset. Consumes the token + sets the
+// new password; never establishes a session. Bad/expired/used tokens → 410.
+func (h *Handler) resetPassword(c *gin.Context) {
+	var body resetPasswordBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
+		return
+	}
+	if err := h.svc.ResetPassword(c.Request.Context(), body.Token, body.Password, clientAddr(c)); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// clientAddr parses gin's resolved client IP into a netip.Addr (invalid when
+// unparseable). Used to rate-limit + record the requesting IP.
+func clientAddr(c *gin.Context) netip.Addr {
+	addr, err := netip.ParseAddr(c.ClientIP())
+	if err != nil {
+		return netip.Addr{}
+	}
+	return addr
 }
 
 func (h *Handler) oidcLogin(c *gin.Context) {
@@ -249,11 +361,12 @@ func toMe(u User, memberships []Membership, active uuid.UUID) gen.Me {
 
 func toAPIUser(u User) gen.User {
 	out := gen.User{
-		ID:        u.ID,
-		Email:     u.Email,
-		Name:      u.Name,
-		CreatedAt: u.CreatedAt,
-		UpdatedAt: u.UpdatedAt,
+		ID:           u.ID,
+		Email:        u.Email,
+		Name:         u.Name,
+		CreatedAt:    u.CreatedAt,
+		UpdatedAt:    u.UpdatedAt,
+		IsSuperadmin: gen.NewOptBool(u.IsSuperadmin),
 	}
 	if u.LastLoginAt != nil {
 		out.LastLoginAt = gen.NewOptDateTime(*u.LastLoginAt)

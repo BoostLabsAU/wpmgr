@@ -1,0 +1,20 @@
+You're invited to {{.OrgName}} on {{.ProductName}}
+===================================================
+
+Hi {{.Name}},
+
+{{.InviterName}} invited you to join {{.OrgName}} on {{.ProductName}}
+as {{.Role}}. Accept the invitation using this link (you'll set your
+own password along the way):
+
+{{.AcceptURL}}
+
+This invitation expires in {{.ExpiresHours}} hours.
+
+If you weren't expecting it, you can safely ignore this email.
+
+--
+{{.ProductName}} — fleet control for WordPress
+{{if .FooterNote}}{{.FooterNote}}
+{{end}}Need help? Contact {{.SupportEmail}}.
+(c) {{.Year}} {{.ProductName}}.

@@ -1,0 +1,344 @@
+package perf
+
+import (
+	"encoding/json"
+	"io"
+	"mime"
+	"mime/multipart"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
+	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
+)
+
+// Body limits for the agent endpoints. The RUCSS HTML/CSS limits are ENFORCED
+// BEFORE buffering (the multipart reader stops at the cap → 413), never after.
+const (
+	maxStatsBody  = 64 << 10 // 64 KiB — small gauge JSON
+	maxConfigAck  = 16 << 10 // 16 KiB — install-state ack JSON
+	maxRucssHTML  = 10 << 20 // 10 MiB
+	maxRucssCSS   = 5 << 20  // 5 MiB (total across all css parts)
+	maxRucssMeta  = 8 << 10  // 8 KiB meta JSON
+	maxRucssTotal = 16 << 20 // hard overall request ceiling (HTML+CSS+meta+framing)
+)
+
+// AgentHandler serves the agent-authenticated Performance Suite callbacks under
+// /agent/v1/cache/* and /agent/v1/perf/* and the RUCSS ingest at
+// /agent/v1/rucss. Authentication is the Ed25519 signed-request middleware on
+// the agent group; the site + tenant are taken from the VERIFIED identity, never
+// from the body. The RUCSS endpoint additionally asserts the body's site_id
+// matches the JWT-bound site (no cross-site).
+type AgentHandler struct {
+	svc   *Service
+	rucss *RucssIngestService
+}
+
+// NewAgentHandler wires the agent handler. rucss may be nil (RUCSS endpoint then
+// reports unavailable so the agent keeps serving full CSS).
+func NewAgentHandler(svc *Service, rucss *RucssIngestService) *AgentHandler {
+	return &AgentHandler{svc: svc, rucss: rucss}
+}
+
+// Register mounts the routes on the agent-authenticated group.
+func (h *AgentHandler) Register(r *gin.RouterGroup) {
+	r.POST("/cache/stats-report", h.statsReport)
+	r.POST("/perf/config-ack", h.configAck)
+	r.POST("/rucss", h.rucssIngest)
+}
+
+// ---------------------------------------------------------------------------
+// cache stats report
+// ---------------------------------------------------------------------------
+
+type statsReportBody struct {
+	CachedPagesCount int    `json:"cached_pages_count"`
+	CacheSizeBytes   int64  `json:"cache_size_bytes"`
+	LastPurgedAt     int64  `json:"last_purged_at,omitempty"` // unix seconds
+	LastPurgeKind    string `json:"last_purge_kind,omitempty"`
+	LastPreloadAt    int64  `json:"last_preload_at,omitempty"`
+	PreloadPending   int    `json:"preload_pending"`
+	PreloadTotal     int    `json:"preload_total"`
+}
+
+func (h *AgentHandler) statsReport(c *gin.Context) {
+	id, ok := agent.IdentityFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("agent_unauthenticated", "agent identity required"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxStatsBody))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "could not read request body"))
+		return
+	}
+	var in statsReportBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON: "+err.Error()))
+		return
+	}
+	stats := CacheStats{
+		SiteID:           id.SiteID,
+		TenantID:         id.TenantID,
+		CachedPagesCount: in.CachedPagesCount,
+		CacheSizeBytes:   in.CacheSizeBytes,
+		LastPurgeKind:    in.LastPurgeKind,
+		PreloadPending:   in.PreloadPending,
+		PreloadTotal:     in.PreloadTotal,
+	}
+	if in.LastPurgedAt > 0 {
+		t := time.Unix(in.LastPurgedAt, 0).UTC()
+		stats.LastPurgedAt = &t
+	}
+	if in.LastPreloadAt > 0 {
+		t := time.Unix(in.LastPreloadAt, 0).UTC()
+		stats.LastPreloadAt = &t
+	}
+	if _, err := h.svc.ReportCacheStats(c.Request.Context(), stats); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// perf config ack (install-state report)
+// ---------------------------------------------------------------------------
+
+type configAckBody struct {
+	ConfigVersion      int    `json:"config_version"`
+	ServerSoftware     string `json:"server_software"`
+	DropinInstalled    bool   `json:"dropin_installed"`
+	WPCacheConstantSet bool   `json:"wp_cache_constant_set"`
+	HtaccessManaged    bool   `json:"htaccess_managed"`
+}
+
+func (h *AgentHandler) configAck(c *gin.Context) {
+	id, ok := agent.IdentityFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("agent_unauthenticated", "agent identity required"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxConfigAck))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "could not read request body"))
+		return
+	}
+	var in configAckBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON: "+err.Error()))
+		return
+	}
+	if err := h.svc.MarkConfigApplied(c.Request.Context(), id.SiteID, in.ServerSoftware, in.DropinInstalled, in.WPCacheConstantSet, in.HtaccessManaged); err != nil {
+		// A missing config row (the operator never saved one yet) is non-fatal: the
+		// agent will re-ack after the next config push. Return ok=true.
+		if err == ErrNotFound {
+			c.JSON(http.StatusOK, gin.H{"ok": true, "detail": "no config row yet"})
+			return
+		}
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+// ---------------------------------------------------------------------------
+// RUCSS ingest (multipart)
+// ---------------------------------------------------------------------------
+
+// rucssMeta is the `meta` JSON part of the multipart RUCSS request.
+type rucssMeta struct {
+	SiteID        string   `json:"site_id"`
+	URL           string   `json:"url"`
+	StructureHash string   `json:"structure_hash"`
+	Safelist      []string `json:"safelist,omitempty"`
+}
+
+// rucssIngest accepts a multipart body: a `meta` JSON part + one `html` part +
+// one or more `css` parts. Body limits are enforced as we stream each part (we
+// never buffer past the cap → 413).
+//
+// RUCSS AGENT ROUND-TRIP CONTRACT (authoritative — match this exactly, agent eng):
+//
+//   - Endpoint: POST {cp_base}/agent/v1/rucss
+//   - Auth: Ed25519 signed-request middleware (agent group). Site + tenant come
+//     from the VERIFIED identity, NEVER the body.
+//   - Request: Content-Type multipart/form-data with parts —
+//     meta (application/json) {"site_id","url","structure_hash","safelist"?};
+//     site_id, when present, MUST equal the authenticated site (else 403);
+//     structure_hash is REQUIRED; html (required, ≤10 MiB); css (one-or-more,
+//     optional, ≤5 MiB total). Hard overall request ceiling 16 MiB; a part over
+//     its cap → 413.
+//
+// Responses:
+//   - 200 OK — CACHE HIT. Body is the used-CSS CONTENT (NOT a key); the agent
+//     inlines it directly, no S3 access. Headers: Content-Type: text/css;
+//     Content-Encoding: gzip (the bytes ARE gzip-compressed); X-Rucss-Reduction-Pct
+//     (float, informational); X-Rucss-Used-Bytes (int, uncompressed used-CSS size).
+//     An HTTP client sending Accept-Encoding: gzip inflates transparently; a raw
+//     client must gunzip the body.
+//   - 202 Accepted — CACHE MISS (or RUCSS degraded/unavailable). JSON
+//     {"status":"processing","job_id":"..."} or {"status":"unavailable"}. The agent
+//     serves FULL CSS this render and NEVER blocks; the used CSS becomes available
+//     on a later request once the job runs.
+//   - 401 — no verified agent identity.
+//   - 403 — meta.site_id does not match the authenticated site.
+//   - 413 — a part (or the whole request) exceeded its size limit.
+//   - 422 — missing/invalid meta (no structure_hash) or missing html part.
+func (h *AgentHandler) rucssIngest(c *gin.Context) {
+	id, ok := agent.IdentityFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("agent_unauthenticated", "agent identity required"))
+		return
+	}
+
+	mediaType, params, err := mime.ParseMediaType(c.GetHeader("Content-Type"))
+	if err != nil || !strings.HasPrefix(mediaType, "multipart/") {
+		httpx.Error(c, domain.Validation("invalid_content_type", "expected multipart/form-data"))
+		return
+	}
+	boundary := params["boundary"]
+	if boundary == "" {
+		httpx.Error(c, domain.Validation("invalid_multipart", "missing multipart boundary"))
+		return
+	}
+
+	// Hard ceiling on the whole request so a malicious framing flood can't OOM us
+	// before the per-part caps engage.
+	mr := multipart.NewReader(io.LimitReader(c.Request.Body, maxRucssTotal+1), boundary)
+
+	var (
+		meta    rucssMeta
+		gotMeta bool
+		html    []byte
+		gotHTML bool
+		css     []byte
+	)
+
+	for {
+		part, perr := mr.NextPart()
+		if perr == io.EOF {
+			break
+		}
+		if perr != nil {
+			httpx.Error(c, domain.Validation("invalid_multipart", "could not read multipart part: "+perr.Error()))
+			return
+		}
+		switch part.FormName() {
+		case "meta":
+			raw, rerr := readCapped(part, maxRucssMeta)
+			if rerr != nil {
+				_ = part.Close()
+				httpx.Error(c, rerr)
+				return
+			}
+			if jerr := json.Unmarshal(raw, &meta); jerr != nil {
+				_ = part.Close()
+				httpx.Error(c, domain.Validation("invalid_meta", "meta part is not valid JSON"))
+				return
+			}
+			gotMeta = true
+		case "html":
+			raw, rerr := readCapped(part, maxRucssHTML)
+			if rerr != nil {
+				_ = part.Close()
+				httpx.Error(c, rerr)
+				return
+			}
+			html = raw
+			gotHTML = true
+		case "css":
+			// CSS may arrive in multiple parts; enforce the CAP across the running
+			// total so the sum cannot exceed maxRucssCSS.
+			remaining := maxRucssCSS - len(css)
+			if remaining <= 0 {
+				_ = part.Close()
+				httpx.Error(c, domain.TooLarge("rucss_css_too_large", "css total exceeds 5MB limit"))
+				return
+			}
+			raw, rerr := readCapped(part, remaining)
+			if rerr != nil {
+				_ = part.Close()
+				httpx.Error(c, rerr)
+				return
+			}
+			css = append(css, raw...)
+		}
+		_ = part.Close()
+	}
+
+	if !gotMeta || meta.StructureHash == "" {
+		httpx.Error(c, domain.Validation("invalid_meta", "meta part with structure_hash is required"))
+		return
+	}
+	if !gotHTML {
+		httpx.Error(c, domain.Validation("missing_html", "html part is required"))
+		return
+	}
+
+	// SECURITY: the body-supplied site_id MUST match the JWT-bound site. Reject
+	// any cross-site attempt (a compromised/buggy agent must not compute or read
+	// another site's RUCSS).
+	if meta.SiteID != "" {
+		bodySite, perr := uuid.Parse(meta.SiteID)
+		if perr != nil || bodySite != id.SiteID {
+			httpx.Error(c, domain.Forbidden("site_mismatch", "meta.site_id does not match the authenticated site"))
+			return
+		}
+	}
+
+	if h.rucss == nil {
+		// RUCSS not wired: tell the agent to keep serving full CSS.
+		c.JSON(http.StatusAccepted, gin.H{"status": "unavailable"})
+		return
+	}
+
+	res, ierr := h.rucss.Ingest(c.Request.Context(), RucssIngestInput{
+		TenantID:      id.TenantID,
+		SiteID:        id.SiteID,
+		StructureHash: meta.StructureHash,
+		URL:           meta.URL,
+		HTML:          html,
+		CSS:           css,
+		Safelist:      meta.Safelist,
+	})
+	if ierr != nil {
+		httpx.Error(c, ierr)
+		return
+	}
+	// CACHE HIT: return the used-CSS CONTENT (not a key) so the agent can inline
+	// it without S3 access. Only when we actually read the object bytes — if the
+	// read degraded (res.UsedCSS empty) we fall through to the 202 miss so the
+	// agent keeps serving full CSS this render. See the contract comment above.
+	if res.Cached && len(res.UsedCSS) > 0 {
+		c.Header("X-Rucss-Reduction-Pct", strconv.FormatFloat(res.ReductionPct, 'f', 2, 64))
+		c.Header("X-Rucss-Used-Bytes", strconv.Itoa(res.UsedCSSBytes))
+		if res.UsedCSSGzip {
+			c.Header("Content-Encoding", "gzip")
+		}
+		c.Data(http.StatusOK, "text/css", res.UsedCSS)
+		return
+	}
+	// Miss (or degraded): 202 processing. The agent serves full CSS now.
+	c.JSON(http.StatusAccepted, gin.H{"status": "processing", "job_id": res.JobID})
+}
+
+// readCapped reads up to limit bytes from r; if r has MORE than limit bytes it
+// returns a 413 domain error (enforced BEFORE the excess is buffered: we read
+// limit+1 and reject when the extra byte is present).
+func readCapped(r io.Reader, limit int) ([]byte, error) {
+	buf, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
+	if err != nil {
+		return nil, domain.Validation("read_error", "could not read part")
+	}
+	if len(buf) > limit {
+		return nil, domain.TooLarge("rucss_part_too_large", "a part exceeded its size limit")
+	}
+	return buf, nil
+}
