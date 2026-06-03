@@ -1,12 +1,14 @@
 // Package org serves the organisation management endpoints:
 //   - POST   /api/v1/orgs               — create a new org (tenant) + creator owner membership
-//   - POST   /api/v1/orgs/{orgId}/activate — switch the session's active tenant
+//   - POST   /api/v1/orgs/{orgId}/activate — switch the session's active tenant (path-param form)
+//   - POST   /api/v1/orgs/switch         — switch the session's active tenant (body form)
 //
 // Hand-rolled Gin style (no ogen churn) mirroring restore_run_handler.go.
 package org
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -54,9 +56,12 @@ func NewHandler(pool *db.Pool, tenants TenantCreator, sessions SessionManager, a
 // Register mounts the org routes on the /api/v1 group.
 // POST /orgs requires only authentication (any logged-in user can create a new org).
 // POST /orgs/:orgId/activate requires the caller to be a member of that org.
+// POST /orgs/switch is registered before /:orgId so Gin's static-path-wins rule
+// routes it correctly without conflicting with the param route.
 func (h *Handler) Register(r *gin.RouterGroup) {
 	r.GET("/orgs", h.list)
 	r.POST("/orgs", h.create)
+	r.POST("/orgs/switch", h.switchOrg) // must be before /:orgId/activate
 	r.POST("/orgs/:orgId/activate", h.activate)
 	r.PATCH("/orgs/:orgId", h.rename)
 }
@@ -183,6 +188,91 @@ func (h *Handler) activate(c *gin.Context) {
 	h.sessions.SetActiveTenant(c.Request.Context(), orgID)
 
 	c.JSON(http.StatusOK, gin.H{"active_tenant_id": orgID.String()})
+}
+
+// switchOrgBody is the request body for POST /api/v1/orgs/switch.
+type switchOrgBody struct {
+	TenantID string `json:"tenant_id"`
+}
+
+// switchOrgResponse is returned by POST /api/v1/orgs/switch on success.
+type switchOrgResponse struct {
+	OK          bool   `json:"ok"`
+	TenantID    string `json:"tenant_id"`
+	TenantName  string `json:"tenant_name"`
+}
+
+// switchOrg handles POST /api/v1/orgs/switch.
+//
+// Security invariants:
+//  1. RequireAuth is enforced by the v1Auth group; no active tenant is required
+//     (that is the point — a user stranded on the wrong tenant must be able to
+//     call this endpoint).
+//  2. Membership gate: GetTenantForUser runs inside InUserTx which sets
+//     app.user_id GUC, enabling the memberships_self_read RLS policy. The query
+//     JOINs memberships on tenant_id AND user_id, so it returns no rows (and we
+//     return 403) if the caller is NOT a member of the requested tenant. This is
+//     the SOLE membership check — there is no way to switch into an org the
+//     caller does not belong to.
+//  3. The tenant name is returned in the same query so no second privileged read
+//     is required and no information from a non-member tenant leaks.
+func (h *Handler) switchOrg(c *gin.Context) {
+	p, ok := domain.PrincipalFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("unauthenticated", "authentication required"))
+		return
+	}
+
+	var body switchOrgBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
+		return
+	}
+	if body.TenantID == "" {
+		httpx.Error(c, domain.Validation("tenant_id_required", "tenant_id is required"))
+		return
+	}
+	tenantID, err := uuid.Parse(body.TenantID)
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_tenant_id", "tenant_id is not a valid UUID"))
+		return
+	}
+
+	// Membership gate (line below is the security-critical check):
+	// GetTenantForUser runs under InUserTx (app.user_id GUC), which activates the
+	// memberships_self_read RLS policy. The query requires m.user_id = $2, so a
+	// non-member gets pgx.ErrNoRows → 403. A member gets the tenant row → 200.
+	var tenant sqlc.Tenant
+	err = h.pool.InUserTx(c.Request.Context(), p.UserID, func(tx pgx.Tx) error {
+		var qErr error
+		// MEMBERSHIP CHECK — handler.go switchOrg: this JOIN on memberships is the
+		// gate; a non-member yields ErrNoRows which is mapped to 403 below.
+		tenant, qErr = sqlc.New(tx).GetTenantForUser(c.Request.Context(), sqlc.GetTenantForUserParams{
+			ID:     tenantID,
+			UserID: p.UserID,
+		})
+		return qErr
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// The user is not a member of the requested tenant (or the tenant does
+			// not exist). Return 403 — not 404 — to avoid leaking tenant existence
+			// to a non-member while still being unambiguous about the cause.
+			httpx.Error(c, domain.Forbidden("not_a_member", "you do not have access to this organisation"))
+			return
+		}
+		httpx.Error(c, domain.Internal("switch_org_failed", "failed to switch organisation").WithCause(err))
+		return
+	}
+
+	// Membership confirmed. Update the session's active tenant.
+	h.sessions.SetActiveTenant(c.Request.Context(), tenantID)
+
+	c.JSON(http.StatusOK, switchOrgResponse{
+		OK:         true,
+		TenantID:   tenant.ID.String(),
+		TenantName: tenant.Name,
+	})
 }
 
 // list returns the caller's organisations with names + their role in each. Runs

@@ -34,6 +34,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.POST("/users/:userId/resend-verification", h.resendVerification)
 	g.GET("/sites/:siteId/tenancy", h.siteTenancy)
 	g.POST("/sites/:siteId/grant-self-membership", h.grantSelfMembership)
+	g.GET("/accounts-tenancy", h.accountsTenancy)
 }
 
 // grantSelfMembership re-attaches the calling superadmin as an OWNER of the org
@@ -108,6 +109,28 @@ func (h *Handler) siteTenancy(c *gin.Context) {
 			"site_matches_data":     rep.SiteFound && dataTenant != uuid.Nil && rep.SiteTenantID == dataTenant,
 			"you_can_see_perf_data": youMatchData,
 		},
+	})
+}
+
+// accountsTenancy is a read-only diagnostic: it returns every user whose email
+// matches the ?email=<substr> query parameter (ILIKE %substr%), with their org
+// memberships, plus a full org census (every tenant with site + member counts).
+// Intended for diagnosing account/org splits (e.g. a superadmin stranded in the
+// wrong org while site data lives in a different org). No mutation.
+//
+// Query param:
+//
+//	email  — substring to ILIKE-match against users.email (required; empty string matches all users)
+func (h *Handler) accountsTenancy(c *gin.Context) {
+	emailSubstr := c.Query("email")
+	rep, err := h.svc.AccountsTenancy(c.Request.Context(), emailSubstr)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"users": rep.Users,
+		"orgs":  rep.Orgs,
 	})
 }
 

@@ -28,12 +28,21 @@ type userStore interface {
 	DeleteEmptyTenant(ctx context.Context, tenantID uuid.UUID) (bool, error)
 	SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error)
 	GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid.UUID) (uuid.UUID, string, bool, error)
+	AccountsTenancy(ctx context.Context, emailSubstr string) (AccountsTenancyReport, error)
 }
 
 // SiteTenancy returns a read-only diagnostic comparing where a site + its perf
 // data live vs the requesting superadmin's org memberships.
 func (s *Service) SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error) {
 	return s.repo.SiteTenancy(ctx, userID, siteID)
+}
+
+// AccountsTenancy returns a comprehensive read-only diagnostic of every user
+// whose email matches emailSubstr (ILIKE %substr%), with their memberships, plus
+// every org with its site/member counts. Useful for diagnosing account/org
+// splits without guessing UUIDs.
+func (s *Service) AccountsTenancy(ctx context.Context, emailSubstr string) (AccountsTenancyReport, error) {
+	return s.repo.AccountsTenancy(ctx, emailSubstr)
 }
 
 // GrantSelfOwnerMembership re-attaches the calling superadmin as an owner of the

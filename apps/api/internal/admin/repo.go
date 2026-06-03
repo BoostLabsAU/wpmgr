@@ -326,6 +326,148 @@ func (r *Repo) GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid
 	return tenantID, tenantName, added, nil
 }
 
+// AccountUserMembership is one org membership within the accounts-tenancy
+// diagnostic report.
+type AccountUserMembership struct {
+	TenantID   uuid.UUID `json:"tenant_id"`
+	TenantName string    `json:"tenant_name"`
+	Role       string    `json:"role"`
+}
+
+// AccountUser represents one user in the accounts-tenancy diagnostic, with all
+// their org memberships inline.
+type AccountUser struct {
+	ID           uuid.UUID               `json:"id"`
+	Email        string                  `json:"email"`
+	IsSuperadmin bool                    `json:"is_superadmin"`
+	Memberships  []AccountUserMembership `json:"memberships"`
+}
+
+// AccountOrg is a summary row for one org in the accounts-tenancy diagnostic.
+type AccountOrg struct {
+	TenantID    uuid.UUID `json:"tenant_id"`
+	TenantName  string    `json:"tenant_name"`
+	SiteCount   int64     `json:"site_count"`
+	MemberCount int64     `json:"member_count"`
+}
+
+// AccountsTenancyReport is the full response for GET /admin/accounts-tenancy.
+type AccountsTenancyReport struct {
+	Users []AccountUser `json:"users"`
+	Orgs  []AccountOrg  `json:"orgs"`
+}
+
+// AccountsTenancy returns every user whose email ILIKE %emailSubstr%, with
+// their memberships, plus a full org census (every tenant with site + member
+// counts). Everything runs under InAgentTx (memberships_agent + sites_agent)
+// so cross-tenant rows are visible. Read-only.
+func (r *Repo) AccountsTenancy(ctx context.Context, emailSubstr string) (AccountsTenancyReport, error) {
+	var rep AccountsTenancyReport
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		// 1. Matching users (ILIKE %substr%)
+		userRows, err := tx.Query(ctx,
+			`SELECT id, email, is_superadmin FROM users
+			 WHERE email ILIKE '%' || $1 || '%'
+			 ORDER BY email`,
+			emailSubstr,
+		)
+		if err != nil {
+			return err
+		}
+		defer userRows.Close()
+		userByID := map[uuid.UUID]*AccountUser{}
+		for userRows.Next() {
+			var u AccountUser
+			if err := userRows.Scan(&u.ID, &u.Email, &u.IsSuperadmin); err != nil {
+				return err
+			}
+			u.Memberships = []AccountUserMembership{}
+			rep.Users = append(rep.Users, u)
+			// keep pointer into the slice element for membership decoration below
+		}
+		if err := userRows.Err(); err != nil {
+			return err
+		}
+		userRows.Close()
+
+		// Build a stable lookup by re-indexing into the slice (pointer-stable after
+		// we stop appending).
+		for i := range rep.Users {
+			userByID[rep.Users[i].ID] = &rep.Users[i]
+		}
+
+		// 2. Memberships for all matching users in one query (IN list built from IDs)
+		if len(rep.Users) > 0 {
+			ids := make([]uuid.UUID, 0, len(rep.Users))
+			for _, u := range rep.Users {
+				ids = append(ids, u.ID)
+			}
+			memRows, merr := tx.Query(ctx,
+				`SELECT m.user_id, m.tenant_id, t.name, m.role
+				 FROM memberships m
+				 JOIN tenants t ON t.id = m.tenant_id
+				 WHERE m.user_id = ANY($1)
+				 ORDER BY t.name`,
+				ids,
+			)
+			if merr != nil {
+				return merr
+			}
+			defer memRows.Close()
+			for memRows.Next() {
+				var userID uuid.UUID
+				var mem AccountUserMembership
+				if err := memRows.Scan(&userID, &mem.TenantID, &mem.TenantName, &mem.Role); err != nil {
+					return err
+				}
+				if u, ok := userByID[userID]; ok {
+					u.Memberships = append(u.Memberships, mem)
+				}
+			}
+			if err := memRows.Err(); err != nil {
+				return err
+			}
+			memRows.Close()
+		}
+
+		// 3. Full org census — every tenant with site + member counts
+		orgRows, oerr := tx.Query(ctx,
+			`SELECT t.id,
+			        t.name,
+			        COUNT(DISTINCT s.id)::bigint  AS site_count,
+			        COUNT(DISTINCT m.user_id)::bigint AS member_count
+			 FROM tenants t
+			 LEFT JOIN sites s       ON s.tenant_id = t.id
+			 LEFT JOIN memberships m ON m.tenant_id = t.id
+			 GROUP BY t.id, t.name
+			 ORDER BY t.name`,
+		)
+		if oerr != nil {
+			return oerr
+		}
+		defer orgRows.Close()
+		for orgRows.Next() {
+			var o AccountOrg
+			if err := orgRows.Scan(&o.TenantID, &o.TenantName, &o.SiteCount, &o.MemberCount); err != nil {
+				return err
+			}
+			rep.Orgs = append(rep.Orgs, o)
+		}
+		return orgRows.Err()
+	})
+	if err != nil {
+		return AccountsTenancyReport{}, domain.Internal("admin_accounts_tenancy_failed", "failed to load accounts tenancy").WithCause(err)
+	}
+	// Guarantee non-nil slices for clean JSON serialisation.
+	if rep.Users == nil {
+		rep.Users = []AccountUser{}
+	}
+	if rep.Orgs == nil {
+		rep.Orgs = []AccountOrg{}
+	}
+	return rep, nil
+}
+
 // collectRefs runs a (tenant_id, name, role) query and returns the refs.
 func collectRefs(ctx context.Context, tx pgx.Tx, sql string, arg uuid.UUID) ([]TenancyRef, error) {
 	rows, err := tx.Query(ctx, sql, arg)

@@ -94,6 +94,55 @@ func (f *fakeStore) GrantSelfOwnerMembership(_ context.Context, _, _ uuid.UUID) 
 	return uuid.New(), "Test Org", true, nil
 }
 
+func (f *fakeStore) AccountsTenancy(_ context.Context, emailSubstr string) (AccountsTenancyReport, error) {
+	// Return users that contain emailSubstr in their email, with no memberships.
+	var users []AccountUser
+	for _, u := range f.users {
+		if emailSubstr == "" || contains(u.Email, emailSubstr) {
+			users = append(users, AccountUser{
+				ID:          u.ID,
+				Email:       u.Email,
+				IsSuperadmin: u.IsSuperadmin,
+				Memberships: []AccountUserMembership{},
+			})
+		}
+	}
+	if users == nil {
+		users = []AccountUser{}
+	}
+	return AccountsTenancyReport{
+		Users: users,
+		Orgs:  []AccountOrg{},
+	}, nil
+}
+
+// contains is a simple case-insensitive substring check for the fake store.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (substr == "" ||
+		func() bool {
+			for i := 0; i <= len(s)-len(substr); i++ {
+				match := true
+				for j := 0; j < len(substr); j++ {
+					a, b := s[i+j], substr[j]
+					if a >= 'A' && a <= 'Z' {
+						a += 32
+					}
+					if b >= 'A' && b <= 'Z' {
+						b += 32
+					}
+					if a != b {
+						match = false
+						break
+					}
+				}
+				if match {
+					return true
+				}
+			}
+			return false
+		}())
+}
+
 func newService(f *fakeStore) *Service {
 	return &Service{repo: f}
 }
@@ -255,6 +304,65 @@ func TestSetStatus_Success(t *testing.T) {
 	}
 	if updated.Status != "disabled" {
 		t.Fatalf("expected status disabled, got %s", updated.Status)
+	}
+}
+
+func TestAccountsTenancy_FiltersByEmail(t *testing.T) {
+	f := newFakeStore()
+	id1, id2 := uuid.New(), uuid.New()
+	f.users[id1] = AdminUser{ID: id1, Email: "alice@oscod.dev", Status: "active"}
+	f.users[id2] = AdminUser{ID: id2, Email: "bob@pan.org", Status: "active"}
+
+	rep, err := newService(f).AccountsTenancy(context.Background(), "oscod")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rep.Users) != 1 {
+		t.Fatalf("expected 1 user matching 'oscod', got %d", len(rep.Users))
+	}
+	if rep.Users[0].Email != "alice@oscod.dev" {
+		t.Fatalf("expected alice@oscod.dev, got %s", rep.Users[0].Email)
+	}
+	if rep.Users[0].Memberships == nil {
+		t.Fatal("memberships must not be nil (must be an empty slice)")
+	}
+	if rep.Orgs == nil {
+		t.Fatal("orgs must not be nil (must be an empty slice)")
+	}
+}
+
+func TestAccountsTenancy_EmptySubstrReturnsAll(t *testing.T) {
+	f := newFakeStore()
+	for i := 0; i < 3; i++ {
+		id := uuid.New()
+		f.users[id] = AdminUser{ID: id, Email: "user" + string(rune('0'+i)) + "@example.com", Status: "active"}
+	}
+	rep, err := newService(f).AccountsTenancy(context.Background(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rep.Users) != 3 {
+		t.Fatalf("expected 3 users for empty substr, got %d", len(rep.Users))
+	}
+}
+
+func TestAccountsTenancy_NoMatchReturnsEmptySlices(t *testing.T) {
+	f := newFakeStore()
+	id := uuid.New()
+	f.users[id] = AdminUser{ID: id, Email: "someone@example.com", Status: "active"}
+
+	rep, err := newService(f).AccountsTenancy(context.Background(), "zzznomatch")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(rep.Users) != 0 {
+		t.Fatalf("expected 0 users, got %d", len(rep.Users))
+	}
+	if rep.Users == nil {
+		t.Fatal("users must be a non-nil empty slice")
+	}
+	if rep.Orgs == nil {
+		t.Fatal("orgs must be a non-nil empty slice")
 	}
 }
 
