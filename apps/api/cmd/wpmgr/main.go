@@ -253,6 +253,35 @@ func run() error {
 		}
 	}
 
+	// One-shot membership revocation: WPMGR_REVOKE_MEMBERSHIPS =
+	// "email:tenant_uuid[,...]". Removes a user's membership in an org — e.g. to
+	// drop a stray empty org left by a recovery so the user's remaining org
+	// becomes their login default (login picks the first membership; there is no
+	// org switcher yet). Idempotent. Never deletes the org itself, only the
+	// membership row. Remove the env after use.
+	if raw := os.Getenv("WPMGR_REVOKE_MEMBERSHIPS"); raw != "" {
+		for _, entry := range strings.Split(raw, ",") {
+			entry = strings.TrimSpace(entry)
+			if entry == "" {
+				continue
+			}
+			parts := strings.SplitN(entry, ":", 2)
+			if len(parts) != 2 {
+				logger.Warn("revoke membership: bad entry, want email:tenant_uuid", slog.String("entry", entry))
+				continue
+			}
+			email := strings.ToLower(strings.TrimSpace(parts[0]))
+			tenantID, perr := uuid.Parse(strings.TrimSpace(parts[1]))
+			if perr != nil {
+				logger.Warn("revoke membership: tenant must be a UUID", slog.String("entry", entry))
+				continue
+			}
+			if err := revokeMembership(ctx, migPool.Pool, logger, email, tenantID); err != nil {
+				logger.Warn("revoke membership failed", slog.String("email", email), slog.String("tenant_id", tenantID.String()), slog.Any("error", err))
+			}
+		}
+	}
+
 	migPool.Close()
 	logger.Info("migrations applied")
 
@@ -1412,6 +1441,36 @@ func grantMembership(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logge
 		slog.String("org", tenantName),
 		slog.String("tenant_id", tenantID.String()),
 		slog.String("role", role),
+		slog.Int64("rows", ct.RowsAffected()))
+	return nil
+}
+
+// revokeMembership idempotently removes the membership of `email`'s user in
+// tenantID. The DELETE runs under app.tenant_id = tenantID so the memberships
+// USING policy exposes the row. Never deletes the org itself.
+func revokeMembership(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, email string, tenantID uuid.UUID) error {
+	var userID uuid.UUID
+	if err := pool.QueryRow(ctx, `SELECT id FROM users WHERE lower(email) = $1`, email).Scan(&userID); err != nil {
+		return fmt.Errorf("resolve user %q: %w", email, err)
+	}
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
+		return fmt.Errorf("set app.tenant_id: %w", err)
+	}
+	ct, err := tx.Exec(ctx, `DELETE FROM memberships WHERE user_id = $1 AND tenant_id = $2`, userID, tenantID)
+	if err != nil {
+		return fmt.Errorf("delete membership: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit revoke: %w", err)
+	}
+	logger.Info("revoke membership: done",
+		slog.String("email", email),
+		slog.String("tenant_id", tenantID.String()),
 		slog.Int64("rows", ct.RowsAffected()))
 	return nil
 }
