@@ -455,10 +455,13 @@ func (s *Service) Purge(ctx context.Context, tenantID, siteID uuid.UUID, in Purg
 		if lookupErr != nil {
 			return entry, "", lookupErr
 		}
-		res, perr := s.agent.CachePurge(ctx, siteID, siteURL, agentcmd.CachePurgeRequest{
-			Scope: string(in.Scope),
-			URLs:  in.URLs,
-		})
+		purgeReq := agentcmd.CachePurgeRequest{Scope: string(in.Scope), URLs: in.URLs}
+		// The agent reads the singular `url` for scope=url; set it so a targeted
+		// purge actually removes the file (the operator "Purge URL" path).
+		if in.Scope == PurgeKindURL && len(in.URLs) > 0 {
+			purgeReq.URL = in.URLs[0]
+		}
+		res, perr := s.agent.CachePurge(ctx, siteID, siteURL, purgeReq)
 		if perr != nil {
 			return entry, "", perr
 		}
@@ -560,9 +563,14 @@ func (s *Service) ComputeRucss(ctx context.Context, tenantID, siteID uuid.UUID, 
 	if len(purgeURLs) == 0 {
 		purgeURLs = []string{siteURL}
 	}
-	if _, perr := s.agent.CachePurge(ctx, siteID, siteURL, agentcmd.CachePurgeRequest{Scope: "url", URLs: purgeURLs}); perr != nil {
-		s.logger.Warn("rucss compute: pre-purge failed (continuing)",
-			slog.String("site_id", siteID.String()), slog.Any("error", perr))
+	// The agent's cache_purge reads the SINGULAR `url` for scope=url, so purge
+	// each target URL individually (best-effort; a purge failure must not block
+	// the compute).
+	for _, u := range purgeURLs {
+		if _, perr := s.agent.CachePurge(ctx, siteID, siteURL, agentcmd.CachePurgeRequest{Scope: "url", URL: u}); perr != nil {
+			s.logger.Warn("rucss compute: pre-purge failed (continuing)",
+				slog.String("site_id", siteID.String()), slog.String("url", u), slog.Any("error", perr))
+		}
 	}
 	res, perr := s.agent.RucssCompute(ctx, siteID, siteURL, agentcmd.RucssComputeRequest{URLs: urls})
 	if perr != nil {

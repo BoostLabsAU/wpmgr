@@ -135,9 +135,13 @@ type CacheDisableResult struct {
 }
 
 // CachePurgeRequest is the POST body for `cache_purge`. Scope "all" purges the
-// entire cache; scope "url" purges only URLs.
+// entire cache; scope "url" purges a single URL's variants. The agent's
+// cache_purge handler reads the SINGULAR `url` field for scope=url, so URL must
+// be set for a targeted purge; URLs is retained for forward-compat but is not
+// what the current agent reads.
 type CachePurgeRequest struct {
 	Scope string   `json:"scope"` // "all" | "url"
+	URL   string   `json:"url,omitempty"`
 	URLs  []string `json:"urls,omitempty"`
 }
 
