@@ -125,18 +125,52 @@ func (s *Store) EnsureBucket(ctx context.Context) error {
 	return nil
 }
 
-// Put uploads an object's bytes. Used in tests and for any CP-side writes; the
-// production chunk-upload path uses presigned PUT URLs so the agent writes
-// directly.
+// Put uploads an object's bytes. CP-side writes route through a presigned PUT URL
+// + plain HTTP (see PutViaPresign): a live SDK PutObject is rejected by GCS's
+// S3-compatible API with "SignatureDoesNotMatch: Access denied", exactly like a
+// live GetObject (see GetViaPresign) — the agent's presigned chunk PUTs are
+// accepted, but a CP-side SDK PutObject 403s. This is why RUCSS's bundle/result
+// writes (the only CP-side Puts on GCS) failed silently while presigned backups
+// worked. presigned SigV4 is accepted everywhere we run (GCS, SeaweedFS, MinIO).
 func (s *Store) Put(ctx context.Context, key string, body io.Reader, size int64) error {
-	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket:        aws.String(s.bucket),
-		Key:           aws.String(key),
-		Body:          body,
-		ContentLength: aws.Int64(size),
-	})
+	return s.PutViaPresign(ctx, key, body, size)
+}
+
+// presignUploadClient bounds CP-side uploads of objects via presigned PUT URLs.
+// Larger timeout than the small-object fetch client (RUCSS source bundles can be
+// up to ~16 MiB of page HTML + CSS).
+var presignUploadClient = &http.Client{Timeout: 60 * time.Second}
+
+// PutViaPresign uploads an object by minting a short-lived presigned PUT URL and
+// PUTting the bytes over plain HTTP, instead of a live SDK PutObject.
+//
+// aws-sdk-go-v2 signs a live PutObject in a way GCS's S3-compatible API rejects
+// with "SignatureDoesNotMatch: Access denied" (the same reason GetViaPresign
+// exists for reads), whereas presigned query-param SigV4 is accepted — which is
+// why the agent's presigned chunk uploads work but a CP-side PutObject 403s. The
+// presigned URL is a bearer credential — never log it.
+func (s *Store) PutViaPresign(ctx context.Context, key string, body io.Reader, size int64) error {
+	url, err := s.PresignPut(ctx, key, 5*time.Minute)
+	if err != nil {
+		return fmt.Errorf("blobstore: presign put %q: %w", key, err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, body)
+	if err != nil {
+		return err
+	}
+	if size >= 0 {
+		req.ContentLength = size
+	}
+	resp, err := presignUploadClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("blobstore: put %q: %w", key, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		// S3 returns an XML error body; surface a bounded snippet for diagnostics
+		// (never the URL — it is a bearer credential).
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("blobstore: put %q: unexpected status %d: %s", key, resp.StatusCode, string(snippet))
 	}
 	return nil
 }
