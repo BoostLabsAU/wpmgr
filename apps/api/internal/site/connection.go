@@ -103,6 +103,8 @@ const (
 	// Performance Suite (ADR-046) event types, published on the shared tenant
 	// SSE bus and filtered by site_id. The frontend must add these strings to
 	// SITE_EVENT_TYPES in use-site-events.ts to receive them.
+	EventRucssQueued    = "rucss.queued"
+	EventRucssComputing = "rucss.computing"
 	EventRucssCompleted = "rucss.completed"
 	EventRucssFailed    = "rucss.failed"
 

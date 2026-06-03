@@ -127,13 +127,15 @@ final class CacheManager
     }
 
     /**
-     * Preload cron callback.
+     * Preload cron callback. Passes a PerfReporter so progress/completion are
+     * reported back to the CP after each batch (fire-and-forget).
      *
      * @return void
      */
     public function runPreload(): void
     {
-        $this->preloadEngine()->run();
+        $reporter = $this->makePerfReporter();
+        $this->preloadEngine()->run(50, $reporter);
     }
 
     // -------------------------------------------------------------------------
@@ -431,6 +433,31 @@ final class CacheManager
     {
         $header = 'HTTP_' . strtoupper(str_replace('-', '_', Preload::PRELOAD_HEADER));
         return isset($_SERVER[$header]) && (string) $_SERVER[$header] === '1';
+    }
+
+    /**
+     * Build a PerfReporter for the current site. Returns null when the reporter
+     * cannot be constructed (e.g. before enrollment). The reporter is cheap to
+     * build (no DB reads); actual I/O only happens when report*() is called.
+     *
+     * @return PerfReporter|null
+     */
+    public function makePerfReporter(): ?PerfReporter
+    {
+        try {
+            // PerfReporter needs Settings + Signer. These mirror what Plugin
+            // holds, but CacheManager is constructed without them. We build
+            // lightweight instances here; they share the same wp-options storage.
+            $settings = new \WPMgr\Agent\Settings();
+            if (!$settings->isEnrolled()) {
+                return null;
+            }
+            $keystore = new \WPMgr\Agent\Keystore();
+            $signer   = new \WPMgr\Agent\Signer($keystore);
+            return new PerfReporter($settings, $signer, $this);
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

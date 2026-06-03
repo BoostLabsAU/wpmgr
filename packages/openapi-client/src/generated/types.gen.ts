@@ -5189,6 +5189,30 @@ export type ClearRucssResponses = {
 
 export type ClearRucssResponse = ClearRucssResponses[keyof ClearRucssResponses];
 
+export type ComputeRucssData = {
+  body?: {
+    /**
+     * Same-host URLs to compute; empty computes the home page.
+     */
+    urls?: Array<string>;
+  };
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/rucss/compute";
+};
+
+export type ComputeRucssResponses = {
+  /**
+   * Compute acknowledged
+   */
+  200: PerfActionResult;
+};
+
+export type ComputeRucssResponse =
+  ComputeRucssResponses[keyof ComputeRucssResponses];
+
 export type BulkPurgeCacheData = {
   body: BulkPurgeRequest;
   path?: never;

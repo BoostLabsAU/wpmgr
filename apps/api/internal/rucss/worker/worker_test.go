@@ -172,8 +172,9 @@ func TestWorker_Success(t *testing.T) {
 	if jobs.running != 1 || jobs.done != 1 || jobs.failed != 0 {
 		t.Errorf("lifecycle wrong: running=%d done=%d failed=%d", jobs.running, jobs.done, jobs.failed)
 	}
-	if len(events.events) != 1 || events.events[0].Type != site.EventRucssCompleted {
-		t.Errorf("expected one rucss.completed event, got %+v", events.events)
+	// markRunning publishes rucss.computing, then success publishes rucss.completed.
+	if len(events.events) != 2 || events.events[0].Type != site.EventRucssComputing || events.events[1].Type != site.EventRucssCompleted {
+		t.Errorf("expected rucss.computing then rucss.completed, got %+v", events.events)
 	}
 }
 
@@ -188,8 +189,9 @@ func TestWorker_SourceFetcherUnwired_TerminalFail(t *testing.T) {
 	if jobs.failed != 1 {
 		t.Errorf("expected a recorded failure, got failed=%d", jobs.failed)
 	}
-	if len(events.events) != 1 || events.events[0].Type != site.EventRucssFailed {
-		t.Errorf("expected one rucss.failed event")
+	// markRunning publishes rucss.computing first, then the terminal rucss.failed.
+	if len(events.events) == 0 || events.events[len(events.events)-1].Type != site.EventRucssFailed {
+		t.Errorf("expected rucss.failed as the terminal event, got %+v", events.events)
 	}
 }
 

@@ -72,6 +72,8 @@ const SITE_EVENT_TYPES = [
   "cache.stats.updated",
   "perf.config.updated",
   "db.clean.completed",
+  "rucss.queued",
+  "rucss.computing",
   "rucss.completed",
   "rucss.failed",
 ] as const;

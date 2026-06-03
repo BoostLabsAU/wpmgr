@@ -26,6 +26,7 @@ const (
 	CancelMediaOperation             OperationName = "CancelMedia"
 	CleanDatabaseOperation           OperationName = "CleanDatabase"
 	ClearRucssOperation              OperationName = "ClearRucss"
+	ComputeRucssOperation            OperationName = "ComputeRucss"
 	CreateApiKeyOperation            OperationName = "CreateApiKey"
 	CreateAutologinOperation         OperationName = "CreateAutologin"
 	CreateBackupOperation            OperationName = "CreateBackup"

@@ -33,6 +33,15 @@ use WPMgr\Agent\Optimizer\Optimizer;
  */
 final class CacheWriter
 {
+    /**
+     * HTML comment appended to every buffer that is written to the disk cache.
+     * Its presence in the served bytes is a definitive signal that WPMgr wrote
+     * (and optionally optimized) this response. NEVER names a competitor plugin.
+     */
+    public const FOOTPRINT_MARKER = '<!-- Optimized and cached by WPMgr';
+
+    /** Suffix appended when the optimizer transformed the buffer. */
+    private const FOOTPRINT_OPTIMIZED_SUFFIX = ' (optimized)';
     private CacheConfig $config;
 
     private CacheKey $key;
@@ -106,6 +115,7 @@ final class CacheWriter
 
         try {
             $ctx = $this->resolveContext($buffer);
+            $optimized = false;
             // Optimize ONLY when this request is actually cacheable (a MISS we
             // are about to store): the optimization pipeline is the same shape
             // we cache, so a non-cacheable request is served verbatim.
@@ -113,12 +123,17 @@ final class CacheWriter
                 && $this->isOptimizable($ctx)
                 && $this->cacheability->isRequestCacheable($ctx + ['body' => $buffer])
             ) {
-                $optimized = $this->runOptimizer($buffer);
-                if ($optimized !== '') {
-                    $buffer = $optimized;
+                $out = $this->runOptimizer($buffer);
+                if ($out !== '' && $out !== $buffer) {
+                    $buffer    = $out;
+                    $optimized = true;
+                    // Task 5: emit x-wpmgr-optimized header on an optimized MISS.
+                    if (!headers_sent()) {
+                        header('x-wpmgr-optimized: 1');
+                    }
                 }
             }
-            $this->maybeWrite($buffer, $ctx);
+            $this->maybeWrite($buffer, $ctx, $optimized);
         } catch (\Throwable $e) {
             // Never let a cache write / optimize break the page.
         }
@@ -142,6 +157,8 @@ final class CacheWriter
 
     /**
      * Run the lazily-resolved optimizer over the buffer (no-op when inactive).
+     * Returns '' when the optimizer is off or produced no output, so the caller
+     * can detect a genuine transformation by comparing against the original.
      *
      * @param string $buffer Rendered HTML.
      * @return string Optimized HTML, or '' to signal "leave the buffer as-is".
@@ -181,11 +198,16 @@ final class CacheWriter
      * Decide-and-write for a resolved request context + body. Public + context-
      * injected so it is unit-testable with no superglobal/WP dependency.
      *
-     * @param string              $buffer The page body.
-     * @param array<string,mixed> $ctx    Resolved request/response context (see Cacheability).
+     * Appends an HTML comment footprint RIGHT BEFORE gzencode so it lands in
+     * both the cached .html.gz AND the live served bytes. The marker's presence
+     * is a definitive signal that WPMgr wrote this response.
+     *
+     * @param string              $buffer    The page body.
+     * @param array<string,mixed> $ctx       Resolved request/response context (see Cacheability).
+     * @param bool                $optimized Whether the optimizer transformed the buffer.
      * @return bool True when a cache file was written.
      */
-    public function maybeWrite(string $buffer, array $ctx): bool
+    public function maybeWrite(string $buffer, array $ctx, bool $optimized = false): bool
     {
         if (!$this->config->enabled) {
             return false;
@@ -215,6 +237,13 @@ final class CacheWriter
             (string) ($ctx['uri_path'] ?? '/'),
             $fileName
         );
+
+        // Append the footprint marker BEFORE gzencode so it appears in both the
+        // cached file bytes and the live served response. Only appended on an
+        // actual cache write (so its presence is a true signal).
+        $ts            = gmdate('Y-m-d\TH:i:s\Z');
+        $footprintSuffix = $optimized ? self::FOOTPRINT_OPTIMIZED_SUFFIX : '';
+        $buffer .= "\n" . self::FOOTPRINT_MARKER . $footprintSuffix . ' · ' . $ts . ' -->';
 
         $compressed = gzencode($buffer, 6);
         if ($compressed === false) {

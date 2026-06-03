@@ -245,6 +245,14 @@ func (w *Worker) failTerminal(ctx context.Context, a RucssArgs, reason string) e
 }
 
 func (w *Worker) markRunning(ctx context.Context, a RucssArgs) {
+	// Publish rucss.computing so the dashboard's live RUCSS indicator advances
+	// from "queued" (shown optimistically when the operator clicks Compute) to
+	// "computing". The terminal rucss.completed/failed frames already exist.
+	w.publish(ctx, a, site.EventRucssComputing, map[string]any{
+		"job_id":         a.JobID,
+		"structure_hash": a.StructureHash,
+		"url":            a.URL,
+	})
 	if w.jobs == nil || a.JobID == "" {
 		return
 	}

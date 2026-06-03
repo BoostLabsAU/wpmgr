@@ -43,6 +43,8 @@ use WPMgr\Agent\Commands\CacheDisableCommand;
 use WPMgr\Agent\Commands\CachePurgeCommand;
 use WPMgr\Agent\Commands\CachePreloadCommand;
 use WPMgr\Agent\Commands\PerfConfigUpdateCommand;
+use WPMgr\Agent\Commands\RucssComputeCommand;
+use WPMgr\Agent\Cache\PerfReporter;
 use WPMgr\Agent\Commands\DbCleanCommand;
 use WPMgr\Agent\Cache\CacheManager;
 use WPMgr\Agent\Optimizer\Bloat;
@@ -446,6 +448,11 @@ final class Plugin
         // ship onto HOOK_ERRORS_SHIP for sub-minute latency (ErrorMonitor).
         add_action(Scheduler::HOOK_ERRORS_SHIP, [$this, 'shipErrors']);
         add_action(Scheduler::HOOK_HEARTBEAT, [$this, 'shipErrors'], 30);
+
+        // Performance Suite — heartbeat backstop for cache stats + install-state.
+        // Priority 35 so it runs after errors (30). Fire-and-forget: a failed
+        // report must never interfere with the heartbeat itself.
+        add_action(Scheduler::HOOK_HEARTBEAT, [$this, 'shipPerfReport'], 35);
 
         // ADR-037 Sprint 2 — install the error monitor + heal the mu-plugin
         // copy on every boot. install() is idempotent; the mu-installer
@@ -881,12 +888,13 @@ final class Plugin
             //   cache_preload       -> queue background warm (desktop+mobile UA)
             //   perf_config_update  -> re-render drop-in config + .htaccess mobile flag
             //   db_clean            -> Phase 4 stub (signed surface wired now)
-            new CacheEnableCommand($this->cacheManager),
+            new CacheEnableCommand($this->cacheManager, $this->cacheManager->makePerfReporter()),
             new CacheDisableCommand($this->cacheManager),
             new CachePurgeCommand($this->cacheManager),
             new CachePreloadCommand($this->cacheManager),
-            new PerfConfigUpdateCommand($this->cacheManager),
+            new PerfConfigUpdateCommand($this->cacheManager, $this->cacheManager->makePerfReporter()),
             new DbCleanCommand(),
+            new RucssComputeCommand(),
         ];
     }
 
@@ -920,6 +928,11 @@ final class Plugin
         // cadence is now the dedicated 5-min HOOK_ERRORS_SHIP cron + heartbeat
         // backstop (shipErrors()); keeping the call here too is harmless.
         $this->shipErrors();
+
+        // Performance Suite — also ship cache stats + install-state on the
+        // daily diagnostics push so the dashboard stays current even if the
+        // heartbeat backstop missed a cycle.
+        $this->shipPerfReport();
 
         // S2 — ship any pending login-event batch on this same cron tick.
         // LoginProtection::shipBatch returns up to SHIP_BATCH (100) newest rows
@@ -1282,6 +1295,32 @@ final class Plugin
     public function drainAutoOptimize(): void
     {
         $this->autoOptimizeUpload->drain();
+    }
+
+    /**
+     * Heartbeat backstop for the Performance Suite: push fresh cache stats and
+     * install-state to the CP so the dashboard "Server status / Verify" card
+     * reflects reality even without a recent cache_enable command. Fire-and-forget.
+     *
+     * Bound to HOOK_HEARTBEAT at priority 35 (after errors at 30).
+     *
+     * @return void
+     */
+    public function shipPerfReport(): void
+    {
+        if (!$this->settings->isEnrolled()) {
+            return;
+        }
+        try {
+            $reporter = $this->cacheManager->makePerfReporter();
+            if ($reporter === null) {
+                return;
+            }
+            $reporter->reportStats();
+            $reporter->reportInstallState();
+        } catch (\Throwable $e) {
+            // Fire-and-forget: swallow.
+        }
     }
 
     /**

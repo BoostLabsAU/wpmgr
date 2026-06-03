@@ -34,10 +34,55 @@ Enable does three things on the host, in order:
 3. Splices the managed `# BEGIN WPMgr Cache` block into the site-root `.htaccess`
    (Apache only; see [server support](#server-support)).
 
+Enabling also pushes the full optimization config (CSS/JS minify, lazy-load, font
+display-swap, properly-sized images) to the site immediately, so it is
+production-ready out of the box. Each optimization toggle can be turned off
+individually afterward via the perf config.
+
 The agent reports back which of these took (`dropin_installed`,
 `wp_cache_constant_set`, `htaccess_managed`, `server_software`) into
 `site_perf_config`, so the Cache tab shows the true install state. Disable
 reverses all three and purges everything.
+
+## Server-status verify card
+
+The **Cache** tab surfaces the real install state of the cache on the host,
+reported by the agent on every heartbeat, on enable, and during preload:
+
+| Field | What it means |
+|-------|---------------|
+| `server_software` | Web server detected (e.g. `Apache/2.4`, `nginx`) |
+| `dropin_installed` | `wp-content/advanced-cache.php` is present and owned by WPMgr |
+| `wp_cache_constant_set` | `define('WP_CACHE', true)` is in `wp-config.php` |
+| `htaccess_managed` | The `# BEGIN WPMgr Cache` block is in `.htaccess` (Apache only) |
+
+Live gauges alongside the status card: **cached pages**, **cache size**, **last
+purge**, and **last preload** (sourced from `POST /agent/v1/cache/stats-report`
+on a 60s heartbeat cadence).
+
+### WP_CACHE remediation
+
+When `wp-config.php` is not writable, the agent cannot set `WP_CACHE`
+automatically. The dashboard detects `wp_cache_constant_set: false` and surfaces
+the exact line to add:
+
+```php
+define('WP_CACHE', true);
+```
+
+Add it in `wp-config.php`, above the line `/* That's all, stop editing! */`.
+The drop-in continues to serve cache hits while the constant is absent (WordPress
+will not call the drop-in on cache misses, so caching degrades to warm-only until
+the constant is set).
+
+### nginx / OpenResty
+
+On nginx and OpenResty the agent detects the server from `$_SERVER['SERVER_SOFTWARE']`,
+skips the `.htaccess` write, and sets `htaccess_managed: false`. This is the
+correct state — the PHP drop-in serves cache hits without `.htaccess` on these
+servers, and `htaccess_managed: false` is not shown as an error on the status card
+for nginx/OpenResty sites. See [Server support](#server-support) for the optional
+server-level fast-path snippet.
 
 ## What gets cached (and what never does)
 
@@ -141,6 +186,12 @@ curl -X POST https://manage.wpmgr.app/api/v1/sites/$SITE_ID/cache/preload \
   -H "Authorization: Bearer $TOKEN"
 ```
 
+**Live preload progress.** The agent emits `cache.preload.progress` SSE events
+as it warms URLs, and a final `cache.preload.completed` event when the pass
+finishes. The dashboard resolves the spinner to a result without polling. If no
+completion event arrives within the client-side stale timeout, the UI treats the
+preload as finished and re-fetches stats, so it never hangs indefinitely.
+
 ## Server support
 
 The PHP drop-in always serves the cache on a hit. A server-level fast-path can
@@ -181,6 +232,18 @@ to leave the platform-owned page cache in place where it is managed. The agent
 never overwrites a foreign canonical `advanced-cache.php` it does not recognise
 as its own; if another cache plugin owns the drop-in, install reports the
 conflict rather than fighting it.
+
+## Page-source marker
+
+Every cached and optimized page carries an HTML comment at the end of `<body>`:
+
+```html
+<!-- Optimized and cached by WPMgr | 2026-06-03T10:11:12Z -->
+```
+
+View page source to confirm caching and optimization are active. The timestamp is
+the moment the cache file was written (UTC). The comment is stripped from any
+response the drop-in serves uncached (PHP fall-through, bypass, or miss).
 
 ## Cache headers
 

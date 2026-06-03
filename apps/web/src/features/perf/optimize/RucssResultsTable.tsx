@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronLeft, ChevronRight, Loader2, Trash2 } from "lucide-react";
+import { ChevronLeft, ChevronRight, Loader2, Play, Trash2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +15,10 @@ import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
 import { toast } from "@/components/toast";
 
 import { formatBytes, formatWhen } from "../format";
+import { useComputeRucss } from "../hooks/useComputeRucss";
 import { useClearRucss } from "../hooks/useCacheStats";
 import { RUCSS_PAGE_SIZE, useRucssResults } from "../hooks/useRucssResults";
+import { RucssLiveIndicator } from "./RucssLiveIndicator";
 
 // RUCSS results table: one row per page structure, showing original → used CSS,
 // the reduction %, and when it was last used. Paginated (offset windows of 25).
@@ -38,6 +40,7 @@ export function RucssResultsTable({
   const [clearOpen, setClearOpen] = useState(false);
   const results = useRucssResults(siteId, page);
   const clear = useClearRucss(siteId);
+  const compute = useComputeRucss(siteId);
 
   const items = results.data ?? [];
   const hasNext = items.length === RUCSS_PAGE_SIZE;
@@ -66,21 +69,38 @@ export function RucssResultsTable({
           </p>
         </div>
         {canOperate ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setClearOpen(true)}
-            disabled={clear.isPending || items.length === 0}
-            className="shrink-0"
-          >
-            {clear.isPending ? (
-              <Loader2 aria-hidden="true" className="size-4 animate-spin" />
-            ) : (
-              <Trash2 aria-hidden="true" className="size-4" />
-            )}
-            Clear results
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <RucssLiveIndicator siteId={siteId} />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => compute.mutate()}
+              disabled={compute.isPending}
+              title="Compute Used-CSS for the home page now"
+            >
+              {compute.isPending ? (
+                <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+              ) : (
+                <Play aria-hidden="true" className="size-4" />
+              )}
+              Compute now
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setClearOpen(true)}
+              disabled={clear.isPending || items.length === 0}
+            >
+              {clear.isPending ? (
+                <Loader2 aria-hidden="true" className="size-4 animate-spin" />
+              ) : (
+                <Trash2 aria-hidden="true" className="size-4" />
+              )}
+              Clear results
+            </Button>
+          </div>
         ) : null}
       </div>
 

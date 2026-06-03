@@ -32,12 +32,15 @@
 </FilesMatch>
 
 # Serve cached pages straight from disk when present.
+# CACHE_CONTENT_PATH is replaced at install time with the real WP_CONTENT_DIR-
+# relative path (e.g. wp-content/cache/wpmgr) so this block is correct even
+# when wp-content is relocated outside the webroot.
 <IfModule mod_rewrite.c>
 	RewriteEngine On
 	RewriteBase /
 
 	# Block direct hits on the cache directory.
-	RewriteCond %{THE_REQUEST} "/wp-content/cache/wpmgr/.*\.html\.gz" [NC]
+	RewriteCond %{THE_REQUEST} "/CACHE_CONTENT_PATH/.*\.html\.gz" [NC]
 	RewriteRule ^ - [F]
 
 	# Mobile-caching flag. The HtaccessManager flips :0 to :1 when mobile
@@ -51,8 +54,8 @@
 	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
 	RewriteCond %{HTTP_USER_AGENT} "android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos" [NC]
 	RewriteCond %{ENV:MOBILE_CACHING_FLAG} =1
-	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz -f
-	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz [L]
+	RewriteCond %{DOCUMENT_ROOT}/CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz -f
+	RewriteRule ^(.*)$ CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz [L]
 
 	# Serve the desktop cache otherwise.
 	RewriteCond %{REQUEST_METHOD} GET|HEAD
@@ -61,7 +64,7 @@
 	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
 	RewriteCond %{HTTP_USER_AGENT} "!(android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos)" [NC,OR]
 	RewriteCond %{ENV:MOBILE_CACHING_FLAG} !=1
-	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
-	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
+	RewriteCond %{DOCUMENT_ROOT}/CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
+	RewriteRule ^(.*)$ CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
 </IfModule>
 # END WPMgr Cache

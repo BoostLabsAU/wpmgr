@@ -124,11 +124,17 @@ final class OptimizerPipelineTest extends TestCase
         $this->assertStringContainsString('wpmgr-yt', $returned);
         $this->assertStringNotContainsString('<iframe', $returned);
 
-        // The cached file holds the SAME optimized bytes.
+        // The cached file holds the optimized bytes PLUS the footprint marker.
+        // The live response ($returned) is the optimized HTML; the cached file
+        // additionally contains the appended footprint comment.
         $path = $this->root . '/example.com/post/index.html.gz';
         $this->assertFileExists($path);
-        $cached = gzdecode((string) file_get_contents($path));
-        $this->assertSame($returned, $cached, 'cached bytes must equal the served optimized bytes');
+        $cached = (string) gzdecode((string) file_get_contents($path));
+        $this->assertStringStartsWith($returned, $cached, 'cached bytes must start with the served optimized bytes');
+        $this->assertStringContainsString(\WPMgr\Agent\Cache\CacheWriter::FOOTPRINT_MARKER, $cached,
+            'cached bytes must include the footprint marker');
+        $this->assertStringContainsString('(optimized)', $cached,
+            'cached bytes for an optimized write must include the optimized suffix');
 
         unset($_SERVER['REQUEST_URI'], $_SERVER['HTTP_HOST'], $_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_USER_AGENT']);
     }
@@ -151,7 +157,12 @@ final class OptimizerPipelineTest extends TestCase
 
         $path = $this->root . '/example.com/p2/index.html.gz';
         $this->assertFileExists($path);
-        $this->assertSame(self::DOC, gzdecode((string) file_get_contents($path)));
+        // The cached file has the footprint appended; the live response does not.
+        $cached = (string) gzdecode((string) file_get_contents($path));
+        $this->assertStringStartsWith(self::DOC, $cached,
+            'cached bytes must start with the original body');
+        $this->assertStringContainsString(\WPMgr\Agent\Cache\CacheWriter::FOOTPRINT_MARKER, $cached,
+            'cached bytes must include the footprint marker');
 
         unset($_SERVER['REQUEST_URI'], $_SERVER['HTTP_HOST'], $_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_USER_AGENT']);
     }

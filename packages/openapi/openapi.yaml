@@ -3124,6 +3124,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/RucssClearResult"
+  /api/v1/sites/{siteId}/perf/rucss/compute:
+    post:
+      operationId: computeRucss
+      summary: Trigger an on-demand Remove-Unused-CSS computation
+      description: |
+        Triggers the agent to compute Used-CSS for the given URLs (or the home
+        page when omitted). The agent self-fetches each URL out-of-band so the
+        optimizer runs the RUCSS stage and posts the page to the control plane,
+        enqueuing a compute job. The queued → computing → completed lifecycle is
+        streamed via the `rucss.*` SSE events. Requires the `site.perf.config`
+        permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                urls:
+                  type: array
+                  items:
+                    type: string
+                  description: Same-host URLs to compute; empty computes the home page.
+      responses:
+        "200":
+          description: Compute acknowledged
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
   /api/v1/cache/bulk-purge:
     post:
       operationId: bulkPurgeCache

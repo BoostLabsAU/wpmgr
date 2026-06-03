@@ -140,6 +140,21 @@ Toggles: `db_post_revisions`, `db_post_auto_drafts`, `db_post_trashed`,
 (`daily`, `weekly` [default], `monthly`) to run it on a schedule. The DB clean
 permission is `site.cache.manage` (operator+).
 
+## Defaults on enable
+
+When you enable the page cache for a site, the full optimization config is pushed
+to the agent immediately with the following toggles on by default:
+
+| Toggle | Default |
+|--------|---------|
+| `css_js_minify` | on |
+| `lazy_load` | on |
+| `properly_size_images` | on |
+| `fonts_display_swap` | on |
+
+All other toggles (RUCSS, JS delay, CDN, bloat removal, etc.) start off. Turn
+individual toggles on or off without re-enabling the cache.
+
 ## Saving the config
 
 All toggles live in one per-site `site_perf_config` row. Save the whole config

@@ -26,7 +26,7 @@ allowlist (belt-and-braces in front of the m36 RLS). Bulk routes check each
 
 | Route group | Permission | Min role |
 |-------------|-----------|----------|
-| `GET .../perf/config`, `PUT .../perf/config`, `POST .../rucss/clear`, `PUT /cache/bulk-config` | `site.perf.config` | operator |
+| `GET .../perf/config`, `PUT .../perf/config`, `POST .../rucss/clear`, `POST .../perf/rucss/compute`, `PUT /cache/bulk-config` | `site.perf.config` | operator |
 | `GET .../cache/stats`, `GET .../rucss/results` | `site:read` | viewer |
 | `POST .../cache/purge`, `/cache/preload`, `POST /cache/bulk-purge` | `site.cache.purge` | operator |
 | `POST .../cache/enable`, `/cache/disable`, `POST .../db/clean` | `site.cache.manage` | operator |
@@ -210,6 +210,41 @@ request).
 { "ok": true, "cleared": 14 }
 ```
 
+### POST /api/v1/sites/{siteId}/perf/rucss/compute
+
+Trigger on-demand RUCSS computation for one or more URLs. Permission:
+`site.perf.config` (operator).
+
+**Request**
+
+```json
+{ "urls": ["https://blog.example.com/hello-world/"] }
+```
+
+`urls` is optional. When omitted or empty, the home page is used. Each URL must
+be on the site's own host (SSRF-guarded).
+
+**Response** `202 Accepted`
+
+```json
+{
+  "ok": true,
+  "jobs": [
+    { "job_id": "01J4QV…", "url": "https://blog.example.com/hello-world/", "status": "queued" }
+  ]
+}
+```
+
+**SSE events** — the job streams `rucss.*` events on the shared tenant bus
+(`GET /api/v1/sites/events`, filter by `site_id`):
+
+| Event | Payload |
+|-------|---------|
+| `rucss.queued` | `{"job_id":"…","url":"…"}` |
+| `rucss.computing` | `{"job_id":"…","url":"…"}` |
+| `rucss.completed` | `{"job_id":"…","url":"…","reduction_pct":88.6,"used_css_bytes":21044}` |
+| `rucss.failed` | `{"job_id":"…","url":"…","reason":"…"}` |
+
 ---
 
 ## Portfolio bulk endpoints
@@ -363,4 +398,5 @@ The perf service publishes on the shared tenant SSE bus
 (`GET /api/v1/sites/events`, ADR-038), filtered by `site_id` client-side:
 `cache.enabled`, `cache.disabled`, `cache.purge.started`, `cache.purge.completed`,
 `cache.preload.started`, `cache.preload.progress`, `cache.preload.completed`,
-`cache.stats.updated`, `perf.config.updated`, `db.clean.completed`.
+`cache.stats.updated`, `perf.config.updated`, `db.clean.completed`,
+`rucss.queued`, `rucss.computing`, `rucss.completed`, `rucss.failed`.

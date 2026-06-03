@@ -86,8 +86,40 @@ final class CacheWriterTest extends TestCase
         $path = $this->root . '/example.com/about/index.html.gz';
         $this->assertFileExists($path);
 
-        $raw = (string) file_get_contents($path);
-        $this->assertSame(self::HTML, gzdecode($raw), 'stored bytes must be gzip of the original body');
+        $raw      = (string) file_get_contents($path);
+        $decoded  = (string) gzdecode($raw);
+
+        // Body must begin with the original HTML.
+        $this->assertStringStartsWith(self::HTML, $decoded, 'stored bytes must start with the original body');
+        // Footprint marker must be present.
+        $this->assertStringContainsString(\WPMgr\Agent\Cache\CacheWriter::FOOTPRINT_MARKER, $decoded,
+            'footprint marker must be appended to the cached bytes');
+        // Non-optimized write must NOT include the "(optimized)" suffix.
+        $this->assertStringNotContainsString('(optimized)', $decoded,
+            'non-optimized write must not include the optimized suffix');
+    }
+
+    public function test_footprint_marker_includes_utc_timestamp(): void
+    {
+        $this->writer()->maybeWrite(self::HTML, $this->ctx());
+        $path    = $this->root . '/example.com/about/index.html.gz';
+        $decoded = (string) gzdecode((string) file_get_contents($path));
+        // The marker must close with --> after a UTC ISO8601 timestamp.
+        $this->assertMatchesRegularExpression(
+            '/<!-- Optimized and cached by WPMgr[^>]*\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z -->/',
+            $decoded,
+            'footprint must include an ISO8601 UTC timestamp'
+        );
+    }
+
+    public function test_footprint_marker_with_optimized_flag(): void
+    {
+        $written = $this->writer()->maybeWrite(self::HTML, $this->ctx(), true);
+        $this->assertTrue($written);
+        $path    = $this->root . '/example.com/about/index.html.gz';
+        $decoded = (string) gzdecode((string) file_get_contents($path));
+        $this->assertStringContainsString('(optimized)', $decoded,
+            'optimized write must include the (optimized) suffix in the footprint');
     }
 
     public function test_disabled_config_writes_nothing(): void

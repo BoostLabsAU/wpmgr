@@ -1,6 +1,7 @@
 import { useCallback } from "react";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 
+import { toast } from "@/components/toast";
 import {
   useSiteEvents,
   type SiteEvent,
@@ -8,6 +9,7 @@ import {
 
 import { perfKeys } from "../perf-keys";
 import { usePreloadStore } from "../preload-store";
+import { useRucssStore, type RucssPhase } from "../rucss-store";
 
 // usePerfEvents — projects the shared `/sites/events` SSE stream onto the perf
 // caches + the live preload/purge progress store. The cache.*/rucss.*/db.*/
@@ -23,7 +25,10 @@ import { usePreloadStore } from "../preload-store";
 //   • cache.preload.progress  → store.progress(done, total) + drive the bar
 //   • cache.preload.completed → store.finish + invalidate stats
 //   • cache.purge.started     → store.start(purging) ; .completed → finish
-//   • rucss.completed / rucss.failed → invalidate the rucss results list.
+//   • rucss.queued → rucss-store.setPhase(queued)
+//   • rucss.computing → rucss-store.setPhase(computing)
+//   • rucss.completed → rucss-store.setPhase(done, reduction_pct) + invalidate
+//   • rucss.failed → rucss-store.setPhase(failed) + toast.error + invalidate
 //
 // Every frame is filtered by site_id first; events for other sites are ignored.
 
@@ -43,10 +48,17 @@ export interface PreloadActions {
   finish: (siteId: string) => void;
 }
 
+/** The slice of the RUCSS store the reducer drives. */
+export interface RucssActions {
+  setPhase: (siteId: string, phase: RucssPhase, extra?: { reduction_pct?: number }) => void;
+  reset: (siteId: string) => void;
+}
+
 export interface PerfEventDeps {
   siteId: string;
   queryClient: Pick<QueryClient, "invalidateQueries">;
   preload: PreloadActions;
+  rucss: RucssActions;
 }
 
 /**
@@ -55,7 +67,7 @@ export interface PerfEventDeps {
  * mediaEventReducer in useMediaEvents.ts).
  */
 export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
-  const { siteId, queryClient, preload } = deps;
+  const { siteId, queryClient, preload, rucss } = deps;
   const data = asRecord(ev.data);
 
   switch (ev.type) {
@@ -98,9 +110,27 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
       void queryClient.invalidateQueries({ queryKey: perfKeys.stats(siteId) });
       break;
 
-    // ── RUCSS results ────────────────────────────────────────────────────────
-    case "rucss.completed":
+    // ── RUCSS live phase ─────────────────────────────────────────────────────
+    case "rucss.queued":
+      rucss.setPhase(siteId, "queued");
+      break;
+    case "rucss.computing":
+      rucss.setPhase(siteId, "computing");
+      break;
+    case "rucss.completed": {
+      const reductionPct = num(data.reduction_pct);
+      rucss.setPhase(siteId, "done", {
+        reduction_pct: reductionPct,
+      });
+      void queryClient.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
+      break;
+    }
     case "rucss.failed":
+      rucss.setPhase(siteId, "failed");
+      toast.error("Remove Unused CSS computation failed.", {
+        description:
+          typeof data.detail === "string" ? data.detail : undefined,
+      });
       void queryClient.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
       break;
 
@@ -128,6 +158,8 @@ export function usePerfEvents(siteId: string): void {
   const start = usePreloadStore((s) => s.start);
   const progress = usePreloadStore((s) => s.progress);
   const finish = usePreloadStore((s) => s.finish);
+  const rucssSetPhase = useRucssStore((s) => s.setPhase);
+  const rucssReset = useRucssStore((s) => s.reset);
 
   const handler = useCallback(
     (ev: SiteEvent) => {
@@ -137,9 +169,10 @@ export function usePerfEvents(siteId: string): void {
         siteId,
         queryClient: qc,
         preload: { start, progress, finish },
+        rucss: { setPhase: rucssSetPhase, reset: rucssReset },
       });
     },
-    [siteId, qc, start, progress, finish],
+    [siteId, qc, start, progress, finish, rucssSetPhase, rucssReset],
   );
 
   useSiteEvents(handler);

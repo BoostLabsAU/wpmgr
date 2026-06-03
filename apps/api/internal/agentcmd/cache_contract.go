@@ -117,11 +117,12 @@ type CacheEnableRequest struct {
 
 // CacheEnableResult is the agent's response to `cache_enable`.
 type CacheEnableResult struct {
-	OK              bool   `json:"ok"`
-	Detail          string `json:"detail"`
-	ServerSoftware  string `json:"server_software,omitempty"`
-	DropinInstalled bool   `json:"dropin_installed,omitempty"`
-	HtaccessManaged bool   `json:"htaccess_managed,omitempty"`
+	OK                 bool   `json:"ok"`
+	Detail             string `json:"detail"`
+	ServerSoftware     string `json:"server_software,omitempty"`
+	DropinInstalled    bool   `json:"dropin_installed,omitempty"`
+	WPCacheConstantSet bool   `json:"wp_cache_constant_set,omitempty"`
+	HtaccessManaged    bool   `json:"htaccess_managed,omitempty"`
 }
 
 // CacheDisableRequest is the POST body for `cache_disable`.
@@ -152,6 +153,23 @@ type CachePurgeResult struct {
 type CachePreloadRequest struct {
 	// SitemapURL optionally overrides the agent's sitemap discovery.
 	SitemapURL string `json:"sitemap_url,omitempty"`
+}
+
+// RucssComputeRequest is the POST body for `rucss_compute` — an operator-initiated
+// "compute Remove-Unused-CSS now" trigger. The agent self-fetches each URL with an
+// out-of-band header so the optimizer runs the RUCSS stage, which posts the page
+// to the CP /agent/v1/rucss endpoint and enqueues a River compute job. URLs empty
+// ⇒ the agent computes the home page. All URLs MUST be same-host (agent enforces).
+type RucssComputeRequest struct {
+	URLs []string `json:"urls,omitempty"`
+}
+
+// RucssComputeResult is the agent's response to `rucss_compute`. Queued is the
+// number of URLs the agent self-fetched to trigger a compute.
+type RucssComputeResult struct {
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail"`
+	Queued int    `json:"queued"`
 }
 
 // CachePreloadResult is the agent's response to `cache_preload`. Total is the

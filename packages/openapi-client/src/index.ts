@@ -98,6 +98,7 @@ export {
   cleanDatabase,
   listRucssResults,
   clearRucss,
+  computeRucss,
   bulkPurgeCache,
   bulkConfigCache,
 } from "./generated/sdk.gen";
@@ -315,4 +316,6 @@ export type {
   BulkPurgeCacheResponse,
   BulkConfigCacheData,
   BulkConfigCacheResponse,
+  ComputeRucssData,
+  ComputeRucssResponse,
 } from "./generated/types.gen";

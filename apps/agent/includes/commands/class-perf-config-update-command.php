@@ -31,6 +31,10 @@ declare(strict_types=1);
 namespace WPMgr\Agent\Commands;
 
 use WPMgr\Agent\Cache\CacheManager;
+use WPMgr\Agent\Cache\DropinInstaller;
+use WPMgr\Agent\Cache\HtaccessManager;
+use WPMgr\Agent\Cache\PerfReporter;
+use WPMgr\Agent\Cache\WpCacheConstant;
 use WPMgr\Agent\Optimizer\PerfConfig;
 
 /**
@@ -50,12 +54,16 @@ final class PerfConfigUpdateCommand implements CommandInterface
 
     private CacheManager $cache;
 
+    private ?PerfReporter $reporter;
+
     /**
-     * @param CacheManager $cache Page-cache orchestrator.
+     * @param CacheManager      $cache    Page-cache orchestrator.
+     * @param PerfReporter|null $reporter Optional reporter for async state push.
      */
-    public function __construct(CacheManager $cache)
+    public function __construct(CacheManager $cache, ?PerfReporter $reporter = null)
     {
-        $this->cache = $cache;
+        $this->cache    = $cache;
+        $this->reporter = $reporter;
     }
 
     /**
@@ -90,8 +98,18 @@ final class PerfConfigUpdateCommand implements CommandInterface
             }
         }
 
+        // Persist the config_version from the CP payload when present.
+        if (isset($params['config_version'])) {
+            PerfReporter::persistConfigVersion((int) $params['config_version']);
+        }
+
         if ($clean === []) {
             if ($optimizationApplied) {
+                // Fire-and-forget state report after optimization-only push.
+                if ($this->reporter !== null) {
+                    $this->reporter->reportInstallState();
+                    $this->reporter->reportStats();
+                }
                 return ['ok' => true, 'detail' => 'optimization config applied'];
             }
             return ['ok' => false, 'detail' => 'no recognised config fields'];
@@ -112,10 +130,81 @@ final class PerfConfigUpdateCommand implements CommandInterface
         try {
             $result = $this->cache->applyConfig($clean);
             $result['stats'] = $this->cache->stats();
+
+            // Additive top-level install-state fields.
+            $result = $this->addInstallStateFields($result);
+
+            // Fire-and-forget async report.
+            if ($this->reporter !== null) {
+                $this->reporter->reportInstallState();
+                $this->reporter->reportStats();
+            }
+
             return $result;
         } catch (\Throwable $e) {
             return ['ok' => false, 'detail' => 'perf config update failed'];
         }
+    }
+
+    /**
+     * Append top-level install-state fields to the response envelope (mirrors
+     * the same helper in CacheEnableCommand, kept here so both commands are
+     * independently complete with no shared base class).
+     *
+     * @param array<string,mixed> $result Current response envelope.
+     * @return array<string,mixed>
+     */
+    private function addInstallStateFields(array $result): array
+    {
+        $result['server_software'] = isset($_SERVER['SERVER_SOFTWARE']) && is_string($_SERVER['SERVER_SOFTWARE'])
+            ? (string) $_SERVER['SERVER_SOFTWARE']
+            : '';
+
+        $dropin      = new DropinInstaller();
+        $dropinPath  = $dropin->dropinPath();
+        $dropinInstalled = false;
+        if ($dropinPath !== '' && @is_file($dropinPath)) {
+            $content = @file_get_contents($dropinPath);
+            $dropinInstalled = $content !== false && strpos($content, DropinInstaller::SIGNATURE) !== false;
+        }
+        $result['dropin_installed'] = $dropinInstalled;
+
+        $stepOk = (bool) ($result['steps']['wp_cache'] ?? false);
+        $result['wp_cache_constant_set'] = $stepOk || (defined('WP_CACHE') && (bool) constant('WP_CACHE'));
+
+        $htaccess = new HtaccessManager();
+        $htaccessManaged = false;
+        if (!$htaccess->isNginx()) {
+            $root = '';
+            if (function_exists('get_home_path')) {
+                $candidate = get_home_path();
+                if (is_string($candidate) && $candidate !== '') {
+                    $root = $candidate;
+                }
+            }
+            if ($root === '' && defined('ABSPATH')) {
+                $root = (string) constant('ABSPATH');
+            }
+            if ($root !== '') {
+                $path = rtrim($root, '/\\') . DIRECTORY_SEPARATOR . '.htaccess';
+                if (@is_file($path)) {
+                    $content = @file_get_contents($path);
+                    $htaccessManaged = $content !== false && strpos($content, HtaccessManager::BEGIN) !== false;
+                }
+            }
+        }
+        $result['htaccess_managed'] = $htaccessManaged;
+
+        if ($stepOk === false && isset($result['steps']['wp_cache'])) {
+            $wpCache = new WpCacheConstant();
+            if (!$wpCache->isWritable()) {
+                $result['detail'] = ($result['detail'] ?? '')
+                    . " WP_CACHE could not be written to wp-config.php"
+                    . " — add: define('WP_CACHE', true);";
+            }
+        }
+
+        return $result;
     }
 
     /**

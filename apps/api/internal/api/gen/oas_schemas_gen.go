@@ -3264,6 +3264,21 @@ func (s *CdnCredentials) SetZone(val OptString) {
 	s.Zone = val
 }
 
+type ComputeRucssReq struct {
+	// Same-host URLs to compute; empty computes the home page.
+	Urls []string `json:"urls"`
+}
+
+// GetUrls returns the value of Urls.
+func (s *ComputeRucssReq) GetUrls() []string {
+	return s.Urls
+}
+
+// SetUrls sets the value of Urls.
+func (s *ComputeRucssReq) SetUrls(val []string) {
+	s.Urls = val
+}
+
 type CreateApiKeyForbidden Error
 
 func (*CreateApiKeyForbidden) createApiKeyRes() {}
@@ -6382,6 +6397,52 @@ func (o OptCdnCredentials) Get() (v CdnCredentials, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptCdnCredentials) Or(d CdnCredentials) CdnCredentials {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptComputeRucssReq returns new OptComputeRucssReq with value set to v.
+func NewOptComputeRucssReq(v ComputeRucssReq) OptComputeRucssReq {
+	return OptComputeRucssReq{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptComputeRucssReq is optional ComputeRucssReq.
+type OptComputeRucssReq struct {
+	Value ComputeRucssReq
+	Set   bool
+}
+
+// IsSet returns true if OptComputeRucssReq was set.
+func (o OptComputeRucssReq) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptComputeRucssReq) Reset() {
+	var v ComputeRucssReq
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptComputeRucssReq) SetTo(v ComputeRucssReq) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptComputeRucssReq) Get() (v ComputeRucssReq, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptComputeRucssReq) Or(d ComputeRucssReq) ComputeRucssReq {
 	if v, ok := o.Get(); ok {
 		return v
 	}

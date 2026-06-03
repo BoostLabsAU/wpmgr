@@ -22,6 +22,8 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Cache;
 
+// PerfReporter is in the same namespace; referenced by FQCN-less calls below.
+
 /**
  * Cache warmer: enqueues and fetches URLs.
  */
@@ -81,28 +83,45 @@ final class Preload
         $merged  = array_values(array_unique(array_merge($pending, $urls)));
         $this->setPending($merged);
 
+        // Persist the total so the cron worker knows the denominator for
+        // progress reporting. We only update the total when we build a NEW
+        // queue (merged count > previous pending count) so a mid-run
+        // re-queue from backoff does not reset the denominator.
+        $mergedCount = count($merged);
+        PerfReporter::persistPreloadTotal($mergedCount);
+
         if (function_exists('wp_schedule_single_event') && function_exists('wp_next_scheduled')) {
             if (wp_next_scheduled(self::HOOK) === false) {
                 wp_schedule_single_event(time() + 1, self::HOOK);
             }
         }
 
-        return count($merged);
+        return $mergedCount;
     }
 
     /**
      * Drain the pending queue, warming each URL. Bounded by $max per invocation;
      * re-schedules itself when work remains.
      *
-     * @param int $max Maximum URLs to warm this pass.
+     * After each batch (and on final drain) we fire a PerfReporter::reportStats()
+     * so the CP can publish cache.preload.progress / cache.preload.completed SSE
+     * frames. The report is fire-and-forget — a failure never breaks warming.
+     *
+     * @param int               $max      Maximum URLs to warm this pass.
+     * @param PerfReporter|null $reporter Optional reporter (injected for tests).
      * @return int URLs warmed this pass.
      */
-    public function run(int $max = 50): int
+    public function run(int $max = 50, ?PerfReporter $reporter = null): int
     {
         $pending = $this->pending();
         if ($pending === []) {
             return 0;
         }
+
+        // Read the stored total BEFORE slicing so progress math is consistent.
+        $preloadTotal = (int) (function_exists('get_option')
+            ? get_option(PerfReporter::OPTION_PRELOAD_TOTAL, count($pending))
+            : count($pending));
 
         $batch     = array_slice($pending, 0, max(1, $max));
         $remaining = array_slice($pending, count($batch));
@@ -122,8 +141,23 @@ final class Preload
             usleep(self::DELAY_US);
         }
 
+        $nowPending = count($this->pending());
+
+        // Report progress. pending==0 && total>0 signals completion to the CP.
+        if ($reporter !== null) {
+            try {
+                $lastPreloadAt = $nowPending === 0 ? time() : null;
+                if ($nowPending === 0) {
+                    PerfReporter::persistLastPreloadAt(time());
+                }
+                $reporter->reportStats($nowPending, $preloadTotal, $lastPreloadAt);
+            } catch (\Throwable $e) {
+                // Fire-and-forget: swallow.
+            }
+        }
+
         // Re-arm if work remains.
-        if ($this->pending() !== []
+        if ($nowPending > 0
             && function_exists('wp_schedule_single_event')
             && function_exists('wp_next_scheduled')
             && wp_next_scheduled(self::HOOK) === false

@@ -255,6 +255,20 @@ func (UnimplementedHandler) ClearRucss(ctx context.Context, params ClearRucssPar
 	return r, ht.ErrNotImplemented
 }
 
+// ComputeRucss implements computeRucss operation.
+//
+// Triggers the agent to compute Used-CSS for the given URLs (or the home
+// page when omitted). The agent self-fetches each URL out-of-band so the
+// optimizer runs the RUCSS stage and posts the page to the control plane,
+// enqueuing a compute job. The queued → computing → completed lifecycle is
+// streamed via the `rucss.*` SSE events. Requires the `site.perf.config`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/rucss/compute
+func (UnimplementedHandler) ComputeRucss(ctx context.Context, req OptComputeRucssReq, params ComputeRucssParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // CreateApiKey implements createApiKey operation.
 //
 // Create an API key (admin+); the secret is shown once.

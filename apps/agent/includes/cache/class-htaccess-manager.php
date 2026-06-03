@@ -177,8 +177,14 @@ final class HtaccessManager
     // -------------------------------------------------------------------------
 
     /**
-     * Render the block body from the template, substituting the HOSTNAME and
-     * MOBILE flag placeholders. On OpenLiteSpeed, strip the gzip section.
+     * Render the block body from the template, substituting the HOSTNAME,
+     * MOBILE flag, and CACHE_CONTENT_PATH placeholders. On OpenLiteSpeed,
+     * strip the gzip section.
+     *
+     * CACHE_CONTENT_PATH is the WP_CONTENT_DIR-relative subdirectory the cache
+     * lives in (e.g. `wp-content/cache/wpmgr` on a standard install, or a
+     * relocated path when WP_CONTENT_DIR is non-default). This makes the Apache
+     * fast-path correct on sites that move wp-content outside the webroot.
      *
      * @param string $hostname      Site hostname.
      * @param bool   $mobileCaching Mobile toggle.
@@ -190,9 +196,13 @@ final class HtaccessManager
 
         $hostname = preg_replace('/[^a-zA-Z0-9\.\-]/', '', $hostname) ?? '';
 
+        // Resolve the WP_CONTENT_DIR-relative cache path so the rewrite rules
+        // point at the real cache directory even when wp-content is relocated.
+        $cachePath = $this->cacheContentPath();
+
         $body = str_replace(
-            ['HOSTNAME', 'MOBILE_CACHING_FLAG:0'],
-            [$hostname, 'MOBILE_CACHING_FLAG:' . ($mobileCaching ? '1' : '0')],
+            ['HOSTNAME', 'MOBILE_CACHING_FLAG:0', 'CACHE_CONTENT_PATH'],
+            [$hostname, 'MOBILE_CACHING_FLAG:' . ($mobileCaching ? '1' : '0'), $cachePath],
             $template
         );
 
@@ -201,6 +211,50 @@ final class HtaccessManager
         }
 
         return rtrim($body, "\n");
+    }
+
+    /**
+     * Compute the document-root-relative path to the WPMgr cache directory.
+     *
+     * On a standard install this is `wp-content/cache/wpmgr`. When WP_CONTENT_DIR
+     * is relocated (e.g. `app/` instead of `wp-content/`) the returned path
+     * reflects the real location so the Apache RewriteCond points at it correctly.
+     *
+     * Returns the default `wp-content/cache/wpmgr` when ABSPATH / WP_CONTENT_DIR
+     * are unavailable (unit-test context).
+     *
+     * @return string Document-root-relative path (no leading/trailing slash).
+     */
+    private function cacheContentPath(): string
+    {
+        $default = 'wp-content/cache/wpmgr';
+
+        if (!defined('WP_CONTENT_DIR') || !defined('ABSPATH')) {
+            return $default;
+        }
+
+        $contentDir = rtrim((string) constant('WP_CONTENT_DIR'), '/\\');
+        $abspath    = rtrim((string) constant('ABSPATH'), '/\\');
+
+        if ($contentDir === '' || $abspath === '') {
+            return $default;
+        }
+
+        // Strip the ABSPATH prefix to get the document-root-relative content dir.
+        if (strpos($contentDir, $abspath) === 0) {
+            $rel = ltrim(substr($contentDir, strlen($abspath)), '/\\');
+        } else {
+            // WP_CONTENT_DIR is outside ABSPATH (hosted separately). Fall back to
+            // the default so the template is not broken; the PHP drop-in is
+            // already correct (it uses WP_CONTENT_DIR directly).
+            return $default;
+        }
+
+        if ($rel === '') {
+            return $default;
+        }
+
+        return $rel . '/cache/wpmgr';
     }
 
     /**
@@ -311,7 +365,8 @@ final class HtaccessManager
 
     /**
      * The fallback embedded template (kept in sync with assets/wpmgr-htaccess.txt
-     * minus the BEGIN/END markers). Hostname + mobile-flag placeholders intact.
+     * minus the BEGIN/END markers). HOSTNAME, MOBILE_CACHING_FLAG, and
+     * CACHE_CONTENT_PATH placeholders are intact; substituted by blockBody().
      *
      * @return string
      */
@@ -350,7 +405,7 @@ final class HtaccessManager
 	RewriteBase /
 
 	# Block direct access to cached files
-	RewriteCond %{THE_REQUEST} "/wp-content/cache/wpmgr/.*\.html\.gz" [NC]
+	RewriteCond %{THE_REQUEST} "/CACHE_CONTENT_PATH/.*\.html\.gz" [NC]
 	RewriteRule ^ - [F]
 
 	# Mobile caching flag (flipped to :1 by the manager when enabled)
@@ -363,8 +418,8 @@ final class HtaccessManager
 	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
 	RewriteCond %{HTTP_USER_AGENT} "android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos" [NC]
 	RewriteCond %{ENV:MOBILE_CACHING_FLAG} =1
-	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz -f
-	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz [L]
+	RewriteCond %{DOCUMENT_ROOT}/CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz -f
+	RewriteRule ^(.*)$ CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index-mobile.html.gz [L]
 
 	# Serve desktop cache
 	RewriteCond %{REQUEST_METHOD} GET|HEAD
@@ -373,8 +428,8 @@ final class HtaccessManager
 	RewriteCond %{REQUEST_URI} !^/(wp-(?:admin|login|register|comments-post|cron|json))/ [NC]
 	RewriteCond %{HTTP_USER_AGENT} "!(android|blackberry|ipad|iphone|ipod|iemobile|opera mobile|palmos|webos)" [NC,OR]
 	RewriteCond %{ENV:MOBILE_CACHING_FLAG} !=1
-	RewriteCond %{DOCUMENT_ROOT}/wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
-	RewriteRule ^(.*)$ wp-content/cache/wpmgr/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
+	RewriteCond %{DOCUMENT_ROOT}/CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz -f
+	RewriteRule ^(.*)$ CACHE_CONTENT_PATH/%{HTTP_HOST}%{REQUEST_URI}/index.html.gz [L]
 </IfModule>
 HT;
     }

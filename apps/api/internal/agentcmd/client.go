@@ -304,6 +304,21 @@ func (c *Client) SyncPerfConfig(ctx context.Context, siteID uuid.UUID, siteURL s
 	return out, nil
 }
 
+// RucssCompute sends the signed `rucss_compute` command: the agent self-fetches
+// the given URLs (or the home page) out-of-band so the optimizer runs the
+// Remove-Unused-CSS stage, which posts each page to the CP and enqueues a compute
+// job. siteID is bound into aud. An ok=false response (HTTP 200) is an error.
+func (c *Client) RucssCompute(ctx context.Context, siteID uuid.UUID, siteURL string, req RucssComputeRequest) (RucssComputeResult, error) {
+	var out RucssComputeResult
+	if err := c.post(ctx, siteID, siteURL, "rucss_compute", req, &out); err != nil {
+		return RucssComputeResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("rucss_compute rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
 // CacheEnable sends the signed `cache_enable` command: install the cache
 // drop-in/.htaccess block and turn page caching on. siteID is bound into aud.
 func (c *Client) CacheEnable(ctx context.Context, siteID uuid.UUID, siteURL string, req CacheEnableRequest) (CacheEnableResult, error) {

@@ -12,6 +12,41 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 - Remove Unused CSS strips the rules a page does not use and inlines only what it needs, computed by WPMgr's own engine with no headless browser and no third-party service. Interactive states like hover and focus are always kept, a per-site safelist covers anything added by scripts, and results are cached and shared across pages with the same structure. On a cache miss or any failure the full CSS is served, so rendering is never blocked.
 - Per-site controls plus portfolio bulk actions: save the performance config for one site, purge the cache across many sites at once, or apply a safe, balanced, or aggressive preset to a whole group in one run.
 
+## [0.17.0] - 2026-06-03
+
+Agent: 0.14.0-perf-live.
+
+### Added
+
+- Server-status verify card: the Cache tab now shows the real install state of
+  the page cache on the host — web server detected, drop-in present, WP_CACHE
+  constant set, managed .htaccess block in place — along with live gauges
+  (cached pages, cache size, last purge, last preload). Previously the dashboard
+  showed "not set" or zeros even when caching was fully operational.
+- Optimization auto-applies on enable: turning on the page cache for a site now
+  immediately pushes the full optimization config (CSS/JS minify, lazy-load, font
+  display-swap, proper image sizing) to the site by default. Each toggle can still
+  be turned off individually.
+- Live preload progress: cache preload now streams progress and a completion event
+  to the dashboard so the spinner resolves to a result. A client-side stale
+  timeout fires if the stream goes quiet, so the UI never hangs indefinitely.
+- Remove Unused CSS "Compute now" action: operators can trigger RUCSS computation
+  for specific URLs on demand from the dashboard. The job streams a live
+  queued to computing to reduced-N% progress sequence. Visitor-driven passive
+  background computation continues as before.
+- Page-source marker: pages optimized and cached by WPMgr now carry an HTML
+  comment footprint with a timestamp ("Optimized and cached by WPMgr"), so
+  operators can confirm cache and optimization are active by viewing page source.
+
+### Fixed
+
+- WP_CACHE remediation: when the agent cannot write `define('WP_CACHE', true);`
+  to wp-config.php (file not writable), the dashboard surfaces the exact line to
+  add manually instead of failing silently.
+- nginx and OpenResty sites now correctly reflect that the PHP drop-in serves
+  cache hits without .htaccess; the install-state card no longer marks
+  `htaccess_managed` as an error condition on those servers.
+
 ## [0.16.9] - 2026-06-03
 
 ### Added

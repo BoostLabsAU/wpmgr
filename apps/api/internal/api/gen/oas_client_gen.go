@@ -210,6 +210,17 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/rucss/clear
 	ClearRucss(ctx context.Context, params ClearRucssParams) (*RucssClearResult, error)
+	// ComputeRucss invokes computeRucss operation.
+	//
+	// Triggers the agent to compute Used-CSS for the given URLs (or the home
+	// page when omitted). The agent self-fetches each URL out-of-band so the
+	// optimizer runs the RUCSS stage and posts the page to the control plane,
+	// enqueuing a compute job. The queued → computing → completed lifecycle is
+	// streamed via the `rucss.*` SSE events. Requires the `site.perf.config`
+	// permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/rucss/compute
+	ComputeRucss(ctx context.Context, request OptComputeRucssReq, params ComputeRucssParams) (*PerfActionResult, error)
 	// CreateApiKey invokes createApiKey operation.
 	//
 	// Create an API key (admin+); the secret is shown once.
@@ -3028,6 +3039,107 @@ func (c *Client) sendClearRucss(ctx context.Context, params ClearRucssParams) (r
 
 	stage = "DecodeResponse"
 	result, err := decodeClearRucssResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ComputeRucss invokes computeRucss operation.
+//
+// Triggers the agent to compute Used-CSS for the given URLs (or the home
+// page when omitted). The agent self-fetches each URL out-of-band so the
+// optimizer runs the RUCSS stage and posts the page to the control plane,
+// enqueuing a compute job. The queued → computing → completed lifecycle is
+// streamed via the `rucss.*` SSE events. Requires the `site.perf.config`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/rucss/compute
+func (c *Client) ComputeRucss(ctx context.Context, request OptComputeRucssReq, params ComputeRucssParams) (*PerfActionResult, error) {
+	res, err := c.sendComputeRucss(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendComputeRucss(ctx context.Context, request OptComputeRucssReq, params ComputeRucssParams) (res *PerfActionResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("computeRucss"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/rucss/compute"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ComputeRucssOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/rucss/compute"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeComputeRucssRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeComputeRucssResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

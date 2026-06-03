@@ -59,6 +59,8 @@ import type {
   CleanDatabaseResponses,
   ClearRucssData,
   ClearRucssResponses,
+  ComputeRucssData,
+  ComputeRucssResponses,
   CreateApiKeyData,
   CreateApiKeyErrors,
   CreateApiKeyResponses,
@@ -2369,6 +2371,31 @@ export const clearRucss = <ThrowOnError extends boolean = false>(
     url: "/api/v1/sites/{siteId}/perf/rucss/clear",
     ...options,
   });
+
+/**
+ * Trigger an on-demand Remove-Unused-CSS computation
+ *
+ * Triggers the agent to compute Used-CSS for the given URLs (or the home
+ * page when omitted). The agent self-fetches each URL out-of-band so the
+ * optimizer runs the RUCSS stage and posts the page to the control plane,
+ * enqueuing a compute job. The queued → computing → completed lifecycle is
+ * streamed via the `rucss.*` SSE events. Requires the `site.perf.config`
+ * permission.
+ *
+ */
+export const computeRucss = <ThrowOnError extends boolean = false>(
+  options: Options<ComputeRucssData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<ComputeRucssResponses, unknown, ThrowOnError>(
+    {
+      url: "/api/v1/sites/{siteId}/perf/rucss/compute",
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        ...options.headers,
+      },
+    },
+  );
 
 /**
  * Purge the page cache across many sites

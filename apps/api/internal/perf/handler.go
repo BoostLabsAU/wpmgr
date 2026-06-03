@@ -61,6 +61,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
+	g.POST("/perf/rucss/compute", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssCompute)
 
 	// Portfolio bulk routes. RequireSiteAccess is enforced PER-SITE inside the
 	// handlers (each site_id is checked against the principal's allowlist) since
@@ -316,6 +317,38 @@ func (h *Handler) rucssClear(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "cleared": cleared})
+}
+
+// rucssComputeBody is the optional request body for POST /perf/rucss/compute. An
+// empty body computes the home page.
+type rucssComputeBody struct {
+	URLs []string `json:"urls,omitempty"`
+}
+
+func (h *Handler) rucssCompute(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	var body rucssComputeBody
+	if c.Request.ContentLength > 0 {
+		if err := bindJSON(c, &body); err != nil {
+			httpx.Error(c, err)
+			return
+		}
+	}
+	detail, err := h.svc.ComputeRucss(c.Request.Context(), p.TenantID, siteID, body.URLs)
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+	h.record(c, p, audit.ActionPerfConfigUpdated, siteID, map[string]any{"rucss_compute": true})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "detail": detail})
 }
 
 // ---------------------------------------------------------------------------

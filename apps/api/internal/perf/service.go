@@ -25,6 +25,7 @@ type AgentPerfClient interface {
 	CacheDisable(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.CacheDisableRequest) (agentcmd.CacheDisableResult, error)
 	CachePurge(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.CachePurgeRequest) (agentcmd.CachePurgeResult, error)
 	CachePreload(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.CachePreloadRequest) (agentcmd.CachePreloadResult, error)
+	RucssCompute(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.RucssComputeRequest) (agentcmd.RucssComputeResult, error)
 	DBClean(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error)
 }
 
@@ -181,9 +182,13 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 	if s.agent != nil && s.sites != nil {
 		siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
 		if lookupErr == nil {
-			if _, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(saved)); pushErr != nil {
+			res, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(saved))
+			if pushErr != nil {
 				return saved, fmt.Errorf("config stored but agent push failed: %w", pushErr)
 			}
+			// Refresh the verify card from the state the agent observed while
+			// applying the config (drop-in / WP_CACHE / .htaccess / server).
+			_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged)
 		}
 	}
 	return saved, nil
@@ -294,6 +299,25 @@ func (s *Service) ReportCacheStats(ctx context.Context, stats CacheStats) (Cache
 		"preload_pending":    saved.PreloadPending,
 		"preload_total":      saved.PreloadTotal,
 	})
+	// Derive the preload live-progress frames from the reported gauges so the
+	// dashboard's Preload bar advances and (crucially) terminates. The agent
+	// reports {preload_total, preload_pending} from its warm cron; total>0 means
+	// a warm pass is in flight or just finished. This is what stops the loader
+	// from "spinning forever" — nothing else publishes these two events.
+	if saved.PreloadTotal > 0 {
+		done := saved.PreloadTotal - saved.PreloadPending
+		if done < 0 {
+			done = 0
+		}
+		s.publish(ctx, saved.TenantID, saved.SiteID, site.EventCachePreloadProgress, map[string]any{
+			"done": done, "total": saved.PreloadTotal,
+		})
+		if saved.PreloadPending == 0 {
+			s.publish(ctx, saved.TenantID, saved.SiteID, site.EventCachePreloadCompleted, map[string]any{
+				"done": saved.PreloadTotal, "total": saved.PreloadTotal,
+			})
+		}
+	}
 	return saved, nil
 }
 
@@ -332,7 +356,21 @@ func (s *Service) EnableCache(ctx context.Context, tenantID, siteID uuid.UUID) (
 			return "", perr
 		}
 		detail = res.Detail
-		_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, false, res.HtaccessManaged)
+		// Record the REAL install-state the agent reported (drop-in present,
+		// WP_CACHE define written, .htaccess block managed). Previously
+		// wp_cache_constant_set was hardcoded false, so the dashboard's verify
+		// card always read "not set" even when the define was written.
+		_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged)
+
+		// Push the FULL perf config so the optimization flags (minify, lazy-load,
+		// font-swap, …) actually land in the agent's wpmgr_perf_config option.
+		// cache_enable alone only writes WP_CACHE + the drop-in/.htaccess; without
+		// this push the request-path optimizer stays inert (no minify) because its
+		// flags default off. Best-effort: caching is already on if this fails.
+		if _, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(cfg)); pushErr != nil {
+			s.logger.Warn("cache enabled but optimize-config push failed",
+				slog.String("site_id", siteID.String()), slog.Any("error", pushErr))
+		}
 	}
 	s.publish(ctx, tenantID, siteID, site.EventCacheEnabled, map[string]any{"config_version": cfg.ConfigVersion})
 	return detail, nil
@@ -494,6 +532,28 @@ func (s *Service) Preload(ctx context.Context, tenantID, siteID uuid.UUID, initi
 		detail = res.Detail
 	}
 	return detail, nil
+}
+
+// ComputeRucss triggers an operator-initiated Remove-Unused-CSS computation. It
+// pushes rucss_compute to the agent, which self-fetches the target URL(s)
+// out-of-band (same-host only) so the request-path optimizer runs the RUCSS stage
+// and posts each page to the CP — enqueuing a compute job. The
+// queued → computing → completed lifecycle is streamed over the rucss.* SSE
+// events. urls empty ⇒ the agent computes the home page. RUCSS is otherwise
+// passive (visitor-driven), so this is the operator's deterministic trigger.
+func (s *Service) ComputeRucss(ctx context.Context, tenantID, siteID uuid.UUID, urls []string) (string, error) {
+	if s.agent == nil || s.sites == nil {
+		return "", domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return "", err
+	}
+	res, perr := s.agent.RucssCompute(ctx, siteID, siteURL, agentcmd.RucssComputeRequest{URLs: urls})
+	if perr != nil {
+		return "", perr
+	}
+	return res.Detail, nil
 }
 
 // ---------------------------------------------------------------------------

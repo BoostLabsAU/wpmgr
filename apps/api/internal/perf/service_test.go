@@ -124,6 +124,9 @@ func (a *fakeAgent) CachePurge(_ context.Context, _ uuid.UUID, _ string, req age
 func (a *fakeAgent) CachePreload(context.Context, uuid.UUID, string, agentcmd.CachePreloadRequest) (agentcmd.CachePreloadResult, error) {
 	return agentcmd.CachePreloadResult{OK: true, Detail: "preload"}, nil
 }
+func (a *fakeAgent) RucssCompute(context.Context, uuid.UUID, string, agentcmd.RucssComputeRequest) (agentcmd.RucssComputeResult, error) {
+	return agentcmd.RucssComputeResult{OK: true, Detail: "rucss compute queued", Queued: 1}, nil
+}
 func (a *fakeAgent) DBClean(context.Context, uuid.UUID, string, agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error) {
 	return agentcmd.DBCleanResult{OK: true, Detail: "cleaned", RowsCleaned: 7}, nil
 }

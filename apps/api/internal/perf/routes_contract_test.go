@@ -38,6 +38,7 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/db/clean",
 	"GET    /api/v1/sites/:siteId/perf/rucss/results",
 	"POST   /api/v1/sites/:siteId/perf/rucss/clear",
+	"POST   /api/v1/sites/:siteId/perf/rucss/compute",
 	"POST   /api/v1/cache/bulk-purge",
 	"PUT    /api/v1/cache/bulk-config",
 }

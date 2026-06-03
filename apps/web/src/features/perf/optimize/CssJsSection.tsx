@@ -1,3 +1,5 @@
+import { Info } from "lucide-react";
+
 import { ChipInput } from "../components/ChipInput";
 import { SelectField } from "../components/Field";
 import { SettingRow } from "../components/SettingRow";
@@ -25,6 +27,16 @@ export function CssJsSection({
       title="CSS & JavaScript"
       description="Shrink and defer styles and scripts so pages render sooner."
     >
+      {config.cache_enabled ? (
+        <div className="flex items-start gap-2 border-b border-border px-5 py-3">
+          <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" />
+          <p className="text-xs text-muted-foreground">
+            After changing optimization settings, Purge and Preload the cache so
+            new entries are written with the updated optimizations applied.
+            Minify only applies to freshly-written cache entries.
+          </p>
+        </div>
+      ) : null}
       <SettingRow
         label="Minify CSS & JavaScript"
         description="Strip whitespace and comments from served CSS and JS."

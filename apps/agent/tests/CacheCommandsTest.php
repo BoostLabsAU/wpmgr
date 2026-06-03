@@ -188,6 +188,36 @@ final class CacheCommandsTest extends TestCase
         $this->assertTrue($stored['enabled']);
     }
 
+    public function test_enable_returns_top_level_install_state_fields(): void
+    {
+        $this->optionStore['permalink_structure'] = '/%postname%/';
+        $cmd = new CacheEnableCommand($this->manager());
+        $res = $cmd->execute([], []);
+        // These top-level fields are required by the CP dashboard "Verify" card.
+        $this->assertArrayHasKey('server_software', $res);
+        $this->assertArrayHasKey('dropin_installed', $res);
+        $this->assertArrayHasKey('wp_cache_constant_set', $res);
+        $this->assertArrayHasKey('htaccess_managed', $res);
+        // Values are booleans (the exact value depends on the test environment).
+        $this->assertIsBool($res['dropin_installed']);
+        $this->assertIsBool($res['wp_cache_constant_set']);
+        $this->assertIsBool($res['htaccess_managed']);
+        $this->assertIsString($res['server_software']);
+    }
+
+    public function test_perf_config_update_returns_install_state_fields(): void
+    {
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], [
+            'cache_mobile' => true,
+        ]);
+        $this->assertTrue($res['ok']);
+        $this->assertArrayHasKey('server_software', $res);
+        $this->assertArrayHasKey('dropin_installed', $res);
+        $this->assertArrayHasKey('wp_cache_constant_set', $res);
+        $this->assertArrayHasKey('htaccess_managed', $res);
+    }
+
     public function test_enable_refused_on_plain_permalinks(): void
     {
         // Plain permalinks (?p=123) give no URL path to key a disk cache file on,

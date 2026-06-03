@@ -121,7 +121,8 @@ single computation (singleflight), so a burst of requests computes the purge
 once.
 
 Operators can list cached results, see the per-structure reduction percentage,
-and clear the cache for a site (which forces a recompute on the next request):
+clear the cache for a site (which forces a recompute on the next request), and
+trigger on-demand computation:
 
 ```bash
 # List cached RUCSS results
@@ -131,7 +132,33 @@ curl https://manage.wpmgr.app/api/v1/sites/$SITE_ID/rucss/results \
 # Clear the cache for the site (operator, site.perf.config)
 curl -X POST https://manage.wpmgr.app/api/v1/sites/$SITE_ID/rucss/clear \
   -H "Authorization: Bearer $TOKEN"
+
+# Trigger on-demand computation for specific URLs (operator, site.perf.config)
+curl -X POST https://manage.wpmgr.app/api/v1/sites/$SITE_ID/perf/rucss/compute \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"urls": ["https://blog.example.com/hello-world/"]}'
 ```
+
+## Operator-triggered computation ("Compute now")
+
+In addition to the passive visitor-driven path, operators can trigger RUCSS
+computation on demand from the dashboard or via the API. This is useful after a
+theme or plugin update, when you want fresh results without waiting for real
+visitor traffic.
+
+**Live stream.** The job emits `rucss.*` SSE events on the shared tenant bus
+while it runs:
+
+| Event | Payload |
+|-------|---------|
+| `rucss.queued` | `{"job_id":"…","url":"…"}` |
+| `rucss.computing` | `{"job_id":"…","url":"…"}` |
+| `rucss.completed` | `{"job_id":"…","url":"…","reduction_pct":88.6,"used_css_bytes":21044}` |
+| `rucss.failed` | `{"job_id":"…","url":"…","reason":"…"}` |
+
+The dashboard shows the live queued to computing to reduced-N% sequence. Passive
+background computation continues unaffected alongside operator-triggered jobs.
 
 ## Limitations
 
