@@ -1,0 +1,62 @@
+# Build context exclusions for the api / web / media-encoder images
+# (infra/Dockerfile.*). The Dockerfiles use selective COPY, so this is
+# defense-in-depth + a smaller, faster context for local self-host builds.
+
+# Version control
+.git
+.gitattributes
+.github
+
+# Secrets — must NEVER enter an image build context
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+!**/testdata/**/*.key
+*.tfvars
+**/cloudbuild*.yml
+**/cloudbuild*.yaml
+secrets/
+keys/
+
+# Node / pnpm (deps are installed inside the build stage)
+**/node_modules
+**/dist
+**/.turbo
+**/.vite
+**/*.tsbuildinfo
+.pnpm-store/
+.eslintcache
+playwright-report/
+test-results/
+
+# Go build outputs (binaries are produced inside the build stage)
+**/bin/
+apps/api/wpmgr
+apps/api/media-encoder
+*.exe
+*.test
+*.out
+coverage.txt
+coverage.html
+go.work.sum
+
+# PHP agent vendor (the agent ships as a plugin zip, not an image)
+apps/agent/vendor/
+
+# Release / scratch artifacts
+release/
+sbom/
+*.zip
+reference/
+analysis/
+
+# Tooling / editor / OS
+.claude/
+.agents/
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db

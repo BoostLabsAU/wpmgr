@@ -93,6 +93,7 @@ jobs:
 
   agent:
     name: agent plugin → release asset
+    needs: images # don't publish the release asset if any image build failed
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

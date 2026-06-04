@@ -1,0 +1,25 @@
+# Pull-only overlay — run the published GHCR images instead of building locally.
+#
+# Usage (combine with the base compose):
+#   export WPMGR_VERSION=v0.19.0     # omit to track :latest
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
+#
+# Add the usual profiles as needed, e.g. the media encoder:
+#   docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml \
+#     --profile media up -d
+#
+# `pull_policy: always` makes `up` pull the GHCR image rather than building the
+# base file's local `build:` stanza. All other service config (env, ports,
+# volumes, depends_on) is inherited from infra/docker-compose.yml.
+services:
+  api:
+    image: ghcr.io/mosamlife/wpmgr-api:${WPMGR_VERSION:-latest}
+    pull_policy: always
+
+  web:
+    image: ghcr.io/mosamlife/wpmgr-web:${WPMGR_VERSION:-latest}
+    pull_policy: always
+
+  media-encoder:
+    image: ghcr.io/mosamlife/wpmgr-media-encoder:${WPMGR_VERSION:-latest}
+    pull_policy: always

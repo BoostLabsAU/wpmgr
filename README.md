@@ -12,7 +12,7 @@ WPMgr lets you enroll, monitor, update, back up, and secure a fleet of WordPress
   <a href="https://wpmgr.app/docs/">API reference</a>
 </p>
 
-**v0.12.0** — first public release. Early but production-usable for self-hosters.
+**v0.19.0** — open-source and production-usable for self-hosters.
 
 ---
 
@@ -164,15 +164,23 @@ docker compose -f infra/docker-compose.yml --profile media up -d
 
 ### Prebuilt container images
 
-The `v0.12.0` control plane, dashboard, and (optional) media encoder are published on GitHub Container Registry — wire them into your own compose, Kubernetes, or Swarm for production:
+The `v0.19.0` control plane, dashboard, and (optional) media encoder are published on GitHub Container Registry — wire them into your own compose, Kubernetes, or Swarm for production:
 
 ```bash
-docker pull ghcr.io/mosamlife/wpmgr-api:v0.12.0
-docker pull ghcr.io/mosamlife/wpmgr-web:v0.12.0
-docker pull ghcr.io/mosamlife/wpmgr-media-encoder:v0.12.0   # optional
+docker pull ghcr.io/mosamlife/wpmgr-api:v0.19.0
+docker pull ghcr.io/mosamlife/wpmgr-web:v0.19.0
+docker pull ghcr.io/mosamlife/wpmgr-media-encoder:v0.19.0   # optional
 ```
 
-> A turnkey "pull-only" compose (no local build) is on the near-term roadmap.
+Or bring up the whole stack from the published images (no local build) with the
+pull-only Compose overlay:
+
+```bash
+export WPMGR_VERSION=v0.19.0   # omit to track :latest
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
+```
+
+Images are `linux/amd64`. (arm64 multi-arch is a near-term follow-up.)
 
 Full install guide, env reference, and production hardening: [docs/install.md](./docs/install.md).
 

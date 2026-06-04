@@ -88,12 +88,35 @@ sharing the bootstrap superuser; never set it in production.
 
 ## 2. Bring up the stack
 
+Build the images locally from source:
+
 ```bash
 docker compose -f infra/docker-compose.yml up -d
 ```
 
 This starts Postgres, Redis, SeaweedFS (S3 gateway on `:8333`), ClickHouse, the
 API (`:8080`), and the web dashboard (served by nginx on `:80`).
+
+### Or: run the prebuilt GHCR images (no local build)
+
+Pre-built `linux/amd64` images are published on GitHub Container Registry:
+`ghcr.io/mosamlife/wpmgr-api`, `-web`, and `-media-encoder` (each tagged
+`:vX.Y.Z` and `:latest`). Bring up the stack from them with the pull-only
+overlay:
+
+```bash
+export WPMGR_VERSION=v0.19.0   # omit to track :latest
+docker compose -f infra/docker-compose.yml -f infra/docker-compose.prod.yml up -d
+```
+
+The overlay only swaps the three app services to `image:` + `pull_policy:
+always`; everything else (Postgres, Redis, SeaweedFS, ClickHouse, env, volumes)
+is inherited from the base file. Add `--profile media` for the encoder.
+
+> GHCR packages are private on first publish. The maintainer makes each
+> `wpmgr-*` package **Public** once (GitHub → Packages → package → Settings →
+> Change visibility → Public); after that `docker pull` needs no auth. arm64
+> multi-arch images are a near-term follow-up.
 
 ## 3. Verify
 
