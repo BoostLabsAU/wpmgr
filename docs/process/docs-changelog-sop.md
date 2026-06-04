@@ -126,8 +126,7 @@ Run this checklist as the closing act of every feature. Treat each box as blocki
 - [ ] Grep your edits before shipping. NEVER name a competitor in landing copy, README, CHANGELOG, or code/comments:
   ```
   node apps/landing/scripts/check-copy.mjs   # gates apps/landing/src for em/en dashes + competitor names
-  grep -rinE 'managewp|mainwp|wpvivid|flyingpress|infinitewp|wp remote' \
-    README.md CHANGELOG.md apps/landing/src apps/api apps/web apps/agent
+  node apps/landing/scripts/check-copy.mjs --extra README.md CHANGELOG.md
   ```
   Both must come back clean (the root `CHANGELOG.md` and `README.md` are NOT covered by `check-copy.mjs`, so the grep is what protects them).
 - [ ] **Sanctioned exception, and the only one:** the GitHub repository **description** field (the "About" blurb on github.com) may reference a competitor for discoverability. Nothing inside the repo tree may.

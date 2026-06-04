@@ -14,8 +14,8 @@
  *     constants) we can call directly.
  * If neither exists we NO-OP — WPMgr never invents Cloudflare credentials.
  *
- * Original implementation (uses Cloudflare's public v4 purge_cache endpoint and
- * the official plugin's published hook surface).
+ * Uses Cloudflare's public v4 purge_cache endpoint and the official plugin's
+ * published hook surface.
  *
  * @package WPMgr\Agent\Integrations
  */

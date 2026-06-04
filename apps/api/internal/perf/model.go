@@ -34,6 +34,14 @@ type Config struct {
 	CacheIncludeQueries  []string
 	CacheIncludeCookies  []string
 
+	// Preload (cache-warm) throttle — operator-tunable queue drain knobs (M37).
+	// The agent clamps each to the same bounds locally: concurrency 1..4,
+	// delay 0..10000 ms, batch 1..500, max-load-per-core 0..64 (0 = disabled).
+	PreloadConcurrency int
+	PreloadDelayMs     int
+	PreloadBatchSize   int
+	PreloadMaxLoad     float64
+
 	// CSS / JS
 	CSSJSMinify               bool
 	CSSRucss                  bool
@@ -75,6 +83,8 @@ type Config struct {
 	DBCommentsTrashed   bool
 	DBTransientsExpired bool
 	DBOptimizeTables    bool
+	// M38: CP-owned scheduling; nil means no pending auto-clean (first-run case).
+	NextDBCleanAt *time.Time
 
 	// Bloat removal
 	BloatDisableBlockCSS     bool
@@ -134,6 +144,191 @@ type PurgeAuditEntry struct {
 	URLsCount       int
 	CreatedAt       time.Time
 }
+
+// DbSizeTrendPoint is one row of the site_db_size_history table as returned
+// by the GetDBSizeHistory query. Only the trend fields are serialized to the
+// API response; the row identity and tenant_id are internal and omitted.
+type DbSizeTrendPoint struct {
+	ID          uuid.UUID `json:"-"`
+	SiteID      uuid.UUID `json:"-"`
+	TenantID    uuid.UUID `json:"-"`
+	DBSizeBytes int64     `json:"db_size_bytes"`
+	TableCount  int       `json:"table_count"`
+	ScannedAt   time.Time `json:"scanned_at"`
+	CreatedAt   time.Time `json:"-"`
+}
+
+// DBHealthResponse is the payload for GET /perf/db/health.
+// Points is ordered ascending by scanned_at (oldest first). GrowthBytes and
+// GrowthPct are derived from Points[0] vs Points[len-1]; both are zero when
+// fewer than two points exist. The frontend must treat < 2 points as an
+// empty-state condition and show the chart empty state rather than a line.
+type DBHealthResponse struct {
+	Points      []DbSizeTrendPoint `json:"points"`
+	GrowthBytes int64              `json:"growth_bytes"`
+	GrowthPct   float64            `json:"growth_pct"`
+}
+
+// ---------------------------------------------------------------------------
+// P3.5 — Orphans Classification Report
+// ---------------------------------------------------------------------------
+
+// OrphanItem is one classified candidate-orphan artefact (wp_options row,
+// WP-Cron event, or custom table). The Confidence field mirrors the
+// dbclean.ConfidenceLevel wire values ("exact" | "prefix" | "heuristic" |
+// "unknown"). Internal ids and tenant_id are never included.
+type OrphanItem struct {
+	// Name is the raw artefact identifier (option_name, hook name, or table name).
+	Name string `json:"name"`
+
+	// OwnerSlug is the wordpress.org plugin slug the corpus attributed the item
+	// to. Empty when Confidence is "unknown".
+	OwnerSlug string `json:"owner_slug,omitempty"`
+
+	// Confidence is the attribution strength: "exact" | "prefix" |
+	// "heuristic" | "unknown". Matches dbclean.ConfidenceLevel wire values.
+	Confidence string `json:"confidence"`
+
+	// KnownPlugins is the full set of corpus slugs whose patterns matched this
+	// item. When len > 1 the item is potentially shared between multiple plugins
+	// and DeletableEligible will be false.
+	KnownPlugins []string `json:"known_plugins,omitempty"`
+
+	// Installed is true when the classified OwnerSlug or any of KnownPlugins
+	// is present in the site's installed-plugin snapshot at scan time.
+	// An installed plugin still owns its artefacts; Installed=true means this
+	// item is NOT a real orphan.
+	Installed bool `json:"installed"`
+
+	// DeletableEligible is the conservative gate for deletion candidates.
+	// True only when ALL of the following hold:
+	//   - Confidence is "exact" or "prefix" (never heuristic or unknown).
+	//   - len(KnownPlugins) == 1 (no ownership ambiguity).
+	//   - Installed is false (the owning plugin is not in the scan snapshot).
+	// P3.8 will additionally require a live re-verify and type-to-confirm.
+	DeletableEligible bool `json:"deletable_eligible"`
+
+	// --- type-specific optional fields ---
+
+	// SizeBytes is LENGTH(option_value) for options, or DATA+INDEX bytes for
+	// tables. Zero for cron items.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
+
+	// Autoload is set for options only (true when autoload='yes').
+	Autoload *bool `json:"autoload,omitempty"`
+
+	// NextRunAt is the Unix timestamp of the next scheduled run (cron only).
+	NextRunAt *int64 `json:"next_run_at,omitempty"`
+
+	// Recurrence is the cron schedule slug (cron only; empty = one-off).
+	Recurrence string `json:"recurrence,omitempty"`
+
+	// Rows is the estimated row count for tables (tables only).
+	Rows *int64 `json:"rows,omitempty"`
+}
+
+// OrphansCountSummary is the count summary embedded in OrphansReport.
+type OrphansCountSummary struct {
+	Options   int `json:"options"`
+	Cron      int `json:"cron"`
+	Tables    int `json:"tables"`
+	Deletable int `json:"deletable"`
+}
+
+// OrphansReport is the response payload for GET /perf/db/orphans.
+// Classification is performed on-demand against the live corpus at request time.
+type OrphansReport struct {
+	// Options is the classified list of orphaned wp_options candidate items.
+	// Items whose owning plugin is currently installed are excluded; see
+	// HiddenInstalled for the suppressed count.
+	Options []OrphanItem `json:"options"`
+
+	// Cron is the classified list of orphaned WP-Cron event candidate items.
+	// Items whose owning plugin is currently installed are excluded; see
+	// HiddenInstalled for the suppressed count.
+	Cron []OrphanItem `json:"cron"`
+
+	// Tables is the classified list of orphaned custom table candidate items
+	// (those whose owner_type was "orphan" in the scan's tables_json).
+	// Items whose owning plugin is currently installed are excluded; see
+	// HiddenInstalled for the suppressed count.
+	Tables []OrphanItem `json:"tables"`
+
+	// CorpusVersion is the corpus_version of the first Signature loaded during
+	// this request. Zero when the corpus is empty.
+	CorpusVersion int `json:"corpus_version"`
+
+	// SnapshotAvailable is true when the scan carried a non-empty installed-
+	// plugins snapshot. When false (e.g. a scan from an agent < 0.16.0), the
+	// installed cross-check is indeterminate and no item is DeletableEligible;
+	// the UI/P3.8 must require a fresh scan from a current agent before offering
+	// any deletion.
+	SnapshotAvailable bool `json:"snapshot_available"`
+
+	// HiddenInstalled is the total count of candidate items that were dropped
+	// from Options, Cron, and Tables because their attributed owner plugin is
+	// present in the installed-plugins snapshot. These items are not real orphans
+	// (the plugin still owns them). Counts and the per-kind slices reflect only
+	// the remaining genuine-orphan items.
+	HiddenInstalled int `json:"hidden_installed"`
+
+	// Counts is the derived count summary reflecting only the non-installed items
+	// that appear in Options, Cron, and Tables.
+	Counts OrphansCountSummary `json:"counts"`
+}
+
+// ---------------------------------------------------------------------------
+// P3.7 — Fleet / Portfolio DB Health aggregate
+// ---------------------------------------------------------------------------
+
+// FleetSiteDbSummary is the per-site entry in the top-N list returned by
+// GET /api/v1/perf/db/fleet-health. It carries the site's latest DB size,
+// table count, orphan counts, and growth relative to the lookback window.
+type FleetSiteDbSummary struct {
+	SiteID      uuid.UUID `json:"site_id"`
+	SiteName    string    `json:"site_name"`
+	DBSizeBytes int64     `json:"db_size_bytes"`
+	TableCount  int       `json:"table_count"`
+	// OrphanedOptionsCount is the length of orphaned_options_json from the
+	// latest scan. This is the raw count of wp_options orphan candidates, not
+	// the classified/deletable subset; corpus classification is per-site only.
+	OrphanedOptionsCount int `json:"orphaned_options_count"`
+	// OrphanedCronCount is the length of orphaned_cron_json from the latest
+	// scan (raw cron-event orphan candidates, unclassified).
+	OrphanedCronCount int       `json:"orphaned_cron_count"`
+	ScannedAt         time.Time `json:"scanned_at"`
+	// GrowthBytes is the DB size change from the earliest to the latest
+	// size-history point within the lookback window. Zero when fewer than two
+	// history points exist for this site in the window.
+	GrowthBytes int64 `json:"growth_bytes"`
+}
+
+// FleetDbHealth is the response payload for GET /api/v1/perf/db/fleet-health.
+// It aggregates database health across every site in the tenant that has at
+// least one completed scan.
+type FleetDbHealth struct {
+	// TotalSitesScanned is the number of sites with at least one scan result.
+	TotalSitesScanned int `json:"total_sites_scanned"`
+	// TotalDBSizeBytes is the sum of the latest db_size_bytes across all scanned sites.
+	TotalDBSizeBytes int64 `json:"total_db_size_bytes"`
+	// TotalTableCount is the sum of table_count across all scanned sites.
+	TotalTableCount int `json:"total_table_count"`
+	// TotalOrphanedOptions is the sum of orphaned_options_count across all scanned sites.
+	TotalOrphanedOptions int `json:"total_orphaned_options"`
+	// TotalOrphanedCron is the sum of orphaned_cron_count across all scanned sites.
+	TotalOrphanedCron int `json:"total_orphaned_cron"`
+	// SitesWithOrphans is the count of sites that have at least one orphan
+	// candidate (options or cron). These are worth investigating with the
+	// per-site orphans endpoint.
+	SitesWithOrphans int `json:"sites_with_orphans"`
+	// TopSites is the top-N sites by DB size (descending). N is capped at 10.
+	// When TotalSitesScanned is zero, TopSites is an empty slice.
+	TopSites []FleetSiteDbSummary `json:"top_sites"`
+}
+
+// ---------------------------------------------------------------------------
+// CDN credentials (existing; kept below the new types)
+// ---------------------------------------------------------------------------
 
 // CDNCredentials is the decrypted CDN provider secret. It exists ONLY inside the
 // service for the duration of a CDN purge — it is never serialized to a client

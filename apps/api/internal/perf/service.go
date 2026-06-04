@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/url"
 	"strings"
 	"time"
@@ -27,6 +28,20 @@ type AgentPerfClient interface {
 	CachePreload(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.CachePreloadRequest) (agentcmd.CachePreloadResult, error)
 	RucssCompute(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.RucssComputeRequest) (agentcmd.RucssComputeResult, error)
 	DBClean(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error)
+	// M39 — synchronous db_scan command (READ-ONLY, full result in ACK body).
+	DBScan(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBScanRequest) (agentcmd.DBScanResult, error)
+	// Phase 2.2/2.5 — synchronous per-table DDL action (optimize/repair/drop/empty/analyze/convert_innodb).
+	DBTableAction(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBTableActionRequest) (agentcmd.DBTableActionResult, error)
+	// Phase 3.8 — async destructive orphan deletion.
+	DBOrphanDelete(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error)
+}
+
+// BackupChecker reports whether a site has a successful backup within a given
+// lookback window. It is used by the db_table_action drop/empty handler to emit
+// the advisory backup-warning (non-blocking). *backup.Service satisfies it via
+// a narrow adapter wired in main.
+type BackupChecker interface {
+	HasRecentBackup(ctx context.Context, tenantID, siteID uuid.UUID, within time.Duration) (bool, error)
 }
 
 // SiteLookup resolves a site's agent URL (wired in main via a narrow adapter so
@@ -65,21 +80,45 @@ type repository interface {
 	UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error
 	GetCacheStats(ctx context.Context, tenantID, siteID uuid.UUID) (CacheStats, error)
 	UpsertCacheStats(ctx context.Context, s CacheStats) (CacheStats, error)
+	MarkCachePurged(ctx context.Context, tenantID, siteID uuid.UUID, kind string) error
 	RecordPurge(ctx context.Context, in RecordPurgeInput) (PurgeAuditEntry, error)
 	ListPurgeAudit(ctx context.Context, tenantID, siteID uuid.UUID, limit, offset int32) ([]PurgeAuditEntry, error)
+	// M38 — CP-owned db-clean scheduling.
+	GetDueDBCleanSites(ctx context.Context, limit int) ([]DueDBCleanSite, error)
+	UpdateNextDBCleanAt(ctx context.Context, siteID uuid.UUID, nextAt time.Time) error
+	// M39 — watchdog columns for db_clean + db_scan.
+	SetActiveDBCleanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error
+	ClearActiveDBCleanJob(ctx context.Context, siteID uuid.UUID) error
+	SetActiveDBScanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error
+	ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
+	GetStalledDBCleanJobs(ctx context.Context, cleanThreshold time.Duration) ([]StalledDBCleanJob, error)
+	GetStalledDBScanJobs(ctx context.Context, scanThreshold time.Duration) ([]StalledDBScanJob, error)
+	// M39 — db_scan result persistence.
+	UpsertDBScanResult(ctx context.Context, in DBScanResultInput) error
+	GetDBScanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBScanResult, error)
+	// M42 — DB-size trend history (Phase 3.4).
+	GetDBSizeHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]DbSizeTrendPoint, error)
+	PruneDBSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
+	// P3.7 — Fleet / Portfolio DB Health aggregate (tenant-level).
+	GetFleetDbHealth(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]FleetSiteDbSummary, error)
+	// P3.8 — watchdog columns for db_orphan_delete.
+	SetActiveDBOrphanDeleteJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error
+	ClearActiveDBOrphanDeleteJob(ctx context.Context, siteID uuid.UUID) error
+	GetStalledDBOrphanDeleteJobs(ctx context.Context, threshold time.Duration) ([]StalledDBOrphanDeleteJob, error)
 }
 
 var _ repository = (*Repo)(nil)
 
 // Service orchestrates the Performance Suite control plane.
 type Service struct {
-	repo      repository
-	agent     AgentPerfClient
-	sites     SiteLookup
-	events    EventPublisher
-	decryptor Decryptor
-	cdn       CDNPurger
-	logger    *slog.Logger
+	repo          repository
+	agent         AgentPerfClient
+	sites         SiteLookup
+	events        EventPublisher
+	decryptor     Decryptor
+	cdn           CDNPurger
+	backupChecker BackupChecker
+	logger        *slog.Logger
 }
 
 // NewService builds the perf service. agent/sites/events/decryptor/cdn may be nil
@@ -99,6 +138,10 @@ func (s *Service) SetAgentClient(agent AgentPerfClient, sites SiteLookup) {
 
 // SetCDNPurger wires the SSRF-guarded CDN purger.
 func (s *Service) SetCDNPurger(p CDNPurger) { s.cdn = p }
+
+// SetBackupChecker wires the backup recency checker for the drop/empty advisory
+// backup-warning nudge (non-blocking).
+func (s *Service) SetBackupChecker(b BackupChecker) { s.backupChecker = b }
 
 // ---------------------------------------------------------------------------
 // config
@@ -265,7 +308,35 @@ func (s *Service) validateConfig(cfg *Config) error {
 	cfg.JSDelayExcludes = normalize(cfg.JSDelayExcludes)
 	cfg.JSDelayThirdPartyExcludes = normalize(cfg.JSDelayThirdPartyExcludes)
 	cfg.LazyLoadExclusions = normalize(cfg.LazyLoadExclusions)
+	// Preload throttle (M37): clamp (do not reject) out-of-range knobs to the
+	// nearest bound for forward-compat. These mirror the agent's local clamps.
+	cfg.PreloadConcurrency = clampInt(cfg.PreloadConcurrency, 1, 4)
+	cfg.PreloadDelayMs = clampInt(cfg.PreloadDelayMs, 0, 10000)
+	cfg.PreloadBatchSize = clampInt(cfg.PreloadBatchSize, 1, 500)
+	cfg.PreloadMaxLoad = clampFloat(cfg.PreloadMaxLoad, 0, 64)
 	return nil
+}
+
+// clampInt returns v constrained to the inclusive [lo, hi] range.
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+// clampFloat returns v constrained to the inclusive [lo, hi] range.
+func clampFloat(v, lo, hi float64) float64 {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +541,15 @@ func (s *Service) Purge(ctx context.Context, tenantID, siteID uuid.UUID, in Purg
 		s.maybePurgeCDN(ctx, tenantID, siteID, siteURL, in.URLs)
 	}
 
+	// Stamp the "Last purge" dashboard gauge now. The agent's periodic stats push
+	// never reports a purge time, so this is the gauge's writer for operator
+	// purges; UpsertCacheStats uses GREATEST so a later agent push cannot wipe it.
+	// Best-effort: the purge already succeeded, so a stamp failure must not fail it.
+	if err := s.repo.MarkCachePurged(ctx, tenantID, siteID, string(in.Scope)); err != nil {
+		s.logger.Warn("purge: failed to stamp last_purged_at gauge",
+			"site_id", siteID, "kind", string(in.Scope), "error", err)
+	}
+
 	s.publish(ctx, tenantID, siteID, site.EventCachePurgeCompleted, map[string]any{
 		"kind":       string(in.Scope),
 		"urls_count": len(in.URLs),
@@ -521,19 +601,26 @@ func (s *Service) Preload(ctx context.Context, tenantID, siteID uuid.UUID, initi
 	}); err != nil {
 		return "", err
 	}
-	s.publish(ctx, tenantID, siteID, site.EventCachePreloadStarted, map[string]any{})
 	detail := "preload requested"
+	total := 0
 	if s.agent != nil && s.sites != nil {
 		siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
 		if lookupErr != nil {
 			return "", lookupErr
 		}
-		res, perr := s.agent.CachePreload(ctx, siteID, siteURL, agentcmd.CachePreloadRequest{})
+		// Mode "full" ⇒ the agent enumerates every cacheable URL (all public post
+		// types incl. products, taxonomies, authors) and warms desktop + mobile.
+		res, perr := s.agent.CachePreload(ctx, siteID, siteURL, agentcmd.CachePreloadRequest{Mode: "full"})
 		if perr != nil {
 			return "", perr
 		}
 		detail = res.Detail
+		total = res.Total
 	}
+	// Publish `started` AFTER the agent call so it carries the REAL denominator the
+	// dashboard's live progress bar needs. Previously this fired before the call
+	// with an empty map (total:0), leaving the bar indeterminate with no percent.
+	s.publish(ctx, tenantID, siteID, site.EventCachePreloadStarted, map[string]any{"total": total})
 	return detail, nil
 }
 
@@ -583,42 +670,912 @@ func (s *Service) ComputeRucss(ctx context.Context, tenantID, siteID uuid.UUID, 
 // db clean
 // ---------------------------------------------------------------------------
 
-// DBClean runs an ad-hoc database cleanup scoped to the per-site db_* config and
-// emits db.clean.completed. Returns the agent detail.
-func (s *Service) DBClean(ctx context.Context, tenantID, siteID uuid.UUID) (string, int, error) {
-	cfg, err := s.GetConfig(ctx, tenantID, siteID)
-	if err != nil {
-		return "", 0, err
+// dbCleanTasksFromConfig translates the operator's per-flag config into the
+// 14-standard category id strings. The CP is the authoritative source of which
+// tasks run; the agent never reads its local PerfConfig flags on the command path.
+func dbCleanTasksFromConfig(cfg Config) []string {
+	tasks := make([]string, 0, 7)
+	if cfg.DBPostRevisions {
+		tasks = append(tasks, "revisions")
 	}
-	detail := "db clean requested"
-	rows := 0
-	if s.agent != nil && s.sites != nil {
-		siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
-		if lookupErr != nil {
-			return "", 0, lookupErr
-		}
-		res, perr := s.agent.DBClean(ctx, siteID, siteURL, agentcmd.DBCleanRequest{
-			PostRevisions:     cfg.DBPostRevisions,
-			PostAutoDrafts:    cfg.DBPostAutoDrafts,
-			PostTrashed:       cfg.DBPostTrashed,
-			CommentsSpam:      cfg.DBCommentsSpam,
-			CommentsTrashed:   cfg.DBCommentsTrashed,
-			TransientsExpired: cfg.DBTransientsExpired,
-			OptimizeTables:    cfg.DBOptimizeTables,
+	if cfg.DBPostAutoDrafts {
+		tasks = append(tasks, "auto_drafts")
+	}
+	if cfg.DBPostTrashed {
+		tasks = append(tasks, "trashed_posts")
+	}
+	if cfg.DBCommentsSpam {
+		tasks = append(tasks, "spam_comments")
+	}
+	if cfg.DBCommentsTrashed {
+		tasks = append(tasks, "trashed_comments")
+	}
+	if cfg.DBTransientsExpired {
+		tasks = append(tasks, "expired_transients")
+	}
+	if cfg.DBOptimizeTables {
+		tasks = append(tasks, "optimize_tables")
+	}
+	return tasks
+}
+
+// DBClean runs an ad-hoc (operator-triggered) database cleanup scoped to the
+// per-site db_* config flags.
+//
+// Flow (M38 async model):
+//  1. Translate db_* config flags into the tasks []string.
+//  2. Emit db.clean.started SSE (so the UI can show the in-progress state).
+//  3. POST the db_clean command to the agent; agent ACKs immediately with
+//     {ok, job_id} then runs async, posting per-category results to
+//     progress_endpoint.
+//  4. On ok=false: emit db.clean.failed SSE; return the agent's detail as error.
+//  5. On ok=true: return — the agent drives completion via progress pushes.
+//
+// Returns the job_id minted by this call (for correlation) and any error.
+func (s *Service) DBClean(ctx context.Context, tenantID, siteID uuid.UUID, cpBaseURL string) (jobID string, err error) {
+	cfg, cfgErr := s.GetConfig(ctx, tenantID, siteID)
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	tasks := dbCleanTasksFromConfig(cfg)
+	jobID = uuid.New().String()
+
+	s.publish(ctx, tenantID, siteID, site.EventDbCleanStarted, map[string]any{
+		"job_id":  jobID,
+		"tasks":   tasks,
+		"trigger": "manual",
+	})
+
+	// Stamp watchdog columns so the sweeper can detect a stalled job.
+	if wErr := s.repo.SetActiveDBCleanJob(ctx, siteID, jobID, time.Now().UTC()); wErr != nil {
+		s.logger.Warn("db-clean: failed to stamp watchdog columns",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", wErr))
+	}
+
+	if s.agent == nil || s.sites == nil {
+		// No agent wired: emit completed immediately with zero counts.
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanCompleted, map[string]any{
+			"job_id":       jobID,
+			"rows_deleted": 0,
+			"bytes_freed":  0,
+			"categories":   map[string]any{},
 		})
-		if perr != nil {
-			return "", 0, perr
-		}
-		detail = res.Detail
-		rows = res.RowsCleaned
+		return jobID, nil
 	}
-	s.publish(ctx, tenantID, siteID, site.EventDbCleanCompleted, map[string]any{"rows_cleaned": rows})
-	return detail, rows, nil
+
+	siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if lookupErr != nil {
+		return "", lookupErr
+	}
+
+	progressEndpoint := ""
+	if cpBaseURL != "" {
+		progressEndpoint = strings.TrimRight(cpBaseURL, "/") + "/agent/v1/db-clean/progress"
+	}
+
+	res, perr := s.agent.DBClean(ctx, siteID, siteURL, agentcmd.DBCleanRequest{
+		JobID:            jobID,
+		Tasks:            tasks,
+		ProgressEndpoint: progressEndpoint,
+	})
+	if perr != nil {
+		// Transport error — not a semantic refusal. Clear watchdog immediately.
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": perr.Error(),
+		})
+		return "", perr
+	}
+	if !res.OK {
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": res.Detail,
+		})
+		return "", fmt.Errorf("db_clean refused by agent: %s", res.Detail)
+	}
+	// Agent accepted. Completion/progress arrive via /agent/v1/db-clean/progress.
+	// The watchdog columns are cleared by HandleDBCleanProgress when done=true.
+	return jobID, nil
+}
+
+// DBCleanScheduled runs a scheduled (CP-initiated) database cleanup for one site.
+// It mirrors DBClean but sets trigger="scheduled" in the started SSE payload.
+func (s *Service) DBCleanScheduled(ctx context.Context, tenantID, siteID uuid.UUID, cpBaseURL string) (jobID string, err error) {
+	cfg, cfgErr := s.GetConfig(ctx, tenantID, siteID)
+	if cfgErr != nil {
+		return "", cfgErr
+	}
+	tasks := dbCleanTasksFromConfig(cfg)
+	jobID = uuid.New().String()
+
+	s.publish(ctx, tenantID, siteID, site.EventDbCleanStarted, map[string]any{
+		"job_id":  jobID,
+		"tasks":   tasks,
+		"trigger": "scheduled",
+	})
+
+	// Stamp watchdog columns.
+	if wErr := s.repo.SetActiveDBCleanJob(ctx, siteID, jobID, time.Now().UTC()); wErr != nil {
+		s.logger.Warn("db-clean-scheduled: failed to stamp watchdog columns",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", wErr))
+	}
+
+	if s.agent == nil || s.sites == nil {
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanCompleted, map[string]any{
+			"job_id":       jobID,
+			"rows_deleted": 0,
+			"bytes_freed":  0,
+			"categories":   map[string]any{},
+		})
+		return jobID, nil
+	}
+
+	siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if lookupErr != nil {
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		return "", lookupErr
+	}
+
+	progressEndpoint := ""
+	if cpBaseURL != "" {
+		progressEndpoint = strings.TrimRight(cpBaseURL, "/") + "/agent/v1/db-clean/progress"
+	}
+
+	res, perr := s.agent.DBClean(ctx, siteID, siteURL, agentcmd.DBCleanRequest{
+		JobID:            jobID,
+		Tasks:            tasks,
+		ProgressEndpoint: progressEndpoint,
+	})
+	if perr != nil {
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": perr.Error(),
+		})
+		return "", perr
+	}
+	if !res.OK {
+		_ = s.repo.ClearActiveDBCleanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbCleanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": res.Detail,
+		})
+		return "", fmt.Errorf("db_clean refused by agent: %s", res.Detail)
+	}
+	return jobID, nil
+}
+
+// DBCleanProgressInput carries one per-category progress push from the agent.
+type DBCleanProgressInput struct {
+	JobID       string
+	Category    string
+	RowsDeleted int
+	BytesFreed  int
+	State       string
+	Detail      string
+	Done        bool
+	TenantID    uuid.UUID
+	SiteID      uuid.UUID
+}
+
+// HandleDBCleanProgress processes one per-category progress push from the agent.
+// It emits db.clean.progress SSE for non-final pushes and db.clean.completed for
+// the final push (done=true). If job_id is unknown (CP restarted mid-job) the
+// event is still processed — we never 404 on unknown job_id.
+func (s *Service) HandleDBCleanProgress(ctx context.Context, in DBCleanProgressInput) error {
+	if in.Done {
+		// Clear the watchdog columns — job is no longer in-flight.
+		_ = s.repo.ClearActiveDBCleanJob(ctx, in.SiteID)
+
+		// Final push: emit terminal event. If the agent reported state=error, emit
+		// db.clean.failed (the agent's inner shutdown function posts done=true +
+		// state=error on fatal OOM/crash). Otherwise emit db.clean.completed.
+		if in.State == "error" {
+			s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanFailed, map[string]any{
+				"job_id": in.JobID,
+				"detail": in.Detail,
+			})
+			return nil
+		}
+		s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanCompleted, map[string]any{
+			"job_id":       in.JobID,
+			"rows_deleted": in.RowsDeleted,
+			"bytes_freed":  in.BytesFreed,
+			"categories": map[string]any{
+				in.Category: map[string]any{
+					"rows_deleted": in.RowsDeleted,
+					"bytes_freed":  in.BytesFreed,
+					"state":        in.State,
+				},
+			},
+		})
+		return nil
+	}
+	// Non-final push: emit per-category progress.
+	data := map[string]any{
+		"job_id":       in.JobID,
+		"category":     in.Category,
+		"rows_deleted": in.RowsDeleted,
+		"bytes_freed":  in.BytesFreed,
+		"state":        in.State,
+	}
+	if in.Detail != "" {
+		data["detail"] = in.Detail
+	}
+	s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanProgress, data)
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// db scan (M39 Phase 2) — synchronous read-only scan
+// ---------------------------------------------------------------------------
+
+// DBScan runs a synchronous read-only database scan against the site's agent.
+// The agent performs information_schema queries and returns the full result in
+// the ACK body (no async progress). The CP emits:
+//
+//  1. db.scan.started  — before the agent command is sent
+//  2. db.scan.completed — after ok=true ACK (with the full category map)
+//  3. db.scan.failed   — on transport error or ok=false
+//
+// Returns the job_id for correlation.
+func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, categories []string) (string, error) {
+	jobID := uuid.New().String()
+
+	s.publish(ctx, tenantID, siteID, site.EventDbScanStarted, map[string]any{
+		"job_id":     jobID,
+		"categories": categories,
+		"trigger":    "manual",
+	})
+
+	// Stamp watchdog columns (3-minute threshold).
+	if wErr := s.repo.SetActiveDBScanJob(ctx, siteID, jobID, time.Now().UTC()); wErr != nil {
+		s.logger.Warn("db-scan: failed to stamp watchdog columns",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", wErr))
+	}
+
+	if s.agent == nil || s.sites == nil {
+		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": "agent client not configured",
+		})
+		return jobID, fmt.Errorf("agent client not configured")
+	}
+
+	siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if lookupErr != nil {
+		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": lookupErr.Error(),
+		})
+		return jobID, lookupErr
+	}
+
+	// Scan timeout: use 90s when orphan categories are requested (Phase 3.3),
+	// because the orphan-enumeration passes (source-scan + prefix matching across
+	// all installed plugins) can take significantly longer than a pure
+	// information_schema scan. 60s is still used for non-orphan scans.
+	scanTimeout := 60 * time.Second
+	if includesOrphanCategories(categories) {
+		scanTimeout = 90 * time.Second
+	}
+	scanCtx, cancel := context.WithTimeout(ctx, scanTimeout)
+	defer cancel()
+
+	res, perr := s.agent.DBScan(scanCtx, siteID, siteURL, agentcmd.DBScanRequest{
+		JobID:      jobID,
+		Categories: categories,
+	})
+	if perr != nil {
+		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": perr.Error(),
+		})
+		return jobID, perr
+	}
+	if !res.OK {
+		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
+			"job_id": jobID,
+			"detail": res.Detail,
+		})
+		return jobID, fmt.Errorf("db_scan refused by agent: %s", res.Detail)
+	}
+
+	// Persist the scan result for the operator GET endpoint.
+	catJSON, jsonErr := json.Marshal(res.Categories)
+	if jsonErr != nil {
+		catJSON = []byte("{}")
+	}
+	// Phase 2.1: marshal the per-table inventory alongside categories.
+	tablesJSON, tablesJSONErr := json.Marshal(res.Tables)
+	if tablesJSONErr != nil || len(res.Tables) == 0 {
+		tablesJSON = []byte("[]")
+	}
+	// Phase 3.3: marshal orphan-enumeration fields. Agents < 0.16.0 return nil
+	// slices which marshal to "null"; normalise those to "[]" for storage.
+	orphanedOptionsJSON := marshalJSONArray(res.OrphanedOptions)
+	orphanedCronJSON := marshalJSONArray(res.OrphanedCron)
+	installedPluginsJSON := marshalJSONArray(res.InstalledPlugins)
+
+	_ = s.repo.UpsertDBScanResult(ctx, DBScanResultInput{
+		SiteID:               siteID,
+		TenantID:             tenantID,
+		JobID:                jobID,
+		CategoriesJSON:       catJSON,
+		TablesJSON:           tablesJSON,
+		OrphanedOptionsJSON:  orphanedOptionsJSON,
+		OrphanedCronJSON:     orphanedCronJSON,
+		InstalledPluginsJSON: installedPluginsJSON,
+		DBSizeBytes:          res.DBSizeBytes,
+		TableCount:           res.TableCount,
+		ScannedAt:            time.Unix(res.ScannedAt, 0).UTC(),
+	})
+
+	// Clear watchdog — scan complete.
+	_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+
+	// Emit db.scan.completed with the full result so the UI can render all tabs
+	// immediately via SSE without a separate GET round-trip. Phase 3.3 fields
+	// are included so the orphan panel can display without a page reload.
+	s.publish(ctx, tenantID, siteID, site.EventDbScanCompleted, map[string]any{
+		"job_id":            jobID,
+		"categories":        res.Categories,
+		"tables":            res.Tables,
+		"orphaned_options":  res.OrphanedOptions,
+		"orphaned_cron":     res.OrphanedCron,
+		"installed_plugins": res.InstalledPlugins,
+		"db_size_bytes":     res.DBSizeBytes,
+		"table_count":       res.TableCount,
+		"scanned_at":        res.ScannedAt,
+	})
+
+	return jobID, nil
+}
+
+// GetLatestScan returns the latest stored db_scan result for a site.
+// Returns nil (no error) when no scan has been run yet.
+func (s *Service) GetLatestScan(ctx context.Context, tenantID, siteID uuid.UUID) (*DBScanResult, error) {
+	result, err := s.repo.GetDBScanResult(ctx, tenantID, siteID)
+	if err == ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ---------------------------------------------------------------------------
+// db health / size trend (M42 Phase 3.4)
+// ---------------------------------------------------------------------------
+
+// GetDBHealth returns the DB-size trend for the given site over the last
+// `days` days. days is caller-clamped to [7, 365] before this call.
+func (s *Service) GetDBHealth(ctx context.Context, tenantID, siteID uuid.UUID, days int) (DBHealthResponse, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	points, err := s.repo.GetDBSizeHistory(ctx, tenantID, siteID, since)
+	if err != nil {
+		return DBHealthResponse{}, err
+	}
+	growthBytes, growthPct := computeGrowth(points)
+	return DBHealthResponse{
+		Points:      points,
+		GrowthBytes: growthBytes,
+		GrowthPct:   growthPct,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// fleet db health (P3.7)
+// ---------------------------------------------------------------------------
+
+// fleetTopN is the maximum number of per-site entries in FleetDbHealth.TopSites.
+const fleetTopN = 10
+
+// GetFleetDbHealth aggregates database health across all of the tenant's sites
+// that have at least one completed scan. `days` is the lookback window for the
+// growth calculation (clamped [7,365] by the caller). The result is READ-ONLY
+// and NEVER crosses tenant boundaries — the repo call runs inside InTenantTx.
+func (s *Service) GetFleetDbHealth(ctx context.Context, tenantID uuid.UUID, days int) (FleetDbHealth, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	rows, err := s.repo.GetFleetDbHealth(ctx, tenantID, since)
+	if err != nil {
+		return FleetDbHealth{}, err
+	}
+
+	var out FleetDbHealth
+	out.TopSites = make([]FleetSiteDbSummary, 0)
+
+	for _, row := range rows {
+		out.TotalSitesScanned++
+		out.TotalDBSizeBytes += row.DBSizeBytes
+		out.TotalTableCount += row.TableCount
+		out.TotalOrphanedOptions += row.OrphanedOptionsCount
+		out.TotalOrphanedCron += row.OrphanedCronCount
+		if row.OrphanedOptionsCount > 0 || row.OrphanedCronCount > 0 {
+			out.SitesWithOrphans++
+		}
+	}
+
+	// Cap the top-N list. The SQL result is already ordered by db_size_bytes
+	// DESC so the first fleetTopN rows are the largest sites.
+	n := len(rows)
+	if n > fleetTopN {
+		n = fleetTopN
+	}
+	out.TopSites = rows[:n]
+
+	return out, nil
+}
+
+// computeGrowth derives the absolute and percent DB-size growth from the
+// first to the last point in the series. Returns zeros when fewer than two
+// points are available. GrowthPct is rounded to two decimal places.
+func computeGrowth(points []DbSizeTrendPoint) (growthBytes int64, growthPct float64) {
+	if len(points) < 2 {
+		return 0, 0
+	}
+	first := points[0].DBSizeBytes
+	last := points[len(points)-1].DBSizeBytes
+	growthBytes = last - first
+	if first > 0 {
+		raw := float64(growthBytes) / float64(first) * 100
+		growthPct = math.Round(raw*100) / 100
+	}
+	return
+}
+
+// ---------------------------------------------------------------------------
+// db table action (Phase 2.2/2.5) — per-table DDL: optimize / repair / drop / empty / analyze / convert_innodb
+// ---------------------------------------------------------------------------
+
+// validTableActions is the set of accepted action strings.
+var validTableActions = map[string]bool{
+	"optimize":       true,
+	"repair":         true,
+	"drop":           true,
+	"empty":          true,
+	"analyze":        true,
+	"convert_innodb": true,
+}
+
+// destructiveTableActions are the actions that require the non-core safety gate
+// on the agent side AND the type-to-confirm validation on the CP side.
+// Both drop and empty are refused for WP-core and unclassified tables by the
+// agent (layer 1); the CP does not distinguish between owner types — that gate
+// is agent-side only.
+var destructiveTableActions = map[string]bool{
+	"drop":  true,
+	"empty": true,
+}
+
+// DBTableActionInput carries the validated parameters for a per-table action.
+// Confirm is the operator-supplied type-to-confirm token (required for
+// drop/empty). For a single-table drop Confirm must equal the table name; for
+// bulk drop Confirm must equal "DROP N TABLES" where N = len(Tables).
+type DBTableActionInput struct {
+	Action  string
+	Tables  []string
+	Confirm string // required only for drop/empty; validated before dispatch
+}
+
+// DBTableActionOutput is the CP response to a db_table_action dispatch. The
+// agent's per-table results are passed through verbatim.
+type DBTableActionOutput struct {
+	JobID         string
+	Results       []agentcmd.DBTableActionTableResult
+	BackupWarning string // non-empty when no recent backup found (advisory only)
+}
+
+// DBTableAction validates the input, checks the backup advisory, dispatches the
+// signed db_table_action command to the agent, and emits SSE events.
+//
+// Safety layers enforced on the CP side (before dispatch):
+//  1. Valid action value.
+//  2. Non-empty tables list, max 200 tables per call (matches the agent's cap so
+//     a confirmed bulk action is never silently truncated on the agent side).
+//  3. For drop/empty: type-to-confirm validation.
+//  4. Advisory backup nudge (non-blocking): if no successful backup in last 24 h,
+//     BackupWarning is set in the output.
+//
+// The agent enforces its own non-core gate (layer 1 in the contract — refuses
+// owner_type 'core' and 'unknown'; allows plugin/theme/orphan) and exact-match
+// information_schema validation (layer 2) independently. The CP does not send
+// any classification data to the agent.
+func (s *Service) DBTableAction(ctx context.Context, tenantID, siteID uuid.UUID, in DBTableActionInput) (DBTableActionOutput, error) {
+	// --- input validation ---
+	if !validTableActions[in.Action] {
+		return DBTableActionOutput{}, domain.Validation("invalid_table_action",
+			fmt.Sprintf("action %q is not valid; must be one of: optimize, repair, drop, empty, analyze, convert_innodb", in.Action))
+	}
+	if len(in.Tables) == 0 {
+		return DBTableActionOutput{}, domain.Validation("missing_tables", "tables must contain at least one table name")
+	}
+	if len(in.Tables) > 200 {
+		return DBTableActionOutput{}, domain.Validation("too_many_tables", "tables may contain at most 200 entries per call")
+	}
+
+	// --- type-to-confirm gate for destructive actions ---
+	if destructiveTableActions[in.Action] {
+		if len(in.Tables) == 1 {
+			if in.Confirm != in.Tables[0] {
+				return DBTableActionOutput{}, domain.Validation("confirm_mismatch",
+					"confirm must equal the table name for a single-table "+in.Action)
+			}
+		} else {
+			expected := fmt.Sprintf("%s %d TABLES", strings.ToUpper(in.Action), len(in.Tables))
+			if in.Confirm != expected {
+				return DBTableActionOutput{}, domain.Validation("confirm_mismatch",
+					fmt.Sprintf("confirm must equal %q for a bulk %s of %d tables", expected, in.Action, len(in.Tables)))
+			}
+		}
+	}
+
+	// --- advisory backup nudge (non-blocking) ---
+	backupWarning := ""
+	if destructiveTableActions[in.Action] && s.backupChecker != nil {
+		hasRecent, checkErr := s.backupChecker.HasRecentBackup(ctx, tenantID, siteID, 24*time.Hour)
+		if checkErr != nil {
+			s.logger.Warn("db-table-action: backup recency check failed (continuing)",
+				slog.String("site_id", siteID.String()), slog.Any("error", checkErr))
+		} else if !hasRecent {
+			backupWarning = "No recent backup found. Consider backing up before running destructive table actions."
+		}
+	}
+
+	// --- agent dispatch ---
+	if s.agent == nil || s.sites == nil {
+		return DBTableActionOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return DBTableActionOutput{}, err
+	}
+
+	jobID := uuid.New().String()
+	res, agentErr := s.agent.DBTableAction(ctx, siteID, siteURL, agentcmd.DBTableActionRequest{
+		JobID:  jobID,
+		Action: in.Action,
+		Tables: in.Tables,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventDbTableActionFailed, map[string]any{
+			"job_id": jobID,
+			"action": in.Action,
+			"detail": agentErr.Error(),
+		})
+		return DBTableActionOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventDbTableActionFailed, map[string]any{
+			"job_id": jobID,
+			"action": in.Action,
+			"detail": res.Detail,
+		})
+		return DBTableActionOutput{}, fmt.Errorf("db_table_action refused by agent: %s", res.Detail)
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventDbTableActionCompleted, map[string]any{
+		"job_id":  jobID,
+		"action":  in.Action,
+		"results": res.Results,
+	})
+
+	return DBTableActionOutput{
+		JobID:         jobID,
+		Results:       res.Results,
+		BackupWarning: backupWarning,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// P3.8 — orphan delete (destructive, async, GATED by re-classify + confirm)
+// ---------------------------------------------------------------------------
+
+// OrphanDeleteRequestItem is one item from the operator's POST body.
+type OrphanDeleteRequestItem struct {
+	Kind      string `json:"kind"`       // "option" | "cron" | "table"
+	Name      string `json:"name"`
+	OwnerSlug string `json:"owner_slug"`
+}
+
+// OrphanDeleteInput is the validated operator input for DBOrphanDelete.
+type OrphanDeleteInput struct {
+	Items   []OrphanDeleteRequestItem
+	Confirm string
+}
+
+// OrphanDeleteOutput is returned by Service.DBOrphanDelete on success.
+type OrphanDeleteOutput struct {
+	JobID         string
+	AcceptedCount int    // items that passed re-classify and were signed
+	DroppedCount  int    // items filtered out by re-classify
+	BackupWarning string // non-empty when no recent backup found (advisory)
+}
+
+// DBOrphanDelete is the P3.8 destructive orphan-deletion service method.
+//
+// Safety sequence:
+//  1. Re-run GetOrphansReport against the latest scan (live corpus).
+//  2. Filter the operator's requested items to those currently DeletableEligible
+//     AND whose owner_slug matches the report. Survivors only are signed.
+//  3. Reject if zero items survive.
+//  4. Validate the type-to-confirm token against the REQUESTED count (operators
+//     confirm the count they see in the UI; re-classify may drop some).
+//  5. Emit db.orphan.delete.started SSE.
+//  6. Sign and dispatch the db_orphan_delete command to the agent (ASYNC).
+//  7. Record the watchdog columns so the sweeper can detect a stalled job.
+func (s *Service) DBOrphanDelete(
+	ctx context.Context,
+	corpusSource CorpusSource,
+	tenantID, siteID uuid.UUID,
+	cpBaseURL string,
+	in OrphanDeleteInput,
+) (OrphanDeleteOutput, error) {
+	if len(in.Items) == 0 {
+		return OrphanDeleteOutput{}, domain.Validation("missing_items", "items must contain at least one entry")
+	}
+	if len(in.Items) > 500 {
+		return OrphanDeleteOutput{}, domain.Validation("too_many_items", "items may contain at most 500 entries per call")
+	}
+
+	// --- Validate the type-to-confirm token (before re-classify, against the
+	//     requested count the operator saw in the UI) ---
+	expectedConfirm := orphanDeleteExpectedConfirm(in.Items)
+	if strings.ToUpper(in.Confirm) != strings.ToUpper(expectedConfirm) {
+		return OrphanDeleteOutput{}, domain.Validation("confirm_mismatch",
+			fmt.Sprintf("confirm must equal %q", expectedConfirm))
+	}
+
+	// --- Re-classify: run GetOrphansReport with the latest scan ---
+	if corpusSource == nil {
+		return OrphanDeleteOutput{}, domain.ServiceUnavailable("corpus_unwired", "corpus reader not configured")
+	}
+	report, err := s.GetOrphansReport(ctx, corpusSource, tenantID, siteID)
+	if err != nil {
+		return OrphanDeleteOutput{}, err
+	}
+	if !report.SnapshotAvailable {
+		return OrphanDeleteOutput{}, domain.Validation("no_snapshot", "installed-plugin snapshot is unavailable; run a fresh scan with agent >= 0.16.0 first")
+	}
+
+	// Build a lookup map from the live report: "kind:name" → OrphanItem.
+	reportMap := make(map[string]OrphanItem, len(report.Options)+len(report.Cron)+len(report.Tables))
+	for _, it := range report.Options {
+		reportMap["option:"+it.Name] = it
+	}
+	for _, it := range report.Cron {
+		reportMap["cron:"+it.Name] = it
+	}
+	for _, it := range report.Tables {
+		reportMap["table:"+it.Name] = it
+	}
+
+	// Filter to survivors: only items currently DeletableEligible with matching owner_slug.
+	survivors := make([]agentcmd.OrphanDeleteItem, 0, len(in.Items))
+	dropped := 0
+	for _, req := range in.Items {
+		key := req.Kind + ":" + req.Name
+		ri, found := reportMap[key]
+		if !found || !ri.DeletableEligible || ri.OwnerSlug != req.OwnerSlug {
+			dropped++
+			continue
+		}
+		// Use the report's owner_slug (not the raw request) to prevent slug spoofing.
+		survivors = append(survivors, agentcmd.OrphanDeleteItem{
+			Kind:      req.Kind,
+			Name:      req.Name,
+			OwnerSlug: ri.OwnerSlug,
+		})
+	}
+
+	if len(survivors) == 0 {
+		return OrphanDeleteOutput{}, domain.Validation("no_eligible_items",
+			"none of the requested items are currently eligible for deletion")
+	}
+
+	// --- Advisory backup nudge (non-blocking) ---
+	backupWarning := ""
+	if s.backupChecker != nil {
+		hasRecent, checkErr := s.backupChecker.HasRecentBackup(ctx, tenantID, siteID, 24*time.Hour)
+		if checkErr != nil {
+			s.logger.Warn("db-orphan-delete: backup recency check failed (continuing)",
+				slog.String("site_id", siteID.String()), slog.Any("error", checkErr))
+		} else if !hasRecent {
+			backupWarning = "No recent backup found. Consider backing up before running destructive orphan deletions."
+		}
+	}
+
+	// --- Agent dispatch ---
+	if s.agent == nil || s.sites == nil {
+		return OrphanDeleteOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return OrphanDeleteOutput{}, err
+	}
+
+	jobID := uuid.New().String()
+
+	progressEndpoint := ""
+	if cpBaseURL != "" {
+		progressEndpoint = strings.TrimRight(cpBaseURL, "/") + "/agent/v1/db-orphan-delete/progress"
+	}
+
+	// Emit started event before dispatch so the UI knows a job is running.
+	s.publish(ctx, tenantID, siteID, site.EventDbOrphanDeleteStarted, map[string]any{
+		"job_id":         jobID,
+		"site_id":        siteID.String(),
+		"accepted_count": len(survivors),
+		"dropped_count":  dropped,
+	})
+
+	// Stamp watchdog columns.
+	if wErr := s.repo.SetActiveDBOrphanDeleteJob(ctx, siteID, jobID, time.Now().UTC()); wErr != nil {
+		s.logger.Warn("db-orphan-delete: failed to stamp watchdog columns",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", wErr))
+	}
+
+	res, agentErr := s.agent.DBOrphanDelete(ctx, siteID, siteURL, agentcmd.DBOrphanDeleteRequest{
+		JobID:            jobID,
+		Items:            survivors,
+		ProgressEndpoint: progressEndpoint,
+	})
+	if agentErr != nil {
+		_ = s.repo.ClearActiveDBOrphanDeleteJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbOrphanDeleteFailed, map[string]any{
+			"job_id":  jobID,
+			"site_id": siteID.String(),
+			"detail":  agentErr.Error(),
+		})
+		return OrphanDeleteOutput{}, agentErr
+	}
+	if !res.OK {
+		_ = s.repo.ClearActiveDBOrphanDeleteJob(ctx, siteID)
+		s.publish(ctx, tenantID, siteID, site.EventDbOrphanDeleteFailed, map[string]any{
+			"job_id":  jobID,
+			"site_id": siteID.String(),
+			"detail":  res.Detail,
+		})
+		return OrphanDeleteOutput{}, fmt.Errorf("db_orphan_delete refused by agent: %s", res.Detail)
+	}
+
+	return OrphanDeleteOutput{
+		JobID:         jobID,
+		AcceptedCount: len(survivors),
+		DroppedCount:  dropped,
+		BackupWarning: backupWarning,
+	}, nil
+}
+
+// orphanDeleteExpectedConfirm computes the type-to-confirm token the operator
+// must type for a given set of requested items.
+//
+// Grammar:
+//   - Exactly 1 item: the item's Name value.
+//   - Multiple items, all same kind: "DELETE N OPTIONS|CRON|TABLES" (uppercased).
+//   - Multiple items, mixed kinds: "DELETE N ORPHANS".
+func orphanDeleteExpectedConfirm(items []OrphanDeleteRequestItem) string {
+	if len(items) == 1 {
+		return items[0].Name
+	}
+	// Check if all items are the same kind.
+	kind := items[0].Kind
+	sameKind := true
+	for _, it := range items[1:] {
+		if it.Kind != kind {
+			sameKind = false
+			break
+		}
+	}
+	n := len(items)
+	if sameKind {
+		kindLabel := kindToLabel(kind)
+		return fmt.Sprintf("DELETE %d %s", n, kindLabel)
+	}
+	return fmt.Sprintf("DELETE %d ORPHANS", n)
+}
+
+// kindToLabel maps an orphan item kind to the plural uppercase label used in
+// the type-to-confirm token (e.g. "option" → "OPTIONS").
+func kindToLabel(kind string) string {
+	switch kind {
+	case "option":
+		return "OPTIONS"
+	case "cron":
+		return "CRON"
+	case "table":
+		return "TABLES"
+	default:
+		return strings.ToUpper(kind) + "S"
+	}
+}
+
+// HandleDBOrphanDeleteProgress processes one batched progress push from the
+// agent at POST /agent/v1/db-orphan-delete/progress. It emits:
+//   - db.orphan.delete.progress for non-final pushes (done=false).
+//   - db.orphan.delete.completed for the final push (done=true, no error).
+//   - db.orphan.delete.failed if the agent signals a fatal error (done=true,
+//     any result has status="error" at the top level — not per-item error which
+//     is normal).
+func (s *Service) HandleDBOrphanDeleteProgress(ctx context.Context, in DBOrphanDeleteProgressInput) error {
+	if in.Done {
+		_ = s.repo.ClearActiveDBOrphanDeleteJob(ctx, in.SiteID)
+		s.publish(ctx, in.TenantID, in.SiteID, site.EventDbOrphanDeleteCompleted, map[string]any{
+			"job_id":          in.JobID,
+			"site_id":         in.SiteID.String(),
+			"deleted_options": in.DeletedOptions,
+			"deleted_cron":    in.DeletedCron,
+			"deleted_tables":  in.DeletedTables,
+			"skipped":         in.Skipped,
+			"bytes_freed":     0, // options + cron are small; tables are cleaned elsewhere
+		})
+		return nil
+	}
+	s.publish(ctx, in.TenantID, in.SiteID, site.EventDbOrphanDeleteProgress, map[string]any{
+		"job_id":          in.JobID,
+		"site_id":         in.SiteID.String(),
+		"deleted_options": in.DeletedOptions,
+		"deleted_cron":    in.DeletedCron,
+		"deleted_tables":  in.DeletedTables,
+		"skipped":         in.Skipped,
+	})
+	return nil
+}
+
+// DBOrphanDeleteProgressInput carries one batched progress push from the agent.
+type DBOrphanDeleteProgressInput struct {
+	JobID          string
+	Results        []agentcmd.OrphanDeleteItemResult
+	DeletedOptions int
+	DeletedCron    int
+	DeletedTables  int
+	Skipped        int
+	Done           bool
+	TenantID       uuid.UUID
+	SiteID         uuid.UUID
 }
 
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// includesOrphanCategories reports whether the requested category set includes
+// the Phase 3.3 orphan-scan categories ("orphaned_options" or "orphaned_cron").
+// An empty slice means "all categories" and the orphan scan is included by
+// definition, so a nil/empty categories slice also returns true. This drives
+// the extended 90-second timeout for orphan-enumeration scans.
+func includesOrphanCategories(categories []string) bool {
+	if len(categories) == 0 {
+		// Empty ⇒ all categories including orphan ones.
+		return true
+	}
+	for _, c := range categories {
+		if c == "orphaned_options" || c == "orphaned_cron" {
+			return true
+		}
+	}
+	return false
+}
+
+// marshalJSONArray serialises v to JSON. If v is nil or marshals to "null"
+// it returns []byte("[]") — this normalises nil slices from agents < 0.16.0
+// to an empty JSON array for consistent JSONB storage.
+func marshalJSONArray(v any) []byte {
+	b, err := json.Marshal(v)
+	if err != nil || string(b) == "null" {
+		return []byte("[]")
+	}
+	return b
+}
 
 func (s *Service) publish(ctx context.Context, tenantID, siteID uuid.UUID, eventType string, data map[string]any) {
 	if s.events == nil {
@@ -642,6 +1599,10 @@ func defaultConfig(tenantID, siteID uuid.UUID) Config {
 		ProperlySizeImages:   true,
 		CDNFileTypes:         "all",
 		DBAutoCleanInterval:  "weekly",
+		PreloadConcurrency:   1,
+		PreloadDelayMs:       500,
+		PreloadBatchSize:     50,
+		PreloadMaxLoad:       0,
 		ConfigVersion:        0,
 		CreatedAt:            time.Now(),
 		UpdatedAt:            time.Now(),
@@ -674,6 +1635,10 @@ func toPerfConfigRequest(c Config) agentcmd.PerfConfigRequest {
 		CacheBypassCookies:       coalesce(c.CacheBypassCookies),
 		CacheIncludeQueries:      coalesce(c.CacheIncludeQueries),
 		CacheIncludeCookies:      coalesce(c.CacheIncludeCookies),
+		PreloadConcurrency:       c.PreloadConcurrency,
+		PreloadDelayMs:           c.PreloadDelayMs,
+		PreloadBatchSize:         c.PreloadBatchSize,
+		PreloadMaxLoad:           c.PreloadMaxLoad,
 		CSSJSMinify:              c.CSSJSMinify,
 		CSSRucss:                 c.CSSRucss,
 		CSSRucssIncludeSelect:    coalesce(c.CSSRucssIncludeSelectors),

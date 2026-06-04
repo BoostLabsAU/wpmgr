@@ -10,8 +10,6 @@
  * Detection: the GridPane purger class / its purge action (the host's own
  * signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

@@ -1,21 +1,30 @@
-# Performance API — caching, optimization & RUCSS
+# Performance API — caching, optimization, RUCSS & Database Cleaner
 
-Endpoints for the Performance Suite (M36 / Phase 6). Two surfaces: operator-facing
-dashboard routes under `/api/v1/sites/{siteId}/...` plus portfolio bulk routes
-under `/api/v1/cache/...` (session + RBAC), and agent-callback routes under
-`/agent/v1/...` (Ed25519 signed-request).
+Endpoints for the Performance Suite (M36 / ADR-046 + DB Cleaner P3 phases). Two
+surfaces: operator-facing dashboard routes under
+`/api/v1/sites/{siteId}/...` plus portfolio bulk routes under `/api/v1/cache/...`
+and the tenant-level `/api/v1/perf/db/fleet-health` (session + RBAC), and
+agent-callback routes under `/agent/v1/...` (Ed25519 signed-request).
 
-Design: [ADR-046](../adr/ADR-046-performance-suite-architecture.md).
+Design: [ADR-046](../adr/ADR-046-performance-suite-architecture.md),
+[ADR-047](../adr/ADR-047-hand-written-gin-routes-perf-suite.md).
 User guides: [features/caching.md](../features/caching.md),
 [features/optimization.md](../features/optimization.md),
 [features/rucss.md](../features/rucss.md).
 Architecture: [architecture/perf-suite.md](../architecture/perf-suite.md).
 
-> **Hand-rolled DTOs.** Per ADR-046 these routes hand-roll local DTO structs +
-> `c.JSON` (the scan/media convention), **not** ogen-generated types. They are
-> not in the OpenAPI spec and not exposed by the `@wpmgr/api` TS client. Source of
-> truth: `apps/api/internal/perf/handler.go`, `.../agent_handler.go`, `.../dto.go`,
-> and the CP→agent contract `apps/api/internal/agentcmd/cache_contract.go`.
+> **Routing note.** The cache, config, db-scan, db-clean, and RUCSS routes are
+> declared in `packages/openapi/openapi.yaml` so the `@wpmgr/api` TypeScript client
+> is generated for them. The five Database Cleaner routes added in Phase 3 (db/health,
+> db/orphans, db/orphan-delete, db/table-action, perf/db/fleet-health) are
+> **hand-written Gin only** and are documented here instead. See ADR-047 for the
+> governance rule that determines which routes belong in the spec versus being
+> hand-written.
+>
+> All perf routes use hand-rolled local DTO structs and `c.JSON` (not ogen-generated
+> types). Source of truth: `apps/api/internal/perf/handler.go`,
+> `.../agent_handler.go`, `.../model.go`, and the CP-to-agent contract
+> `apps/api/internal/agentcmd/backup_contract.go`.
 
 ## Auth & RBAC
 
@@ -166,7 +175,7 @@ No body. Each returns `200 { "ok": true, "detail": "…" }`.
 { "ok": true, "detail": "cache enabled" }
 ```
 
-### POST /api/v1/sites/{siteId}/db/clean
+### POST /api/v1/sites/{siteId}/perf/db/clean
 
 No body. Runs the cleanup scoped to the site's `db_*` config.
 
@@ -175,6 +184,316 @@ No body. Runs the cleanup scoped to the site's `db_*` config.
 ```json
 { "ok": true, "detail": "db clean complete", "rows_cleaned": 1284 }
 ```
+
+---
+
+## Database Cleaner endpoints (hand-written Gin, Phase 3)
+
+These five routes are implemented in `apps/api/internal/perf/handler.go` and are
+documented here rather than in the OpenAPI spec. See ADR-047 for the governance
+rule. The web layer calls them via the raw `client.get` / `client.post` transport
+from `@wpmgr/api` (the same low-level HTTP client, without a typed wrapper).
+
+### GET /api/v1/sites/{siteId}/perf/db/health
+
+**Permission:** `site:read` (viewer+). **Auth:** session cookie or API key.
+
+Returns the DB-size growth trend for the site. The `days` query parameter sets
+the lookback window (default 90, clamped server-side to [7, 365]).
+
+**Query parameters:**
+
+| Name | Type | Default | Notes |
+|------|------|---------|-------|
+| `days` | integer | 90 | Lookback window in days. Server clamps to [7, 365]. |
+
+**Response** `200 OK`
+
+```json
+{
+  "points": [
+    { "db_size_bytes": 41943040, "table_count": 27, "scanned_at": "2026-05-01T03:00:00Z" },
+    { "db_size_bytes": 48234496, "table_count": 28, "scanned_at": "2026-06-01T03:00:00Z" }
+  ],
+  "growth_bytes": 6291456,
+  "growth_pct": 15.0
+}
+```
+
+`points` is ordered oldest-first. `growth_bytes` and `growth_pct` are derived
+from `points[0]` versus `points[len-1]`; both are `0` when fewer than two points
+exist. The frontend treats fewer than two points as an empty-state condition (no
+chart line).
+
+**Source:** `perf.Service.GetDBHealth` + `perf.DBHealthResponse` + `perf.DbSizeTrendPoint`.
+
+---
+
+### GET /api/v1/sites/{siteId}/perf/db/orphans
+
+**Permission:** `site:read` (viewer+). **Auth:** session cookie or API key.
+
+Classifies the orphaned artefacts stored in the latest `db_scan` result and
+returns the structured report. Classification runs on-demand against the live
+corpus so the report is always current relative to the corpus version. This
+endpoint is read-only; it does not delete anything.
+
+Returns `503 corpus_unwired` when the corpus reader is not configured (should
+not occur in normal deployments). Returns `404 not_found` (or an empty-result
+shape) when no scan has been run for the site yet.
+
+**Response** `200 OK`
+
+```json
+{
+  "options": [
+    {
+      "name": "my_plugin_option",
+      "owner_slug": "my-plugin",
+      "confidence": "exact",
+      "known_plugins": ["my-plugin"],
+      "installed": false,
+      "deletable_eligible": true,
+      "size_bytes": 1024,
+      "autoload": false
+    }
+  ],
+  "cron": [
+    {
+      "name": "my_plugin_cron_hook",
+      "owner_slug": "my-plugin",
+      "confidence": "prefix",
+      "known_plugins": ["my-plugin"],
+      "installed": false,
+      "deletable_eligible": true,
+      "next_run_at": 1748822400,
+      "recurrence": "daily"
+    }
+  ],
+  "tables": [
+    {
+      "name": "wp_my_plugin_data",
+      "owner_slug": "my-plugin",
+      "confidence": "exact",
+      "known_plugins": ["my-plugin"],
+      "installed": false,
+      "deletable_eligible": true,
+      "size_bytes": 204800,
+      "rows": 512
+    }
+  ],
+  "corpus_version": 42,
+  "snapshot_available": true,
+  "hidden_installed": 3,
+  "counts": {
+    "options": 1,
+    "cron": 1,
+    "tables": 1,
+    "deletable": 3
+  }
+}
+```
+
+**Field notes:**
+
+- `confidence` is one of `exact | prefix | heuristic | unknown`.
+- `deletable_eligible` is `true` only when confidence is `exact` or `prefix`,
+  `known_plugins` has exactly one entry, and `installed` is `false`.
+- `snapshot_available` is `false` for scans from agents older than 0.16.0; when
+  false, no item is `deletable_eligible` and the UI must prompt for a fresh scan.
+- `hidden_installed` is the total count of candidates suppressed because their
+  attributed plugin is present in the installed-plugins snapshot at scan time.
+
+**Source:** `perf.Service.GetOrphansReport` + `perf.OrphansReport` + `perf.OrphanItem`.
+
+---
+
+### POST /api/v1/sites/{siteId}/perf/db/table-action
+
+**Route-level permission:** `site.cache.manage` (operator+).
+**Destructive actions (`drop`, `empty`) additionally require:** `site.cache.delete-everything` (admin+) — enforced inside the handler body.
+**Auth:** session cookie or API key.
+
+Dispatches a per-table DDL operation to the site's agent. The operation is
+synchronous: the agent processes all tables sequentially and returns the
+per-table result array in the ACK body.
+
+Valid actions:
+
+| Action | Destructive | Notes |
+|--------|-------------|-------|
+| `optimize` | no | `OPTIMIZE TABLE` — reclaims overhead (fragmentation). |
+| `repair` | no | `REPAIR TABLE` — repairs corrupted MyISAM/ARIA tables. |
+| `analyze` | no | `ANALYZE TABLE` — updates the optimizer's key-distribution stats. |
+| `convert_innodb` | no | `ALTER TABLE … ENGINE=InnoDB` — converts MyISAM to InnoDB. |
+| `drop` | **yes** | `DROP TABLE` — permanent; requires `confirm`. |
+| `empty` | **yes** | `TRUNCATE TABLE` — deletes all rows; requires `confirm`. |
+
+**Request body**
+
+```json
+{
+  "action": "optimize",
+  "tables": ["wp_postmeta", "wp_options"],
+  "confirm": "DROP 2 TABLES"
+}
+```
+
+`confirm` is required for `drop` and `empty`:
+- Single table: must equal the table name exactly (e.g. `"wp_postmeta"`).
+- Multiple tables: must equal `"DROP N TABLES"` or `"EMPTY N TABLES"` (uppercase,
+  where N is the exact count).
+
+`tables` must contain 1 to 200 entries. The agent independently validates that
+each table exists and is not a WordPress core table.
+
+**Response** `200 OK`
+
+```json
+{
+  "ok": true,
+  "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "action": "optimize",
+  "results": [
+    { "table": "wp_postmeta", "status": "done", "detail": "reclaimed 40960 bytes" },
+    { "table": "wp_options",  "status": "done", "detail": "reclaimed 0 bytes" }
+  ],
+  "backup_warning": ""
+}
+```
+
+Per-table `status` values: `done | skipped | error | not_found | rejected`.
+
+An agent semantic rejection (HTTP 200, `ok: false`) is returned as-is:
+`{ "ok": false, "detail": "…" }`.
+
+When no recent backup (within 24 h) is found for destructive actions, the
+`X-Backup-Warning` response header is set and `backup_warning` in the body is
+non-empty (advisory only; the action still proceeds).
+
+**Source:** `perf.Service.DBTableAction` + `perf.DBTableActionOutput` +
+`agentcmd.DBTableActionTableResult`.
+
+---
+
+### POST /api/v1/sites/{siteId}/perf/db/orphan-delete
+
+**Route-level permission:** `site.cache.manage` (operator+).
+**Handler-body gate:** `site.cache.delete-everything` (admin+) — checked before re-classify.
+**Auth:** session cookie or API key.
+
+Destructive orphan deletion (P3.8). The CP re-classifies every requested item
+against the live corpus before signing; items that are no longer
+`deletable_eligible` or whose `owner_slug` drifted are silently dropped from the
+signed command. The agent performs live re-verification of every item
+independently.
+
+The operation is asynchronous on the agent: the CP dispatches the command and
+returns immediately. Per-item progress arrives via SSE events
+(`db.orphan.delete.started`, `db.orphan.delete.progress`,
+`db.orphan.delete.completed`, `db.orphan.delete.failed`) on the shared tenant bus.
+
+**Request body**
+
+```json
+{
+  "items": [
+    { "kind": "option", "name": "my_plugin_option", "owner_slug": "my-plugin" },
+    { "kind": "cron",   "name": "my_plugin_cron_hook", "owner_slug": "my-plugin" },
+    { "kind": "table",  "name": "wp_my_plugin_data",   "owner_slug": "my-plugin" }
+  ],
+  "confirm": "DELETE 3 ORPHANS"
+}
+```
+
+`kind` is one of `option | cron | table`. `owner_slug` must match the value
+returned by the orphans endpoint exactly (used by the CP and agent for
+re-verification).
+
+`confirm` grammar (case-insensitive server-side; the client should send uppercase):
+- 1 item: the artefact name itself (e.g. `"my_plugin_option"`).
+- N items, same kind: `"DELETE N OPTIONS"` | `"DELETE N CRON"` | `"DELETE N TABLES"`.
+- N items, mixed kinds: `"DELETE N ORPHANS"`.
+
+**Response** `200 OK`
+
+```json
+{
+  "ok": true,
+  "job_id": "7e9f8d6c-1a2b-4c3d-8e4f-5a6b7c8d9e0f",
+  "accepted_count": 3,
+  "dropped_count": 0,
+  "backup_warning": ""
+}
+```
+
+`accepted_count` may be smaller than `items` length when the CP re-classify
+filtered some items. When no recent backup is found, `X-Backup-Warning` is set
+and `backup_warning` is non-empty (advisory; the action still proceeds).
+
+An agent semantic rejection is returned as `{ "ok": false, "detail": "…" }`.
+
+**Source:** `perf.Service.DBOrphanDelete` + `perf.OrphanDeleteOutput`.
+
+---
+
+## Portfolio / tenant-level endpoints
+
+### GET /api/v1/perf/db/fleet-health
+
+**Permission:** org-scope only (`RequireOrgScope`); `site:read` (viewer+).
+**Auth:** session cookie or API key.
+**Note:** site-scoped collaborators are blocked by the `RequireOrgScope` middleware.
+
+Returns the tenant-level aggregate of database health across all sites that have
+at least one completed scan. The `days` query parameter controls the growth
+lookback window (default 90, clamped to [7, 365]).
+
+**Query parameters:**
+
+| Name | Type | Default | Notes |
+|------|------|---------|-------|
+| `days` | integer | 90 | Growth-lookback window in days. Server clamps to [7, 365]. |
+
+**Response** `200 OK`
+
+When no sites have been scanned yet, all numeric fields are `0` and `top_sites` is
+an empty array (`total_sites_scanned === 0`); callers should render the empty-state
+panel for this case. The endpoint always returns `200`; never `404`.
+
+```json
+{
+  "total_sites_scanned": 5,
+  "total_db_size_bytes": 314572800,
+  "total_table_count": 142,
+  "total_orphaned_options": 12,
+  "total_orphaned_cron": 3,
+  "sites_with_orphans": 2,
+  "top_sites": [
+    {
+      "site_id": "6f1c2b7e-…",
+      "site_name": "Main Store",
+      "db_size_bytes": 104857600,
+      "table_count": 38,
+      "orphaned_options_count": 6,
+      "orphaned_cron_count": 1,
+      "scanned_at": "2026-06-03T03:00:00Z",
+      "growth_bytes": 5242880
+    }
+  ]
+}
+```
+
+`top_sites` contains at most 10 entries, ordered by `db_size_bytes` descending.
+The orphan counts in this response are **raw scan counts** (unclassified by the
+corpus); use the per-site `GET /perf/db/orphans` endpoint for the attributed,
+deletable-eligible breakdown.
+
+**Source:** `perf.Service.GetFleetDbHealth` + `perf.FleetDbHealth` + `perf.FleetSiteDbSummary`.
+
+---
+
+## RUCSS (Remove-Unused-CSS) endpoints
 
 ### GET /api/v1/sites/{siteId}/rucss/results
 

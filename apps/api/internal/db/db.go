@@ -82,6 +82,51 @@ func currentUserName(ctx context.Context, p *Pool) string {
 	return name
 }
 
+// ProbeTablePrivilege verifies that the connecting role has SELECT access to the
+// core application tables by calling has_table_privilege(). This is a functional
+// probe — it does NOT compare role names; it checks actual privilege state — so
+// it cannot false-positive a correctly-configured instance.
+//
+// When the application connects as a role that was never granted wpmgr_app
+// privileges (e.g. a self-hoster who set WPMGR_DB_USER to a plain login role
+// but forgot to GRANT wpmgr_app to it), every table DML silently fails with
+// "permission denied", which is extremely hard to diagnose. This probe fires
+// exactly in that case and logs a clear, actionable message.
+//
+// The probe is skipped when the connecting role is a superuser (has_table_privilege
+// always returns true for superusers, and EnforceRLSRole already gates that path
+// behind AllowRLSBypassRole). The probe is always safe to run: if the role has
+// the grant, the query returns true and boot continues; if not, we fail fast
+// before serving any traffic.
+func (p *Pool) ProbeTablePrivilege(ctx context.Context, logger *slog.Logger) error {
+	var ok bool
+	err := p.QueryRow(ctx,
+		`SELECT has_table_privilege(current_user, 'public.tenants', 'SELECT')`,
+	).Scan(&ok)
+	if err != nil {
+		// has_table_privilege can itself return an error if the table does not
+		// exist yet (pre-migration). Treat this as a configuration problem:
+		// migrations must run before the app connects with the app role.
+		return fmt.Errorf(
+			"privilege probe failed — the application DB role (%q) could not query 'public.tenants': %w; "+
+				"ensure migrations have run (WPMGR_DB_MIGRATION_DSN) before starting the application",
+			currentUserName(ctx, p), err,
+		)
+	}
+	if ok {
+		return nil
+	}
+	return fmt.Errorf(
+		"the application database role (%q) lacks SELECT privilege on WPMgr tables; "+
+			"the app must connect as the wpmgr_app role created by the migrations, "+
+			"or as a role that has been granted wpmgr_app's privileges "+
+			"(e.g. GRANT wpmgr_app TO %s). "+
+			"Set WPMGR_DB_USER to the correct role. "+
+			"See docs/install.md for the two-DSN setup.",
+		currentUserName(ctx, p), currentUserName(ctx, p),
+	)
+}
+
 // InTenantTx runs fn inside a transaction with app.tenant_id set to the given
 // tenant for the lifetime of the transaction (SET LOCAL). This is how RLS is
 // enforced: every tenant-scoped query executed via the supplied tx is filtered

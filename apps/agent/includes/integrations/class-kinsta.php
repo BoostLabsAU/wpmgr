@@ -9,8 +9,6 @@
  *
  * Detection: the `$kinsta_cache` global (Kinsta's own signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

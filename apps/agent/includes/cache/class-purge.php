@@ -13,8 +13,7 @@
  * All paths are contained under the cache root; a computed target outside the
  * root is refused (defence against a malformed host/URL).
  *
- * Standard disk-cache purge technique (Cache Enabler / WP Super Cache, GPLv2).
- * Original implementation.
+ * Standard WordPress disk-cache purge technique.
  *
  * Every purge operation also fires a pair of WordPress actions
  * (`wpmgr_purge_*:before` / `:after`) so that host/edge-cache integrations can
@@ -103,7 +102,25 @@ final class Purge
         $this->fire('wpmgr_purge_urls:before', [$urls]);
 
         $host = (string) (parse_url($url, PHP_URL_HOST) ?? '');
-        $path = (string) (parse_url($url, PHP_URL_PATH) ?? $url);
+
+        // Derive the path component. parse_url() returns NULL for the path when
+        // the URL is just scheme://host with no path (e.g. "https://example.com"
+        // or "https://example.com?x=1"). The old "?? $url" fallback then fed the
+        // ENTIRE URL in as the path, which normalizePath() mangled into a phantom
+        // "/https:/host" subdirectory — so the homepage's real cache file at
+        // {root}/{host}/index.html.gz was never matched and survived every purge
+        // (this is exactly why scope=url purges of the home page were no-ops on
+        // nginx/Apache static-fast-path setups). Resolve a host-present-but-
+        // path-less URL to the site root ("/"); only fall back to the raw string
+        // for a genuinely path-only input like "/blog/".
+        $rawPath = parse_url($url, PHP_URL_PATH);
+        if (is_string($rawPath) && $rawPath !== '') {
+            $path = $rawPath;
+        } elseif ($host !== '') {
+            $path = '/';
+        } else {
+            $path = $url;
+        }
 
         $host = $this->sanitizeHost($host);
         $dir  = $this->cacheRoot . '/' . $host . CacheKey::normalizePath($path);
@@ -186,6 +203,16 @@ final class Purge
         $ok = @mkdir($this->cacheRoot, 0o755, true) || @is_dir($this->cacheRoot);
 
         $this->fire('wpmgr_purge_everything:after');
+
+        // Stamp the "Last purge" gauge for EVERY full-cache clear (operator purge,
+        // auto-purge on content changes, host-integration flush). This is the one
+        // chokepoint for whole-cache purges; per-URL purges (incl. RUCSS reheat
+        // pre-purges) deliberately do not record here. The next stats heartbeat
+        // reports it; the CP reconciles with its own operator-purge stamp via
+        // GREATEST, so this never regresses a newer dashboard purge time.
+        if ($ok) {
+            PerfReporter::persistLastPurge(time(), 'all');
+        }
 
         return $ok;
     }

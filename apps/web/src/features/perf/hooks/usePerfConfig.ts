@@ -95,10 +95,13 @@ export function useUpdatePerfConfig(
       toast.error("Could not save setting.", { description: err.message });
     },
     onSuccess: (saved) => {
+      // Authoritative: the PUT returns the persisted config, so the read cache is
+      // already correct here. We deliberately do NOT invalidate the config query
+      // afterwards — a background refetch re-renders all 30+ Optimize toggles on
+      // every single save, which reads as a flicker / momentary revert of the
+      // switch you just flipped. Server-side reconciliation (e.g. an agent
+      // config-ack) still arrives via the perf.config SSE handler in usePerfEvents.
       qc.setQueryData(perfKeys.config(siteId), saved);
-    },
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: perfKeys.config(siteId) });
     },
   });
 }

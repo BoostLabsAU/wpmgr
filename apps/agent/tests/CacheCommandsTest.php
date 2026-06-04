@@ -59,10 +59,18 @@ final class CacheCommandsTest extends TestCase
         Functions\when('wp_clear_scheduled_hook')->justReturn(true);
         Functions\when('add_filter')->justReturn(true);
         Functions\when('add_action')->justReturn(true);
+
+        // Task #171 — the preload warmer now enqueues into a custom table via
+        // PreloadQueue. Install a minimal in-memory $wpdb double so addTask()
+        // INSERTs and pendingCount() COUNTs are consistent; loopback dispatch is
+        // inert here (rest_url is unstubbed, but claimable count drives dispatch
+        // so it no-ops cleanly in the unit context).
+        $GLOBALS['wpdb'] = new FakePreloadQueueWpdb();
     }
 
     protected function tear_down(): void
     {
+        unset($GLOBALS['wpdb']);
         Monkey\tearDown();
         parent::tear_down();
     }
@@ -163,14 +171,27 @@ final class CacheCommandsTest extends TestCase
         $this->assertTrue($stored['enabled'], 'enabled must be preserved when not in the payload');
     }
 
-    public function test_db_clean_returns_counts_envelope(): void
+    public function test_db_clean_returns_ack_envelope(): void
     {
-        // No $wpdb in this test environment, so the engine reports an empty
-        // cleaned map but the command still returns a well-formed success ack.
-        $res = (new DbCleanCommand())->execute([], ['tasks' => ['revisions']]);
+        // M38 contract: execute() returns the frozen ACK immediately.
+        // job_id is REQUIRED; tasks and progress_endpoint are optional.
+        $jobId = 'test-job-' . bin2hex(random_bytes(4));
+        $res   = (new DbCleanCommand())->execute([], [
+            'job_id' => $jobId,
+            'tasks'  => ['revisions'],
+        ]);
         $this->assertTrue($res['ok']);
-        $this->assertSame('db cleaned', $res['detail']);
-        $this->assertIsArray($res['cleaned']);
+        $this->assertSame($jobId, $res['job_id']);
+        // The old 'detail' and 'cleaned' keys are NOT present in the ACK.
+        $this->assertArrayNotHasKey('detail', $res);
+        $this->assertArrayNotHasKey('cleaned', $res);
+    }
+
+    public function test_db_clean_rejects_missing_job_id(): void
+    {
+        $res = (new DbCleanCommand())->execute([], ['tasks' => ['revisions']]);
+        $this->assertFalse($res['ok']);
+        $this->assertStringContainsString('job_id', (string) ($res['detail'] ?? ''));
     }
 
     public function test_enable_returns_envelope_with_stats(): void

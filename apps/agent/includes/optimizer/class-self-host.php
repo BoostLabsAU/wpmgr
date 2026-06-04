@@ -12,7 +12,7 @@
  * the rewritten host are removed so the browser does not warm a now-unused
  * connection.
  *
- * Original implementation. NOT copied from a third-party plugin.
+ * Standard third-party asset self-hosting technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

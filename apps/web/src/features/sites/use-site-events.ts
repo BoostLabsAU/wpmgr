@@ -71,11 +71,30 @@ const SITE_EVENT_TYPES = [
   "cache.preload.completed",
   "cache.stats.updated",
   "perf.config.updated",
+  "db.clean.started",
+  "db.clean.progress",
   "db.clean.completed",
+  "db.clean.failed",
+  // Database scan (Phase 2 — read-only preview before clean).
+  // Synchronous on the agent; the CP emits exactly these three events.
+  // Missing any one here would silently drop the frame before usePerfEvents
+  // sees it — all three must be listed.
+  "db.scan.started",
+  "db.scan.completed",
+  "db.scan.failed",
   "rucss.queued",
   "rucss.computing",
   "rucss.completed",
   "rucss.failed",
+  // Orphan delete (P3.8). Async operation — started is emitted synchronously
+  // before the agent command is dispatched; progress/completed/failed arrive
+  // as the agent POSTs batched results back to the CP. All four must be listed
+  // here or the z.enum frame validator silently drops them before they reach
+  // usePerfEvents / OrphanReviewSection.
+  "db.orphan.delete.started",
+  "db.orphan.delete.progress",
+  "db.orphan.delete.completed",
+  "db.orphan.delete.failed",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

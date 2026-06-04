@@ -36,6 +36,16 @@ final class UrlHelper
     }
 
     /**
+     * The site base URL (scheme + host[:port]), no trailing slash.
+     *
+     * @return string
+     */
+    public function siteUrl(): string
+    {
+        return $this->siteUrl;
+    }
+
+    /**
      * The site host (no scheme), or '' when unknown.
      *
      * @return string

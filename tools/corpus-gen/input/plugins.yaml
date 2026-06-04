@@ -1,0 +1,15 @@
+# corpus-gen input configuration.
+#
+# extra_slug_versions: Add slugs not present in the public popular-browse API
+# (e.g. premium plugins distributed outside wordpress.org). The value is the
+# version string used to construct the download URL.
+#
+# skip_slugs: Slugs to never download (broken ZIPs, unusually large plugins,
+# or plugins whose patterns are hand-curated in the committed seed migration).
+extra_slug_versions: {}
+
+skip_slugs:
+  # These slugs are known to produce oversized ZIPs or have known issues
+  # with the wordpress.org download endpoint:
+  - "hello-dolly"
+  - "akismet"  # pre-installed; patterns in committed seed

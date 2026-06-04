@@ -167,16 +167,32 @@ final class OptimizerPipelineTest extends TestCase
         unset($_SERVER['REQUEST_URI'], $_SERVER['HTTP_HOST'], $_SERVER['REQUEST_METHOD'], $_SERVER['HTTP_USER_AGENT']);
     }
 
-    public function test_db_clean_command_returns_engine_counts(): void
+    public function test_db_clean_command_returns_ack(): void
     {
+        // M38 contract: execute() returns the frozen ACK {ok, job_id} immediately;
+        // the actual cleanup + progress POSTs run asynchronously via shutdown hook.
         $wpdb = new FakeCleanupWpdb();
         $wpdb->idResults = [1, 2];
         $engine = new DbCleanup(new PerfConfig(['db_post_revisions' => true]), $wpdb);
 
-        $res = (new DbCleanCommand($engine))->execute([], ['tasks' => ['revisions']]);
+        $jobId = 'pipeline-test-job-id';
+        $res   = (new DbCleanCommand($engine))->execute([], [
+            'job_id' => $jobId,
+            'tasks'  => ['revisions'],
+        ]);
+
         $this->assertTrue($res['ok']);
-        $this->assertSame('db cleaned', $res['detail']);
-        $this->assertArrayHasKey('revisions', $res['cleaned']);
-        $this->assertSame(2, $res['cleaned']['revisions']);
+        $this->assertSame($jobId, $res['job_id']);
+        // The ACK carries NO result data — those come via progress pushes.
+        $this->assertArrayNotHasKey('detail', $res);
+        $this->assertArrayNotHasKey('cleaned', $res);
+    }
+
+    public function test_db_clean_command_rejects_missing_job_id(): void
+    {
+        $engine = new DbCleanup(new PerfConfig([]), null);
+        $res    = (new DbCleanCommand($engine))->execute([], ['tasks' => ['revisions']]);
+        $this->assertFalse($res['ok']);
+        $this->assertArrayHasKey('detail', $res);
     }
 }

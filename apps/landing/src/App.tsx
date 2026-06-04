@@ -14,6 +14,7 @@ import {
   PerformanceSpotlight,
   Security,
   Stats,
+  TechStack,
   TrustStrip,
 } from "@/sections";
 
@@ -34,6 +35,7 @@ export function App() {
         <HowItWorks />
         <Security />
         <OpenSource />
+        <TechStack />
         <Stats />
         <Faq />
         <FinalCta />

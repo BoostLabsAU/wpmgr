@@ -22,8 +22,8 @@
  * the drop-in and the writer both sort the surviving keys before serialising to
  * guarantee a stable hash regardless of arrival order.
  *
- * This is the standard WordPress disk-cache key technique (as used by GPLv2
- * Cache Enabler / WP Super Cache). Original implementation.
+ * This is the standard WordPress disk-cache key technique: a host + path +
+ * variant composite that uniquely identifies each cacheable request state.
  *
  * @package WPMgr\Agent\Cache
  */

@@ -34,6 +34,12 @@ final class PerfReporter
     /** wp-option storing the total URL count of the current/last preload batch. */
     public const OPTION_PRELOAD_TOTAL = 'wpmgr_cache_preload_total';
 
+    /** wp-option storing the timestamp of the last full cache purge. */
+    public const OPTION_LAST_PURGED_AT = 'wpmgr_cache_last_purged_at';
+
+    /** wp-option storing the kind of the last purge (e.g. "all", "auto"). */
+    public const OPTION_LAST_PURGE_KIND = 'wpmgr_cache_last_purge_kind';
+
     /** CP path for cache stats. */
     private const PATH_STATS = '/agent/v1/cache/stats-report';
 
@@ -83,10 +89,9 @@ final class PerfReporter
             $stats = $this->cache->stats();
 
             // Preload pending: either the override (mid-run call) or the current
-            // persisted queue length.
+            // queue-table count (pending + processing).
             if ($preloadPending === null) {
-                $preload = new Preload();
-                $preloadPending = count($preload->pending());
+                $preloadPending = PreloadQueue::fromConfig()->pendingCount();
             }
 
             // Preload total: override or stored option (persisted when queue was built).
@@ -112,6 +117,24 @@ final class PerfReporter
             ];
             if ($lastPreloadAt !== null) {
                 $body['last_preload_at'] = $lastPreloadAt;
+            }
+
+            // Last purge: reported so the dashboard "Last purge" gauge reflects
+            // agent-side full-cache purges the CP cannot see (auto-purge on content
+            // changes, host-integration flushes). The CP also stamps operator
+            // dashboard purges directly and reconciles with GREATEST, so an older
+            // value reported here can never regress a newer CP stamp.
+            $lastPurgedAt = function_exists('get_option')
+                ? get_option(self::OPTION_LAST_PURGED_AT, null)
+                : null;
+            if ($lastPurgedAt !== null) {
+                $body['last_purged_at'] = (int) $lastPurgedAt;
+                $kind = function_exists('get_option')
+                    ? get_option(self::OPTION_LAST_PURGE_KIND, '')
+                    : '';
+                if (is_string($kind) && $kind !== '') {
+                    $body['last_purge_kind'] = $kind;
+                }
             }
 
             $this->post(self::PATH_STATS, $body);
@@ -206,6 +229,25 @@ final class PerfReporter
     {
         if (function_exists('update_option')) {
             update_option(self::OPTION_LAST_PRELOAD_AT, $at, false);
+        }
+    }
+
+    /**
+     * Record the timestamp + kind of a full cache purge so the next stats push
+     * reports it to the CP. Called from the purge engine on every full-cache clear
+     * (operator "purge everything", auto-purge on content changes, host-integration
+     * flushes). Per-URL purges are intentionally NOT recorded here — they include
+     * the RUCSS reheat/compute pre-purges, which would spam the gauge.
+     *
+     * @param int    $at   Unix timestamp.
+     * @param string $kind Purge kind, e.g. "all" or "auto".
+     * @return void
+     */
+    public static function persistLastPurge(int $at, string $kind = 'all'): void
+    {
+        if (function_exists('update_option')) {
+            update_option(self::OPTION_LAST_PURGED_AT, $at, false);
+            update_option(self::OPTION_LAST_PURGE_KIND, $kind, false);
         }
     }
 

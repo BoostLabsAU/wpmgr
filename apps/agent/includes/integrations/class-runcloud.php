@@ -9,8 +9,6 @@
  *
  * Detection: the `RunCloud_Hub` class (RunCloud's own signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

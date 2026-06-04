@@ -11,8 +11,7 @@
  * Runs LAST in the pipeline so it also picks up the local minified/self-hosted
  * asset URLs the earlier stages produced.
  *
- * Standard CDN URL-rewrite technique; original implementation. NOT copied from
- * a third-party plugin.
+ * Standard CDN URL-rewrite technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

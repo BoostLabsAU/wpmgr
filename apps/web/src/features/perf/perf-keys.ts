@@ -7,4 +7,8 @@ export const perfKeys = {
   config: (siteId: string) => [...perfKeys.all, "config", siteId] as const,
   stats: (siteId: string) => [...perfKeys.all, "stats", siteId] as const,
   rucss: (siteId: string) => [...perfKeys.all, "rucss", siteId] as const,
+  dbHealth: (siteId: string) => [...perfKeys.all, "dbHealth", siteId] as const,
+  dbOrphans: (siteId: string) => [...perfKeys.all, "dbOrphans", siteId] as const,
+  // Tenant-level fleet aggregate — no siteId (cross-site).
+  fleetDbHealth: () => [...perfKeys.all, "fleetDbHealth"] as const,
 } as const;

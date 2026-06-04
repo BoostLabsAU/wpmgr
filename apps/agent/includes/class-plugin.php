@@ -46,8 +46,17 @@ use WPMgr\Agent\Commands\PerfConfigUpdateCommand;
 use WPMgr\Agent\Commands\RucssComputeCommand;
 use WPMgr\Agent\Cache\PerfReporter;
 use WPMgr\Agent\Commands\DbCleanCommand;
+use WPMgr\Agent\Commands\DbOrphanDeleteCommand;
+use WPMgr\Agent\Commands\DbScanCommand;
+use WPMgr\Agent\Commands\DbTableActionCommand;
 use WPMgr\Agent\Cache\CacheManager;
+use WPMgr\Agent\Cache\PreloadQueue;
+use WPMgr\Agent\Commands\CachePreloadQueueStatusCommand;
+use WPMgr\Agent\Commands\CachePreloadQueueRetryFailedCommand;
+use WPMgr\Agent\Commands\CachePreloadQueueClearCommand;
+use WPMgr\Agent\Commands\CachePreloadQueueTestRestCommand;
 use WPMgr\Agent\Optimizer\Bloat;
+use WPMgr\Agent\Optimizer\DbCleanup;
 use WPMgr\Agent\Diagnostics\SizeProbe;
 use WPMgr\Agent\Media\DiskWriter;
 use WPMgr\Agent\Media\HtaccessInstaller;
@@ -292,6 +301,11 @@ final class Plugin
 
         add_action('rest_api_init', [$this->router, 'registerRoutes']);
         add_action('rest_api_init', [$this, 'registerAutologinRoute']);
+        // Task #171 — unsigned self-HMAC loopback runner route for the preload
+        // queue. SEPARATE from the signed dispatch router: it is a fire-and-forget
+        // loopback kick from the agent to itself and carries no command authority
+        // (only drains an already-queued, same-host URL set). See §1.10.
+        add_action('rest_api_init', [$this, 'registerPreloadRunRoute']);
 
         // Autologin replay-table maintenance: drop expired rows hourly. The
         // cron event is scheduled at activation; this hook binds the handler.
@@ -390,6 +404,13 @@ final class Plugin
         // just a single option read). Self-skips on preload warming requests.
         $this->cacheManager->registerHooks();
 
+        // Task #171 — preload-queue watchdog. Bind the cron handler (re-kicks any
+        // queue whose loopback runner chain died) and ensure the 60s recurring
+        // event is scheduled (reuses the agent's existing wpmgr_60sec interval).
+        // A real method (not a closure) keeps the hook table serialization-safe.
+        add_action(PreloadQueue::WATCHDOG_HOOK, [$this, 'runPreloadWatchdog']);
+        add_action('init', [$this, 'maybeSchedulePreloadWatchdog']);
+
         // Phase 4 — bloat-removal hooks. Unlike the rest of the optimizer (which
         // runs inside the cache writer's ob_start on a MISS), de-bloat must
         // UN-register core actions/filters at the right phase so the unwanted
@@ -398,6 +419,14 @@ final class Plugin
         // inert site pays just a single option read. A real method (not a
         // closure) keeps the hook table serialization-safe.
         add_action('init', [$this, 'registerBloatHooks'], 0);
+
+        // DB-classify source-scan cache busting. When a plugin is activated or
+        // deactivated the plugin-to-table-name source-scan map (stored in the
+        // wpmgr_db_table_plugin_map transient) may be stale. Delete the transient
+        // so the next db_scan rebuilds it fresh. Static method reference keeps
+        // the hook table serialization-safe (no Closure holding $this).
+        add_action('activated_plugin', [DbCleanup::class, 'bustPluginTableMapCache']);
+        add_action('deactivated_plugin', [DbCleanup::class, 'bustPluginTableMapCache']);
 
         // ADR-037 Sprint 2 — diagnostics cron handler. Scheduler::scheduleEvents
         // sets up the cron event; the handler runs the on-demand DiagnosticsCommand
@@ -684,6 +713,8 @@ final class Plugin
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(\WPMgr\Agent\Cache\Preload::HOOK);
             wp_clear_scheduled_hook(\WPMgr\Agent\Cache\CacheRefreshCron::HOOK);
+            // Task #171 — clear the preload-queue watchdog cron.
+            wp_clear_scheduled_hook(PreloadQueue::WATCHDOG_HOOK);
         }
     }
 
@@ -720,6 +751,93 @@ final class Plugin
                 ],
             ]
         );
+    }
+
+    /**
+     * Task #171 — register the POST /wpmgr/v1/preload/run loopback runner route.
+     *
+     * SEPARATE from the signed dispatch router (Router::registerRoutes): this is a
+     * fire-and-forget LOOPBACK kick from the agent to itself and carries no command
+     * authority — it only drains an already-queued, SSRF-filtered, same-host URL
+     * set. Authentication is a self-HMAC handshake (NOT Ed25519 Connector signing):
+     * the body's `token` is verified inside PreloadQueue::runFromRest() against
+     * hash_hmac over wp_salt('auth'), so permission_callback is __return_true
+     * (WP nonces/auth cookies are unavailable on a non-blocking loopback POST).
+     * See the §1.10 security-review checklist.
+     *
+     * @return void
+     */
+    public function registerPreloadRunRoute(): void
+    {
+        if (!function_exists('register_rest_route')) {
+            return;
+        }
+
+        $queue = PreloadQueue::fromConfig();
+
+        register_rest_route(
+            PreloadQueue::REST_NAMESPACE,
+            PreloadQueue::REST_RUN_ROUTE,
+            [
+                'methods'             => 'POST',
+                'callback'            => [$queue, 'runFromRest'],
+                'permission_callback' => '__return_true',
+                'args'                => [
+                    'group' => [
+                        'required'          => true,
+                        'type'              => 'string',
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                    'callback' => [
+                        'required'          => true,
+                        'type'              => 'string',
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                    'token' => [
+                        'required'          => true,
+                        'type'              => 'string',
+                        'sanitize_callback' => 'sanitize_text_field',
+                    ],
+                ],
+            ]
+        );
+    }
+
+    /**
+     * Task #171 — cron handler for the preload-queue watchdog
+     * (PreloadQueue::WATCHDOG_HOOK). Re-kicks any queue whose loopback runner chain
+     * died (the non-blocking POST was dropped). A real public method (not a closure)
+     * keeps the WP hook table serialization-safe.
+     *
+     * @return void
+     */
+    public function runPreloadWatchdog(): void
+    {
+        try {
+            PreloadQueue::fromConfig()->runWatchdog();
+        } catch (\Throwable $e) {
+            // Best-effort: a watchdog failure must never fatal a cron tick.
+        }
+    }
+
+    /**
+     * Task #171 — ensure the 60-second preload-queue watchdog event is scheduled.
+     * Bound to `init`; reuses the agent's existing wpmgr_60sec cron interval
+     * (registered by Scheduler::addSchedules). Reschedule-if-missing pattern,
+     * mirroring maybeRescheduleCron. Cheap on the hot path (one wp_next_scheduled
+     * read of the already-loaded cron option).
+     *
+     * @return void
+     */
+    public function maybeSchedulePreloadWatchdog(): void
+    {
+        if (!function_exists('wp_next_scheduled') || !function_exists('wp_schedule_event')) {
+            return;
+        }
+        if (wp_next_scheduled(PreloadQueue::WATCHDOG_HOOK) !== false) {
+            return;
+        }
+        wp_schedule_event(time() + 60, Scheduler::SCHEDULE_60SEC, PreloadQueue::WATCHDOG_HOOK);
     }
 
     /**
@@ -893,8 +1011,34 @@ final class Plugin
             new CachePurgeCommand($this->cacheManager),
             new CachePreloadCommand($this->cacheManager),
             new PerfConfigUpdateCommand($this->cacheManager, $this->cacheManager->makePerfReporter()),
-            new DbCleanCommand(),
-            new RucssComputeCommand(),
+            new DbCleanCommand(null, $this->keystore, $this->settings),
+            // M39 — read-only database scan. Synchronous: full per-category
+            // COUNT + reclaimable-bytes result is returned in the ACK body so
+            // the operator sees the preview before committing to a db_clean.
+            new DbScanCommand(),
+            // Phase 2.2 — per-table actions (optimize, repair, drop, empty).
+            // Synchronous; gated by orphan-only check (LAYER 1) + information_schema
+            // exact-match validation (LAYER 2) for DROP/EMPTY. Optimize/repair are
+            // always allowed (no data loss possible). Type-to-confirm and
+            // PermSiteManage gates live in the CP handler layer.
+            new DbTableActionCommand(),
+            // P3.8 — destructive orphan delete. Deletes ONLY the CP-signed
+            // allowlist (options / cron / tables). Agent live-re-verifies every
+            // item against the LIVE installed-plugin set before acting. Async
+            // (shutdown function), progress POSTs to progress_endpoint.
+            new DbOrphanDeleteCommand(null, $this->keystore, $this->settings),
+            new RucssComputeCommand($this->cacheManager),
+            // Task #171 — signed preload-queue status + maintenance commands for
+            // the React viewer. These go through the SIGNED wpmgr/v1/command/{cmd}
+            // dispatcher (NOT the unsigned loopback /preload/run route):
+            //   cache_preload_queue_status       -> per-status tallies + a page of rows
+            //   cache_preload_queue_retry_failed -> revive failed -> pending
+            //   cache_preload_queue_clear        -> clearQueue()
+            //   cache_preload_queue_test_rest    -> loopback-reachability self-test
+            new CachePreloadQueueStatusCommand($this->cacheManager),
+            new CachePreloadQueueRetryFailedCommand($this->cacheManager),
+            new CachePreloadQueueClearCommand($this->cacheManager),
+            new CachePreloadQueueTestRestCommand($this->cacheManager),
         ];
     }
 

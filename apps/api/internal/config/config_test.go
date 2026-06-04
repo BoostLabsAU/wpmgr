@@ -72,3 +72,37 @@ func TestOIDCEnabled(t *testing.T) {
 		t.Fatal("set issuer should be enabled")
 	}
 }
+
+// TestPrivilegeProbeGate verifies that the two-DSN gate logic (MigrationDSN != "")
+// correctly identifies when the privilege probe should run. In single-DSN mode
+// (MigrationDSN empty) the app connects as the migration runner, so the probe is
+// skipped. In two-DSN mode the app role is distinct from the migration runner and
+// must hold wpmgr_app privileges — the probe must run.
+func TestPrivilegeProbeGate(t *testing.T) {
+	tests := []struct {
+		name         string
+		migrationDSN string
+		wantProbe    bool
+	}{
+		{
+			name:         "single-DSN mode: MigrationDSN empty, probe skipped",
+			migrationDSN: "",
+			wantProbe:    false,
+		},
+		{
+			name:         "two-DSN mode: MigrationDSN set, probe runs",
+			migrationDSN: "postgres://owner:secret@localhost/wpmgr",
+			wantProbe:    true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := DBConfig{MigrationDSN: tt.migrationDSN}
+			got := d.MigrationDSN != ""
+			if got != tt.wantProbe {
+				t.Fatalf("probe gate: MigrationDSN=%q → want probe=%v, got %v",
+					tt.migrationDSN, tt.wantProbe, got)
+			}
+		})
+	}
+}

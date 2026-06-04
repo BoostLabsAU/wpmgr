@@ -10,8 +10,6 @@
  *
  * Detection: the Breeze classes (Cloudways' own signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

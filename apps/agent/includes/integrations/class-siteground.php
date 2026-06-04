@@ -10,8 +10,6 @@
  * Detection: the Supercacher class / sg_cachepress helper (SiteGround's own
  * signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

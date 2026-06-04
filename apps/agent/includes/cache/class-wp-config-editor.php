@@ -16,7 +16,7 @@
  *     removing an absent constant is a no-op.
  *
  * The managed-define marker convention follows the same idiom WordPress core
- * uses for `// Added by ...` annotations. Original implementation.
+ * uses for `// Added by ...` annotations.
  *
  * @package WPMgr\Agent\Cache
  */

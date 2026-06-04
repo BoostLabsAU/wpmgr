@@ -8,6 +8,7 @@ import type { PerfConfig } from "../types";
 import { CacheOverview } from "./CacheOverview";
 import { CacheControls } from "./CacheControls";
 import { CacheBasicSettings } from "./CacheBasicSettings";
+import { PreloadTuningCard } from "./PreloadTuningCard";
 import { CacheAdvancedSettings } from "./CacheAdvancedSettings";
 import { ServerStatusCard } from "./ServerStatusCard";
 import { PreloadProgress } from "./PreloadProgress";
@@ -86,6 +87,8 @@ export function CacheTab({
         disabled={disabled}
         saving={update.isPending}
       />
+
+      <PreloadTuningCard config={cfg} save={save} disabled={disabled} />
 
       <CacheAdvancedSettings config={cfg} save={save} disabled={disabled} />
     </div>

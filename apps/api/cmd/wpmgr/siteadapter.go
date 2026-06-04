@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -327,6 +328,40 @@ func (a *perfSiteAdapter) GetSiteURL(ctx context.Context, tenantID, siteID uuid.
 }
 
 var _ perf.SiteLookup = (*perfSiteAdapter)(nil)
+
+// backupCheckerAdapter adapts the backup service to the perf.BackupChecker
+// interface (narrow: only HasRecentBackup). Keeps the perf package free of a
+// backup import.
+type backupCheckerAdapter struct {
+	svc *backup.Service
+}
+
+func newBackupCheckerAdapter(svc *backup.Service) *backupCheckerAdapter {
+	return &backupCheckerAdapter{svc: svc}
+}
+
+// HasRecentBackup returns true when the site has at least one completed snapshot
+// created within the lookback window. It uses ListSnapshots with limit=1 and
+// checks whether the single most-recent snapshot falls within `within`.
+func (a *backupCheckerAdapter) HasRecentBackup(ctx context.Context, tenantID, siteID uuid.UUID, within time.Duration) (bool, error) {
+	snaps, err := a.svc.ListSnapshots(ctx, tenantID, siteID, 1, 0)
+	if err != nil {
+		return false, err
+	}
+	if len(snaps) == 0 {
+		return false, nil
+	}
+	latest := snaps[0]
+	if latest.Status != backup.StatusCompleted {
+		return false, nil
+	}
+	if latest.FinishedAt == nil {
+		return false, nil
+	}
+	return time.Since(*latest.FinishedAt) <= within, nil
+}
+
+var _ perf.BackupChecker = (*backupCheckerAdapter)(nil)
 
 // activitySecurityAlerter is the seam between the activity log and the EXISTING
 // uptime alert Dispatcher (ADR-037 Sprint 3): a high-severity activity event

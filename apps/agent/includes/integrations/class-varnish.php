@@ -18,7 +18,7 @@
  * Detection: presence of the Varnish marker headers on the inbound request
  * (X-Varnish / Via: varnish) — set by Varnish itself, the host's own signal.
  *
- * Original implementation (standard Varnish PURGE/BAN-over-HTTP idiom).
+ * Standard Varnish PURGE/BAN-over-HTTP idiom.
  *
  * @package WPMgr\Agent\Integrations
  */

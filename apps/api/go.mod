@@ -30,6 +30,7 @@ require (
 	github.com/knadh/koanf/v2 v2.3.4
 	github.com/ogen-go/ogen v1.20.3
 	github.com/oschwald/maxminddb-golang v1.13.1
+	github.com/pingcap/tidb/pkg/parser v0.0.0-20260418072757-ce92298d1124
 	github.com/riverqueue/river v0.38.0
 	github.com/riverqueue/river/riverdriver/riverpgxv5 v0.38.0
 	github.com/tdewolff/parse/v2 v2.8.13
@@ -148,7 +149,6 @@ require (
 	github.com/pingcap/errors v0.11.5-0.20250523034308-74f78ae071ee // indirect
 	github.com/pingcap/failpoint v0.0.0-20240528011301-b51a646c7c86 // indirect
 	github.com/pingcap/log v1.1.0 // indirect
-	github.com/pingcap/tidb/pkg/parser v0.0.0-20260418072757-ce92298d1124 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/quic-go/qpack v0.6.0 // indirect

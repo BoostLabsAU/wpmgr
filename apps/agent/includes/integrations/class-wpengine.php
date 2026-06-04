@@ -9,8 +9,6 @@
  *
  * Detection: the `WpeCommon` class (WP Engine's own signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

@@ -8,8 +8,7 @@
  * are skipped (assumed pre-minified). External, excluded, or already-cached
  * sources are left untouched.
  *
- * Standard minify-and-rewrite technique (same pattern WP Rocket / Autoptimize
- * use, GPLv2); original implementation. NOT copied from a third-party plugin.
+ * Standard minify-and-rewrite technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

@@ -272,6 +272,36 @@ func (r *Repo) ListForSite(ctx context.Context, tenantID, siteID uuid.UUID, limi
 	return out, nil
 }
 
+// DeleteForSite removes ALL cached RUCSS results for a site and returns the
+// number of rows deleted. Runs under InTenantTx: the operator's active tenant
+// scopes the delete and the rucss_results_tenant_isolation RLS policy enforces
+// tenant_id = app.tenant_id; the explicit tenant_id predicate below is
+// belt-and-braces in front of that policy. After this, the next render whose
+// structure_hash matched a deleted row misses the cache (GetByHash ->
+// ErrNotFound), so the agent re-serves full CSS and re-triggers a compute —
+// which is exactly the "clear results so I can re-run the pipeline" semantics.
+// A raw scoped DELETE is used (rather than a sqlc query) because it is a single
+// trivial tenant+site predicate and avoids a codegen roundtrip. The freed
+// used_css_s3_key objects are deterministic per (site, structure_hash) and are
+// overwritten on recompute, so they are intentionally not purged here.
+func (r *Repo) DeleteForSite(ctx context.Context, tenantID, siteID uuid.UUID) (int, error) {
+	var deleted int
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, derr := tx.Exec(ctx,
+			`DELETE FROM rucss_results WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID)
+		if derr != nil {
+			return derr
+		}
+		deleted = int(tag.RowsAffected())
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 // ---------------------------------------------------------------------------
 // row <-> model mapping
 // ---------------------------------------------------------------------------

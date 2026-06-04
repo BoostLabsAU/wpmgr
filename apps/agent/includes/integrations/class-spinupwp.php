@@ -9,8 +9,6 @@
  * Detection: the SpinupWP cache class / its purge helpers (the host's own
  * signal). No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

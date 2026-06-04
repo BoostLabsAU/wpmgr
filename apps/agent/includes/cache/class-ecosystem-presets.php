@@ -16,7 +16,7 @@
  * defines (the same identifiers their own docs publish). When a plugin is
  * detected its cookies/queries are contributed as DEFAULTS, merged UNDER the
  * operator's configured `include_cookies` / `include_queries` (operator config
- * always wins — we never silently override it). Original implementation; only the
+ * always wins, we never silently override it). Only the
  * public identifier names are borrowed (uncopyrightable facts).
  *
  * @package WPMgr\Agent\Cache

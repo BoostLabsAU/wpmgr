@@ -3068,6 +3068,64 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/db/scan:
+    post:
+      operationId: triggerDbScan
+      summary: Trigger a synchronous read-only database scan for a site
+      description: |
+        Runs a synchronous read-only scan against the site's WordPress database
+        via the agent. Returns the job_id. The full result (categories + per-table
+        inventory) is pushed via the `db.scan.completed` SSE event and persisted
+        for retrieval via the GET endpoint. Requires the `site.cache.manage`
+        permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                categories:
+                  type: array
+                  items: { type: string }
+                  description: Subset of categories to scan; empty means all 14.
+      responses:
+        "200":
+          description: Scan triggered
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, job_id]
+                properties:
+                  ok: { type: boolean }
+                  job_id: { type: string }
+                  detail: { type: string }
+    get:
+      operationId: getDbScanResult
+      summary: Get the latest stored database scan result for a site
+      description: |
+        Returns the most recently persisted db_scan result including the
+        per-category counts and the full per-table inventory (Phase 2.1).
+        Returns `{"result": null}` when no scan has been run yet.
+        Requires the `site:read` permission.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Latest scan result (null when none)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  result:
+                    nullable: true
+                    $ref: "#/components/schemas/DbScanResult"
   /api/v1/sites/{siteId}/perf/db/clean:
     post:
       operationId: cleanDatabase
@@ -5862,6 +5920,11 @@ components:
         cache_bypass_cookies: { type: array, items: { type: string } }
         cache_include_queries: { type: array, items: { type: string } }
         cache_include_cookies: { type: array, items: { type: string } }
+        # Preload (cache-warm) throttle (M37) — operator-tunable queue drain knobs.
+        preload_concurrency: { type: integer, minimum: 1, maximum: 4, default: 1 }
+        preload_delay_ms: { type: integer, minimum: 0, maximum: 10000, default: 500 }
+        preload_batch_size: { type: integer, minimum: 1, maximum: 500, default: 50 }
+        preload_max_load: { type: number, format: float, minimum: 0, maximum: 64, default: 0 }
         # CSS / JS
         css_js_minify: { type: boolean }
         css_rucss: { type: boolean }
@@ -5962,6 +6025,87 @@ components:
         ok: { type: boolean }
         detail: { type: string }
         purge_id: { type: string, format: uuid }
+    DbScanTableInventoryRow:
+      type: object
+      description: |
+        One row in the per-table inventory returned by the db_scan agent command
+        (Phase 2.1). Ownership is classified locally on the agent using the WP
+        core table list + active plugin/theme slugs; no cloud lookup is performed.
+      required: [name, rows, size_bytes, engine, overhead_bytes, belongs_to, owner_type]
+      properties:
+        name:
+          type: string
+          description: Full table name including the wp_ prefix (e.g. "wp_posts").
+        rows:
+          type: integer
+          format: int64
+          description: |
+            TABLE_ROWS from information_schema. An estimate for InnoDB tables
+            (can be 40-50% off); exact for MyISAM/ARIA. Rendered with a "~"
+            prefix in the UI to signal InnoDB estimate.
+        size_bytes:
+          type: integer
+          format: int64
+          description: DATA_LENGTH + INDEX_LENGTH in bytes.
+        engine:
+          type: string
+          description: Storage engine (e.g. "InnoDB", "MyISAM").
+        overhead_bytes:
+          type: integer
+          format: int64
+          description: DATA_FREE in bytes (reclaimable fragmented space; often 0 for InnoDB).
+        belongs_to:
+          type: string
+          description: |
+            Human-readable ownership label: "WordPress core", an active plugin
+            display name (e.g. "WooCommerce"), an active theme display name
+            (e.g. "Astra"), or "Orphan".
+        owner_type:
+          type: string
+          enum: [core, plugin, theme, orphan, unknown]
+          description: |
+            Machine-readable ownership category used for client-side filtering.
+            "unknown" is reserved for forward-compat and should not appear in
+            Phase 2.1 results.
+    DbScanResult:
+      type: object
+      description: |
+        The latest db_scan result for a site, as stored by the control plane
+        after the agent's synchronous ACK. Includes both the per-category
+        counts/bytes preview and the full per-table inventory (Phase 2.1).
+      required: [job_id, db_size_bytes, table_count, scanned_at, created_at]
+      properties:
+        job_id:
+          type: string
+          description: Correlation ID for this scan run.
+        categories:
+          type: object
+          description: Per-category count/bytes map (keyed by category id).
+          additionalProperties: true
+        tables:
+          type: array
+          description: |
+            Full per-table inventory. Sorted by size_bytes DESC (largest first)
+            when returned from the agent. Client-side pagination (25 rows/page)
+            and filtering (All / WP Core / Plugins / Themes / Orphans) are
+            applied in the browser.
+          items:
+            $ref: "#/components/schemas/DbScanTableInventoryRow"
+        db_size_bytes:
+          type: integer
+          format: int64
+          description: Total database size in bytes at scan time.
+        table_count:
+          type: integer
+          description: Number of tables at scan time.
+        scanned_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) when the agent performed the scan.
+        created_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) when the control plane persisted this result.
     DbCleanResult:
       type: object
       description: The acknowledgement returned by the database-cleanup endpoint.

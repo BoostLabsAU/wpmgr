@@ -11,8 +11,7 @@
  * Injected once, before </head>. The exclusion patterns are conservative so a
  * logged-out visitor never warms a personalised/destructive endpoint.
  *
- * Standard Speculation-Rules usage; original implementation. NOT copied from
- * a third-party plugin.
+ * Standard Speculation Rules API usage.
  *
  * @package WPMgr\Agent\Optimizer
  */

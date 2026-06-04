@@ -11,10 +11,9 @@ Design: [ADR-046](../adr/ADR-046-performance-suite-architecture.md). Related:
 ADR-043 (media optimizer split), ADR-031 (CP→agent signed commands), ADR-038 (SSE
 bus), ADR-010 (object storage).
 
-> The caching architecture follows the standard WordPress disk-cache pattern used
-> by WP Super Cache and Cache Enabler. Minification uses matthiasmullie/minify.
-> RUCSS is an original WPMgr Go engine. All are re-implementations under WPMgr
-> naming; no third-party plugin source is copied. See [NOTICE.md](../../NOTICE.md).
+> The caching architecture follows the standard WordPress disk-cache pattern.
+> Minification uses matthiasmullie/minify. RUCSS is a WPMgr Go engine. See
+> [NOTICE.md](../../NOTICE.md) for dependency attribution.
 
 ## Who does what
 

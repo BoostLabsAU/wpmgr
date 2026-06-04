@@ -112,6 +112,16 @@ const (
 	ActionCacheDeleteEverything = "site.cache.delete_everything"
 	ActionPerfConfigUpdated     = "site.perf.config.updated"
 	ActionDbCleaned             = "site.db.cleaned"
+	// Phase 2.2 — per-table DDL action (optimize/repair/drop/empty). The
+	// destructive drop/empty paths require PermSiteCacheDeleteAll (admin+);
+	// the action field in metadata distinguishes optimize/repair (read-only
+	// DDL, operator+) from drop/empty (data-destructive, admin+).
+	ActionDbTableAction = "site.db.table.action"
+
+	// Phase 3.8 — destructive orphan deletion. Requires PermSiteCacheDeleteAll
+	// (admin+) and a type-to-confirm token. Metadata carries job_id,
+	// accepted_count, dropped_count, and a per-kind breakdown.
+	ActionDbOrphanDelete = "site.db.orphan.delete"
 )
 
 // Entry is one audit record.

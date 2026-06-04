@@ -6,6 +6,7 @@ import {
   type UseQueryResult,
 } from "@tanstack/react-query";
 import {
+  client,
   getCacheStats,
   purgeCache,
   preloadCache,
@@ -108,13 +109,42 @@ export function useToggleCache(
   });
 }
 
-/** POST /perf/db/clean — run the configured database cleanup now. */
+/** POST /perf/db/clean — run the configured database cleanup now (all tasks). */
 export function useDbClean(
   siteId: string,
 ): UseMutationResult<PerfActionResult, Error, void> {
   return useMutation({
     mutationFn: async () => {
       const { data, error } = await cleanDatabase({ path: { siteId } });
+      if (error) throw toError(error);
+      return (data as PerfActionResult) ?? { ok: false };
+    },
+    onError: (err) =>
+      toast.error("Could not clean the database.", {
+        description: err.message,
+      }),
+  });
+}
+
+/**
+ * POST /perf/db/clean with an explicit `tasks` list — runs only the selected
+ * categories. Used by the scan->preview->clean flow in DatabaseSection when the
+ * operator ticks a subset of categories and clicks "Clean selected".
+ *
+ * The generated SDK's cleanDatabase() declares `body?: never`, so it cannot
+ * carry the tasks array. We call the same URL via the raw `client.post` instead
+ * (same pattern as useDbScan / useMediaSettings before SDK regen).
+ */
+export function useDbCleanSelected(
+  siteId: string,
+): UseMutationResult<PerfActionResult, Error, string[]> {
+  return useMutation({
+    mutationFn: async (tasks: string[]) => {
+      const { data, error } = await client.post<PerfActionResult, unknown, false>({
+        url: `/api/v1/sites/${siteId}/perf/db/clean`,
+        body: { tasks },
+        credentials: "include",
+      });
       if (error) throw toError(error);
       return (data as PerfActionResult) ?? { ok: false };
     },

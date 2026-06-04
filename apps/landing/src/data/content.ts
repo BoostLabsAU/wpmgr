@@ -7,12 +7,12 @@
 
 export const SITE = {
   name: "WPMgr",
-  tagline: "All your WordPress sites, one dashboard you own.",
+  tagline: "Open-source WordPress fleet management you can run, read, and improve.",
   github: "https://github.com/mosamlife/wpmgr",
   dashboard: "https://manage.wpmgr.app",
   metaTitle: "WPMgr: Open-Source, Self-Hosted WordPress Fleet Management",
   metaDescription:
-    "Manage all your WordPress sites from one dashboard you own. Open source and self-hostable: scheduled backups, safe fleet updates, AVIF and WebP image optimization, uptime, and security, with a signed agent you can audit.",
+    "Open-source, self-hostable WordPress fleet manager. Backups and restore, safe updates, Media Optimizer (AVIF and WebP), full-page caching, Database Cleaner, uptime, and security scanning, with a signed MIT-licensed agent you can audit and contribute to.",
 } as const;
 
 export const NAV = {
@@ -20,56 +20,58 @@ export const NAV = {
     { label: "Features", href: "#features" },
     { label: "Performance", href: "#performance" },
     { label: "Media", href: "#media" },
+    { label: "DB Cleaner", href: "#features" },
     { label: "How it works", href: "#how-it-works" },
-    { label: "Open source", href: "#open-source" },
+    { label: "Stack", href: "#stack" },
+    { label: "Contribute", href: "#open-source" },
     { label: "API", href: "/docs/" },
     { label: "FAQ", href: "#faq" },
   ],
 };
 
 export const HERO = {
-  badge: "v0.15.0",
-  heading: "Run your whole WordPress fleet from one dashboard you actually own",
+  badge: "v0.17.0 / open source",
+  heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
-    "WPMgr is the open-source, self-hostable control panel for everyone managing one site or a hundred. Enroll, monitor, update, back up, optimize images, and lock down every site from a single screen, on infrastructure you control, with a signed agent you can audit line by line.",
+    "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",
   bodyLines: [
     "Add a site by URL, paste a one-time code into the plugin, and watch it flip from Awaiting to Connected with no page refresh.",
     "Open source under AGPL with an MIT-licensed agent. Every message it exchanges is Ed25519-signed, so nothing happens to your sites you cannot verify.",
   ],
   trust: [
-    { icon: "BadgeCheck", title: "No per-site fees", desc: "Free to self-host, no paid tier" },
+    { icon: "GitFork", title: "Fork and contribute", desc: "AGPL control plane, MIT agent, PRs welcome" },
     { icon: "ServerCog", title: "Your infrastructure", desc: "Fleet data never leaves your server" },
     { icon: "FileSearch", title: "Auditable agent", desc: "Read every line before you run it" },
   ],
   ctas: [
-    { label: "Self-host it", href: SITE.github, variant: "primary" as const, icon: "Github" },
+    { label: "Star on GitHub", href: SITE.github, variant: "primary" as const, icon: "Github" },
     { label: "See the live dashboard", href: SITE.dashboard, variant: "secondary" as const, icon: "ArrowRight" },
   ],
 };
 
 export const TRUST = {
   eyebrow: "Why trust it",
-  heading: "Trust earned the honest way, not borrowed from logos",
+  heading: "Every claim is verifiable in the repository",
   subhead:
-    "No customer logos to show yet, because WPMgr just shipped its first public release. So we will earn your trust the open way instead.",
+    "No marketing logos. WPMgr earns trust by being readable: open source, self-hostable, and built so contributors can follow every decision from issue to merged code.",
   bodyLines: [
     "Everything is open source under the AGPL, so you can read every line before you run it. The WordPress agent is MIT-licensed and every message it exchanges with the control plane is Ed25519-signed.",
-    "Self-host it on your own server and your fleet data, backups, and media never leave infrastructure you control. Browse the live dashboard to see exactly what you get, then read the code on GitHub and judge it for yourself.",
+    "Self-host it on your own server and your fleet data, backups, and media never leave infrastructure you control. Browse the live dashboard to see exactly what you get, then read the code on GitHub and contribute what you need.",
   ],
   chips: [
     { icon: "Scale", value: "AGPL-3.0", label: "Read the whole control plane in the open" },
     { icon: "FileBadge", value: "MIT", label: "The WordPress agent is permissively licensed" },
     { icon: "KeyRound", value: "Ed25519", label: "Every agent message is cryptographically signed" },
-    { icon: "HardDrive", value: "Self-hosted", label: "Your data stays on infrastructure you run" },
+    { icon: "GitPullRequest", value: "PRs open", label: "Contributions welcome, good-first-issue labels maintained" },
   ],
   cta: { label: "Read the code on GitHub", href: SITE.github, icon: "ArrowRight" },
 };
 
 export const FEATURES = {
   eyebrow: "The platform",
-  heading: "Everything you need to run a fleet, included",
+  heading: "Everything you need to run a fleet, all in the open release",
   subhead:
-    "Connect sites, back them up, update them safely, watch their health, and lock them down. One dashboard, no add-on sprawl.",
+    "Connect sites, back them up, update them safely, watch their health, optimize images, and clean the database. One dashboard, no add-on sprawl, every line of code available to read and extend.",
   body:
     "Each capability ships in the open release. Turn on what you need, leave the rest off, and manage one site or hundreds from the same screen.",
   cards: [
@@ -108,6 +110,12 @@ export const FEATURES = {
       title: "Performance and caching",
       desc:
         "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. A failed optimization never breaks the page.",
+    },
+    {
+      icon: "DatabaseZap",
+      title: "Database Cleaner",
+      desc:
+        "Scan the database before touching it: see row counts and space savings per category, a full per-table inventory with engine and overhead, and which tables belong to core, an active plugin, or a leftover orphan. Clean revisions, transients, metadata, and more in batches that never lock a busy site. Orphaned options and cron events are classified against a corpus of plugin signatures so you know what is safe to remove. A 90-day health trend shows whether cleanups are keeping pace with growth, and a fleet view lets you act on the worst databases across all your sites in one place.",
     },
     {
       icon: "Users",
@@ -315,19 +323,19 @@ export const SECURITY = {
 
 export const OPEN_SOURCE = {
   eyebrow: "Open source",
-  heading: "Open source, self-hosted, and yours to keep",
+  heading: "Built to be forked, run, and improved by anyone",
   subhead:
-    "Bring up the full stack with a few commands and your fleet runs entirely on infrastructure you own.",
+    "WPMgr is open source first. Self-host it in minutes, read every line, open issues, submit PRs, and shape where it goes next.",
   bodyLines: [
-    "WPMgr is free to self-host with no paid tier or per-site fee. The control plane and dashboard are AGPL-3.0 and the WordPress agent plugin is MIT-licensed.",
-    "The bundled Docker Compose stack brings up the control plane, dashboard, database, and storage in a few commands, and prebuilt container images are published for production setups.",
+    "The control plane and dashboard are AGPL-3.0. The WordPress agent is MIT-licensed. Both licenses are chosen so you can audit, fork, and deploy without restriction. There is no paid tier or per-site fee to run it yourself.",
+    "The bundled Docker Compose stack brings up the control plane, dashboard, database, and storage in a few commands. Prebuilt container images are published for production setups. Good-first-issue labels are kept current on GitHub so contributors have a clear on-ramp.",
   ],
   command: "docker compose up -d",
   chips: [
-    { icon: "Scale", value: "AGPL-3.0", label: "Control plane and dashboard, open to read and audit" },
+    { icon: "Scale", value: "AGPL-3.0", label: "Control plane and dashboard, open to read, fork, and deploy" },
     { icon: "FileBadge", value: "MIT", label: "The WordPress agent carries a permissive license" },
-    { icon: "ContainerIcon", value: "Compose", label: "Full system up in a few commands" },
-    { icon: "Infinity", value: "Unlimited", label: "Manage one site or hundreds, no per-site fee" },
+    { icon: "GitPullRequest", value: "PRs welcome", label: "Good-first-issue labels maintained for new contributors" },
+    { icon: "Infinity", value: "Unlimited sites", label: "No per-site fee, no artificial cap" },
   ],
   ctas: [
     { label: "Star on GitHub", href: SITE.github, variant: "primary" as const, icon: "Star" },
@@ -335,28 +343,83 @@ export const OPEN_SOURCE = {
   ],
 };
 
+export const TECH_STACK = {
+  eyebrow: "Under the hood",
+  heading: "A readable, contributor-friendly stack top to bottom",
+  subhead:
+    "Every layer was chosen for clarity and long-term maintainability. One static binary for the control plane, typed contracts shared across the wire, and a WordPress agent you can read before you run it.",
+  items: [
+    {
+      icon: "ServerCog",
+      label: "Go control plane",
+      blurb:
+        "A single self-contained binary. Compiles in seconds, ships as a tiny container, and reads like straightforward imperative code. No JVM, no interpreter, no runtime surprises.",
+    },
+    {
+      icon: "LayoutDashboard",
+      label: "React 19 + TypeScript + Vite",
+      blurb:
+        "React 19 with TanStack Query for server state, Zustand for local UI state, shadcn/ui primitives, and Tailwind v4. Strict TypeScript throughout, fast hot reload with Vite.",
+    },
+    {
+      icon: "FileBadge",
+      label: "MIT-licensed PHP agent",
+      blurb:
+        "A lightweight WordPress plugin that needs only PHP 8.1 and WordPress 6.0. MIT-licensed so you can read, audit, fork, and embed it without restriction.",
+    },
+    {
+      icon: "FileScan",
+      label: "OpenAPI contract layer",
+      blurb:
+        "Types are generated from a single OpenAPI spec and shared by the Go server and the TypeScript client. Change the spec, regenerate, and both ends stay in sync automatically.",
+    },
+    {
+      icon: "HardDrive",
+      label: "PostgreSQL + Redis",
+      blurb:
+        "Row-level security handles multi-tenancy in the database itself, not in application logic. Redis backs the job queue and short-lived state so the control plane stays stateless.",
+    },
+    {
+      icon: "Zap",
+      label: "River job queue + Ed25519 + SSE",
+      blurb:
+        "A Go-native job queue (River) drives async work. Every command the control plane sends to an agent is Ed25519-signed. Live progress streams to the browser over Server-Sent Events.",
+    },
+    {
+      icon: "Globe",
+      label: "Run anywhere",
+      blurb:
+        "A bundled Docker Compose file brings up the full stack in one command. S3-compatible object storage means MinIO works locally and any cloud provider works in production.",
+    },
+  ],
+} as const;
+
 export const STATS = {
   eyebrow: "Day one",
   heading: "What you get on day one",
   subhead: "Concrete capabilities, not a roadmap.",
   items: [
-    { icon: "ImageDown", value: "AVIF + WebP", label: "Modern formats delivered to browsers that support them, originals as fallback" },
-    { icon: "Undo2", value: "100%", label: "Reversible by design, restore reverts every variant" },
-    { icon: "ShieldOff", value: "0 bytes", label: "Image bytes on the control plane, presigned URLs only" },
+    { icon: "ImageDown", value: "AVIF + WebP", label: "Media Optimizer delivers modern formats to browsers that support them, originals as fallback" },
+    { icon: "Undo2", value: "100%", label: "Reversible by design: media revert, backup restore, and db clean all roll back cleanly" },
+    { icon: "DatabaseZap", value: "DB Cleaner", label: "Scan, classify orphans, trend 90 days of health, and act on the whole fleet at once" },
     { icon: "Activity", value: "7 / 30 / 90 days", label: "Response-time and uptime history with fleet-wide status" },
     { icon: "Users", value: "4 roles", label: "From owner to viewer, plus single-site sharing" },
-    { icon: "KeyRound", value: "Ed25519", label: "Signed on every control-plane message between agent and control plane" },
+    { icon: "GitFork", value: "AGPL + MIT", label: "Fork, self-host, and contribute, no paid tier required" },
   ],
 };
 
 export const FAQ = {
   eyebrow: "FAQ",
   heading: "Questions, answered straight",
-  subhead: "The things people ask before they self-host.",
+  subhead: "The things people ask before they self-host or contribute.",
   items: [
     {
       q: "Is WPMgr free?",
       a: "Yes. WPMgr is open source and free to self-host. The control plane and dashboard are AGPL-3.0, and the WordPress agent plugin is MIT-licensed. There is no paid tier or per-site fee to run it yourself.",
+    },
+    {
+      q: "How do I contribute?",
+      a: "Fork the repository on GitHub, pick a good-first-issue, and open a pull request. The control plane is Go with a generated OpenAPI layer, the frontend is React 19, and the agent is PHP. Each area has its own README with a dev-setup walkthrough. Architecture decisions are tracked in docs/adr/ so you can understand why things are built the way they are before you change them.",
     },
     {
       q: "Do I have to self-host it?",
@@ -375,6 +438,10 @@ export const FAQ = {
       a: "There is no built-in site limit. WPMgr is designed as fleet management for one site or many, with a real-time sites list, multi-tenant organizations, role-based access, and per-site sharing so you can hand a collaborator exactly one site without exposing the rest.",
     },
     {
+      q: "How does the Database Cleaner work?",
+      a: "It scans before it deletes. A read-only scan shows row counts and space savings per category, a full per-table inventory with engine and overhead, and a 'belongs to' label identifying WordPress core tables, active plugin or theme tables, and orphans left by removed plugins. Orphaned options and cron events are matched against a corpus of plugin signatures so you know what is safe to remove before you remove it. Cleanup runs in batches, streams live progress, never locks a busy database, and supports a scheduled automatic clean the control plane drives.",
+    },
+    {
       q: "How do backups work?",
       a: "You set a schedule (hourly, daily, weekly, or monthly), and each backup streams a database dump and file archive, chunks and deduplicates them so only changed data re-uploads, and stores them in your chosen destination. Restore the whole site or a single plugin, theme, upload, or table, atomically, while the site stays online.",
     },
@@ -382,12 +449,12 @@ export const FAQ = {
 };
 
 export const FINAL_CTA = {
-  heading: "Own your WordPress management. Self-host it in minutes.",
+  heading: "Self-host it, contribute to it, or just use it. Your call.",
   subhead:
-    "Bring up the full stack with a few commands, enroll your first site with a one-time code, and run your whole fleet from a dashboard that lives on infrastructure you control.",
-  body: "Free, open source, and no per-site fee. Read every line before you run it.",
+    "Bring up the full stack with a few commands, enroll your first site with a one-time code, and run your whole fleet from a dashboard that lives on infrastructure you control. Or fork it and build what you need.",
+  body: "Free, open source, no per-site fee. Read every line before you run it.",
   ctas: [
-    { label: "Self-host it", href: SITE.github, variant: "primary" as const, icon: "Github" },
+    { label: "Star on GitHub", href: SITE.github, variant: "primary" as const, icon: "Github" },
     { label: "See the live dashboard", href: SITE.dashboard, variant: "secondary" as const, icon: "ArrowRight" },
   ],
 };
@@ -395,11 +462,12 @@ export const FINAL_CTA = {
 export const FOOTER = {
   tagline: SITE.tagline,
   bodyLines: [
-    "Open source under AGPL-3.0 (control plane and dashboard) and MIT (WordPress agent).",
+    "Open source under AGPL-3.0 (control plane and dashboard) and MIT (WordPress agent). Contributions welcome.",
     "WordPress is a trademark of the WordPress Foundation. WPMgr is an independent, self-hostable project and is not endorsed by, affiliated with, or sponsored by the WordPress Foundation or Automattic.",
   ],
   links: [
     { label: "GitHub", href: SITE.github, icon: "Github" },
+    { label: "Contributing", href: SITE.github + "/blob/main/docs/contributing.md", icon: "GitPullRequest" },
     { label: "API reference", href: "/docs/", icon: "FileSearch" },
     { label: "Live dashboard", href: SITE.dashboard, icon: "LayoutDashboard" },
     { label: "License", href: SITE.github + "/blob/main/LICENSE", icon: "Scale" },

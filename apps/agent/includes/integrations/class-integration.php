@@ -15,8 +15,6 @@
  * and MAY override purgeUrls(array $urls): void to purge by URL (the default
  * falls back to purgeAll()).
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

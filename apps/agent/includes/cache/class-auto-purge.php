@@ -26,8 +26,7 @@
  * The set is de-duplicated, each URL is purged, then queued for preload so a
  * visitor never pays the cold-cache penalty after an edit.
  *
- * Standard auto-purge technique (Cache Enabler / WP Super Cache, GPLv2).
- * Original implementation.
+ * Standard WordPress page-cache auto-purge technique.
  *
  * @package WPMgr\Agent\Cache
  */
@@ -510,6 +509,8 @@ final class AutoPurge
         foreach ($urls as $url) {
             $this->purge->purgeUrl($url);
         }
-        $this->preload->queue($urls);
+        // Targeted purge-and-preload: enqueue at the higher-urgency priority so a
+        // just-edited page is re-warmed ahead of any full-site enumeration backlog.
+        $this->preload->queue($urls, Preload::PRIORITY_TARGETED);
     }
 }

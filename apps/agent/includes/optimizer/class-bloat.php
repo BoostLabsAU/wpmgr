@@ -13,8 +13,7 @@
  * Each toggle reads its PerfConfig flag and is otherwise a no-op. The tests
  * assert removal via has_action() after register().
  *
- * Standard bloat-removal technique (many optimization plugins);
- * original implementation.
+ * Standard bloat-removal technique (many optimization plugins).
  *
  * @package WPMgr\Agent\Optimizer
  */

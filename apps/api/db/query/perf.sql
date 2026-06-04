@@ -34,6 +34,7 @@ INSERT INTO site_perf_config (
     bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis,
     bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed,
     bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control,
+    preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load,
     config_version, updated_at
 ) VALUES (
     @site_id, @tenant_id,
@@ -53,6 +54,7 @@ INSERT INTO site_perf_config (
     @bloat_disable_block_css, @bloat_disable_dashicons, @bloat_disable_emojis,
     @bloat_disable_jquery_migrate, @bloat_disable_xml_rpc, @bloat_disable_rss_feed,
     @bloat_disable_oembeds, @bloat_heartbeat_control, @bloat_post_revisions_control,
+    @preload_concurrency, @preload_delay_ms, @preload_batch_size, @preload_max_load,
     @config_version, now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
@@ -106,6 +108,10 @@ ON CONFLICT (site_id) DO UPDATE SET
     bloat_disable_oembeds         = EXCLUDED.bloat_disable_oembeds,
     bloat_heartbeat_control       = EXCLUDED.bloat_heartbeat_control,
     bloat_post_revisions_control  = EXCLUDED.bloat_post_revisions_control,
+    preload_concurrency           = EXCLUDED.preload_concurrency,
+    preload_delay_ms              = EXCLUDED.preload_delay_ms,
+    preload_batch_size            = EXCLUDED.preload_batch_size,
+    preload_max_load              = EXCLUDED.preload_max_load,
     config_version                = EXCLUDED.config_version,
     updated_at                    = now()
 RETURNING *;
@@ -145,13 +151,42 @@ INSERT INTO site_cache_stats (
 ON CONFLICT (site_id) DO UPDATE SET
     cached_pages_count = EXCLUDED.cached_pages_count,
     cache_size_bytes   = EXCLUDED.cache_size_bytes,
-    last_purged_at     = EXCLUDED.last_purged_at,
-    last_purge_kind    = EXCLUDED.last_purge_kind,
+    -- last_purged_at has TWO writers: the control plane (MarkCachePurged on every
+    -- operator dashboard purge) and the agent (records its own auto-purges and
+    -- reports them here). GREATEST keeps the MOST RECENT of the two and ignores
+    -- NULLs, so neither writer can regress the gauge: an agent push with a NULL or
+    -- older purge time never clobbers a newer CP stamp, and a newer agent
+    -- auto-purge advances it. The kind tracks whichever timestamp wins.
+    last_purged_at     = GREATEST(EXCLUDED.last_purged_at, site_cache_stats.last_purged_at),
+    last_purge_kind    = CASE
+        WHEN EXCLUDED.last_purged_at IS NOT NULL
+         AND (site_cache_stats.last_purged_at IS NULL
+              OR EXCLUDED.last_purged_at >= site_cache_stats.last_purged_at)
+        THEN EXCLUDED.last_purge_kind
+        ELSE site_cache_stats.last_purge_kind
+    END,
     last_preload_at    = EXCLUDED.last_preload_at,
     preload_pending    = EXCLUDED.preload_pending,
     preload_total      = EXCLUDED.preload_total,
     reported_at        = now()
 RETURNING *;
+
+-- name: MarkCachePurged :exec
+-- Stamp the last-purge gauge from the CONTROL PLANE when an operator purge runs
+-- (dashboard "Purge everything" / "Purge URL"). The agent's periodic stats push
+-- never reports a purge time, so without this the gauge sits at "Never" forever.
+-- Sets ONLY the purge columns: on a first-ever insert the other gauges take their
+-- schema defaults (0) and the agent fills them in on its next push; on conflict
+-- they keep the agent's last-reported values. Paired with UpsertCacheStats's
+-- GREATEST so a later agent push cannot wipe or regress this.
+INSERT INTO site_cache_stats (
+    site_id, tenant_id, last_purged_at, last_purge_kind, reported_at
+) VALUES (
+    @site_id, @tenant_id, now(), @last_purge_kind, now()
+)
+ON CONFLICT (site_id) DO UPDATE SET
+    last_purged_at  = now(),
+    last_purge_kind = EXCLUDED.last_purge_kind;
 
 -- ---------------------------------------------------------------------------
 -- cache_purge_audit
@@ -242,3 +277,198 @@ RETURNING *;
 -- name: GetRucssJob :one
 SELECT * FROM rucss_jobs
 WHERE id = @id AND tenant_id = @tenant_id;
+
+-- ---------------------------------------------------------------------------
+-- db-clean scheduling (M38)
+-- ---------------------------------------------------------------------------
+
+-- name: GetDueDBCleanSites :many
+-- Returns up to @limit site_perf_config rows where db_auto_clean=true and the
+-- site is due for cleanup (next_db_clean_at IS NULL means first-run-ever and
+-- is treated as immediately due). Runs under app.agent (cross-tenant sweep).
+SELECT site_id, tenant_id, db_auto_clean_interval, next_db_clean_at
+FROM site_perf_config
+WHERE db_auto_clean = true
+  AND (next_db_clean_at IS NULL OR next_db_clean_at <= now())
+LIMIT @row_limit;
+
+-- name: UpdateNextDBCleanAt :exec
+-- Advance the next_db_clean_at timestamp after a clean job is dispatched.
+-- Runs under app.agent (the scheduled-dispatch path is cross-tenant).
+UPDATE site_perf_config
+SET next_db_clean_at = @next_db_clean_at,
+    updated_at       = now()
+WHERE site_id = @site_id;
+
+-- name: SetActiveDBCleanJob :exec
+-- Stamp the in-flight db_clean job id + start time for the watchdog.
+-- Runs under app.agent (cross-tenant scheduled path) or InTenantTx (operator).
+UPDATE site_perf_config
+SET active_db_clean_job_id  = @active_db_clean_job_id,
+    active_db_clean_started = @active_db_clean_started,
+    updated_at              = now()
+WHERE site_id = @site_id;
+
+-- name: ClearActiveDBCleanJob :exec
+-- Clear the in-flight db_clean watchdog columns on completion or failure.
+UPDATE site_perf_config
+SET active_db_clean_job_id  = NULL,
+    active_db_clean_started = NULL,
+    updated_at              = now()
+WHERE site_id = @site_id;
+
+-- name: SetActiveDBScanJob :exec
+-- Stamp the in-flight db_scan job id + start time for the watchdog.
+UPDATE site_perf_config
+SET active_db_scan_job_id  = @active_db_scan_job_id,
+    active_db_scan_started = @active_db_scan_started,
+    updated_at             = now()
+WHERE site_id = @site_id;
+
+-- name: ClearActiveDBScanJob :exec
+-- Clear the in-flight db_scan watchdog columns on completion or failure.
+UPDATE site_perf_config
+SET active_db_scan_job_id  = NULL,
+    active_db_scan_started = NULL,
+    updated_at             = now()
+WHERE site_id = @site_id;
+
+-- name: GetStalledDBCleanJobs :many
+-- Returns site_perf_config rows with a stalled db_clean job (started but no
+-- terminal event within the threshold). Runs under app.agent (cross-tenant).
+SELECT site_id, tenant_id, active_db_clean_job_id
+FROM site_perf_config
+WHERE active_db_clean_started IS NOT NULL
+  AND active_db_clean_started < now() - @clean_threshold::interval;
+
+-- name: GetStalledDBScanJobs :many
+-- Returns site_perf_config rows with a stalled db_scan job (started but no
+-- result within the threshold). Runs under app.agent (cross-tenant).
+SELECT site_id, tenant_id, active_db_scan_job_id
+FROM site_perf_config
+WHERE active_db_scan_started IS NOT NULL
+  AND active_db_scan_started < now() - @scan_threshold::interval;
+
+-- ---------------------------------------------------------------------------
+-- site_db_scan_results (M39)
+-- ---------------------------------------------------------------------------
+
+-- name: UpsertDBScanResult :one
+-- Persists (or refreshes) the latest db_scan result for a site.
+-- Uses upsert so there is always at most one row per site.
+-- Phase 2.1: tables_json carries the per-table inventory alongside categories_json.
+-- Phase 3.3 (M41): orphaned_options_json, orphaned_cron_json, installed_plugins_json
+--   carry the orphan-enumeration output from agents >= 0.16.0. Agents < 0.16.0
+--   omit these fields; the caller passes '[]' for backward compat.
+INSERT INTO site_db_scan_results (
+    site_id, tenant_id, job_id, categories_json, tables_json,
+    db_size_bytes, table_count, scanned_at, created_at,
+    orphaned_options_json, orphaned_cron_json, installed_plugins_json
+) VALUES (
+    @site_id, @tenant_id, @job_id, @categories_json, @tables_json,
+    @db_size_bytes, @table_count, @scanned_at, now(),
+    @orphaned_options_json, @orphaned_cron_json, @installed_plugins_json
+)
+ON CONFLICT (site_id) DO UPDATE SET
+    tenant_id              = EXCLUDED.tenant_id,
+    job_id                 = EXCLUDED.job_id,
+    categories_json        = EXCLUDED.categories_json,
+    tables_json            = EXCLUDED.tables_json,
+    db_size_bytes          = EXCLUDED.db_size_bytes,
+    table_count            = EXCLUDED.table_count,
+    scanned_at             = EXCLUDED.scanned_at,
+    created_at             = now(),
+    orphaned_options_json  = EXCLUDED.orphaned_options_json,
+    orphaned_cron_json     = EXCLUDED.orphaned_cron_json,
+    installed_plugins_json = EXCLUDED.installed_plugins_json
+RETURNING *;
+
+-- name: GetDBScanResult :one
+-- Returns the latest scan result for a site (tenant-scoped via RLS).
+SELECT * FROM site_db_scan_results
+WHERE site_id = @site_id AND tenant_id = @tenant_id;
+
+-- ---------------------------------------------------------------------------
+-- site_db_size_history (M42)
+-- ---------------------------------------------------------------------------
+
+-- name: InsertDBSizeHistory :one
+-- Appends one size data point after a successful db_scan.
+-- Called from the same InTenantTx as UpsertDBScanResult so both land
+-- atomically. ON CONFLICT DO NOTHING on (site_id, scanned_at) prevents
+-- duplicate rows if the operator retriggers a scan within the same second.
+INSERT INTO site_db_size_history (
+    site_id, tenant_id, db_size_bytes, table_count, scanned_at
+) VALUES (
+    @site_id, @tenant_id, @db_size_bytes, @table_count, @scanned_at
+)
+ON CONFLICT DO NOTHING
+RETURNING *;
+
+-- name: GetDBSizeHistory :many
+-- Returns up to 366 data points for the trend chart, ordered oldest-first.
+-- The caller passes the cutoff as a timestamptz (now() - interval).
+-- Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+SELECT * FROM site_db_size_history
+WHERE site_id   = @site_id
+  AND tenant_id = @tenant_id
+  AND scanned_at >= @since
+ORDER BY scanned_at ASC
+LIMIT 366;
+
+-- name: PruneDBSizeHistory :execrows
+-- Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
+-- LIMIT 2000 keeps each GC transaction short; the periodic job runs daily so
+-- at typical scan frequency the cap is never hit in practice.
+DELETE FROM site_db_size_history
+WHERE id IN (
+    SELECT h.id FROM site_db_size_history h
+    WHERE h.created_at < @cutoff
+    LIMIT 2000
+);
+
+-- ---------------------------------------------------------------------------
+-- P3.7 — Fleet / Portfolio DB Health aggregate (tenant-level, no site_id param)
+-- ---------------------------------------------------------------------------
+
+-- name: GetFleetDbHealth :many
+-- Returns one row per site that has a scan result, with the site name, latest
+-- db_size_bytes, table_count, orphan counts from stored JSONB arrays, and a
+-- growth_bytes derived from the earliest vs latest size-history points.
+-- Tenant-scoped via RLS (InTenantTx sets app.tenant_id). Top-N ordering is
+-- applied by the caller; this returns ALL scanned sites so the service can
+-- compute tenant-level aggregates and then slice the top-N list.
+WITH size_bounds AS (
+    -- Earliest and latest size-history points per site within the lookback window.
+    SELECT
+        h.site_id,
+        MIN(h.db_size_bytes) FILTER (WHERE h.scanned_at = (
+            SELECT MIN(h2.scanned_at) FROM site_db_size_history h2
+            WHERE h2.site_id = h.site_id AND h2.tenant_id = h.tenant_id
+              AND h2.scanned_at >= @since
+        )) AS first_size_bytes,
+        MAX(h.db_size_bytes) FILTER (WHERE h.scanned_at = (
+            SELECT MAX(h2.scanned_at) FROM site_db_size_history h2
+            WHERE h2.site_id = h.site_id AND h2.tenant_id = h.tenant_id
+              AND h2.scanned_at >= @since
+        )) AS last_size_bytes
+    FROM site_db_size_history h
+    WHERE h.tenant_id = @tenant_id
+      AND h.scanned_at >= @since
+    GROUP BY h.site_id
+)
+SELECT
+    s.id                                                   AS site_id,
+    s.name                                                 AS site_name,
+    r.db_size_bytes,
+    r.table_count,
+    jsonb_array_length(r.orphaned_options_json)            AS orphaned_options_count,
+    jsonb_array_length(r.orphaned_cron_json)               AS orphaned_cron_count,
+    r.scanned_at,
+    COALESCE(sb.first_size_bytes, r.db_size_bytes)         AS first_size_bytes,
+    COALESCE(sb.last_size_bytes,  r.db_size_bytes)         AS last_size_bytes
+FROM site_db_scan_results r
+JOIN sites s ON s.id = r.site_id
+LEFT JOIN size_bounds sb ON sb.site_id = r.site_id
+WHERE r.tenant_id = @tenant_id
+ORDER BY r.db_size_bytes DESC;

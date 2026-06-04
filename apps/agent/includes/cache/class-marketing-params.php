@@ -16,8 +16,8 @@
  *     ALLOWED through cacheability.
  *
  * Any query param that appears in NEITHER list makes a URL un-cacheable (an
- * unknown param is treated as a personalised / dynamic request — the same
- * conservative stance taken by Cache Enabler and WP Super Cache). Operators can
+ * unknown param is treated as a personalised / dynamic request — the
+ * conservative safe-by-default stance). Operators can
  * extend the INCLUDE list per-site via the stored config (handled by the
  * Cacheability class, not here).
  *

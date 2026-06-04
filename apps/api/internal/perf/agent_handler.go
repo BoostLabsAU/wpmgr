@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
+	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
 )
@@ -51,6 +52,10 @@ func (h *AgentHandler) Register(r *gin.RouterGroup) {
 	r.POST("/cache/stats-report", h.statsReport)
 	r.POST("/perf/config-ack", h.configAck)
 	r.POST("/rucss", h.rucssIngest)
+	r.POST("/db-clean/progress", h.dbCleanProgress)
+	// P3.8 — async orphan-delete progress from the agent.
+	// POST /agent/v1/db-orphan-delete/progress
+	r.POST("/db-orphan-delete/progress", h.dbOrphanDeleteProgress)
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +163,10 @@ type rucssMeta struct {
 	URL           string   `json:"url"`
 	StructureHash string   `json:"structure_hash"`
 	Safelist      []string `json:"safelist,omitempty"`
+	// Reheat is set by the agent when this render is a CP-initiated post-compute
+	// re-warm self-fetch; it propagates to the River job so the worker does not
+	// re-trigger another reheat (loop guard against structure_hash drift).
+	Reheat bool `json:"reheat,omitempty"`
 }
 
 // rucssIngest accepts a multipart body: a `meta` JSON part + one `html` part +
@@ -307,6 +316,7 @@ func (h *AgentHandler) rucssIngest(c *gin.Context) {
 		HTML:          html,
 		CSS:           css,
 		Safelist:      meta.Safelist,
+		Reheat:        meta.Reheat,
 	})
 	if ierr != nil {
 		httpx.Error(c, ierr)
@@ -329,6 +339,77 @@ func (h *AgentHandler) rucssIngest(c *gin.Context) {
 	c.JSON(http.StatusAccepted, gin.H{"status": "processing", "job_id": res.JobID})
 }
 
+// ---------------------------------------------------------------------------
+// db-clean progress push (M38)
+// ---------------------------------------------------------------------------
+
+// maxDBCleanProgressBody is the size cap for per-category progress push bodies.
+// 16 KiB matches the frozen contract's body_size_limit.
+const maxDBCleanProgressBody = 16 << 10
+
+// dbCleanProgressBody is the body the agent POSTs for each category result.
+type dbCleanProgressBody struct {
+	JobID       string `json:"job_id"`
+	Category    string `json:"category"`
+	RowsDeleted int    `json:"rows_deleted"`
+	BytesFreed  int    `json:"bytes_freed"`
+	State       string `json:"state"`
+	Detail      string `json:"detail,omitempty"`
+	// Done is true only on the FINAL push for this job (after the last category).
+	// The CP emits db.clean.completed and advances next_db_clean_at.
+	Done bool `json:"done"`
+}
+
+// dbCleanProgress handles per-category progress pushes from the agent at
+// POST /agent/v1/db-clean/progress. Authentication is the same Ed25519 signed-
+// request middleware as /agent/v1/cache/stats-report: the site + tenant come
+// from the VERIFIED identity, never from the body.
+//
+// The frozen contract mandates:
+//   - If job_id is unknown (CP restarted mid-job), still process — do NOT 404.
+//   - The agent must tolerate a non-2xx response without halting the cleanup loop.
+func (h *AgentHandler) dbCleanProgress(c *gin.Context) {
+	id, ok := agent.IdentityFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("agent_unauthenticated", "agent identity required"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxDBCleanProgressBody))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "could not read request body"))
+		return
+	}
+	var in dbCleanProgressBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON: "+err.Error()))
+		return
+	}
+	if in.JobID == "" {
+		httpx.Error(c, domain.Validation("missing_job_id", "job_id is required"))
+		return
+	}
+	if in.Category == "" {
+		httpx.Error(c, domain.Validation("missing_category", "category is required"))
+		return
+	}
+
+	if err := h.svc.HandleDBCleanProgress(c.Request.Context(), DBCleanProgressInput{
+		JobID:       in.JobID,
+		Category:    in.Category,
+		RowsDeleted: in.RowsDeleted,
+		BytesFreed:  in.BytesFreed,
+		State:       in.State,
+		Detail:      in.Detail,
+		Done:        in.Done,
+		TenantID:    id.TenantID,
+		SiteID:      id.SiteID,
+	}); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
 // readCapped reads up to limit bytes from r; if r has MORE than limit bytes it
 // returns a 413 domain error (enforced BEFORE the excess is buffered: we read
 // limit+1 and reject when the extra byte is present).
@@ -341,4 +422,59 @@ func readCapped(r io.Reader, limit int) ([]byte, error) {
 		return nil, domain.TooLarge("rucss_part_too_large", "a part exceeded its size limit")
 	}
 	return buf, nil
+}
+
+// ---------------------------------------------------------------------------
+// db-orphan-delete progress push (P3.8)
+// ---------------------------------------------------------------------------
+
+// maxDBOrphanDeleteProgressBody is the size cap for orphan-delete progress
+// push bodies. 512 KiB accommodates up to 500 items × ~1 KiB each.
+const maxDBOrphanDeleteProgressBody = 512 << 10
+
+// dbOrphanDeleteProgress handles batched progress pushes from the agent at
+// POST /agent/v1/db-orphan-delete/progress. Authentication is the same
+// Ed25519 signed-request middleware as all other /agent/v1/* routes: the site
+// and tenant come from the VERIFIED identity, never from the body.
+//
+// The frozen contract requires:
+//   - If job_id is unknown (CP restarted mid-job), still process — do NOT 404.
+//   - The agent must tolerate a non-2xx response without halting the delete loop.
+func (h *AgentHandler) dbOrphanDeleteProgress(c *gin.Context) {
+	id, ok := agent.IdentityFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Unauthorized("agent_unauthenticated", "agent identity required"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(c.Request.Body, maxDBOrphanDeleteProgressBody))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "could not read request body"))
+		return
+	}
+
+	var in agentcmd.DBOrphanDeleteProgressBody
+	if err := json.Unmarshal(body, &in); err != nil {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON: "+err.Error()))
+		return
+	}
+	if in.JobID == "" {
+		httpx.Error(c, domain.Validation("missing_job_id", "job_id is required"))
+		return
+	}
+
+	if err := h.svc.HandleDBOrphanDeleteProgress(c.Request.Context(), DBOrphanDeleteProgressInput{
+		JobID:          in.JobID,
+		Results:        in.Results,
+		DeletedOptions: in.DeletedOptions,
+		DeletedCron:    in.DeletedCron,
+		DeletedTables:  in.DeletedTables,
+		Skipped:        in.Skipped,
+		Done:           in.Done,
+		TenantID:       id.TenantID,
+		SiteID:         id.SiteID,
+	}); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

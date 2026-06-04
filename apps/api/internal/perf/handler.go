@@ -20,9 +20,11 @@ import (
 // /api/v1/sites/{siteId}/perf|cache|db|rucss/... plus the portfolio bulk routes
 // under /api/v1/cache/*.
 type Handler struct {
-	svc   *Service
-	rucss *RucssResultsReader
-	audit *audit.Recorder
+	svc       *Service
+	rucss     *RucssResultsReader
+	audit     *audit.Recorder
+	corpus    CorpusSource // P3.5 — nil degrades orphans to no-scan-found
+	cpBaseURL string       // forwarded to Service.DBClean for progress_endpoint
 }
 
 // RucssResultsReader is the subset of the rucss repo the operator results route
@@ -35,10 +37,20 @@ type RucssResultsReader struct {
 }
 
 // NewHandler builds the operator handler. rucss may be nil (RUCSS results route
-// degrades to an empty list).
+// degrades to an empty list). cpBaseURL is the CP public base URL forwarded to
+// the agent as the progress_endpoint host (may be empty in test).
 func NewHandler(svc *Service, rucss *RucssResultsReader, rec *audit.Recorder) *Handler {
 	return &Handler{svc: svc, rucss: rucss, audit: rec}
 }
+
+// SetCorpusSource wires the corpus reader used by the orphans classification
+// endpoint (P3.5). When nil the endpoint returns a domain.NotFound response
+// (same as when no scan exists).
+func (h *Handler) SetCorpusSource(c CorpusSource) { h.corpus = c }
+
+// SetCPBaseURL sets the CP public base URL used when constructing the
+// progress_endpoint for db_clean commands.
+func (h *Handler) SetCPBaseURL(u string) { h.cpBaseURL = u }
 
 // Register mounts the routes on the authenticated /api/v1 group. RequireSiteAccess
 // is applied on the per-site group so every sub-route inherits the collaborator
@@ -58,6 +70,24 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.POST("/perf/cache/disable", authz.RequirePermission(authz.PermSiteCacheManage), h.disable)
 
 	g.POST("/perf/db/clean", authz.RequirePermission(authz.PermSiteCacheManage), h.dbClean)
+	g.POST("/perf/db/scan", authz.RequirePermission(authz.PermSiteCacheManage), h.dbScan)
+	g.GET("/perf/db/scan", authz.RequirePermission(authz.PermSiteRead), h.getDbScan)
+	// M42 Phase 3.4 — DB-size trend history + growth summary.
+	g.GET("/perf/db/health", authz.RequirePermission(authz.PermSiteRead), h.getDBHealth)
+	// P3.5 — on-demand orphan classification report (READ-ONLY).
+	g.GET("/perf/db/orphans", authz.RequirePermission(authz.PermSiteRead), h.getOrphansReport)
+	// P3.8 — destructive orphan deletion (options / cron / tables from UNINSTALLED
+	// plugins only). Route-level gate: PermSiteCacheManage (operator+). The handler
+	// body enforces PermSiteCacheDeleteAll (admin+) + type-to-confirm token +
+	// CP-side re-classify before signing. The agent performs live re-verification
+	// of every item independently.
+	g.POST("/perf/db/orphan-delete", authz.RequirePermission(authz.PermSiteCacheManage), h.dbOrphanDelete)
+	// Phase 2.2/2.5 — per-table DDL actions (optimize/repair/drop/empty/analyze/convert_innodb).
+	// Route-level gate: PermSiteCacheManage (operator+). Destructive actions
+	// (drop/empty) additionally require PermSiteCacheDeleteAll (admin+), enforced
+	// inside the handler body (mirrors the purge delete-everything pattern).
+	// Non-destructive actions (analyze/convert_innodb) require only PermSiteCacheManage.
+	g.POST("/perf/db/table-action", authz.RequirePermission(authz.PermSiteCacheManage), h.dbTableAction)
 
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
@@ -68,6 +98,16 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// the route param is a body array, not a path :siteId.
 	r.POST("/cache/bulk-purge", authz.RequirePermission(authz.PermSiteCachePurge), h.bulkPurge)
 	r.PUT("/cache/bulk-config", authz.RequirePermission(authz.PermSitePerfConfig), h.bulkConfig)
+
+	// P3.7 — tenant-level (no :siteId) fleet DB health aggregate.
+	// RequireOrgScope blocks site-scoped collaborators; PermSiteRead is the
+	// minimum read permission (viewer+), matching the sites-list and update-list
+	// portfolio endpoints.
+	r.GET("/perf/db/fleet-health",
+		authz.RequireOrgScope(),
+		authz.RequirePermission(authz.PermSiteRead),
+		h.getFleetDbHealth,
+	)
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +302,7 @@ func (h *Handler) dbClean(c *gin.Context) {
 	if !ok {
 		return
 	}
-	detail, rows, err := h.svc.DBClean(c.Request.Context(), p.TenantID, siteID)
+	jobID, err := h.svc.DBClean(c.Request.Context(), p.TenantID, siteID, h.cpBaseURL)
 	if err != nil {
 		if _, isDomain := domain.AsDomain(err); isDomain {
 			httpx.Error(c, err)
@@ -271,8 +311,369 @@ func (h *Handler) dbClean(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
 		return
 	}
-	h.record(c, p, audit.ActionDbCleaned, siteID, map[string]any{"rows_cleaned": rows})
-	c.JSON(http.StatusOK, gin.H{"ok": true, "detail": detail, "rows_cleaned": rows})
+	h.record(c, p, audit.ActionDbCleaned, siteID, map[string]any{"job_id": jobID})
+	c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID})
+}
+
+// ---------------------------------------------------------------------------
+// db scan (M39 Phase 2)
+// ---------------------------------------------------------------------------
+
+// dbScanBody is the optional request body for POST /perf/db/scan. An empty
+// categories list means scan all 14 categories.
+type dbScanBody struct {
+	Categories []string `json:"categories"`
+}
+
+// dbScan triggers a synchronous read-only database scan. The agent returns the
+// full per-category result in the ACK body; the CP stores it, emits SSE, and
+// returns the job_id. Operator can poll the GET endpoint for the last result.
+func (h *Handler) dbScan(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body dbScanBody
+	// Body is optional — an absent body means scan all categories.
+	if c.Request.ContentLength != 0 {
+		if err := bindJSON(c, &body); err != nil {
+			httpx.Error(c, err)
+			return
+		}
+	}
+
+	jobID, err := h.svc.DBScan(c.Request.Context(), p.TenantID, siteID, body.Categories)
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "job_id": jobID, "detail": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID})
+}
+
+// getDbScan returns the latest stored db_scan result for a site.
+// Returns null result when no scan has been run yet.
+// Phase 2.1: the response includes both `categories` and `tables` so the web
+// layer can render the Tables tab on page reload (hydration path) without
+// waiting for an SSE db.scan.completed event.
+func (h *Handler) getDbScan(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.GetLatestScan(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if result == nil {
+		c.JSON(http.StatusOK, gin.H{"result": nil})
+		return
+	}
+	// Unmarshal the JSONB blobs back to typed values so the response is clean
+	// JSON, not base64-encoded blobs. Fall through to zero values on parse error.
+	var categories any
+	if len(result.CategoriesJSON) > 0 {
+		var m map[string]any
+		if jerr := json.Unmarshal(result.CategoriesJSON, &m); jerr == nil {
+			categories = m
+		}
+	}
+	// Phase 2.1: unmarshal per-table inventory; return empty array on error so the
+	// web layer always receives an array (never null) and can render the Tables tab.
+	var tables any = []any{}
+	if len(result.TablesJSON) > 0 {
+		var arr []any
+		if jerr := json.Unmarshal(result.TablesJSON, &arr); jerr == nil {
+			tables = arr
+		}
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"result": gin.H{
+			"job_id":        result.JobID,
+			"categories":    categories,
+			"tables":        tables,
+			"db_size_bytes": result.DBSizeBytes,
+			"table_count":   result.TableCount,
+			"scanned_at":    result.ScannedAt.Unix(),
+			"created_at":    result.CreatedAt.Unix(),
+		},
+	})
+}
+
+// ---------------------------------------------------------------------------
+// db health / size trend (M42 Phase 3.4)
+// ---------------------------------------------------------------------------
+
+// getDBHealth returns the 90-day DB-size trend and growth summary for a site.
+// The `days` query parameter adjusts the lookback window (clamped to [7,365]).
+func (h *Handler) getDBHealth(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	days := 90
+	if s := c.Query("days"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			if n < 7 {
+				n = 7
+			} else if n > 365 {
+				n = 365
+			}
+			days = n
+		}
+	}
+	resp, err := h.svc.GetDBHealth(c.Request.Context(), p.TenantID, siteID, days)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------------
+// P3.7 — fleet / portfolio DB health aggregate (tenant-level, no :siteId)
+// ---------------------------------------------------------------------------
+
+// getFleetDbHealth returns the tenant-level aggregate of database health across
+// all sites that have at least one completed scan. The `days` query parameter
+// controls the growth lookback window (clamped to [7,365], default 90). This
+// endpoint has no :siteId — it always aggregates the entire tenant.
+func (h *Handler) getFleetDbHealth(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	days := 90
+	if s := c.Query("days"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			if n < 7 {
+				n = 7
+			} else if n > 365 {
+				n = 365
+			}
+			days = n
+		}
+	}
+	resp, err := h.svc.GetFleetDbHealth(c.Request.Context(), p.TenantID, days)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------------
+// P3.5 — orphans classification report (read-only)
+// ---------------------------------------------------------------------------
+
+// getOrphansReport classifies the orphaned artefacts stored in the latest
+// db_scan result and returns the structured report.  The classification runs
+// on-demand against the live corpus so the report is always fresh relative to
+// the current corpus version.  No destructive operation is performed; there is
+// no delete path on this endpoint.
+func (h *Handler) getOrphansReport(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	if h.corpus == nil {
+		httpx.Error(c, domain.ServiceUnavailable("corpus_unwired", "corpus reader not configured"))
+		return
+	}
+	report, err := h.svc.GetOrphansReport(c.Request.Context(), h.corpus, p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, report)
+}
+
+// ---------------------------------------------------------------------------
+// db table action (Phase 2.2)
+// ---------------------------------------------------------------------------
+
+// dbTableActionBody is the request body for POST /perf/db/table-action.
+type dbTableActionBody struct {
+	Action  string   `json:"action"`
+	Tables  []string `json:"tables"`
+	Confirm string   `json:"confirm,omitempty"`
+}
+
+// dbTableAction dispatches a per-table DDL operation
+// (optimize/repair/drop/empty/analyze/convert_innodb) to the site's agent.
+// Destructive actions (drop/empty) require the higher PermSiteCacheDeleteAll
+// permission AND a type-to-confirm token in the request body. Non-destructive
+// actions (optimize/repair/analyze/convert_innodb) require only
+// PermSiteCacheManage. The backup-warning advisory is surfaced as an
+// X-Backup-Warning header (non-blocking) when no recent backup is found.
+func (h *Handler) dbTableAction(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body dbTableActionBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Destructive actions (drop/empty) require the admin-level permission.
+	isDestructive := body.Action == "drop" || body.Action == "empty"
+	if isDestructive {
+		if !h.allows(c, authz.PermSiteCacheDeleteAll) {
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"drop and empty table actions require the cache delete-all permission (admin+)"))
+			return
+		}
+	}
+
+	out, err := h.svc.DBTableAction(c.Request.Context(), p.TenantID, siteID, DBTableActionInput{
+		Action:  body.Action,
+		Tables:  body.Tables,
+		Confirm: body.Confirm,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		// Agent rejection: surface as 200 ok=false (mirrors security/purge pattern).
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	if out.BackupWarning != "" {
+		c.Header("X-Backup-Warning", out.BackupWarning)
+	}
+
+	h.record(c, p, audit.ActionDbTableAction, siteID, map[string]any{
+		"job_id":      out.JobID,
+		"action":      body.Action,
+		"table_count": len(body.Tables),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"job_id":         out.JobID,
+		"action":         body.Action,
+		"results":        out.Results,
+		"backup_warning": out.BackupWarning,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3.8 — orphan delete (destructive)
+// ---------------------------------------------------------------------------
+
+// orphanDeleteBody is the JSON body for POST /perf/db/orphan-delete.
+type orphanDeleteBody struct {
+	// Items is the set of orphan identifiers the operator wants deleted. Each
+	// item carries kind ("option"|"cron"|"table"), name, and owner_slug as
+	// reported by the P3.5 orphans endpoint. The CP re-classifies before signing;
+	// any item that is no longer DeletableEligible or whose owner_slug drifted is
+	// silently dropped from the signed command.
+	Items []orphanDeleteBodyItem `json:"items"`
+	// Confirm is the type-to-confirm token. See orphanDeleteExpectedConfirm for
+	// the exact format spec.
+	Confirm string `json:"confirm"`
+}
+
+// orphanDeleteBodyItem is one item in the orphanDeleteBody.
+type orphanDeleteBodyItem struct {
+	Kind      string `json:"kind"`
+	Name      string `json:"name"`
+	OwnerSlug string `json:"owner_slug"`
+}
+
+// dbOrphanDelete is the P3.8 destructive orphan-deletion handler.
+//
+// Permission model:
+//   - Route-level gate: PermSiteCacheManage (operator+) — applied by Register.
+//   - Handler-body gate: PermSiteCacheDeleteAll (admin+) — checked below before
+//     re-classify, consistent with dbTableAction drop/empty.
+//
+// On success it returns {ok, job_id, accepted, dropped} plus an advisory
+// X-Backup-Warning header when no recent backup is found.
+func (h *Handler) dbOrphanDelete(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	// Inner admin-level gate (mirrors dbTableAction drop/empty pattern).
+	if !h.allows(c, authz.PermSiteCacheDeleteAll) {
+		httpx.Error(c, domain.Forbidden("insufficient_permission",
+			"orphan deletion requires the cache delete-all permission (admin+)"))
+		return
+	}
+
+	if h.corpus == nil {
+		httpx.Error(c, domain.ServiceUnavailable("corpus_unwired", "corpus reader not configured"))
+		return
+	}
+
+	var body orphanDeleteBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Convert the handler-layer DTO to the service-layer input.
+	items := make([]OrphanDeleteRequestItem, 0, len(body.Items))
+	for _, it := range body.Items {
+		items = append(items, OrphanDeleteRequestItem{
+			Kind:      it.Kind,
+			Name:      it.Name,
+			OwnerSlug: it.OwnerSlug,
+		})
+	}
+
+	out, err := h.svc.DBOrphanDelete(c.Request.Context(), h.corpus, p.TenantID, siteID, h.cpBaseURL, OrphanDeleteInput{
+		Items:   items,
+		Confirm: body.Confirm,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	if out.BackupWarning != "" {
+		c.Header("X-Backup-Warning", out.BackupWarning)
+	}
+
+	// Tally per-kind counts from the input items (for audit metadata).
+	kindCounts := map[string]int{}
+	for _, it := range body.Items {
+		kindCounts[it.Kind]++
+	}
+
+	h.record(c, p, audit.ActionDbOrphanDelete, siteID, map[string]any{
+		"job_id":     out.JobID,
+		"accepted":   out.AcceptedCount,
+		"dropped":    out.DroppedCount,
+		"item_kinds": kindCounts,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"job_id":         out.JobID,
+		"accepted_count": out.AcceptedCount,
+		"dropped_count":  out.DroppedCount,
+		"backup_warning": out.BackupWarning,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -316,6 +717,9 @@ func (h *Handler) rucssClear(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
+	// A destructive, tenant-scoped delete belongs in the audit trail (mirrors the
+	// sibling rucssCompute record). cleared is the actual rows-deleted count.
+	h.record(c, p, audit.ActionPerfConfigUpdated, siteID, map[string]any{"rucss_clear": true, "cleared": cleared})
 	c.JSON(http.StatusOK, gin.H{"ok": true, "cleared": cleared})
 }
 

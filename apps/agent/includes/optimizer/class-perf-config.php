@@ -152,6 +152,19 @@ final class PerfConfig
     /** @var bool Cap stored post revisions. */
     public bool $bloatPostRevisionsControl;
 
+    // -- Preload tuning (Task #171) ----------------------------------------
+    /** @var int Parallel loopback drain workers (PreloadQueue concurrency, 1..4). */
+    public int $preloadConcurrency;
+
+    /** @var int Inter-request warm delay in MILLISECONDS (0..10000; agent x1000 => µs). */
+    public int $preloadDelayMs;
+
+    /** @var int Max URLs a single drain pass handles (1..500; informational for loopback). */
+    public int $preloadBatchSize;
+
+    /** @var float 1-min load-average-per-core ceiling above which a pass defers (0..64; 0 = disabled). */
+    public float $preloadMaxLoad;
+
     /**
      * @param array<string,mixed> $data Raw config map (from storage or CP).
      */
@@ -198,6 +211,12 @@ final class PerfConfig
         $this->bloatDisableOembeds       = (bool) ($data['bloat_disable_oembeds'] ?? false);
         $this->bloatHeartbeatControl     = (bool) ($data['bloat_heartbeat_control'] ?? false);
         $this->bloatPostRevisionsControl = (bool) ($data['bloat_post_revisions_control'] ?? false);
+
+        // Preload tuning (Task #171). Clamp (never reject) to the frozen bounds.
+        $this->preloadConcurrency = self::clampInt($data['preload_concurrency'] ?? 1, 1, 4);
+        $this->preloadDelayMs     = self::clampInt($data['preload_delay_ms'] ?? 500, 0, 10000);
+        $this->preloadBatchSize   = self::clampInt($data['preload_batch_size'] ?? 50, 1, 500);
+        $this->preloadMaxLoad     = self::clampFloat($data['preload_max_load'] ?? 0.0, 0.0, 64.0);
     }
 
     /**
@@ -296,6 +315,10 @@ final class PerfConfig
             'bloat_disable_oembeds'        => $this->bloatDisableOembeds,
             'bloat_heartbeat_control'      => $this->bloatHeartbeatControl,
             'bloat_post_revisions_control' => $this->bloatPostRevisionsControl,
+            'preload_concurrency'          => $this->preloadConcurrency,
+            'preload_delay_ms'             => $this->preloadDelayMs,
+            'preload_batch_size'           => $this->preloadBatchSize,
+            'preload_max_load'             => $this->preloadMaxLoad,
         ];
     }
 
@@ -321,6 +344,49 @@ final class PerfConfig
     {
         $v = is_string($value) ? strtolower(trim($value)) : '';
         return in_array($v, ['all', 'css_js_font', 'image'], true) ? $v : 'all';
+    }
+
+    /**
+     * Clamp a mixed value to an integer within [min, max] (inclusive). A
+     * non-numeric value coerces to the lower bound after int-cast (0 for most),
+     * then is clamped — never rejected.
+     *
+     * @param mixed $value Candidate value.
+     * @param int   $min   Lower bound.
+     * @param int   $max   Upper bound.
+     * @return int
+     */
+    private static function clampInt($value, int $min, int $max): int
+    {
+        $v = is_numeric($value) ? (int) $value : $min;
+        if ($v < $min) {
+            return $min;
+        }
+        if ($v > $max) {
+            return $max;
+        }
+        return $v;
+    }
+
+    /**
+     * Clamp a mixed value to a float within [min, max] (inclusive). Non-numeric
+     * coerces to the lower bound — never rejected.
+     *
+     * @param mixed $value Candidate value.
+     * @param float $min   Lower bound.
+     * @param float $max   Upper bound.
+     * @return float
+     */
+    private static function clampFloat($value, float $min, float $max): float
+    {
+        $v = is_numeric($value) ? (float) $value : $min;
+        if ($v < $min) {
+            return $min;
+        }
+        if ($v > $max) {
+            return $max;
+        }
+        return $v;
     }
 
     /**

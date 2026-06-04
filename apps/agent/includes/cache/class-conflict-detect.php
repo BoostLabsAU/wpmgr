@@ -13,7 +13,7 @@
  * a class, or a function it always declares) — the public, uncopyrightable facts
  * each plugin's own code exposes once active. Cheap: only `defined()` /
  * `class_exists()` / `function_exists()` checks, safe to call on the 60s
- * heartbeat. Original implementation.
+ * heartbeat.
  *
  * @package WPMgr\Agent\Cache
  */

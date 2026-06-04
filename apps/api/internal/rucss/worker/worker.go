@@ -44,6 +44,11 @@ type RucssArgs struct {
 	SourceKey string `json:"source_key,omitempty"`
 	// Safelist is the per-site css_rucss_include_selectors at enqueue time.
 	Safelist []string `json:"safelist,omitempty"`
+	// Reheat is true when this job was produced by a CP post-compute re-warm
+	// self-fetch (rather than an operator/organic render). The worker does NOT
+	// re-trigger another reheat for a reheat-originated job — this terminates the
+	// loop if the page's structure_hash drifts between renders.
+	Reheat bool `json:"reheat,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -84,6 +89,17 @@ type EventPublisher interface {
 	Publish(ctx context.Context, ev site.ConnectionEvent) error
 }
 
+// CacheReheater re-warms the page cache for a URL whose used-CSS just landed, so
+// the NEXT render is a CP cache HIT (200) that the agent caches as optimized
+// HTML. This is the closing loop that an async RUCSS pipeline needs: the first
+// render is always a 202 (used-CSS not computed yet); without a re-warm the
+// agent's page cache keeps serving that un-optimized render forever. Best-effort
+// — a failure is logged and never fails the job (the organic next-visit path is
+// the backstop). Satisfied by *perf.rucssReheater (agent client + site lookup).
+type CacheReheater interface {
+	ReheatURL(ctx context.Context, tenantID, siteID uuid.UUID, pageURL string) error
+}
+
 // Worker runs one RUCSS computation: fetch source -> service.ComputeOrGetCached
 // -> record done/failed -> publish rucss.completed / rucss.failed.
 type Worker struct {
@@ -93,6 +109,7 @@ type Worker struct {
 	del     SourceDeleter
 	jobs    JobLifecycle
 	events  EventPublisher
+	reheat  CacheReheater
 	logger  *slog.Logger
 	timeout time.Duration
 }
@@ -111,7 +128,9 @@ type JobLifecycle interface {
 // fetcher yields a recorded failure, never a panic). If src ALSO implements
 // SourceDeleter (Phase 6's fetcher does), the worker reaps the temp source
 // bundle after it has been consumed or has failed terminally.
-func NewWorker(svc *service.Service, src SourceFetcher, jobs JobLifecycle, events EventPublisher, logger *slog.Logger) *Worker {
+// reheat may be nil (degraded env / agent client unwired) — the worker then
+// skips the post-compute re-warm and relies on the organic next-visit backstop.
+func NewWorker(svc *service.Service, src SourceFetcher, jobs JobLifecycle, events EventPublisher, reheat CacheReheater, logger *slog.Logger) *Worker {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -120,6 +139,7 @@ func NewWorker(svc *service.Service, src SourceFetcher, jobs JobLifecycle, event
 		src:     src,
 		jobs:    jobs,
 		events:  events,
+		reheat:  reheat,
 		logger:  logger,
 		timeout: RucssTimeout,
 	}
@@ -203,9 +223,54 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[RucssArgs]) error {
 	w.logger.Info("rucss computed",
 		slog.String("site_id", a.SiteID.String()),
 		slog.String("structure_hash", a.StructureHash),
+		slog.String("url", a.URL),
 		slog.Bool("cache_hit", res.CacheHit),
+		slog.Bool("reheat_arg", a.Reheat),
 		slog.Float64("reduction_pct", res.Stats.ReductionPct))
+
+	// Closing loop: re-warm the page cache so the optimized HTML actually lands on
+	// disk. Only on a FRESH compute (!CacheHit) for a known URL, and NOT for a
+	// reheat-originated job (a.Reheat) — that guard makes the loop terminate even
+	// if the page's structure_hash drifts between renders. Best-effort; the
+	// organic next-visit path is the backstop.
+	switch {
+	case !res.CacheHit && a.URL != "" && !a.Reheat:
+		w.reheatURL(ctx, a)
+	case !res.CacheHit:
+		// Make the no-reheat decision observable (previously silent + thus
+		// indistinguishable from a working reheat in the logs).
+		reason := "url_empty"
+		if a.Reheat {
+			reason = "reheat_originated"
+		}
+		w.logger.Info("rucss reheat skipped",
+			slog.String("site_id", a.SiteID.String()),
+			slog.String("url", a.URL),
+			slog.String("reason", reason))
+	}
 	return nil
+}
+
+// reheatURL fires the post-compute cache re-warm for a.URL with its own short
+// deadline so a slow agent never stalls the River worker slot. A nil reheater
+// (degraded env) or any error is logged and ignored — never fails the job.
+func (w *Worker) reheatURL(ctx context.Context, a RucssArgs) {
+	if w.reheat == nil {
+		// Loud, not silent: a nil reheater means the closing-loop re-warm is
+		// disabled (agent command client unwired at boot) — the optimized page
+		// will only land via the slower organic-revisit backstop.
+		w.logger.Warn("rucss reheat skipped: reheater not wired",
+			slog.String("site_id", a.SiteID.String()), slog.String("url", a.URL))
+		return
+	}
+	rctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if err := w.reheat.ReheatURL(rctx, a.TenantID, a.SiteID, a.URL); err != nil {
+		w.logger.Warn("rucss reheat failed (organic re-render is the backstop)",
+			slog.String("site_id", a.SiteID.String()),
+			slog.String("url", a.URL),
+			slog.Any("error", err))
+	}
 }
 
 // deleteSource reaps the temp HTML+CSS source bundle once the worker is done

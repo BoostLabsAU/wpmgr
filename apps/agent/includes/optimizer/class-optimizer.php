@@ -53,6 +53,15 @@ final class Optimizer
     private ?Settings $settings;
 
     /**
+     * Whether the LAST run()'s RUCSS stage saw a genuine "processing" cache miss
+     * (used-CSS is being computed and WILL land later). The cache writer reads
+     * this via {@see rucssPending()} to DEFER caching this optimization-incomplete
+     * render — so the static fast-path never serves the un-optimized page until a
+     * purge. Only set when css_rucss is on AND the CP returned a 202 processing.
+     */
+    private bool $rucssPending = false;
+
+    /**
      * @param PerfConfig|null $config   Optimization config (default: loaded).
      * @param Signer|null     $signer   Request signer for RUCSS (default: built).
      * @param Settings|null   $settings Enrollment source for RUCSS (default: built).
@@ -84,6 +93,7 @@ final class Optimizer
      */
     public function run(string $html): string
     {
+        $this->rucssPending = false;
         if (!$this->config->anyHtmlTransformEnabled()) {
             return $html;
         }
@@ -236,6 +246,24 @@ final class Optimizer
             return $html;
         }
         $client = new RucssClient($signer, $settings, $this->config->rucssIncludeSelectors);
-        return $client->optimize($html);
+        $out    = $client->optimize($html);
+        // Record whether used-CSS is still being computed so the cache writer can
+        // defer caching this optimization-incomplete render.
+        $this->rucssPending = $client->wasPending();
+        return $out;
+    }
+
+    /**
+     * Whether the last run() deferred RUCSS because the CP is still computing the
+     * used-CSS (HTTP 202 processing). The cache writer skips persisting such a
+     * render so the un-optimized page is never cached; the CP's post-compute
+     * re-warm (or the next visit, once used-CSS lands) produces the render that
+     * DOES get cached.
+     *
+     * @return bool
+     */
+    public function rucssPending(): bool
+    {
+        return $this->rucssPending;
     }
 }

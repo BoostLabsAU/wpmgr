@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	rucssmodel "github.com/mosamlife/wpmgr/apps/api/internal/rucss/model"
 	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
@@ -58,6 +59,11 @@ type RucssIngestInput struct {
 	HTML          []byte
 	CSS           []byte
 	Safelist      []string
+	// Reheat marks this ingest as originating from a CP post-compute re-warm
+	// self-fetch. It flows into the enqueued RucssArgs so the worker will NOT
+	// re-trigger another reheat for a result computed from a reheat render
+	// (terminates the loop if structure_hash drifts between renders).
+	Reheat bool
 }
 
 // RucssIngestResult is what the agent endpoint returns. On a hit, Cached is true
@@ -174,6 +180,7 @@ func (s *RucssIngestService) Ingest(ctx context.Context, in RucssIngestInput) (R
 		URL:           in.URL,
 		SourceKey:     sourceKey,
 		Safelist:      in.Safelist,
+		Reheat:        in.Reheat,
 	}); err != nil {
 		s.logger.Warn("rucss ingest: enqueue failed",
 			slog.String("site_id", in.SiteID.String()), slog.Any("error", err))
@@ -273,6 +280,63 @@ func decodeBundle(raw []byte) (html, css []byte, err error) {
 // rucssBundleKey is the deterministic temp-object key for a RUCSS source bundle.
 func rucssBundleKey(tenantID, siteID uuid.UUID, jobID string) string {
 	return fmt.Sprintf("rucss-src/%s/%s/%s.bin", tenantID.String(), siteID.String(), jobID)
+}
+
+// rucssReheater re-warms a URL's page cache after the RUCSS worker has just
+// computed + stored its used-CSS, so the NEXT render of that URL is a CP cache
+// HIT (200) whose optimized HTML the agent writes to disk. Without this, the
+// async compute leaves the agent's page cache holding the un-optimized (202)
+// render forever. It satisfies rucss/worker.CacheReheater and reuses the perf
+// service's existing agent command client + site URL lookup.
+//
+// Mechanism (mirrors the reference's "completion -> purge(url) -> re-render"
+// chain): purge the URL's cached page (so the static fast-path cannot serve the
+// stale 202 file), then re-send rucss_compute{urls:[url], reheat:true}. That
+// command self-fetches with the cache-bypass header, the render's RUCSS stage
+// re-POSTs to /agent/v1/rucss, the CP now returns the cached result (200), the
+// agent applies the used-CSS and caches the optimized page. The reheat:true flag
+// rides through to the worker so a drifted-hash re-miss does not loop.
+type rucssReheater struct {
+	agent  AgentPerfClient
+	sites  SiteLookup
+	logger *slog.Logger
+}
+
+// NewRucssReheater builds the post-compute cache re-warm seam for the RUCSS
+// worker. agent/sites may be nil in degraded environments (ReheatURL is then a
+// no-op error the worker logs and ignores).
+func NewRucssReheater(agent AgentPerfClient, sites SiteLookup, logger *slog.Logger) *rucssReheater {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &rucssReheater{agent: agent, sites: sites, logger: logger}
+}
+
+// ReheatURL purges then re-computes the given URL so the page cache is rebuilt
+// with the just-computed used-CSS applied. Best-effort: the worker treats any
+// error as non-fatal (the organic next-visit path is the backstop).
+func (r *rucssReheater) ReheatURL(ctx context.Context, tenantID, siteID uuid.UUID, pageURL string) error {
+	if r.agent == nil || r.sites == nil {
+		return fmt.Errorf("rucss reheater: agent client not wired")
+	}
+	siteURL, err := r.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return fmt.Errorf("rucss reheater: site url: %w", err)
+	}
+	// Purge the just-computed URL so the agent's static fast-path can't keep
+	// serving the un-optimized .gz. Best-effort — a purge failure must not block
+	// the re-warm (the rucss_compute command purges again before its self-fetch).
+	if _, perr := r.agent.CachePurge(ctx, siteID, siteURL, agentcmd.CachePurgeRequest{Scope: "url", URL: pageURL}); perr != nil {
+		r.logger.Warn("rucss reheat: pre-purge failed (continuing)",
+			slog.String("site_id", siteID.String()), slog.String("url", pageURL), slog.Any("error", perr))
+	}
+	if _, perr := r.agent.RucssCompute(ctx, siteID, siteURL, agentcmd.RucssComputeRequest{
+		URLs:   []string{pageURL},
+		Reheat: true,
+	}); perr != nil {
+		return fmt.Errorf("rucss reheater: re-compute: %w", perr)
+	}
+	return nil
 }
 
 // maxServedUsedCSS caps how many bytes of a stored used-CSS object the hit path

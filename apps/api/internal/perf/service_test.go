@@ -3,12 +3,15 @@ package perf
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
+	"github.com/mosamlife/wpmgr/apps/api/internal/dbclean"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 )
@@ -25,6 +28,7 @@ type fakeRepo struct {
 	provider    string
 	purges      []RecordPurgeInput
 	upserts     []UpsertConfigInput
+	markedKinds []string // kinds passed to MarkCachePurged
 }
 
 func (r *fakeRepo) GetConfig(_ context.Context, tenantID, siteID uuid.UUID) (Config, error) {
@@ -73,7 +77,64 @@ func (r *fakeRepo) RecordPurge(_ context.Context, in RecordPurgeInput) (PurgeAud
 	return PurgeAuditEntry{ID: uuid.New(), TenantID: in.TenantID, SiteID: in.SiteID, Kind: string(in.Kind), TargetURLs: in.TargetURLs, URLsCount: len(in.TargetURLs)}, nil
 }
 
+func (r *fakeRepo) MarkCachePurged(_ context.Context, _, _ uuid.UUID, kind string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.markedKinds = append(r.markedKinds, kind)
+	return nil
+}
+
 func (r *fakeRepo) ListPurgeAudit(context.Context, uuid.UUID, uuid.UUID, int32, int32) ([]PurgeAuditEntry, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) GetDueDBCleanSites(_ context.Context, _ int) ([]DueDBCleanSite, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) UpdateNextDBCleanAt(_ context.Context, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+
+// M39 watchdog + db_scan stubs — no-op for unit tests.
+func (r *fakeRepo) SetActiveDBCleanJob(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
+	return nil
+}
+func (r *fakeRepo) ClearActiveDBCleanJob(_ context.Context, _ uuid.UUID) error { return nil }
+func (r *fakeRepo) SetActiveDBScanJob(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
+	return nil
+}
+func (r *fakeRepo) ClearActiveDBScanJob(_ context.Context, _ uuid.UUID) error { return nil }
+func (r *fakeRepo) GetStalledDBCleanJobs(_ context.Context, _ time.Duration) ([]StalledDBCleanJob, error) {
+	return nil, nil
+}
+func (r *fakeRepo) GetStalledDBScanJobs(_ context.Context, _ time.Duration) ([]StalledDBScanJob, error) {
+	return nil, nil
+}
+func (r *fakeRepo) UpsertDBScanResult(_ context.Context, _ DBScanResultInput) error { return nil }
+func (r *fakeRepo) GetDBScanResult(_ context.Context, _, _ uuid.UUID) (DBScanResult, error) {
+	return DBScanResult{}, ErrNotFound
+}
+
+// M42 — DB-size history stubs.
+func (r *fakeRepo) GetDBSizeHistory(_ context.Context, _, _ uuid.UUID, _ time.Time) ([]DbSizeTrendPoint, error) {
+	return nil, nil
+}
+func (r *fakeRepo) PruneDBSizeHistory(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+
+// P3.7 — fleet DB health stub.
+func (r *fakeRepo) GetFleetDbHealth(_ context.Context, _ uuid.UUID, _ time.Time) ([]FleetSiteDbSummary, error) {
+	return nil, nil
+}
+
+// P3.8 — orphan-delete watchdog stubs.
+func (r *fakeRepo) SetActiveDBOrphanDeleteJob(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
+	return nil
+}
+func (r *fakeRepo) ClearActiveDBOrphanDeleteJob(_ context.Context, _ uuid.UUID) error { return nil }
+func (r *fakeRepo) GetStalledDBOrphanDeleteJobs(_ context.Context, _ time.Duration) ([]StalledDBOrphanDeleteJob, error) {
 	return nil, nil
 }
 
@@ -127,8 +188,31 @@ func (a *fakeAgent) CachePreload(context.Context, uuid.UUID, string, agentcmd.Ca
 func (a *fakeAgent) RucssCompute(context.Context, uuid.UUID, string, agentcmd.RucssComputeRequest) (agentcmd.RucssComputeResult, error) {
 	return agentcmd.RucssComputeResult{OK: true, Detail: "rucss compute queued", Queued: 1}, nil
 }
-func (a *fakeAgent) DBClean(context.Context, uuid.UUID, string, agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error) {
-	return agentcmd.DBCleanResult{OK: true, Detail: "cleaned", RowsCleaned: 7}, nil
+func (a *fakeAgent) DBClean(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error) {
+	return agentcmd.DBCleanResult{OK: true, JobID: req.JobID}, nil
+}
+func (a *fakeAgent) DBScan(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBScanRequest) (agentcmd.DBScanResult, error) {
+	return agentcmd.DBScanResult{
+		OK:    true,
+		JobID: req.JobID,
+		Categories: map[string]agentcmd.DBScanCategoryResult{
+			"revisions": {Count: 10, Bytes: 0},
+		},
+		DBSizeBytes: 1024,
+		TableCount:  5,
+		ScannedAt:   1748994000,
+	}, nil
+}
+func (a *fakeAgent) DBTableAction(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBTableActionRequest) (agentcmd.DBTableActionResult, error) {
+	results := make([]agentcmd.DBTableActionTableResult, 0, len(req.Tables))
+	for _, t := range req.Tables {
+		results = append(results, agentcmd.DBTableActionTableResult{Table: t, Status: "done"})
+	}
+	return agentcmd.DBTableActionResult{OK: true, JobID: req.JobID, Action: req.Action, Results: results}, nil
+}
+
+func (a *fakeAgent) DBOrphanDelete(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error) {
+	return agentcmd.DBOrphanDeleteResult{OK: true, JobID: req.JobID}, nil
 }
 
 type fakeSites struct{ url string }
@@ -273,6 +357,10 @@ func TestPurgeRecordsAuditAndEmitsEvents(t *testing.T) {
 	if len(ag.purgeCalls) != 1 || ag.purgeCalls[0].Scope != "all" {
 		t.Fatalf("expected agent purge scope=all, got %+v", ag.purgeCalls)
 	}
+	// the "Last purge" gauge is stamped with the scope (kind=all)
+	if len(repo.markedKinds) != 1 || repo.markedKinds[0] != string(PurgeKindAll) {
+		t.Fatalf("expected last-purge gauge stamped kind=all, got %+v", repo.markedKinds)
+	}
 	// SSE: started + completed
 	types := events.types()
 	if !contains(types, site.EventCachePurgeStarted) || !contains(types, site.EventCachePurgeCompleted) {
@@ -339,5 +427,1290 @@ func TestGetConfigDefaultWhenAbsent(t *testing.T) {
 	}
 	if !errors.Is(ErrNotFound, ErrNotFound) {
 		t.Fatal("sentinel")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DBClean — M38 contract tests
+// ---------------------------------------------------------------------------
+
+func TestDBCleanEmitsStartedAndReturnsJobID(t *testing.T) {
+	repo := &fakeRepo{configFound: true, config: Config{
+		DBPostRevisions: true,
+		DBCommentsSpam:  true,
+	}}
+	events := &fakeEvents{}
+	agent := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(agent, sites)
+
+	jobID, err := svc.DBClean(context.Background(), uuid.New(), uuid.New(), "https://cp.example.com")
+	if err != nil {
+		t.Fatalf("DBClean: %v", err)
+	}
+	if jobID == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+
+	types := events.types()
+	if !contains(types, "db.clean.started") {
+		t.Fatalf("expected db.clean.started, got %v", types)
+	}
+}
+
+func TestDBCleanStartedCarriesTasks(t *testing.T) {
+	repo := &fakeRepo{configFound: true, config: Config{
+		DBPostRevisions:     true,
+		DBPostTrashed:       true,
+		DBTransientsExpired: true,
+	}}
+	events := &fakeEvents{}
+	agent := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(agent, sites)
+
+	_, err := svc.DBClean(context.Background(), uuid.New(), uuid.New(), "")
+	if err != nil {
+		t.Fatalf("DBClean: %v", err)
+	}
+
+	ev := events.events[0]
+	tasks, ok := ev.Data["tasks"].([]string)
+	if !ok {
+		t.Fatalf("tasks not []string: %T %v", ev.Data["tasks"], ev.Data["tasks"])
+	}
+	if !contains(tasks, "revisions") {
+		t.Errorf("expected 'revisions' in tasks, got %v", tasks)
+	}
+	if !contains(tasks, "trashed_posts") {
+		t.Errorf("expected 'trashed_posts' in tasks, got %v", tasks)
+	}
+	if !contains(tasks, "expired_transients") {
+		t.Errorf("expected 'expired_transients' in tasks, got %v", tasks)
+	}
+	// Flags that were false must NOT appear.
+	if contains(tasks, "spam_comments") {
+		t.Errorf("unexpected 'spam_comments' in tasks (flag was false)")
+	}
+}
+
+func TestDBCleanAgentRefusalEmitsFailedEvent(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+
+	// An agent that returns ok=false.
+	refusingAgent := &refuseDBCleanAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(refusingAgent, sites)
+
+	_, err := svc.DBClean(context.Background(), uuid.New(), uuid.New(), "")
+	if err == nil {
+		t.Fatal("expected error on agent refusal")
+	}
+
+	types := events.types()
+	if !contains(types, "db.clean.failed") {
+		t.Fatalf("expected db.clean.failed, got %v", types)
+	}
+}
+
+func TestHandleDBCleanProgressProgress(t *testing.T) {
+	repo := &fakeRepo{}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+
+	err := svc.HandleDBCleanProgress(context.Background(), DBCleanProgressInput{
+		JobID:       "job-1",
+		Category:    "revisions",
+		RowsDeleted: 42,
+		BytesFreed:  0,
+		State:       "done",
+		Done:        false,
+		TenantID:    uuid.New(),
+		SiteID:      uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("HandleDBCleanProgress: %v", err)
+	}
+
+	types := events.types()
+	if !contains(types, "db.clean.progress") {
+		t.Fatalf("expected db.clean.progress, got %v", types)
+	}
+}
+
+func TestHandleDBCleanProgressDoneEmitsCompleted(t *testing.T) {
+	repo := &fakeRepo{}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+
+	err := svc.HandleDBCleanProgress(context.Background(), DBCleanProgressInput{
+		JobID:       "job-2",
+		Category:    "optimize_tables",
+		RowsDeleted: 0,
+		BytesFreed:  1024,
+		State:       "done",
+		Done:        true,
+		TenantID:    uuid.New(),
+		SiteID:      uuid.New(),
+	})
+	if err != nil {
+		t.Fatalf("HandleDBCleanProgress: %v", err)
+	}
+
+	types := events.types()
+	if !contains(types, "db.clean.completed") {
+		t.Fatalf("expected db.clean.completed, got %v", types)
+	}
+}
+
+func TestNextCleanTimeParsing(t *testing.T) {
+	_ = time.Now() // ensure time import is used
+	cases := []struct {
+		interval string
+		approx   time.Duration
+	}{
+		{"daily", 24 * time.Hour},
+		{"weekly", 7 * 24 * time.Hour},
+		{"monthly", 30 * 24 * time.Hour},
+	}
+	before := time.Now()
+	for _, tc := range cases {
+		got := nextCleanTime(tc.interval)
+		if got.Before(before) {
+			t.Errorf("nextCleanTime(%q) returned past time %v", tc.interval, got)
+		}
+	}
+}
+
+// refuseDBCleanAgent returns ok=false on DBClean.
+type refuseDBCleanAgent struct{ fakeAgent }
+
+func (a *refuseDBCleanAgent) DBClean(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBCleanRequest) (agentcmd.DBCleanResult, error) {
+	return agentcmd.DBCleanResult{OK: false, Detail: "not supported"}, nil
+}
+
+// ---------------------------------------------------------------------------
+// DBTableAction — Phase 2.3 empty action contract tests
+// ---------------------------------------------------------------------------
+
+// fakeBackupChecker is a test double for BackupChecker.
+type fakeBackupChecker struct {
+	hasRecent bool
+	err       error
+}
+
+func (b *fakeBackupChecker) HasRecentBackup(_ context.Context, _, _ uuid.UUID, _ time.Duration) (bool, error) {
+	return b.hasRecent, b.err
+}
+
+func newDBTableActionSvc() *Service {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	return svc
+}
+
+// TestDBTableActionEmptyRequiresConfirm verifies that a single-table empty
+// action is rejected when confirm does not equal the table name, and accepted
+// when it does.
+func TestDBTableActionEmptyRequiresConfirm(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name    string
+		confirm string
+		wantErr string // domain code; "" = success
+	}{
+		{
+			name:    "empty confirm rejected",
+			confirm: "",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "wrong token rejected",
+			confirm: "DROP 1 TABLES",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "correct token accepted",
+			confirm: "wp_actionscheduler_logs",
+			wantErr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  "empty",
+				Tables:  []string{"wp_actionscheduler_logs"},
+				Confirm: tc.confirm,
+			})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("expected domain error, got %v", err)
+			}
+			if de.Code != tc.wantErr {
+				t.Fatalf("expected code %q, got %q", tc.wantErr, de.Code)
+			}
+		})
+	}
+}
+
+// TestDBTableActionEmptyBulkConfirmToken verifies that bulk empty requires
+// the exact "EMPTY N TABLES" token format.
+func TestDBTableActionEmptyBulkConfirmToken(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+	tables := []string{"wp_actionscheduler_logs", "wp_digits_failed_login_logs", "wp_wpmgr_activity_log"}
+
+	cases := []struct {
+		name    string
+		confirm string
+		wantErr string
+	}{
+		{
+			name:    "drop token rejected for empty",
+			confirm: "DROP 3 TABLES",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "lowercase rejected",
+			confirm: "empty 3 tables",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "wrong count rejected",
+			confirm: "EMPTY 2 TABLES",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "correct EMPTY N TABLES token accepted",
+			confirm: "EMPTY 3 TABLES",
+			wantErr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  "empty",
+				Tables:  tables,
+				Confirm: tc.confirm,
+			})
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("expected domain error, got %v", err)
+			}
+			if de.Code != tc.wantErr {
+				t.Fatalf("expected code %q, got %q", tc.wantErr, de.Code)
+			}
+		})
+	}
+}
+
+// TestDBTableActionEmptyDispatchesToAgent verifies that a valid empty call
+// is dispatched to the agent and returns the per-table results.
+func TestDBTableActionEmptyDispatchesToAgent(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+	table := "wp_wpmgr_login_events"
+
+	out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+		Action:  "empty",
+		Tables:  []string{table},
+		Confirm: table, // single-table: confirm == table name
+	})
+	if err != nil {
+		t.Fatalf("DBTableAction empty: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+	if len(out.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(out.Results))
+	}
+	if out.Results[0].Table != table {
+		t.Fatalf("expected result for table %q, got %q", table, out.Results[0].Table)
+	}
+	if out.Results[0].Status != "done" {
+		t.Fatalf("expected status 'done', got %q", out.Results[0].Status)
+	}
+}
+
+// TestDBTableActionEmptyBackupWarning verifies that the backup warning is set
+// when no recent backup is found for a destructive (empty) action.
+func TestDBTableActionEmptyBackupWarning(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: false})
+
+	table := "wp_actionscheduler_logs"
+	out, err := svc.DBTableAction(context.Background(), uuid.New(), uuid.New(), DBTableActionInput{
+		Action:  "empty",
+		Tables:  []string{table},
+		Confirm: table,
+	})
+	if err != nil {
+		t.Fatalf("DBTableAction empty: %v", err)
+	}
+	if out.BackupWarning == "" {
+		t.Fatal("expected non-empty BackupWarning when no recent backup found")
+	}
+	// The warning must reference the generalised message (not drop-only copy).
+	if !strings.Contains(out.BackupWarning, "destructive table actions") {
+		t.Fatalf("BackupWarning should mention 'destructive table actions', got: %q", out.BackupWarning)
+	}
+}
+
+// TestDBTableActionEmptyNoBackupWarningWhenRecentExists verifies that the
+// backup warning is NOT set when a recent backup is found.
+func TestDBTableActionEmptyNoBackupWarningWhenRecentExists(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: true})
+
+	table := "wp_digits_failed_login_logs"
+	out, err := svc.DBTableAction(context.Background(), uuid.New(), uuid.New(), DBTableActionInput{
+		Action:  "empty",
+		Tables:  []string{table},
+		Confirm: table,
+	})
+	if err != nil {
+		t.Fatalf("DBTableAction empty: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("expected empty BackupWarning when recent backup exists, got: %q", out.BackupWarning)
+	}
+}
+
+// TestDBTableActionDropAcceptsNonCoreOwnerTypes asserts that the CP accepts a
+// drop request for plugin-owned and theme-owned tables (not just orphans).
+// The orphan-only restriction lives exclusively on the agent side; the CP must
+// pass plugin/theme tables through to the agent with a valid confirm token.
+func TestDBTableActionDropAcceptsNonCoreOwnerTypes(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name  string
+		table string
+		note  string
+	}{
+		{
+			name:  "plugin-owned log table",
+			table: "wp_digits_failed_login_logs",
+			note:  "active plugin table; plugin recreates schema on next run",
+		},
+		{
+			name:  "theme-owned table",
+			table: "wp_mytheme_cache",
+			note:  "theme auxiliary table",
+		},
+		{
+			name:  "orphan table",
+			table: "wp_orphan_stale",
+			note:  "orphan table (previous behaviour still works)",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  "drop",
+				Tables:  []string{tc.table},
+				Confirm: tc.table, // single-table: confirm == table name
+			})
+			if err != nil {
+				t.Fatalf("drop %s (%s): expected CP to accept and forward to agent, got error: %v", tc.table, tc.note, err)
+			}
+			if out.JobID == "" {
+				t.Fatalf("drop %s: expected non-empty job_id", tc.table)
+			}
+			if len(out.Results) != 1 || out.Results[0].Table != tc.table {
+				t.Fatalf("drop %s: expected one result for the table, got %+v", tc.table, out.Results)
+			}
+		})
+	}
+}
+
+// TestDBTableActionDropBulkPluginTables verifies that a bulk drop of mixed
+// plugin/orphan tables is accepted by the CP with the correct "DROP N TABLES"
+// token; the agent-side non-core gate is not the CP's concern.
+func TestDBTableActionDropBulkPluginTables(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	tables := []string{
+		"wp_digits_failed_login_logs", // plugin
+		"wp_orphan_old",               // orphan
+		"wp_mytheme_data",             // theme
+	}
+
+	out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+		Action:  "drop",
+		Tables:  tables,
+		Confirm: "DROP 3 TABLES",
+	})
+	if err != nil {
+		t.Fatalf("bulk drop plugin/orphan/theme tables: expected CP to accept, got: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id on bulk drop")
+	}
+	if len(out.Results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(out.Results))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// DBTableAction — Phase 2.5 analyze / convert_innodb contract tests
+// ---------------------------------------------------------------------------
+
+// TestDBTableActionAnalyzeAcceptedWithNoConfirm verifies that analyze is a
+// valid action, requires no type-to-confirm token, and is dispatched to the
+// agent with only PermSiteCacheManage (the service layer does not enforce
+// permissions — that is handler-side; the service must accept with no Confirm).
+func TestDBTableActionAnalyzeAcceptedWithNoConfirm(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name   string
+		tables []string
+	}{
+		{name: "single table", tables: []string{"wp_posts"}},
+		{name: "core table allowed", tables: []string{"wp_options"}},
+		{name: "plugin table", tables: []string{"wp_actionscheduler_logs"}},
+		{name: "bulk tables", tables: []string{"wp_posts", "wp_users", "wp_terms"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  "analyze",
+				Tables:  tc.tables,
+				Confirm: "", // no confirm required for non-destructive action
+			})
+			if err != nil {
+				t.Fatalf("analyze %v: expected success (no confirm required), got: %v", tc.tables, err)
+			}
+			if out.JobID == "" {
+				t.Fatal("expected non-empty job_id")
+			}
+			if len(out.Results) != len(tc.tables) {
+				t.Fatalf("expected %d results, got %d", len(tc.tables), len(out.Results))
+			}
+			for i, r := range out.Results {
+				if r.Table != tc.tables[i] {
+					t.Fatalf("result[%d].Table = %q, want %q", i, r.Table, tc.tables[i])
+				}
+				if r.Status != "done" {
+					t.Fatalf("result[%d].Status = %q, want \"done\"", i, r.Status)
+				}
+			}
+		})
+	}
+}
+
+// TestDBTableActionAnalyzeNoBackupWarning verifies that the backup-warning
+// advisory is NOT emitted for analyze (it is non-destructive).
+func TestDBTableActionAnalyzeNoBackupWarning(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: false}) // no recent backup
+
+	out, err := svc.DBTableAction(context.Background(), uuid.New(), uuid.New(), DBTableActionInput{
+		Action: "analyze",
+		Tables: []string{"wp_posts"},
+	})
+	if err != nil {
+		t.Fatalf("analyze: expected success, got: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("analyze must NOT emit a backup warning (non-destructive), got: %q", out.BackupWarning)
+	}
+}
+
+// TestDBTableActionConvertInnodbAcceptedWithNoConfirm verifies that
+// convert_innodb is a valid action, requires no type-to-confirm token, and is
+// dispatched to the agent without any destructive gate.
+func TestDBTableActionConvertInnodbAcceptedWithNoConfirm(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name   string
+		tables []string
+	}{
+		{name: "single MyISAM table", tables: []string{"wp_myisam_table"}},
+		{name: "core table allowed", tables: []string{"wp_options"}},
+		{name: "plugin table", tables: []string{"wp_wc_orders"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  "convert_innodb",
+				Tables:  tc.tables,
+				Confirm: "", // no confirm required for non-destructive action
+			})
+			if err != nil {
+				t.Fatalf("convert_innodb %v: expected success (no confirm required), got: %v", tc.tables, err)
+			}
+			if out.JobID == "" {
+				t.Fatal("expected non-empty job_id")
+			}
+			if len(out.Results) != len(tc.tables) {
+				t.Fatalf("expected %d results, got %d", len(tc.tables), len(out.Results))
+			}
+		})
+	}
+}
+
+// TestDBTableActionConvertInnodbNoBackupWarning verifies that the backup-warning
+// advisory is NOT emitted for convert_innodb (it is non-destructive).
+func TestDBTableActionConvertInnodbNoBackupWarning(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: false}) // no recent backup
+
+	out, err := svc.DBTableAction(context.Background(), uuid.New(), uuid.New(), DBTableActionInput{
+		Action: "convert_innodb",
+		Tables: []string{"wp_myisam_table"},
+	})
+	if err != nil {
+		t.Fatalf("convert_innodb: expected success, got: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("convert_innodb must NOT emit a backup warning (non-destructive), got: %q", out.BackupWarning)
+	}
+}
+
+// TestDBTableActionInvalidActionListsAllSix asserts that the validation error
+// message for an unrecognised action enumerates all six valid action strings,
+// so the error message stays accurate after the Phase 2.5 additions.
+func TestDBTableActionInvalidActionListsAllSix(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	_, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+		Action: "truncate",
+		Tables: []string{"wp_posts"},
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid action, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "invalid_table_action" {
+		t.Fatalf("expected code \"invalid_table_action\", got %q", de.Code)
+	}
+	// The message must list all six valid actions.
+	for _, action := range []string{"optimize", "repair", "drop", "empty", "analyze", "convert_innodb"} {
+		if !strings.Contains(de.Message, action) {
+			t.Fatalf("validation error message does not mention action %q; full message: %q", action, de.Message)
+		}
+	}
+}
+
+// TestDBTableActionAnalyzeAndConvertNotInDestructiveSet asserts that analyze
+// and convert_innodb are NOT treated as destructive (i.e. they do not require
+// a confirm token even when the backup checker has no recent backup).
+func TestDBTableActionAnalyzeAndConvertNotInDestructiveSet(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	for _, action := range []string{"analyze", "convert_innodb"} {
+		t.Run(action, func(t *testing.T) {
+			// No Confirm supplied — must succeed for non-destructive actions.
+			out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+				Action:  action,
+				Tables:  []string{"wp_some_table"},
+				Confirm: "",
+			})
+			if err != nil {
+				t.Fatalf("%s with no confirm: expected success, got: %v", action, err)
+			}
+			if out.JobID == "" {
+				t.Fatalf("%s: expected non-empty job_id", action)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// P3.8 DBOrphanDelete — service-layer safety gate tests
+// ---------------------------------------------------------------------------
+
+// orphanDeleteSvc builds a Service with a scan result whose options slice
+// contains one exact-matched, uninstalled, single-candidate option (the item
+// that must survive the re-classify gate) plus optionally an installed-plugin
+// set. The fakeAgent returns ok=true for DBOrphanDelete.
+func orphanDeleteSvc(optName, ownerSlug string, installedSlugs []string) (*Service, *fakeEvents, *fakeAgent) {
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: true, SizeBytes: 64}})
+	var plugJSON []byte
+	if len(installedSlugs) == 0 {
+		// Non-empty installed set (snapshot_available=true) that does NOT contain ownerSlug.
+		plugJSON = mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "some-other-plugin", Name: "Other", Active: true, Source: "plugin"}})
+	} else {
+		items := make([]agentcmd.InstalledPluginItem, len(installedSlugs))
+		for i, s := range installedSlugs {
+			items[i] = agentcmd.InstalledPluginItem{Slug: s, Name: s, Active: true, Source: "plugin"}
+		}
+		plugJSON = mustMarshal(items)
+	}
+	scanResult := DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: plugJSON,
+	}
+	repo := &scanRepoWith{scanFound: true, result: scanResult}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, &fakeSites{url: "https://example.com"})
+	return svc, events, ag
+}
+
+// exactCorpus returns a fakeCorpus whose single signature matches optName with
+// exact confidence under ownerSlug.
+func exactCorpus(optName, ownerSlug string) *fakeCorpus {
+	return &fakeCorpus{sigs: []dbclean.Signature{
+		{Slug: ownerSlug, CorpusVersion: 1, OptionPatterns: []string{optName}},
+	}}
+}
+
+// TestDBOrphanDeleteSurvivorIsDispatched verifies the happy path: a single
+// eligible item passes re-classify, the correct confirm token is accepted, and
+// the agent receives exactly that item with the report's owner_slug.
+func TestDBOrphanDeleteSurvivorIsDispatched(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	svc, events, _ := orphanDeleteSvc(optName, ownerSlug, nil)
+	corpus := exactCorpus(optName, ownerSlug)
+
+	out, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "https://cp.example.com",
+		OrphanDeleteInput{
+			Items: []OrphanDeleteRequestItem{
+				{Kind: "option", Name: optName, OwnerSlug: ownerSlug},
+			},
+			Confirm: optName, // single item: confirm == item name
+		},
+	)
+	if err != nil {
+		t.Fatalf("DBOrphanDelete: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+	if out.AcceptedCount != 1 {
+		t.Fatalf("expected accepted_count=1, got %d", out.AcceptedCount)
+	}
+	if out.DroppedCount != 0 {
+		t.Fatalf("expected dropped_count=0, got %d", out.DroppedCount)
+	}
+	// The started SSE must have been emitted.
+	if !contains(events.types(), "db.orphan.delete.started") {
+		t.Fatalf("expected db.orphan.delete.started, got %v", events.types())
+	}
+}
+
+// TestDBOrphanDeleteOwnerSlugSpoofRejected verifies that an item whose
+// requested owner_slug does not match the report's owner_slug is dropped
+// (re-classify override), and when no survivors remain the call is rejected.
+func TestDBOrphanDeleteOwnerSlugSpoofRejected(t *testing.T) {
+	optName := "my_plugin_option"
+	realOwner := "my-plugin"
+	svc, _, _ := orphanDeleteSvc(optName, realOwner, nil)
+	corpus := exactCorpus(optName, realOwner)
+
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items: []OrphanDeleteRequestItem{
+				// Attacker supplies a different owner_slug.
+				{Kind: "option", Name: optName, OwnerSlug: "attacker-plugin"},
+			},
+			Confirm: optName,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error when owner_slug is spoofed, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "no_eligible_items" {
+		t.Fatalf("expected code no_eligible_items, got %q", de.Code)
+	}
+}
+
+// TestDBOrphanDeleteZeroSurvivorRejected verifies that when every requested
+// item fails the re-classify gate (e.g. the item is now installed), the call
+// returns a validation error before dispatching to the agent.
+func TestDBOrphanDeleteZeroSurvivorRejected(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	// Build a service where the owner IS now in the installed set.
+	svc, _, _ := orphanDeleteSvc(optName, ownerSlug, []string{ownerSlug})
+	corpus := exactCorpus(optName, ownerSlug)
+
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items: []OrphanDeleteRequestItem{
+				{Kind: "option", Name: optName, OwnerSlug: ownerSlug},
+			},
+			Confirm: optName,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error when all items are filtered by re-classify, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "no_eligible_items" {
+		t.Fatalf("expected no_eligible_items, got %q", de.Code)
+	}
+}
+
+// TestDBOrphanDeleteConfirmSingleItemGrammar verifies that a single-item
+// request requires confirm == the item's Name, and rejects mismatches before
+// re-classify.
+func TestDBOrphanDeleteConfirmSingleItemGrammar(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	svc, _, _ := orphanDeleteSvc(optName, ownerSlug, nil)
+	corpus := exactCorpus(optName, ownerSlug)
+
+	cases := []struct {
+		name    string
+		confirm string
+		wantErr string
+	}{
+		{
+			name:    "empty confirm rejected",
+			confirm: "",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "wrong token rejected",
+			confirm: "DELETE 1 ORPHANS",
+			wantErr: "confirm_mismatch",
+		},
+		{
+			name:    "correct item name accepted",
+			confirm: optName,
+			wantErr: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.DBOrphanDelete(context.Background(), corpus,
+				uuid.New(), uuid.New(), "",
+				OrphanDeleteInput{
+					Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+					Confirm: tc.confirm,
+				},
+			)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("expected domain error, got %T: %v", err, err)
+			}
+			if de.Code != tc.wantErr {
+				t.Fatalf("expected code %q, got %q", tc.wantErr, de.Code)
+			}
+		})
+	}
+}
+
+// TestDBOrphanDeleteConfirmMultiSameKindGrammar verifies that multiple items of
+// the same kind require "DELETE N <KIND_LABEL>" (e.g. "DELETE 2 OPTIONS").
+func TestDBOrphanDeleteConfirmMultiSameKindGrammar(t *testing.T) {
+	optA := "plugin_a_settings"
+	optB := "plugin_a_data"
+	ownerSlug := "plugin-a"
+	corpus := &fakeCorpus{sigs: []dbclean.Signature{
+		{Slug: ownerSlug, CorpusVersion: 1, OptionPatterns: []string{optA, optB}},
+	}}
+
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{
+		{Name: optA, Autoload: true, SizeBytes: 32},
+		{Name: optB, Autoload: false, SizeBytes: 16},
+	})
+	plugJSON := mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "other", Name: "Other", Active: true, Source: "plugin"}})
+	repo := &scanRepoWith{scanFound: true, result: DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: plugJSON,
+	}}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(&fakeAgent{}, &fakeSites{url: "https://example.com"})
+
+	items := []OrphanDeleteRequestItem{
+		{Kind: "option", Name: optA, OwnerSlug: ownerSlug},
+		{Kind: "option", Name: optB, OwnerSlug: ownerSlug},
+	}
+
+	cases := []struct {
+		name    string
+		confirm string
+		wantErr string
+	}{
+		// "DELETE N ORPHANS" is the mixed-kind token, not the same-kind token.
+		{name: "mixed-kind token rejected for single-kind request", confirm: "DELETE 2 ORPHANS", wantErr: "confirm_mismatch"},
+		// Wrong count is always rejected.
+		{name: "wrong count rejected", confirm: "DELETE 1 OPTIONS", wantErr: "confirm_mismatch"},
+		// The check is case-insensitive, so lowercase is accepted.
+		{name: "lowercase accepted (case-insensitive)", confirm: "delete 2 options", wantErr: ""},
+		{name: "correct uppercased token accepted", confirm: "DELETE 2 OPTIONS", wantErr: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.DBOrphanDelete(context.Background(), corpus,
+				uuid.New(), uuid.New(), "",
+				OrphanDeleteInput{Items: items, Confirm: tc.confirm},
+			)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected success, got %v", err)
+				}
+				return
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("expected domain error, got %T: %v", err, err)
+			}
+			if de.Code != tc.wantErr {
+				t.Fatalf("expected code %q, got %q", tc.wantErr, de.Code)
+			}
+		})
+	}
+}
+
+// TestDBOrphanDeleteConfirmMixedKindGrammar verifies that items spanning
+// multiple kinds require "DELETE N ORPHANS".
+func TestDBOrphanDeleteConfirmMixedKindGrammar(t *testing.T) {
+	optName := "the_plugin_option"
+	cronHook := "the_plugin_cron"
+	ownerSlug := "the-plugin"
+	corpus := &fakeCorpus{sigs: []dbclean.Signature{
+		{Slug: ownerSlug, CorpusVersion: 1,
+			OptionPatterns:   []string{optName},
+			CronHookPatterns: []string{cronHook}},
+	}}
+
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: true, SizeBytes: 32}})
+	cronJSON := mustMarshal([]agentcmd.OrphanedCronItem{{Hook: cronHook, NextRunAt: 0, Recurrence: "daily"}})
+	plugJSON := mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "other", Name: "Other", Active: true, Source: "plugin"}})
+	repo := &scanRepoWith{scanFound: true, result: DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     cronJSON,
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: plugJSON,
+	}}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(&fakeAgent{}, &fakeSites{url: "https://example.com"})
+
+	items := []OrphanDeleteRequestItem{
+		{Kind: "option", Name: optName, OwnerSlug: ownerSlug},
+		{Kind: "cron", Name: cronHook, OwnerSlug: ownerSlug},
+	}
+
+	// Mixed kinds must require "DELETE N ORPHANS".
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{Items: items, Confirm: "DELETE 2 OPTIONS"},
+	)
+	if err == nil {
+		t.Fatal("expected confirm_mismatch when using kind-specific token for mixed kinds")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok || de.Code != "confirm_mismatch" {
+		t.Fatalf("expected confirm_mismatch, got %v", err)
+	}
+
+	_, err = svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{Items: items, Confirm: "DELETE 2 ORPHANS"},
+	)
+	if err != nil {
+		t.Fatalf("expected success with DELETE 2 ORPHANS, got %v", err)
+	}
+}
+
+// capturingOrphanAgent overrides DBOrphanDelete to capture the signed request
+// for assertion. All other AgentPerfClient methods delegate to fakeAgent.
+type capturingOrphanAgent struct {
+	fakeAgent
+	mu       sync.Mutex
+	captured agentcmd.DBOrphanDeleteRequest
+}
+
+func (a *capturingOrphanAgent) DBOrphanDelete(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.captured = req
+	return agentcmd.DBOrphanDeleteResult{OK: true, JobID: req.JobID}, nil
+}
+
+// watchdogTrackingRepo embeds scanRepoWith and counts calls to
+// SetActiveDBOrphanDeleteJob so the watchdog-stamping test can assert it.
+type watchdogTrackingRepo struct {
+	scanRepoWith
+	mu       sync.Mutex
+	setCount int
+}
+
+func (r *watchdogTrackingRepo) SetActiveDBOrphanDeleteJob(_ context.Context, _ uuid.UUID, _ string, _ time.Time) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.setCount++
+	return nil
+}
+
+// TestDBOrphanDeleteWatchdogStampedOnDispatch verifies that the watchdog columns
+// are stamped (SetActiveDBOrphanDeleteJob called) when the agent accepts the job.
+func TestDBOrphanDeleteWatchdogStampedOnDispatch(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+
+	sr := &watchdogTrackingRepo{}
+	sr.scanFound = true
+	sr.result = DBScanResult{
+		OrphanedOptionsJSON:  mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: true, SizeBytes: 64}}),
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "other", Name: "Other", Active: true, Source: "plugin"}}),
+	}
+
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	svc := NewService(sr, nil, events, nil)
+	svc.SetAgentClient(ag, &fakeSites{url: "https://example.com"})
+
+	corpus := exactCorpus(optName, ownerSlug)
+	out, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+			Confirm: optName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("DBOrphanDelete: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+	// SetActiveDBOrphanDeleteJob must have been called exactly once.
+	sr.mu.Lock()
+	setCount := sr.setCount
+	sr.mu.Unlock()
+	if setCount != 1 {
+		t.Fatalf("expected SetActiveDBOrphanDeleteJob called 1 time, got %d", setCount)
+	}
+	// The started event must carry the accepted_count so the UI knows the job is running.
+	var startedEvent *site.ConnectionEvent
+	for i, ev := range events.events {
+		if ev.Type == "db.orphan.delete.started" {
+			startedEvent = &events.events[i]
+			break
+		}
+	}
+	if startedEvent == nil {
+		t.Fatal("expected db.orphan.delete.started event")
+	}
+	if ac, ok := startedEvent.Data["accepted_count"].(int); !ok || ac != 1 {
+		t.Fatalf("expected accepted_count=1 in started event, got %v", startedEvent.Data["accepted_count"])
+	}
+}
+
+// TestDBOrphanDeleteReportSlugUsedNotRequestSlug verifies that the item sent to
+// the agent carries the report's owner_slug (from re-classify), not the raw
+// request slug. This prevents the CP from forwarding an attacker-supplied slug
+// to the agent even when the item itself is eligible.
+func TestDBOrphanDeleteReportSlugUsedNotRequestSlug(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: true, SizeBytes: 64}})
+	plugJSON := mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "other", Name: "Other", Active: true, Source: "plugin"}})
+	repo := &scanRepoWith{scanFound: true, result: DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: plugJSON,
+	}}
+	events := &fakeEvents{}
+	ca := &capturingOrphanAgent{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ca, &fakeSites{url: "https://example.com"})
+
+	corpus := exactCorpus(optName, ownerSlug)
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items: []OrphanDeleteRequestItem{
+				// Operator supplies the correct ownerSlug; we verify it
+				// arrives at the agent from the report, not the raw request.
+				{Kind: "option", Name: optName, OwnerSlug: ownerSlug},
+			},
+			Confirm: optName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("DBOrphanDelete: %v", err)
+	}
+	ca.mu.Lock()
+	req := ca.captured
+	ca.mu.Unlock()
+	if req.JobID == "" {
+		t.Fatal("expected agent to have been called with a request")
+	}
+	if len(req.Items) != 1 {
+		t.Fatalf("expected 1 item in agent request, got %d", len(req.Items))
+	}
+	if req.Items[0].OwnerSlug != ownerSlug {
+		t.Fatalf("expected agent item owner_slug=%q (from report), got %q", ownerSlug, req.Items[0].OwnerSlug)
+	}
+}
+
+// TestDBOrphanDeleteHeuristicItemDropped verifies that a heuristic-confidence
+// item is silently filtered out (not signed) even if the operator includes it.
+func TestDBOrphanDeleteHeuristicItemDropped(t *testing.T) {
+	optName := "heuristic_option"
+	ownerSlug := "contact-form-7"
+
+	// Corpus: no exact/prefix patterns — classifier returns heuristic.
+	corpus := &fakeCorpus{sigs: []dbclean.Signature{
+		{Slug: ownerSlug, CorpusVersion: 1},
+	}}
+
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: false, SizeBytes: 8}})
+	plugJSON := mustMarshal([]agentcmd.InstalledPluginItem{{Slug: "other", Name: "Other", Active: true, Source: "plugin"}})
+	repo := &scanRepoWith{scanFound: true, result: DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: plugJSON,
+	}}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(&fakeAgent{}, &fakeSites{url: "https://example.com"})
+
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+			Confirm: optName,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected no_eligible_items error for heuristic-confidence item, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "no_eligible_items" {
+		t.Fatalf("expected no_eligible_items, got %q", de.Code)
+	}
+}
+
+// TestDBOrphanDeleteNoItemsRejected verifies that an empty items slice returns
+// a validation error.
+func TestDBOrphanDeleteNoItemsRejected(t *testing.T) {
+	svc, _, _ := orphanDeleteSvc("x", "y", nil)
+	_, err := svc.DBOrphanDelete(context.Background(), &fakeCorpus{},
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{Items: nil, Confirm: ""},
+	)
+	de, ok := domain.AsDomain(err)
+	if !ok || de.Code != "missing_items" {
+		t.Fatalf("expected missing_items domain error, got %v", err)
+	}
+}
+
+// TestDBOrphanDeleteNoSnapshotRejected verifies that when the scan result has
+// no installed-plugins snapshot (empty InstalledPluginsJSON), the call is
+// rejected with no_snapshot.
+func TestDBOrphanDeleteNoSnapshotRejected(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	corpus := exactCorpus(optName, ownerSlug)
+
+	// Empty installed plugins JSON — snapshot_available=false.
+	optJSON := mustMarshal([]agentcmd.OrphanedOptionItem{{Name: optName, Autoload: true, SizeBytes: 64}})
+	repo := &scanRepoWith{scanFound: true, result: DBScanResult{
+		OrphanedOptionsJSON:  optJSON,
+		OrphanedCronJSON:     []byte("[]"),
+		TablesJSON:           []byte("[]"),
+		InstalledPluginsJSON: []byte("[]"),
+	}}
+	events := &fakeEvents{}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(&fakeAgent{}, &fakeSites{url: "https://example.com"})
+
+	_, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+			Confirm: optName,
+		},
+	)
+	if err == nil {
+		t.Fatal("expected error when snapshot unavailable, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("expected domain error, got %T: %v", err, err)
+	}
+	if de.Code != "no_snapshot" {
+		t.Fatalf("expected no_snapshot, got %q", de.Code)
+	}
+}
+
+// TestDBOrphanDeleteBackupWarningWhenNoRecentBackup verifies the advisory
+// backup nudge is surfaced when the backup checker reports no recent backup.
+func TestDBOrphanDeleteBackupWarningWhenNoRecentBackup(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	svc, _, _ := orphanDeleteSvc(optName, ownerSlug, nil)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: false})
+	corpus := exactCorpus(optName, ownerSlug)
+
+	out, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+			Confirm: optName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("DBOrphanDelete: %v", err)
+	}
+	if out.BackupWarning == "" {
+		t.Fatal("expected non-empty BackupWarning when no recent backup found")
+	}
+}
+
+// TestDBOrphanDeleteNoBackupWarningWhenRecentExists verifies the advisory
+// backup nudge is NOT set when a recent backup exists.
+func TestDBOrphanDeleteNoBackupWarningWhenRecentExists(t *testing.T) {
+	optName := "my_plugin_option"
+	ownerSlug := "my-plugin"
+	svc, _, _ := orphanDeleteSvc(optName, ownerSlug, nil)
+	svc.SetBackupChecker(&fakeBackupChecker{hasRecent: true})
+	corpus := exactCorpus(optName, ownerSlug)
+
+	out, err := svc.DBOrphanDelete(context.Background(), corpus,
+		uuid.New(), uuid.New(), "",
+		OrphanDeleteInput{
+			Items:   []OrphanDeleteRequestItem{{Kind: "option", Name: optName, OwnerSlug: ownerSlug}},
+			Confirm: optName,
+		},
+	)
+	if err != nil {
+		t.Fatalf("DBOrphanDelete: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("expected empty BackupWarning when recent backup exists, got %q", out.BackupWarning)
+	}
+}
+
+// ---------------------------------------------------------------------------
+
+// TestDBTableActionDropConfirmTokenUnchanged verifies that the drop confirm
+// contract is not broken by the empty changes (single-table and bulk).
+func TestDBTableActionDropConfirmTokenUnchanged(t *testing.T) {
+	svc := newDBTableActionSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	// Single-table drop: confirm must equal the table name.
+	table := "wp_orphan_table"
+	out, err := svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+		Action:  "drop",
+		Tables:  []string{table},
+		Confirm: table,
+	})
+	if err != nil {
+		t.Fatalf("drop single-table: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id on drop")
+	}
+
+	// Bulk drop: confirm must equal "DROP N TABLES".
+	tables := []string{"wp_orphan_a", "wp_orphan_b"}
+	out, err = svc.DBTableAction(context.Background(), tenantID, siteID, DBTableActionInput{
+		Action:  "drop",
+		Tables:  tables,
+		Confirm: "DROP 2 TABLES",
+	})
+	if err != nil {
+		t.Fatalf("drop bulk: %v", err)
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id on bulk drop")
 	}
 }

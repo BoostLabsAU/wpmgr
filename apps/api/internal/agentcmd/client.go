@@ -371,15 +371,68 @@ func (c *Client) CachePreload(ctx context.Context, siteID uuid.UUID, siteURL str
 	return out, nil
 }
 
-// DBClean sends the signed `db_clean` command: run the configured database
-// cleanup. siteID is bound into aud.
+// DBClean sends the signed `db_clean` command to the site's agent. The agent
+// ACKs immediately (ok+job_id) and then runs cleanup async, posting per-category
+// progress to the ProgressEndpoint in the request body. siteID is bound into aud.
+//
+// Unlike most commands, DBClean does NOT wrap ok=false in an error — the caller
+// (perf.Service.DBClean) must inspect the result and emit db.clean.failed SSE.
+// A transport or non-2xx error IS returned as err (retryable).
 func (c *Client) DBClean(ctx context.Context, siteID uuid.UUID, siteURL string, req DBCleanRequest) (DBCleanResult, error) {
 	var out DBCleanResult
 	if err := c.post(ctx, siteID, siteURL, "db_clean", req, &out); err != nil {
 		return DBCleanResult{}, err
 	}
-	if !out.OK {
-		return out, fmt.Errorf("db_clean rejected by agent: %s", out.Detail)
+	return out, nil
+}
+
+// DBScan sends the signed `db_scan` command to the site's agent. Unlike
+// DBClean, the scan is SYNCHRONOUS: the full per-category result is returned
+// in the ACK body (HTTP 200) without async progress pushes. siteID is bound
+// into the JWT's aud claim. The CP should use a 60-second context timeout for
+// this call (scan is READ-ONLY and fast by design — information_schema
+// estimates — so a 60s cut-off is generous).
+//
+// DBScan does NOT wrap ok=false in an error — the caller (perf.Service.DBScan)
+// must inspect the result and emit db.scan.failed SSE if ok=false.
+func (c *Client) DBScan(ctx context.Context, siteID uuid.UUID, siteURL string, req DBScanRequest) (DBScanResult, error) {
+	var out DBScanResult
+	if err := c.post(ctx, siteID, siteURL, "db_scan", req, &out); err != nil {
+		return DBScanResult{}, err
+	}
+	return out, nil
+}
+
+// DBTableAction sends the signed `db_table_action` command to the site's agent.
+// The command is SYNCHRONOUS: optimize, repair, drop, empty, analyze, or
+// convert_innodb is applied to one or more tables and the full per-table result
+// is returned in the ACK body.
+//
+// DBTableAction does NOT wrap ok=false in an error — the caller
+// (perf.Service.DBTableAction) must inspect the result and surface the per-table
+// statuses. A transport error or non-2xx HTTP status IS returned as err.
+func (c *Client) DBTableAction(ctx context.Context, siteID uuid.UUID, siteURL string, req DBTableActionRequest) (DBTableActionResult, error) {
+	var out DBTableActionResult
+	if err := c.post(ctx, siteID, siteURL, "db_table_action", req, &out); err != nil {
+		return DBTableActionResult{}, err
+	}
+	return out, nil
+}
+
+// DBOrphanDelete sends the signed `db_orphan_delete` command to the site's
+// agent. The command is ASYNC: the agent ACKs immediately with {ok, job_id}
+// then processes the allowlist in the background, posting batched progress
+// results to ProgressEndpoint. The CP never adds items to the allowlist; the
+// agent may only SKIP items that fail live re-verification.
+//
+// DBOrphanDelete does NOT wrap ok=false in an error — the caller
+// (perf.Service.DBOrphanDelete) must inspect the result and emit the
+// appropriate SSE events. A transport error or non-2xx HTTP status IS returned
+// as err.
+func (c *Client) DBOrphanDelete(ctx context.Context, siteID uuid.UUID, siteURL string, req DBOrphanDeleteRequest) (DBOrphanDeleteResult, error) {
+	var out DBOrphanDeleteResult
+	if err := c.post(ctx, siteID, siteURL, "db_orphan_delete", req, &out); err != nil {
+		return DBOrphanDeleteResult{}, err
 	}
 	return out, nil
 }

@@ -13,7 +13,7 @@
  *   - preload : heuristically emit `<link rel=preload as=font>` for the first
  *     few woff2 files referenced by self-hosted/inline font CSS.
  *
- * Original implementation. NOT copied from a third-party plugin.
+ * Standard font-display optimization technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

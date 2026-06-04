@@ -22,8 +22,7 @@
  *     mod_deflate no-gzip directives conflict).
  *
  * Marker convention mirrors WordPress core's insert_with_markers(). Standard
- * disk-cache .htaccess technique (Cache Enabler / WP Super Cache, GPLv2).
- * Original implementation.
+ * WordPress disk-cache .htaccess technique.
  *
  * @package WPMgr\Agent\Cache
  */

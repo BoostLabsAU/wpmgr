@@ -57,6 +57,13 @@ Thumbs.db
 /reference/
 /analysis/
 
+# ---- Stray root-level agent release zips (real releases live in /release/) ----
+/wpmgr-agent-*.zip
+
+# ---- corpus-gen build artifacts (source files ARE tracked; binaries are not) ----
+/tools/corpus-gen/corpus-gen
+/tools/corpus-gen/manifest.json
+
 # ---- Skills (installed via npx skills add; lockfile is tracked separately) ----
 .agents/
 .claude/skills/
@@ -64,3 +71,6 @@ Thumbs.db
 
 # ---- pnpm content-addressed store (local cache; not source) ----
 .pnpm-store/
+
+# ---- Claude Code transient worktrees (never committed) ----
+/.claude/worktrees/

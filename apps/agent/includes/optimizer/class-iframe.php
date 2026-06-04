@@ -11,8 +11,8 @@
  * The facade CSS + the one-function runtime are injected once each. Excluded
  * iframes (PerfConfig::$lazyLoadExclusions substrings) are left as-is.
  *
- * Original implementation. NOT copied from a third-party plugin; the placeholder is built
- * from the public i.ytimg.com thumbnail URL (no third-party thumbnail service).
+ * The placeholder is built from the public i.ytimg.com thumbnail URL (no
+ * third-party thumbnail service).
  *
  * @package WPMgr\Agent\Optimizer
  */

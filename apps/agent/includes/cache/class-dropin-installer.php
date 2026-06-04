@@ -14,8 +14,7 @@
  * `wpmgr-advanced-cache.php` and chain to it; on every other host we install the
  * canonical `advanced-cache.php`.
  *
- * Standard disk-cache drop-in technique (Cache Enabler / WP Super Cache, GPLv2).
- * Original implementation.
+ * Standard WordPress disk-cache drop-in technique.
  *
  * @package WPMgr\Agent\Cache
  */

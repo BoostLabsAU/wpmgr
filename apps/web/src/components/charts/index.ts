@@ -6,3 +6,5 @@ export { ChartTooltip } from "./chart-tooltip";
 export type { ChartTooltipProps } from "./chart-tooltip";
 export { ChartEmpty } from "./chart-empty";
 export type { ChartEmptyProps } from "./chart-empty";
+export { DbSizeChart } from "./db-size-chart";
+export type { DbSizeChartProps } from "./db-size-chart";

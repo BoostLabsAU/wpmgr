@@ -16,8 +16,7 @@
  * rules block, the delay runtime itself) are never delayed. The runtime is
  * injected exactly once, before </body>.
  *
- * Standard interaction-delay technique; original implementation. NOT copied
- * from a third-party plugin.
+ * Standard JavaScript interaction-delay technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

@@ -162,7 +162,7 @@ func TestWorker_Success(t *testing.T) {
 		HTML: []byte(`<div class="used">x</div>`),
 		CSS:  []byte(`.used{color:red}.unused{color:blue}`),
 	}}
-	w := NewWorker(newSvc(t), fetch, jobs, events, nil)
+	w := NewWorker(newSvc(t), fetch, jobs, events, nil, nil)
 
 	args := RucssArgs{TenantID: uuid.New(), SiteID: uuid.New(), JobID: "job-1", StructureHash: "h1"}
 	err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: args})
@@ -181,7 +181,7 @@ func TestWorker_Success(t *testing.T) {
 func TestWorker_SourceFetcherUnwired_TerminalFail(t *testing.T) {
 	jobs := &fakeJobs{}
 	events := &fakeEvents{}
-	w := NewWorker(newSvc(t), nil /* no fetcher */, jobs, events, nil)
+	w := NewWorker(newSvc(t), nil /* no fetcher */, jobs, events, nil, nil)
 	err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: RucssArgs{JobID: "j", TenantID: uuid.New(), SiteID: uuid.New(), StructureHash: "h"}})
 	if err != nil {
 		t.Fatalf("unwired fetcher must be terminal (nil err), got %v", err)
@@ -197,7 +197,7 @@ func TestWorker_SourceFetcherUnwired_TerminalFail(t *testing.T) {
 
 func TestWorker_FetchError_Retryable(t *testing.T) {
 	jobs := &fakeJobs{}
-	w := NewWorker(newSvc(t), &fakeFetcher{err: errors.New("s3 blip")}, jobs, &fakeEvents{}, nil)
+	w := NewWorker(newSvc(t), &fakeFetcher{err: errors.New("s3 blip")}, jobs, &fakeEvents{}, nil, nil)
 	err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: RucssArgs{JobID: "j", TenantID: uuid.New(), SiteID: uuid.New(), StructureHash: "h"}})
 	if err == nil {
 		t.Fatal("a transient fetch error must be returned so River retries")
@@ -216,7 +216,7 @@ func TestWorker_DeletesSourceBundle_OnSuccess(t *testing.T) {
 		HTML: []byte(`<div class="used">x</div>`),
 		CSS:  []byte(`.used{color:red}.unused{color:blue}`),
 	}}
-	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil)
+	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil, nil)
 
 	args := RucssArgs{TenantID: uuid.New(), SiteID: uuid.New(), JobID: "job-1", StructureHash: "h1", SourceKey: "rucss-src/t/s/job-1.bin"}
 	if err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: args}); err != nil {
@@ -233,7 +233,7 @@ func TestWorker_DeletesSourceBundle_OnSuccess(t *testing.T) {
 func TestWorker_NoDeleteOnTransientFetchError(t *testing.T) {
 	jobs := &fakeJobs{}
 	fd := &fakeFetchDeleter{err: errors.New("s3 blip")}
-	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil)
+	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil, nil)
 
 	args := RucssArgs{TenantID: uuid.New(), SiteID: uuid.New(), JobID: "j", StructureHash: "h", SourceKey: "rucss-src/t/s/j.bin"}
 	err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: args})
@@ -254,7 +254,7 @@ func TestWorker_DeleteFailure_NonFatal(t *testing.T) {
 		src:       Source{HTML: []byte(`<a class="x"/>`), CSS: []byte(`.x{color:red}`)},
 		deleteErr: errors.New("delete blew up"),
 	}
-	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil)
+	w := NewWorker(newSvc(t), fd, jobs, &fakeEvents{}, nil, nil)
 	args := RucssArgs{TenantID: uuid.New(), SiteID: uuid.New(), JobID: "j", StructureHash: "h", SourceKey: "rucss-src/t/s/j.bin"}
 	if err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: args}); err != nil {
 		t.Fatalf("a delete failure must not fail the job, got %v", err)
@@ -268,7 +268,7 @@ func TestWorker_DeleteFailure_NonFatal(t *testing.T) {
 }
 
 func TestWorker_NilDeps_NoPanic(t *testing.T) {
-	w := NewWorker(newSvc(t), &fakeFetcher{src: Source{HTML: []byte(`<a class="x"/>`), CSS: []byte(`.x{color:red}`)}}, nil, nil, nil)
+	w := NewWorker(newSvc(t), &fakeFetcher{src: Source{HTML: []byte(`<a class="x"/>`), CSS: []byte(`.x{color:red}`)}}, nil, nil, nil, nil)
 	// jobs and events nil — must not panic.
 	if err := w.Work(context.Background(), &river.Job[RucssArgs]{Args: RucssArgs{JobID: "j", TenantID: uuid.New(), SiteID: uuid.New(), StructureHash: "h"}}); err != nil {
 		t.Fatalf("nil deps should still succeed: %v", err)
@@ -293,11 +293,11 @@ func TestArgs_KindAndQueue(t *testing.T) {
 func TestRegisterWorker_NilSafe(t *testing.T) {
 	workers := river.NewWorkers()
 	RegisterWorker(workers, nil) // must not panic
-	RegisterWorker(workers, NewWorker(newSvc(t), &fakeFetcher{}, nil, nil, nil))
+	RegisterWorker(workers, NewWorker(newSvc(t), &fakeFetcher{}, nil, nil, nil, nil))
 }
 
 func TestWorkerTimeout(t *testing.T) {
-	w := NewWorker(newSvc(t), &fakeFetcher{}, nil, nil, nil)
+	w := NewWorker(newSvc(t), &fakeFetcher{}, nil, nil, nil, nil)
 	if w.Timeout(nil) != RucssTimeout {
 		t.Errorf("timeout should default to RucssTimeout")
 	}

@@ -10,9 +10,8 @@ Architecture: [architecture/perf-suite.md](../architecture/perf-suite.md).
 API: [api/perf.md](../api/perf.md). Agent quirks:
 [agent.md → Page cache](../agent.md#page-cache).
 
-> Caching follows the standard WordPress disk-cache pattern used by WP Super
-> Cache and Cache Enabler (GPLv2). The implementation is original WPMgr code; no
-> third-party plugin source is included. See [NOTICE.md](../../NOTICE.md).
+> Caching follows the standard WordPress disk-cache pattern. See
+> [NOTICE.md](../../NOTICE.md) for dependency attribution.
 
 ## Enable it (per site)
 

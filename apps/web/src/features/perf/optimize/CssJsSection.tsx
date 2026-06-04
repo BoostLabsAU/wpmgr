@@ -56,7 +56,7 @@ export function CssJsSection({
       >
         <ChipInput
           label="Safelist selectors"
-          description="Selectors that must always be kept (e.g. classes added by JavaScript)."
+          description="Selectors always kept, even if unused in the rendered page (e.g. classes JavaScript adds at runtime). Common sliders, lightboxes and runtime state classes (splide, swiper, slick, is-active…) are protected automatically — add only extras your theme needs."
           values={config.css_rucss_include_selectors}
           onChange={(v) => save({ css_rucss_include_selectors: v })}
           placeholder=".is-active"

@@ -8,10 +8,9 @@ receives. Every transform is per-site config-gated and is a no-op when off.
 Design: [ADR-046](../adr/ADR-046-performance-suite-architecture.md). RUCSS detail:
 [features/rucss.md](./rucss.md). API: [api/perf.md](../api/perf.md).
 
-> Minification uses **matthiasmullie/minify** (MIT). RUCSS is an original Go
-> engine on the control plane. All other transforms are standard WordPress
-> hooks/filters. No third-party plugin source is copied. See
-> [NOTICE.md](../../NOTICE.md).
+> Minification uses **matthiasmullie/minify** (MIT). RUCSS is a Go engine on the
+> control plane. All other transforms are standard WordPress hooks/filters. See
+> [NOTICE.md](../../NOTICE.md) for dependency attribution.
 
 ## Graceful degradation (the load-bearing guarantee)
 

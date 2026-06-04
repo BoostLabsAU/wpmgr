@@ -21,8 +21,8 @@
  * runs behind. Booting is idempotent and safe to call without WordPress loaded
  * (add_action is guarded inside each integration).
  *
- * Original implementation. The host-detection signals (which class/function/
- * global identifies each host) are public, host-published integration points.
+ * The host-detection signals (which class/function/global identifies each host)
+ * are public, host-published integration points.
  *
  * @package WPMgr\Agent\Integrations
  */

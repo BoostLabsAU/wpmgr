@@ -10,8 +10,6 @@
  * Detection: the Atomic platform + edge-cache classes (the host's own signal).
  * No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

@@ -10,8 +10,6 @@
  * Detection: the `CDN_Clear_Cache_Hooks` class (Rocket.net's own signal).
  * No-op otherwise.
  *
- * Original implementation.
- *
  * @package WPMgr\Agent\Integrations
  */
 

@@ -8,7 +8,7 @@
  * descriptor) to the local copy. Downloads are best-effort: a failed fetch
  * leaves the original gravatar.com URL untouched.
  *
- * Original implementation. NOT copied from a third-party plugin.
+ * Standard gravatar self-hosting technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

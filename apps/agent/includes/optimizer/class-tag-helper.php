@@ -11,7 +11,7 @@
  * job), so each call is O(tag length).
  *
  * Quote-aware and idempotent: setAttr replaces an existing attribute in place
- * or inserts it before the closing `>`/`/>`. Original implementation.
+ * or inserts it before the closing `>`/`/>`.
  *
  * @package WPMgr\Agent\Optimizer
  */

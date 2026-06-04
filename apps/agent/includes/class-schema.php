@@ -42,7 +42,7 @@ class Schema
      * (add a column, add an index, etc). The migration runner reads the
      * stored option and compares it to this value; mismatch => run dbDelta.
      */
-    public const CURRENT_VERSION = '8';
+    public const CURRENT_VERSION = '9';
 
     /** Name of the M5.6 phpbu-runner dedup table (unprefixed). */
     public const BACKUP_RUNS_TABLE = 'wpmgr_backup_runs';
@@ -67,6 +67,14 @@ class Schema
 
     /** S2 — login-event capture table (unprefixed). */
     public const LOGIN_EVENTS_TABLE = 'wpmgr_login_events';
+
+    /**
+     * Task #171 — preload-queue table (unprefixed). A custom MySQL-table queue
+     * with atomic claim/lock, retry/backoff, and concurrency-bounded loopback
+     * runners that warms same-host URLs into the page cache. Replaces the single
+     * wp-option queue that the cache warmer previously used.
+     */
+    public const PRELOAD_QUEUE_TABLE = 'wpmgr_preload_queue';
 
     /** Option key storing the last-installed schema version. */
     public const OPTION_DB_VERSION = 'wpmgr_agent_db_version';
@@ -146,6 +154,7 @@ class Schema
         $diagnosticsRunsTable = $prefix . self::DIAGNOSTICS_RUNS_TABLE;
         $activityLogTable  = $prefix . self::ACTIVITY_LOG_TABLE;
         $loginEventsTable  = $prefix . self::LOGIN_EVENTS_TABLE;
+        $preloadQueueTable = $prefix . self::PRELOAD_QUEUE_TABLE;
 
         return [
             // M2: Connector anti-replay table (short window, per-token jti).
@@ -338,6 +347,37 @@ class Schema
                 PRIMARY KEY  (id),
                 KEY occurred_at (occurred_at),
                 KEY status_occurred (status, occurred_at)
+            ) {$charset};",
+
+            // Task #171 — preload-queue. WPMgr's own self-dispatching warm queue:
+            // rows are claimed atomically (a 32-char lock_token + future-parked
+            // backoff via locked_at), warmed via a same-host loopback fetch, then
+            // DELETEd on success (there is no `completed` status). `task_hash` is
+            // the sha256 dedup key over (url, device), so (url,desktop) and
+            // (url,mobile) are two distinct rows. `priority` is ascending-urgency
+            // (lower = warmed first). All timestamps are UTC DATETIME and every
+            // comparison uses UTC_TIMESTAMP(). Indexes: uniq_group_task is the
+            // upsert/dedup target; idx_runner covers the claim ORDER BY; idx_lock
+            // backs the stale-requeue + active-runner scans.
+            self::PRELOAD_QUEUE_TABLE => "CREATE TABLE {$preloadQueueTable} (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                group_name VARCHAR(32) NOT NULL,
+                callback VARCHAR(64) NOT NULL,
+                url TEXT NOT NULL,
+                device VARCHAR(10) NOT NULL DEFAULT 'desktop',
+                task_hash CHAR(64) NOT NULL,
+                priority INT NOT NULL DEFAULT 20,
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                lock_token VARCHAR(64) NULL,
+                attempts SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+                last_error TEXT NULL,
+                created_at DATETIME NOT NULL,
+                locked_at DATETIME NULL,
+                updated_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                UNIQUE KEY uniq_group_task (group_name, task_hash),
+                KEY idx_runner (group_name, callback, status, priority, created_at, id),
+                KEY idx_lock (status, locked_at)
             ) {$charset};",
         ];
     }

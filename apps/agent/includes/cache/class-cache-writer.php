@@ -16,8 +16,7 @@
  * The written file name is byte-identical to what the serving drop-in computes
  * for the same request — both use CacheKey.
  *
- * Standard disk-cache writer technique (Cache Enabler / WP Super Cache, GPLv2).
- * Original implementation.
+ * Standard WordPress disk-cache writer technique.
  *
  * @package WPMgr\Agent\Cache
  */
@@ -132,6 +131,18 @@ final class CacheWriter
                         header('x-wpmgr-optimized: 1');
                     }
                 }
+                // Cache-FIRST, optimize-later. We DELIBERATELY do NOT skip the
+                // write while RUCSS is still computing (a `202 processing`). Cache
+                // serving is keyed by URL+device+cookies+query (CacheKey), NOT by
+                // structure_hash, so writing the full-CSS render now means the very
+                // next visitor gets a HIT instead of an uncached PHP render on every
+                // hit. Once the CP finishes computing used-CSS, the post-compute
+                // re-warm (RucssComputeCommand purges + re-fetches) — and any organic
+                // re-visit that now gets a 200 — overwrites this entry with the
+                // optimized variant. Serving a full-CSS cached page is strictly
+                // better than serving uncached PHP, so we always persist here.
+                // ($opt->rucssPending() is still surfaced for the x-wpmgr-optimized
+                // header / observability, but it no longer gates the write.)
             }
             $this->maybeWrite($buffer, $ctx, $optimized);
         } catch (\Throwable $e) {

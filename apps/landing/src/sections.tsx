@@ -29,6 +29,7 @@ import {
   SECURITY,
   SITE,
   STATS,
+  TECH_STACK,
   TRUST,
 } from "@/data/content";
 
@@ -448,6 +449,38 @@ export function OpenSource() {
             ))}
           </div>
         </Reveal>
+      </Container>
+    </Section>
+  );
+}
+
+export function TechStack() {
+  return (
+    <Section id="stack">
+      <Container className="flex flex-col gap-10">
+        <Reveal>
+          <SectionHeading
+            align="left"
+            eyebrow={TECH_STACK.eyebrow}
+            title={TECH_STACK.heading}
+            lead={TECH_STACK.subhead}
+          />
+        </Reveal>
+        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
+          {TECH_STACK.items.map((item, i) => (
+            <Reveal key={item.label} delay={(i % 3) * 0.05}>
+              <div className="flex flex-col gap-3 rounded-xl border border-border bg-card p-5 shadow-sm">
+                <div className="flex items-center gap-3">
+                  <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--primary-subtle)] text-[var(--primary-pressed)]">
+                    <Icon name={item.icon} size={18} />
+                  </span>
+                  <h3 className="text-base font-semibold text-foreground">{item.label}</h3>
+                </div>
+                <p className="text-sm leading-relaxed text-muted-foreground">{item.blurb}</p>
+              </div>
+            </Reveal>
+          ))}
+        </div>
       </Container>
     </Section>
   );

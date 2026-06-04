@@ -11,6 +11,18 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
+// WP $wpdb result-format constants (used by PreloadQueue SELECTs). Real WP
+// defines these in wp-db.php; declare them for the in-memory $wpdb doubles.
+if (!defined('ARRAY_A')) {
+    define('ARRAY_A', 'ARRAY_A');
+}
+if (!defined('ARRAY_N')) {
+    define('ARRAY_N', 'ARRAY_N');
+}
+if (!defined('OBJECT')) {
+    define('OBJECT', 'OBJECT');
+}
+
 // ---------------------------------------------------------------------------
 // Minimal WP runtime class doubles used by AutologinCommandTest.
 //

@@ -10,8 +10,7 @@
  *   isRequestCacheable(...)         — full request+response gate. Used at the
  *                                     output-buffer flush before writing a page.
  *
- * The checks follow the standard WordPress disk-cache exclusion set (Cache
- * Enabler / WP Super Cache, GPLv2). Original implementation.
+ * The checks follow the standard WordPress disk-cache exclusion set.
  *
  * @package WPMgr\Agent\Cache
  */

@@ -11,7 +11,7 @@
  * Cleared on logout. Non-HTTPOnly is intentional and safe: it carries only the
  * role slug list (no secret), exactly like the role segment in the cache key.
  *
- * Original implementation (standard role-cookie technique).
+ * Standard role-cookie technique.
  *
  * @package WPMgr\Agent\Cache
  */

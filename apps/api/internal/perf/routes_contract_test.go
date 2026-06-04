@@ -36,11 +36,24 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/cache/enable",
 	"POST   /api/v1/sites/:siteId/perf/cache/disable",
 	"POST   /api/v1/sites/:siteId/perf/db/clean",
+	// M39 Phase 2 — db_scan (trigger + latest result).
+	"POST   /api/v1/sites/:siteId/perf/db/scan",
+	"GET    /api/v1/sites/:siteId/perf/db/scan",
+	// Phase 2.2 — per-table DDL actions (optimize/repair/drop/empty).
+	"POST   /api/v1/sites/:siteId/perf/db/table-action",
+	// M42 Phase 3.4 — DB-size trend history + growth summary.
+	"GET    /api/v1/sites/:siteId/perf/db/health",
+	// P3.5 — on-demand orphan classification report (read-only).
+	"GET    /api/v1/sites/:siteId/perf/db/orphans",
+	// P3.8 — destructive orphan deletion (options/cron/tables, UNINSTALLED plugins only).
+	"POST   /api/v1/sites/:siteId/perf/db/orphan-delete",
 	"GET    /api/v1/sites/:siteId/perf/rucss/results",
 	"POST   /api/v1/sites/:siteId/perf/rucss/clear",
 	"POST   /api/v1/sites/:siteId/perf/rucss/compute",
 	"POST   /api/v1/cache/bulk-purge",
 	"PUT    /api/v1/cache/bulk-config",
+	// P3.7 — tenant-level (no :siteId) fleet DB health aggregate.
+	"GET    /api/v1/perf/db/fleet-health",
 }
 
 // TestOperatorRoutesContract pins the registered operator route set to the

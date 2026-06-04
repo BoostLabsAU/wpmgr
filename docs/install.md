@@ -3,10 +3,6 @@
 Self-host WPMgr with Docker Compose. The stack runs the control plane (Go),
 dashboard (React), and data plane (Postgres, Redis, SeaweedFS, ClickHouse).
 
-> **V0 skeleton.** This brings up the control plane with health endpoints and
-> the tenants + sites CRUD API. Feature milestones (backups, updates, scans) are
-> Roadmap — see [PLAN.md](../PLAN.md).
-
 ## Prerequisites
 
 - **Docker** 24+ with the Compose plugin (`docker compose`, not `docker-compose`)
@@ -38,13 +34,57 @@ Key env vars (all prefixed `WPMGR_`):
 | Var | Purpose | Default |
 |-----|---------|---------|
 | `WPMGR_HTTP_ADDR` | API listen address | `:8080` |
-| `WPMGR_DB_*` | Postgres connection | `localhost:5432`, db/user `wpmgr` |
+| `WPMGR_DB_HOST` | Postgres host | `localhost` |
+| `WPMGR_DB_PORT` | Postgres port | `5432` |
+| `WPMGR_DB_NAME` | Postgres database | `wpmgr` |
+| `WPMGR_DB_USER` | Postgres user (the `wpmgr_app` role) | `wpmgr_app` |
+| `WPMGR_DB_PASSWORD` | Password for `wpmgr_app` | (required) |
+| `WPMGR_DB_MIGRATION_DSN` | Full DSN for the migration-owner role (see below) | falls back to app DSN |
 | `WPMGR_REDIS_ADDR` | Redis | `localhost:6379` |
 | `WPMGR_S3_ENDPOINT` | SeaweedFS S3 gateway | `http://localhost:8333` |
 | `WPMGR_S3_FORCE_PATH_STYLE` | required for SeaweedFS | `true` |
 | `WPMGR_CLICKHOUSE_ADDR` | ClickHouse | `localhost:9000` |
 | `WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP collector | `http://localhost:4318` |
 | `VITE_API_BASE_URL` | API base for the SPA | `http://localhost:8080` |
+
+### Postgres: two-DSN model and the `wpmgr_app` role
+
+WPMgr uses two Postgres connection strings:
+
+| Setting | Role | Purpose |
+|---------|------|---------|
+| `WPMGR_DB_*` | `wpmgr_app` (NOSUPERUSER, NOBYPASSRLS) | Runtime application queries |
+| `WPMGR_DB_MIGRATION_DSN` | Database owner or superuser | Migrations (DDL, role creation) |
+
+`WPMGR_DB_MIGRATION_DSN` accepts a full `postgres://` DSN. When unset it falls
+back to the app DSN, which works for local dev where a single user can run
+migrations. Production deployments should set it to a privileged owner role.
+
+**The application must connect as `wpmgr_app` (or a similarly restricted role).
+A superuser or BYPASSRLS role skips Row-Level Security entirely and the server
+will refuse to boot.**
+
+Migrations create the `wpmgr_app` role (`NOLOGIN NOSUPERUSER NOBYPASSRLS`,
+idempotent) and grant it table privileges. You must enable login + set a password
+out of band after the first migration run:
+
+```sql
+-- run once after migrations, as the owner role:
+ALTER ROLE wpmgr_app LOGIN PASSWORD 'your-password';
+```
+
+Then set `WPMGR_DB_USER=wpmgr_app` and `WPMGR_DB_PASSWORD=your-password`.
+
+The `plugin_signatures` corpus table (used by the Database Cleaner) is
+**insert-only protected**: `wpmgr_app` has `SELECT` only at runtime. The corpus
+seed migration temporarily grants itself `INSERT/UPDATE` (owner bypasses RLS),
+populates the table, then REVOKEs write access from `wpmgr_app`. This
+GRANT-self/REVOKE pattern means the corpus migration requires the owner role
+(`WPMGR_DB_MIGRATION_DSN`); running it as `wpmgr_app` will fail the REVOKE step.
+
+The `WPMGR_ALLOW_RLS_BYPASS_ROLE=true` env var (default `false`) downgrades
+the boot-time RLS check to a warning. Intended only for single-node local dev
+sharing the bootstrap superuser; never set it in production.
 
 ## 2. Bring up the stack
 
@@ -67,6 +107,18 @@ curl localhost:8080/readyz    # 200 once DB/Redis/S3 are reachable
 
 Open the dashboard at `http://localhost` (the `web` service serves the built
 SPA via nginx and proxies to the API).
+
+## Optional: Media Optimizer
+
+Image encoding (JPEG/PNG to WebP/AVIF) runs on a separate encoder service that
+is opt-in. Enable it with the `media` Compose profile:
+
+```bash
+docker compose -f infra/docker-compose.yml --profile media up -d
+```
+
+Without the profile the core API starts fine; the Media Optimizer tab in the
+dashboard is unavailable. See [features/media-optimizer.md](./features/media-optimizer.md).
 
 ## Observability profile
 

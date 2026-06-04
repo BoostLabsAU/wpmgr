@@ -49,6 +49,8 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/metrics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
+	"github.com/mosamlife/wpmgr/apps/api/internal/dbclean"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	rucssrepo "github.com/mosamlife/wpmgr/apps/api/internal/rucss/repo"
 	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
@@ -111,7 +113,10 @@ func run() error {
 
 	// Migrations run with the owner/superuser DSN (creates the app role +
 	// privileged DDL); the application connects with the unprivileged app DSN.
-	// River's own schema is migrated here too, with the same owner DSN.
+	// River's own schema is migrated here too, with the same owner DSN. In
+	// single-DSN dev, MigrateDSN() falls back to the app DSN — the migrations
+	// are authored to remain applicable in that mode (e.g. the plugin_signatures
+	// seed inserts corpus rows before revoking wpmgr_app's DML).
 	migPool, err := db.Connect(ctx, cfg.DB.MigrateDSN())
 	if err != nil {
 		return err
@@ -295,6 +300,22 @@ func run() error {
 	// WPMGR_ALLOW_RLS_BYPASS_ROLE=true).
 	if err := pool.EnforceRLSRole(ctx, logger, cfg.DB.AllowRLSBypassRole); err != nil {
 		return err
+	}
+
+	// Safety guard for self-hosters: verify the app DSN role actually holds the
+	// privileges that the migrations grant to wpmgr_app. A self-hoster who sets
+	// WPMGR_DB_USER to a role that was never granted wpmgr_app privileges will hit
+	// cryptic "permission denied" on every table access. This functional probe
+	// catches the misconfiguration at boot — before any traffic is served — with a
+	// clear, actionable message. The probe runs only in two-DSN mode (a separate
+	// WPMGR_DB_MIGRATION_DSN is set), because in single-DSN mode the app connects
+	// as the migration runner and trivially has all the privileges it just created.
+	// has_table_privilege always returns true for superusers, so the probe cannot
+	// block a correctly-configured instance.
+	if cfg.DB.MigrationDSN != "" {
+		if err := pool.ProbeTablePrivilege(ctx, logger); err != nil {
+			return err
+		}
 	}
 
 	validator := domain.NewValidator()
@@ -782,11 +803,27 @@ func run() error {
 	if mediaStore != nil {
 		rucssSvc = rucssservice.NewService(rucssRepo, mediaStore, clock, logger)
 		rucssBundleStore = mediaStore
+		// Closing-loop re-warm: after the worker stores a result it purges + re-
+		// computes the URL so the agent re-renders a CP cache HIT and caches the
+		// OPTIMIZED page (an async RUCSS pipeline otherwise leaves the un-optimized
+		// 202 render cached forever). Built from the same agent commander + site
+		// lookup the perf service uses; nil when the commander can't push commands
+		// (signing key empty) — the worker then relies on the organic-visit backstop.
+		var rucssReheat rucssworker.CacheReheater
+		if perfCmd, ok := commander.(perf.AgentPerfClient); ok {
+			rucssReheat = perf.NewRucssReheater(perfCmd, newPerfSiteAdapter(siteSvc), logger)
+			logger.Info("rucss reheat re-warm enabled")
+		} else {
+			// Loud, not silent: without this the post-compute cache re-warm is a
+			// no-op and optimized pages only land via organic re-visits.
+			logger.Warn("rucss reheat re-warm DISABLED: agent command client unwired (signing key empty?)")
+		}
 		rucssWorker = rucssworker.NewWorker(
 			rucssSvc,
 			perf.NewRucssSourceFetcher(rucssBundleStore),
 			rucssRepo,
 			siteEventsPub,
+			rucssReheat,
 			logger,
 		)
 		// FIX 1 backstop: reap orphaned source bundles (page HTML) under rucss-src/
@@ -805,6 +842,29 @@ func run() error {
 	}
 	// CDN purge is best-effort over the shared SSRF-hardened client.
 	perfSvc.SetCDNPurger(perf.NewCDNPurger(ssrfClient))
+	// Phase 2.2 — backup recency check for drop/empty advisory warning.
+	if backupSvc != nil {
+		perfSvc.SetBackupChecker(newBackupCheckerAdapter(backupSvc))
+	}
+
+	// M38 — CP-owned db-clean scheduling workers.
+	// Both workers are always registered so scheduled auto-clean works whenever
+	// the signing key is configured. The schedule worker's enqueuer is wired
+	// after River starts (mirrors the backup ScheduleWorker pattern).
+	dbCleanWorker := perf.NewDBCleanWorker(perfSvc, logger)
+	dbCleanScheduleWorker := perf.NewDBCleanScheduleWorker(perfSvc, logger)
+	// M39 — watchdog for stalled db_clean/db_scan jobs (always wired; no
+	// signing key required since it only reads perf_config + emits SSE).
+	dbCleanWatchdogWorker := perf.NewDBCleanWatchdogWorker(perfSvc, logger)
+
+	// P3.8 — watchdog for stalled db_orphan_delete jobs (always wired; no
+	// signing key required — reads perf_config + emits SSE only). Runs every
+	// 2 minutes (same as db_clean watchdog); stall threshold is 5 minutes.
+	dbOrphanDeleteWatchdogWorker := perf.NewDBOrphanDeleteWatchdogWorker(perfSvc, logger)
+
+	// M42 — DB-size history GC: sweeps site_db_size_history rows older than
+	// 120 days, once per day. Always wired (no signing key required).
+	dbSizeHistoryGCWorker := perf.NewDBSizeHistoryGCWorker(perfRepo, logger)
 
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
@@ -835,6 +895,15 @@ func run() error {
 		rucssQueueParallel: 4,
 		// FIX 1 backstop sweeper (nil when S3 not configured).
 		rucssSweepWorker: rucssSweepWorker,
+		// M38 — CP-owned db-clean scheduling workers.
+		dbCleanWorker:         dbCleanWorker,
+		dbCleanScheduleWorker: dbCleanScheduleWorker,
+		// M39 — watchdog for stalled db_clean/db_scan jobs.
+		dbCleanWatchdogWorker: dbCleanWatchdogWorker,
+		// P3.8 — watchdog for stalled db_orphan_delete jobs.
+		dbOrphanDeleteWatchdogWorker: dbOrphanDeleteWatchdogWorker,
+		// M42 — DB-size history GC (always wired).
+		dbSizeHistoryGCWorker: dbSizeHistoryGCWorker,
 	})
 	if err != nil {
 		return err
@@ -869,6 +938,12 @@ func run() error {
 	// started. The enqueuer lives in the PURE media package (no encoder import),
 	// so this binary still has no CGO dependency.
 	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(riverClient))
+
+	// M38 — wire the db-clean schedule worker's enqueuer + cpBaseURL now that
+	// River has started. The schedule worker finds due sites and enqueues
+	// DBCleanArgs River jobs; the dispatch worker calls perfSvc.DBCleanScheduled.
+	dbCleanEnqueuer := perf.NewDBCleanRiverEnqueuer(riverClient)
+	dbCleanScheduleWorker.SetEnqueuer(dbCleanEnqueuer, os.Getenv("WPMGR_PUBLIC_BASE_URL"))
 
 	// ADR-046 Performance Suite: wire the RUCSS enqueuer + perf ingest service
 	// now that River has started. The ingest service stashes the agent-posted
@@ -910,8 +985,15 @@ func run() error {
 			}
 			return out, nil
 		},
+		Clear: func(ctx context.Context, tenantID, siteID uuid.UUID) (int, error) {
+			return rucssRepo.DeleteForSite(ctx, tenantID, siteID)
+		},
 	}
 	perfH := perf.NewHandler(perfSvc, perfRucssReader, auditRec)
+	perfH.SetCPBaseURL(os.Getenv("WPMGR_PUBLIC_BASE_URL"))
+	// P3.5 — wire the corpus reader so the orphans classification endpoint can
+	// classify stored scan candidates against the live plugin_signatures corpus.
+	perfH.SetCorpusSource(dbclean.NewCorpusPostgresReader(sqlc.New(pool)))
 	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc)
 
 	// ADR-045 Phase 2 — wire the auth service's transactional mailer (password
@@ -1522,6 +1604,16 @@ type riverDeps struct {
 	// FIX 1 backstop: reaps orphaned RUCSS source bundles (page HTML stashed on a
 	// cache miss whose job never ran). nil when S3 is not configured.
 	rucssSweepWorker *rucssworker.RucssSweepWorker
+	// M38 — CP-owned db-clean scheduling workers (always wired when agent client
+	// is configured; nil when the signing key is empty).
+	dbCleanWorker         *perf.DBCleanWorker
+	dbCleanScheduleWorker *perf.DBCleanScheduleWorker
+	// M39 — watchdog for stalled db_clean + db_scan jobs (always wired).
+	dbCleanWatchdogWorker *perf.DBCleanWatchdogWorker
+	// P3.8 — watchdog for stalled db_orphan_delete jobs (always wired).
+	dbOrphanDeleteWatchdogWorker *perf.DBOrphanDeleteWatchdogWorker
+	// M42 — DB-size history GC (always wired).
+	dbSizeHistoryGCWorker *perf.DBSizeHistoryGCWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -1718,6 +1810,63 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 			river.PeriodicInterval(30*time.Second),
 			func() (river.JobArgs, *river.InsertOpts) { return rucssworker.RucssSweepArgs{}, nil },
 			nil,
+		))
+	}
+
+	// M38 — CP-owned db-clean scheduling.
+	// DBCleanWorker dispatches a single site's cleanup (enqueued by the schedule
+	// sweeper or the operator-facing ad-hoc route via River).
+	// DBCleanScheduleWorker runs every 5 minutes, sweeps site_perf_config for
+	// due auto-clean sites, enqueues a dispatch job per site, and advances
+	// next_db_clean_at (so the CP fully owns the auto-clean schedule).
+	if d.dbCleanWorker != nil {
+		river.AddWorker(workers, d.dbCleanWorker)
+	}
+	if d.dbCleanScheduleWorker != nil {
+		river.AddWorker(workers, d.dbCleanScheduleWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(5*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return perf.DBCleanScheduleArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// M39 — watchdog for stalled db_clean (>10 min) + db_scan (>3 min) jobs.
+	// Always registered: the watchdog runs cross-tenant and does not need the
+	// agent signing key. Runs every 2 minutes; RunOnStart: false avoids a false
+	// positive on fresh CP boots where no jobs could be in flight yet.
+	if d.dbCleanWatchdogWorker != nil {
+		river.AddWorker(workers, d.dbCleanWatchdogWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(2*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return perf.DBCleanWatchdogArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// P3.8 — watchdog for stalled db_orphan_delete (>5 min) jobs. Always
+	// registered; cross-tenant; no signing key required. Runs every 2 minutes;
+	// RunOnStart: false for the same reason as the db_clean watchdog.
+	if d.dbOrphanDeleteWatchdogWorker != nil {
+		river.AddWorker(workers, d.dbOrphanDeleteWatchdogWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(2*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return perf.DBOrphanDeleteWatchdogArgs{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// M42 — DB-size history GC: prune site_db_size_history rows older than
+	// 120 days. Always registered; runs once per day cross-tenant (InAgentTx).
+	// RunOnStart: false — the table is empty on a fresh deploy; no rush.
+	if d.dbSizeHistoryGCWorker != nil {
+		river.AddWorker(workers, d.dbSizeHistoryGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return perf.DBSizeHistoryGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
 		))
 	}
 

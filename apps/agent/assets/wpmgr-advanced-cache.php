@@ -18,8 +18,7 @@
  * (WPMgr\Agent\Cache\CacheKey): same logged-in/role/include-cookie/mobile/query
  * segments, same ksort + md5(serialize()) query hash, same path normalisation.
  *
- * Standard WordPress disk-cache serving technique (Cache Enabler / WP Super
- * Cache, GPLv2). Original implementation.
+ * Standard WordPress disk-cache serving technique.
  *
  * NOTE: this file runs pre-WordPress, so it intentionally has NO ABSPATH guard
  * (WordPress includes it directly; it is never web-accessible on its own).

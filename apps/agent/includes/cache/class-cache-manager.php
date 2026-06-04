@@ -248,11 +248,146 @@ final class CacheManager
      */
     public function preload(array $urls = []): array
     {
-        if ($urls === [] && function_exists('home_url')) {
-            $urls = [(string) home_url('/')];
+        // Empty set ⇒ full-site warm: enumerate EVERY cacheable front-end URL
+        // (home, all public post types incl. WooCommerce products, all taxonomy
+        // term archives, author archives) rather than warming only the home page.
+        if ($urls === []) {
+            $urls = $this->enumerateSiteUrls();
         }
         $queued = $this->preloadEngine()->queue($urls);
-        return ['ok' => true, 'detail' => 'preload queued', 'queued' => $queued];
+        // Return BOTH `total` (the CP contract reads this as the live-progress
+        // denominator) and `queued` (back-compat).
+        return [
+            'ok'     => true,
+            'detail' => 'preload queued ' . $queued . ' url(s)',
+            'total'  => $queued,
+            'queued' => $queued,
+        ];
+    }
+
+    /** Hard ceiling on the full-site URL set so the persisted queue stays bounded. */
+    private const PRELOAD_MAX_URLS = 10000;
+
+    /**
+     * Enumerate the full set of cacheable front-end URLs to warm. Mirrors a
+     * standard full-site warm: (1) home; (2) every PUBLISHED entry of every PUBLIC
+     * post type — one get_post_types(public=true) query auto-covers pages, posts,
+     * WooCommerce products, and any CPT (no special-casing); (3) every non-empty
+     * term archive of every public+rewritable taxonomy (category, tag, product_cat,
+     * product_tag, attributes); (4) author archives for users with published posts.
+     * Wrapped in wp_suspend_cache_addition so the crawl does not balloon the object
+     * cache; queries skip meta/term cache + found-rows for speed. Best-effort:
+     * whatever is collected is returned even if a sub-step fails. The preload
+     * engine SSRF-filters each URL to same-host before warming.
+     *
+     * @return list<string>
+     */
+    public function enumerateSiteUrls(): array
+    {
+        $urls = [];
+        if (function_exists('home_url')) {
+            $urls[] = (string) home_url('/');
+        }
+        if (!function_exists('get_post_types') || !function_exists('get_permalink')) {
+            return array_values(array_unique($urls));
+        }
+
+        $suspended = false;
+        if (function_exists('wp_suspend_cache_addition')) {
+            wp_suspend_cache_addition(true);
+            $suspended = true;
+        }
+        try {
+            // 1. Every published entry of every public post type (excl. attachments).
+            $postTypes = get_post_types(['public' => true, 'exclude_from_search' => false]);
+            if (is_array($postTypes)) {
+                unset($postTypes['attachment']);
+            }
+            if (is_array($postTypes) && $postTypes !== [] && class_exists('WP_Query')) {
+                $paged = 1;
+                do {
+                    $q = new \WP_Query([
+                        'post_type'              => array_values($postTypes),
+                        'post_status'            => 'publish',
+                        'has_password'           => false,
+                        'fields'                 => 'ids',
+                        'posts_per_page'         => 2000,
+                        'paged'                  => $paged,
+                        'no_found_rows'          => true,
+                        'update_post_meta_cache' => false,
+                        'update_post_term_cache' => false,
+                        'ignore_sticky_posts'    => true,
+                    ]);
+                    $ids = is_array($q->posts) ? $q->posts : [];
+                    foreach ($ids as $id) {
+                        $link = get_permalink((int) $id);
+                        if (is_string($link) && $link !== '') {
+                            $urls[] = $link;
+                        }
+                    }
+                    $paged++;
+                } while (count($ids) === 2000 && $paged <= 50 && count($urls) < self::PRELOAD_MAX_URLS);
+            }
+
+            // 2. Every non-empty term archive of every public, rewritable taxonomy.
+            if (count($urls) < self::PRELOAD_MAX_URLS
+                && function_exists('get_taxonomies') && function_exists('get_terms') && function_exists('get_term_link')
+            ) {
+                $taxes = get_taxonomies(['public' => true, 'rewrite' => true]);
+                if (is_array($taxes) && $taxes !== []) {
+                    $terms = get_terms([
+                        'taxonomy'   => array_values($taxes),
+                        'hide_empty' => true,
+                        'number'     => 5000,
+                    ]);
+                    if (is_array($terms)) {
+                        foreach ($terms as $term) {
+                            if (!is_object($term)) {
+                                continue;
+                            }
+                            $link = get_term_link($term);
+                            if (is_string($link) && $link !== '') {
+                                $urls[] = $link;
+                            }
+                        }
+                    }
+                }
+            }
+
+            // 3. Author archives (only users with published posts → no 404s).
+            if (count($urls) < self::PRELOAD_MAX_URLS
+                && function_exists('get_users') && function_exists('get_author_posts_url')
+            ) {
+                $authorIds = get_users([
+                    'has_published_posts' => true,
+                    'fields'              => 'ID',
+                    'number'              => 500,
+                ]);
+                if (is_array($authorIds)) {
+                    foreach ($authorIds as $aid) {
+                        $link = get_author_posts_url((int) $aid);
+                        if (is_string($link) && $link !== '') {
+                            $urls[] = $link;
+                        }
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            // Best-effort: whatever we collected is still warmed.
+            if (function_exists('error_log')) {
+                error_log('wpmgr-agent: preload enumeration degraded (' . $e->getMessage() . ')');
+            }
+        } finally {
+            if ($suspended && function_exists('wp_suspend_cache_addition')) {
+                wp_suspend_cache_addition(false);
+            }
+        }
+
+        $urls = array_values(array_unique($urls));
+        if (count($urls) > self::PRELOAD_MAX_URLS) {
+            $urls = array_slice($urls, 0, self::PRELOAD_MAX_URLS);
+        }
+        return $urls;
     }
 
     /**
@@ -403,13 +538,29 @@ final class CacheManager
     }
 
     /**
-     * Build a Preload engine honouring the mobile-warm config.
+     * Build a Preload engine honouring the mobile-warm config. The warmer builds
+     * its own PreloadQueue from the persisted PerfConfig throttle values
+     * (preload_concurrency / preload_delay_ms / preload_batch_size /
+     * preload_max_load); the dashboard is the primary surface and the legacy
+     * wpmgr_preload_* filters remain the final escape-hatch override.
      *
      * @return Preload
      */
     private function preloadEngine(): Preload
     {
         return new Preload($this->config()->cacheMobile);
+    }
+
+    /**
+     * Build a PreloadQueue from the persisted PerfConfig throttle values. Used by
+     * the signed preload-queue status/maintenance commands (Track A item 9) and
+     * the watchdog binding in Plugin.
+     *
+     * @return PreloadQueue
+     */
+    public function preloadQueue(): PreloadQueue
+    {
+        return PreloadQueue::fromConfig();
     }
 
     /**

@@ -10,7 +10,7 @@
  * query-less GET requests it `try_files` the pre-gzipped index.html.gz on disk,
  * setting the gzip Content-Encoding so nginx streams the raw bytes.
  *
- * Original implementation (standard nginx try_files cache-serving idiom).
+ * Standard nginx try_files cache-serving idiom.
  *
  * @package WPMgr\Agent\Cache
  */

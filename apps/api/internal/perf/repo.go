@@ -109,6 +109,10 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 			CacheBypassCookies:        coalesce(c.CacheBypassCookies),
 			CacheIncludeQueries:       coalesce(c.CacheIncludeQueries),
 			CacheIncludeCookies:       coalesce(c.CacheIncludeCookies),
+			PreloadConcurrency:        int32(c.PreloadConcurrency),
+			PreloadDelayMs:            int32(c.PreloadDelayMs),
+			PreloadBatchSize:          int32(c.PreloadBatchSize),
+			PreloadMaxLoad:            float32(c.PreloadMaxLoad),
 			CssJsMinify:               c.CSSJSMinify,
 			CssRucss:                  c.CSSRucss,
 			CssRucssIncludeSelectors:  coalesce(c.CSSRucssIncludeSelectors),
@@ -235,6 +239,22 @@ func (r *Repo) UpsertCacheStats(ctx context.Context, s CacheStats) (CacheStats, 
 	return out, nil
 }
 
+// MarkCachePurged stamps the "Last purge" gauge (site_cache_stats.last_purged_at
+// + last_purge_kind) when an operator purge runs from the control plane. Operator
+// write path (InTenantTx) — dashboard purges are tenant-scoped. The agent never
+// reports a purge time, so this is the gauge's writer; UpsertCacheStats uses
+// GREATEST so a later agent stats push cannot wipe or regress it. kind is the
+// purge scope ("all" | "url").
+func (r *Repo) MarkCachePurged(ctx context.Context, tenantID, siteID uuid.UUID, kind string) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return sqlc.New(tx).MarkCachePurged(ctx, sqlc.MarkCachePurgedParams{
+			SiteID:        siteID,
+			TenantID:      tenantID,
+			LastPurgeKind: strPtr(kind),
+		})
+	})
+}
+
 // RecordPurgeInput is one cache_purge_audit row.
 type RecordPurgeInput struct {
 	TenantID        uuid.UUID
@@ -300,6 +320,427 @@ func (r *Repo) ListPurgeAudit(ctx context.Context, tenantID, siteID uuid.UUID, l
 }
 
 // ---------------------------------------------------------------------------
+// db-clean scheduling (M38)
+// ---------------------------------------------------------------------------
+
+// DueDBCleanSite is a minimal view of site_perf_config for the scheduler
+// sweep — only the fields the worker needs to decide and advance the schedule.
+type DueDBCleanSite struct {
+	SiteID              uuid.UUID
+	TenantID            uuid.UUID
+	DBAutoCleanInterval string
+	NextDBCleanAt       *time.Time
+}
+
+// GetDueDBCleanSites returns up to limit sites where db_auto_clean=true and
+// next_db_clean_at IS NULL or <= now(). Cross-tenant (InAgentTx).
+func (r *Repo) GetDueDBCleanSites(ctx context.Context, limit int) ([]DueDBCleanSite, error) {
+	var out []DueDBCleanSite
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetDueDBCleanSites(ctx, int32(limit))
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]DueDBCleanSite, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, DueDBCleanSite{
+				SiteID:              row.SiteID,
+				TenantID:            row.TenantID,
+				DBAutoCleanInterval: row.DbAutoCleanInterval,
+				NextDBCleanAt:       tsToTimePtr(row.NextDbCleanAt),
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// UpdateNextDBCleanAt advances next_db_clean_at after a clean job is dispatched.
+// Cross-tenant (InAgentTx) — the sweeper runs as the agent actor.
+func (r *Repo) UpdateNextDBCleanAt(ctx context.Context, siteID uuid.UUID, nextAt time.Time) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).UpdateNextDBCleanAt(ctx, sqlc.UpdateNextDBCleanAtParams{
+			SiteID:        siteID,
+			NextDbCleanAt: pgtype.Timestamptz{Time: nextAt, Valid: true},
+		})
+	})
+}
+
+// SetActiveDBCleanJob stamps the in-flight db_clean watchdog columns.
+// Runs under InAgentTx (the scheduled and operator paths both use this).
+func (r *Repo) SetActiveDBCleanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).SetActiveDBCleanJob(ctx, sqlc.SetActiveDBCleanJobParams{
+			SiteID:               siteID,
+			ActiveDbCleanJobID:   strPtr(jobID),
+			ActiveDbCleanStarted: pgtype.Timestamptz{Time: startedAt, Valid: true},
+		})
+	})
+}
+
+// ClearActiveDBCleanJob clears the in-flight db_clean watchdog columns.
+func (r *Repo) ClearActiveDBCleanJob(ctx context.Context, siteID uuid.UUID) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).ClearActiveDBCleanJob(ctx, siteID)
+	})
+}
+
+// SetActiveDBScanJob stamps the in-flight db_scan watchdog columns.
+func (r *Repo) SetActiveDBScanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).SetActiveDBScanJob(ctx, sqlc.SetActiveDBScanJobParams{
+			SiteID:              siteID,
+			ActiveDbScanJobID:   strPtr(jobID),
+			ActiveDbScanStarted: pgtype.Timestamptz{Time: startedAt, Valid: true},
+		})
+	})
+}
+
+// ClearActiveDBScanJob clears the in-flight db_scan watchdog columns.
+func (r *Repo) ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).ClearActiveDBScanJob(ctx, siteID)
+	})
+}
+
+// StalledDBCleanJob is a minimal view returned by the watchdog sweep.
+type StalledDBCleanJob struct {
+	SiteID   uuid.UUID
+	TenantID uuid.UUID
+	JobID    string
+}
+
+// GetStalledDBCleanJobs returns rows where active_db_clean_started is older
+// than cleanThreshold. Cross-tenant (InAgentTx).
+func (r *Repo) GetStalledDBCleanJobs(ctx context.Context, cleanThreshold time.Duration) ([]StalledDBCleanJob, error) {
+	var out []StalledDBCleanJob
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetStalledDBCleanJobs(ctx, durationToInterval(cleanThreshold))
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]StalledDBCleanJob, 0, len(rows))
+		for _, row := range rows {
+			jobID := ""
+			if row.ActiveDbCleanJobID != nil {
+				jobID = *row.ActiveDbCleanJobID
+			}
+			out = append(out, StalledDBCleanJob{
+				SiteID:   row.SiteID,
+				TenantID: row.TenantID,
+				JobID:    jobID,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// StalledDBScanJob is a minimal view returned by the watchdog sweep.
+type StalledDBScanJob struct {
+	SiteID   uuid.UUID
+	TenantID uuid.UUID
+	JobID    string
+}
+
+// GetStalledDBScanJobs returns rows where active_db_scan_started is older
+// than scanThreshold. Cross-tenant (InAgentTx).
+func (r *Repo) GetStalledDBScanJobs(ctx context.Context, scanThreshold time.Duration) ([]StalledDBScanJob, error) {
+	var out []StalledDBScanJob
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetStalledDBScanJobs(ctx, durationToInterval(scanThreshold))
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]StalledDBScanJob, 0, len(rows))
+		for _, row := range rows {
+			jobID := ""
+			if row.ActiveDbScanJobID != nil {
+				jobID = *row.ActiveDbScanJobID
+			}
+			out = append(out, StalledDBScanJob{
+				SiteID:   row.SiteID,
+				TenantID: row.TenantID,
+				JobID:    jobID,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DBScanResultInput carries the parameters for upserting a scan result.
+// Phase 2.1: TablesJSON carries the per-table inventory JSON alongside CategoriesJSON.
+// Phase 3.3 (M41): OrphanedOptionsJSON, OrphanedCronJSON, InstalledPluginsJSON
+//   carry the orphan-enumeration output from agents >= 0.16.0. nil/empty values
+//   default to '[]' so rows from older agents remain safe to read.
+type DBScanResultInput struct {
+	SiteID         uuid.UUID
+	TenantID       uuid.UUID
+	JobID          string
+	CategoriesJSON []byte
+	// TablesJSON is the per-table inventory serialised as a JSON array of
+	// DBScanTableInventoryRow objects (Phase 2.1). nil/empty ⇒ defaults to '[]'.
+	TablesJSON []byte
+	// OrphanedOptionsJSON is the []OrphanedOptionItem array serialised as JSON
+	// (Phase 3.3). nil/empty ⇒ defaults to '[]' (backward-compat with agents < 0.16.0).
+	OrphanedOptionsJSON []byte
+	// OrphanedCronJSON is the []OrphanedCronItem array serialised as JSON
+	// (Phase 3.3). nil/empty ⇒ defaults to '[]'.
+	OrphanedCronJSON []byte
+	// InstalledPluginsJSON is the []InstalledPluginItem snapshot serialised as JSON
+	// (Phase 3.3). nil/empty ⇒ defaults to '[]'.
+	InstalledPluginsJSON []byte
+	DBSizeBytes          int64
+	TableCount           int
+	ScannedAt            time.Time
+}
+
+// UpsertDBScanResult persists (or refreshes) the latest db_scan result.
+// Operator write path via InTenantTx (the scan is operator-triggered; the
+// result is stored on behalf of the authenticated tenant).
+// Phase 3.3: nil/empty orphan/plugin JSON slices default to '[]' so rows
+// from agents < 0.16.0 (which omit those fields) are stored safely.
+// Phase 3.4 (M42): also inserts a size-history data point inside the same
+// transaction so the scan row and the history row land atomically.
+func (r *Repo) UpsertDBScanResult(ctx context.Context, in DBScanResultInput) error {
+	tablesJSON := in.TablesJSON
+	if len(tablesJSON) == 0 {
+		tablesJSON = []byte("[]")
+	}
+	orphanedOptionsJSON := in.OrphanedOptionsJSON
+	if len(orphanedOptionsJSON) == 0 {
+		orphanedOptionsJSON = []byte("[]")
+	}
+	orphanedCronJSON := in.OrphanedCronJSON
+	if len(orphanedCronJSON) == 0 {
+		orphanedCronJSON = []byte("[]")
+	}
+	installedPluginsJSON := in.InstalledPluginsJSON
+	if len(installedPluginsJSON) == 0 {
+		installedPluginsJSON = []byte("[]")
+	}
+	return r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
+		_, qerr := sqlc.New(tx).UpsertDBScanResult(ctx, sqlc.UpsertDBScanResultParams{
+			SiteID:               in.SiteID,
+			TenantID:             in.TenantID,
+			JobID:                in.JobID,
+			CategoriesJson:       in.CategoriesJSON,
+			TablesJson:           tablesJSON,
+			OrphanedOptionsJson:  orphanedOptionsJSON,
+			OrphanedCronJson:     orphanedCronJSON,
+			InstalledPluginsJson: installedPluginsJSON,
+			DbSizeBytes:          in.DBSizeBytes,
+			TableCount:           int32(in.TableCount),
+			ScannedAt:            in.ScannedAt,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		// Append a size-history data point in the same transaction (M42).
+		// ON CONFLICT DO NOTHING on (site_id, scanned_at) makes this
+		// idempotent if the operator retriggers a scan within the same second.
+		_, qerr = sqlc.New(tx).InsertDBSizeHistory(ctx, sqlc.InsertDBSizeHistoryParams{
+			SiteID:      in.SiteID,
+			TenantID:    in.TenantID,
+			DbSizeBytes: in.DBSizeBytes,
+			TableCount:  int32(in.TableCount),
+			ScannedAt:   in.ScannedAt,
+		})
+		return qerr
+	})
+}
+
+// GetDBSizeHistory returns size-trend data points for a site from `since`
+// onwards (up to 366 points), ordered oldest-first. Operator read path
+// (InTenantTx).
+func (r *Repo) GetDBSizeHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]DbSizeTrendPoint, error) {
+	var out []DbSizeTrendPoint
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetDBSizeHistory(ctx, sqlc.GetDBSizeHistoryParams{
+			SiteID:   siteID,
+			TenantID: tenantID,
+			Since:    since,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]DbSizeTrendPoint, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, DbSizeTrendPoint{
+				ID:          row.ID,
+				SiteID:      row.SiteID,
+				TenantID:    row.TenantID,
+				DBSizeBytes: row.DbSizeBytes,
+				TableCount:  int(row.TableCount),
+				ScannedAt:   row.ScannedAt,
+				CreatedAt:   row.CreatedAt,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// GetFleetDbHealth returns one FleetSiteDbSummary per scanned site within the
+// tenant, ordered by db_size_bytes descending. Rows are gathered from
+// site_db_scan_results (joined with sites for the name) and size_bounds from
+// site_db_size_history for the growth calculation. Tenant-scoped via InTenantTx
+// (RLS enforces the tenant_id constraint — never reads across tenants).
+// `since` is the earliest history point to consider for growth computation.
+func (r *Repo) GetFleetDbHealth(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]FleetSiteDbSummary, error) {
+	var out []FleetSiteDbSummary
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetFleetDbHealth(ctx, sqlc.GetFleetDbHealthParams{
+			TenantID: tenantID,
+			Since:    since,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]FleetSiteDbSummary, 0, len(rows))
+		for _, row := range rows {
+			firstSize := toInt64Interface(row.FirstSizeBytes)
+			lastSize := toInt64Interface(row.LastSizeBytes)
+			growthBytes := lastSize - firstSize
+
+			out = append(out, FleetSiteDbSummary{
+				SiteID:               row.SiteID,
+				SiteName:             row.SiteName,
+				DBSizeBytes:          row.DbSizeBytes,
+				TableCount:           int(row.TableCount),
+				OrphanedOptionsCount: int(row.OrphanedOptionsCount),
+				OrphanedCronCount:    int(row.OrphanedCronCount),
+				ScannedAt:            row.ScannedAt,
+				GrowthBytes:          growthBytes,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// toInt64Interface safely coerces the interface{} values that sqlc emits for
+// COALESCE expressions over nullable bigint columns. pgx scans bigint/int8 as
+// int64 when the column is not null; the COALESCE expression over two possibly-
+// null sources may arrive as int64 or int32 depending on the Postgres type
+// inference. We handle both to be safe.
+func toInt64Interface(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	default:
+		return 0
+	}
+}
+
+// PruneDBSizeHistory deletes size-history rows older than retention across all
+// tenants. Cross-tenant write path (InAgentTx / app.agent GUC). Returns the
+// count of deleted rows.
+func (r *Repo) PruneDBSizeHistory(ctx context.Context, retention time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention)
+	var deleted int64
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		ct, qerr := sqlc.New(tx).PruneDBSizeHistory(ctx, cutoff)
+		if qerr != nil {
+			return qerr
+		}
+		deleted = ct
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
+// DBScanResult is the model returned from a scan result lookup.
+// Phase 2.1: TablesJSON holds the per-table inventory JSONB column.
+// Phase 3.3 (M41): OrphanedOptionsJSON, OrphanedCronJSON, InstalledPluginsJSON
+//   hold the orphan-enumeration columns. They default to '[]' for rows from
+//   agents < 0.16.0 via the schema DEFAULT.
+type DBScanResult struct {
+	SiteID         uuid.UUID
+	TenantID       uuid.UUID
+	JobID          string
+	CategoriesJSON []byte
+	// TablesJSON holds the per-table inventory as serialised JSON (Phase 2.1).
+	TablesJSON []byte
+	// OrphanedOptionsJSON holds []OrphanedOptionItem as serialised JSON (Phase 3.3).
+	// '[]' when agent < 0.16.0 omitted it.
+	OrphanedOptionsJSON []byte
+	// OrphanedCronJSON holds []OrphanedCronItem as serialised JSON (Phase 3.3).
+	// '[]' when agent < 0.16.0 omitted it.
+	OrphanedCronJSON []byte
+	// InstalledPluginsJSON holds []InstalledPluginItem snapshot as serialised JSON (Phase 3.3).
+	// '[]' when agent < 0.16.0 omitted it.
+	InstalledPluginsJSON []byte
+	DBSizeBytes          int64
+	TableCount           int
+	ScannedAt            time.Time
+	CreatedAt            time.Time
+}
+
+// GetDBScanResult returns the latest scan result for a site.
+// Returns ErrNotFound when no scan has been run yet.
+func (r *Repo) GetDBScanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBScanResult, error) {
+	var out DBScanResult
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).GetDBScanResult(ctx, sqlc.GetDBScanResultParams{
+			SiteID:   siteID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		out = DBScanResult{
+			SiteID:               row.SiteID,
+			TenantID:             row.TenantID,
+			JobID:                row.JobID,
+			CategoriesJSON:       row.CategoriesJson,
+			TablesJSON:           row.TablesJson,
+			OrphanedOptionsJSON:  row.OrphanedOptionsJson,
+			OrphanedCronJSON:     row.OrphanedCronJson,
+			InstalledPluginsJSON: row.InstalledPluginsJson,
+			DBSizeBytes:          row.DbSizeBytes,
+			TableCount:           int(row.TableCount),
+			ScannedAt:            row.ScannedAt,
+			CreatedAt:            row.CreatedAt,
+		}
+		return nil
+	})
+	if err != nil {
+		return DBScanResult{}, err
+	}
+	return out, nil
+}
+
+// ---------------------------------------------------------------------------
 // row <-> model mapping
 // ---------------------------------------------------------------------------
 
@@ -317,6 +758,10 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		CacheBypassCookies:        coalesce(row.CacheBypassCookies),
 		CacheIncludeQueries:       coalesce(row.CacheIncludeQueries),
 		CacheIncludeCookies:       coalesce(row.CacheIncludeCookies),
+		PreloadConcurrency:        int(row.PreloadConcurrency),
+		PreloadDelayMs:            int(row.PreloadDelayMs),
+		PreloadBatchSize:          int(row.PreloadBatchSize),
+		PreloadMaxLoad:            float64(row.PreloadMaxLoad),
 		CSSJSMinify:               row.CssJsMinify,
 		CSSRucss:                  row.CssRucss,
 		CSSRucssIncludeSelectors:  coalesce(row.CssRucssIncludeSelectors),
@@ -348,6 +793,7 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		DBCommentsTrashed:         row.DbCommentsTrashed,
 		DBTransientsExpired:       row.DbTransientsExpired,
 		DBOptimizeTables:          row.DbOptimizeTables,
+		NextDBCleanAt:             tsToTimePtr(row.NextDbCleanAt),
 		BloatDisableBlockCSS:      row.BloatDisableBlockCss,
 		BloatDisableDashicons:     row.BloatDisableDashicons,
 		BloatDisableEmojis:        row.BloatDisableEmojis,
@@ -439,4 +885,98 @@ func tsPtr(t *time.Time) pgtype.Timestamptz {
 		return pgtype.Timestamptz{Valid: false}
 	}
 	return pgtype.Timestamptz{Time: *t, Valid: true}
+}
+
+func tsToTimePtr(ts pgtype.Timestamptz) *time.Time {
+	if !ts.Valid {
+		return nil
+	}
+	t := ts.Time
+	return &t
+}
+
+// durationToInterval converts a time.Duration to a pgtype.Interval suitable
+// for passing to the GetStalledDB* queries (::interval cast).
+func durationToInterval(d time.Duration) pgtype.Interval {
+	// pgtype.Interval stores microseconds in the Microseconds field.
+	return pgtype.Interval{Microseconds: d.Microseconds(), Valid: true}
+}
+
+// ---------------------------------------------------------------------------
+// P3.8 — orphan-delete watchdog columns (active_orphan_delete_job_id /
+// active_orphan_delete_started on site_perf_config)
+// ---------------------------------------------------------------------------
+
+// SetActiveDBOrphanDeleteJob stamps the in-flight db_orphan_delete watchdog
+// columns. Runs under InAgentTx.
+func (r *Repo) SetActiveDBOrphanDeleteJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE site_perf_config
+			    SET active_orphan_delete_job_id  = $1,
+			        active_orphan_delete_started = $2
+			  WHERE site_id = $3`,
+			jobID, startedAt, siteID,
+		)
+		return err
+	})
+}
+
+// ClearActiveDBOrphanDeleteJob clears the in-flight db_orphan_delete watchdog
+// columns. Runs under InAgentTx.
+func (r *Repo) ClearActiveDBOrphanDeleteJob(ctx context.Context, siteID uuid.UUID) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE site_perf_config
+			    SET active_orphan_delete_job_id  = NULL,
+			        active_orphan_delete_started = NULL
+			  WHERE site_id = $1`,
+			siteID,
+		)
+		return err
+	})
+}
+
+// StalledDBOrphanDeleteJob is a minimal view returned by the orphan-delete
+// watchdog sweep.
+type StalledDBOrphanDeleteJob struct {
+	SiteID   uuid.UUID
+	TenantID uuid.UUID
+	JobID    string
+}
+
+// GetStalledDBOrphanDeleteJobs returns rows where
+// active_orphan_delete_started is older than threshold. Cross-tenant
+// (InAgentTx).
+func (r *Repo) GetStalledDBOrphanDeleteJobs(ctx context.Context, threshold time.Duration) ([]StalledDBOrphanDeleteJob, error) {
+	var out []StalledDBOrphanDeleteJob
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := tx.Query(ctx,
+			`SELECT site_id, tenant_id, active_orphan_delete_job_id
+			   FROM site_perf_config
+			  WHERE active_orphan_delete_started IS NOT NULL
+			    AND active_orphan_delete_started < now() - $1::interval`,
+			durationToInterval(threshold),
+		)
+		if qerr != nil {
+			return qerr
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var s StalledDBOrphanDeleteJob
+			var jobID *string
+			if serr := rows.Scan(&s.SiteID, &s.TenantID, &jobID); serr != nil {
+				return serr
+			}
+			if jobID != nil {
+				s.JobID = *jobID
+			}
+			out = append(out, s)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }

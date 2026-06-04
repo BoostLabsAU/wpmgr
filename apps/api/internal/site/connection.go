@@ -119,7 +119,40 @@ const (
 	EventCachePreloadCompleted = "cache.preload.completed"
 	EventCacheStatsUpdated     = "cache.stats.updated"
 	EventPerfConfigUpdated     = "perf.config.updated"
-	EventDbCleanCompleted      = "db.clean.completed"
+	EventDbCleanCompleted = "db.clean.completed"
+	EventDbCleanStarted   = "db.clean.started"
+	EventDbCleanProgress  = "db.clean.progress"
+	EventDbCleanFailed    = "db.clean.failed"
+
+	// DB scan events (M39 Phase 2) — synchronous read-only scan lifecycle.
+	// db.scan.started   emitted before the CP sends the db_scan command.
+	// db.scan.completed emitted after the synchronous ACK returns ok=true.
+	// db.scan.failed    emitted on transport error, ok=false, or watchdog stall.
+	EventDbScanStarted   = "db.scan.started"
+	EventDbScanCompleted = "db.scan.completed"
+	EventDbScanFailed    = "db.scan.failed"
+
+	// DB table-action events (Phase 2.2) — per-table DDL operations.
+	// db.table.action.completed emitted after a synchronous db_table_action ACK
+	//   returns the full per-table results.
+	// db.table.action.failed    emitted on transport error or top-level ok=false.
+	EventDbTableActionCompleted = "db.table.action.completed"
+	EventDbTableActionFailed    = "db.table.action.failed"
+
+	// Orphan delete lifecycle events (P3.8). These mirror the db.clean.* naming
+	// convention.
+	// db.orphan.delete.started   — emitted synchronously by the CP handler before
+	//   the db_orphan_delete command is sent to the agent.
+	// db.orphan.delete.progress  — emitted by the CP on each intermediate progress
+	//   POST (done=false) from the agent.
+	// db.orphan.delete.completed — emitted by the CP on the final progress POST
+	//   (done=true, no error state).
+	// db.orphan.delete.failed    — emitted on agent transport error, ok=false ACK,
+	//   or CP watchdog stall.
+	EventDbOrphanDeleteStarted   = "db.orphan.delete.started"
+	EventDbOrphanDeleteProgress  = "db.orphan.delete.progress"
+	EventDbOrphanDeleteCompleted = "db.orphan.delete.completed"
+	EventDbOrphanDeleteFailed    = "db.orphan.delete.failed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

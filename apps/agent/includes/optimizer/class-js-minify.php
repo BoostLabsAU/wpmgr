@@ -8,8 +8,7 @@
  * skipped (assumed pre-minified). Inline scripts, external sources, and already-
  * cached files are left untouched.
  *
- * Standard minify-and-rewrite technique; original implementation. NOT copied
- * from a third-party plugin.
+ * Standard minify-and-rewrite technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

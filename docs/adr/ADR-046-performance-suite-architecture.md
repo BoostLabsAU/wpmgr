@@ -2,7 +2,7 @@
 
 **Status:** Accepted · **Date:** 2026-06-03
 **Relates:** ADR-043 (media optimizer — agent/CP split, presigned transport), ADR-031 (CP→agent signed commands), ADR-038 (SSE channel scoping), ADR-002 (RLS authored by hand), ADR-010 (object storage).
-**Recon:** `analysis/perf-suite-recon.md`, `analysis/flying-press-cache-patterns.md`.
+**Recon:** `analysis/perf-suite-recon.md`, `analysis/cache-plugin-patterns.md`.
 
 ## Context
 

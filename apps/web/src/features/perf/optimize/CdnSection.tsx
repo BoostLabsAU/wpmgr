@@ -3,7 +3,7 @@ import { useState } from "react";
 import { SelectField, TextField } from "../components/Field";
 import { SettingRow } from "../components/SettingRow";
 import { SettingsCard } from "../components/SettingsCard";
-import { CDN_FILE_TYPES, type PerfConfig } from "../types";
+import { CDN_FILE_TYPES, CDN_PROVIDERS, type PerfConfig } from "../types";
 
 // CDN delivery: enable + base URL + file-type scope + provider + write-only
 // credentials.
@@ -78,13 +78,13 @@ export function CdnSection({ config, save, disabled, saving }: CdnSectionProps) 
             onChange={(v) => save({ cdn_file_types: v })}
             disabled={disabled}
           />
-          <TextField
+          <SelectField
             label="Provider"
             value={config.cdn_provider}
+            options={CDN_PROVIDERS}
             onChange={(v) => save({ cdn_provider: v })}
-            onCommit={(v) => save({ cdn_provider: v.trim() })}
-            placeholder="cloudflare"
             disabled={disabled}
+            hint="Used for edge-cache purges. Only these providers are supported."
           />
 
           {/* Write-only credentials — the stored value is never shown. */}

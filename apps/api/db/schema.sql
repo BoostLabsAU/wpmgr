@@ -1296,6 +1296,8 @@ CREATE TABLE site_perf_config (
     db_comments_trashed           boolean     NOT NULL DEFAULT false,
     db_transients_expired         boolean     NOT NULL DEFAULT false,
     db_optimize_tables            boolean     NOT NULL DEFAULT false,
+    -- DB-clean scheduling (M38): CP-owned; NULL = no pending auto-clean.
+    next_db_clean_at              timestamptz,
     -- Bloat removal
     bloat_disable_block_css       boolean     NOT NULL DEFAULT false,
     bloat_disable_dashicons       boolean     NOT NULL DEFAULT false,
@@ -1306,12 +1308,26 @@ CREATE TABLE site_perf_config (
     bloat_disable_oembeds         boolean     NOT NULL DEFAULT false,
     bloat_heartbeat_control       boolean     NOT NULL DEFAULT false,
     bloat_post_revisions_control  boolean     NOT NULL DEFAULT false,
+    -- Preload (cache-warm) throttle (M37) — operator-tunable queue drain knobs.
+    preload_concurrency           integer     NOT NULL DEFAULT 1,
+    preload_delay_ms              integer     NOT NULL DEFAULT 500,
+    preload_batch_size            integer     NOT NULL DEFAULT 50,
+    preload_max_load              real        NOT NULL DEFAULT 0,
     -- Server / install state (agent-reported)
     server_software               text,
     dropin_installed              boolean     NOT NULL DEFAULT false,
     wp_cache_constant_set         boolean     NOT NULL DEFAULT false,
     htaccess_managed              boolean     NOT NULL DEFAULT false,
     config_version                integer     NOT NULL DEFAULT 1,
+    -- Watchdog columns (M39): track in-flight db_clean/db_scan jobs so the
+    -- periodic DBCleanWatchdogWorker can detect stalled jobs and emit
+    -- db.clean.failed / db.scan.failed SSE to un-stick the UI.
+    active_db_clean_job_id        text,
+    active_db_clean_started       timestamptz,
+    active_db_scan_job_id         text,
+    active_db_scan_started        timestamptz,
+    active_orphan_delete_job_id   text,
+    active_orphan_delete_started  timestamptz,
     created_at                    timestamptz NOT NULL DEFAULT now(),
     updated_at                    timestamptz NOT NULL DEFAULT now()
 );
@@ -1324,6 +1340,41 @@ CREATE POLICY site_perf_config_tenant_isolation ON site_perf_config
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 CREATE POLICY site_perf_config_agent ON site_perf_config
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_db_scan_results — latest db_scan output per site (M39 + M41).
+-- One row per site, upserted on every scan. Holds the full per-category
+-- count/bytes preview so the operator can confirm before running a clean.
+-- M41 (Phase 3.3) adds three JSONB columns for orphan-scan output:
+--   orphaned_options_json  — wp_options rows attributable to no installed plugin.
+--   orphaned_cron_json     — WP-Cron events attributable to no installed plugin/core.
+--   installed_plugins_json — full installed-plugin snapshot at scan time (P3.8 gate).
+CREATE TABLE IF NOT EXISTS site_db_scan_results (
+    site_id                uuid        NOT NULL,
+    tenant_id              uuid        NOT NULL,
+    job_id                 text        NOT NULL,
+    categories_json        jsonb       NOT NULL DEFAULT '{}',
+    tables_json            jsonb       NOT NULL DEFAULT '[]',
+    db_size_bytes          bigint      NOT NULL DEFAULT 0,
+    table_count            int         NOT NULL DEFAULT 0,
+    scanned_at             timestamptz NOT NULL,
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    -- M41 Phase 3.3: orphan-enumeration columns (DEFAULT '[]' so rows from
+    -- agents < 0.16.0 return an empty array rather than NULL).
+    orphaned_options_json  jsonb       NOT NULL DEFAULT '[]',
+    orphaned_cron_json     jsonb       NOT NULL DEFAULT '[]',
+    installed_plugins_json jsonb       NOT NULL DEFAULT '[]',
+    CONSTRAINT site_db_scan_results_pkey PRIMARY KEY (site_id)
+);
+CREATE INDEX IF NOT EXISTS site_db_scan_results_tenant_idx
+    ON site_db_scan_results (tenant_id);
+ALTER TABLE site_db_scan_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_db_scan_results FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_db_scan_results_tenant_isolation ON site_db_scan_results
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY site_db_scan_results_agent ON site_db_scan_results
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
 
@@ -1434,3 +1485,84 @@ CREATE POLICY rucss_jobs_tenant_isolation ON rucss_jobs
 CREATE POLICY rucss_jobs_agent ON rucss_jobs
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- plugin_signatures — M40 corpus table (global, no tenant_id).
+-- ---------------------------------------------------------------------------
+-- Global read-only reference data used by the DB-Cleaner corpus classifier.
+-- One row per wordpress.org plugin slug; stores known option/transient/table/
+-- cron-hook name patterns. ENABLE RLS (not FORCE) so the migration owner can
+-- INSERT the seed; wpmgr_app has SELECT only (see m40 migration REVOKE).
+CREATE TABLE plugin_signatures (
+    slug               text        NOT NULL,
+    corpus_version     integer     NOT NULL DEFAULT 1,
+    option_patterns    jsonb       NOT NULL DEFAULT '[]',
+    transient_patterns jsonb       NOT NULL DEFAULT '[]',
+    table_patterns     jsonb       NOT NULL DEFAULT '[]',
+    cron_hook_patterns jsonb       NOT NULL DEFAULT '[]',
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT plugin_signatures_pkey PRIMARY KEY (slug)
+);
+
+CREATE INDEX plugin_signatures_corpus_version_idx ON plugin_signatures (corpus_version);
+
+ALTER TABLE plugin_signatures ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY plugin_signatures_read ON plugin_signatures
+    FOR SELECT USING (true);
+
+-- The wpmgr_app role has INSERT/UPDATE/DELETE revoked on plugin_signatures.
+-- The ALTER DEFAULT PRIVILEGES in m1 grants wpmgr_app DML on all new tables;
+-- m40 explicitly undoes that for this table because corpus writes must only
+-- happen via the owner/superuser DSN at migration time. The ENABLE (not FORCE)
+-- RLS posture means the owner bypasses RLS at seed time; wpmgr_app's write
+-- attempts fail at the privilege level before RLS is evaluated.
+-- This REVOKE is the PRIMARY write guard; RLS SELECT policy is the second layer.
+REVOKE INSERT, UPDATE, DELETE ON plugin_signatures FROM wpmgr_app;
+
+-- ---------------------------------------------------------------------------
+-- site_db_size_history — M42 Phase 3.4: DB-size trend (append-only).
+-- ---------------------------------------------------------------------------
+-- One row per successful db_scan execution. The CP writes it from the same
+-- InTenantTx as UpsertDBScanResult (atomic with the scan row). The agent
+-- NEVER writes this table directly.
+--
+-- RLS mirrors site_cache_stats EXACTLY (m36 precedent).
+-- Defense-in-depth note: the agent policy is intentionally cross-tenant so the
+-- River GC worker can sweep the whole table in a single pass without enumerating
+-- tenant IDs (same pattern as backup_retention_gc, php_errors retention GC,
+-- site_events prune). The GC worker only deletes — never constructs
+-- user-visible output from rows it touches.
+CREATE TABLE site_db_size_history (
+    id             uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    site_id        uuid        NOT NULL
+                   REFERENCES sites (id) ON DELETE CASCADE,
+    tenant_id      uuid        NOT NULL
+                   REFERENCES tenants (id) ON DELETE CASCADE,
+    db_size_bytes  bigint      NOT NULL DEFAULT 0,
+    table_count    int         NOT NULL DEFAULT 0,
+    scanned_at     timestamptz NOT NULL,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_db_size_history_site_scanned_uniq
+        UNIQUE (site_id, scanned_at)
+);
+
+-- Serves the GET /perf/db/health ORDER BY + LIMIT query efficiently.
+CREATE INDEX site_db_size_history_site_scanned_idx
+    ON site_db_size_history (site_id, scanned_at DESC);
+
+-- Serves the GC prune worker's WHERE created_at < cutoff scan.
+CREATE INDEX site_db_size_history_created_idx
+    ON site_db_size_history (created_at);
+
+ALTER TABLE site_db_size_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_db_size_history FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_db_size_history_tenant_isolation ON site_db_size_history
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+-- No WITH CHECK: the GC path only deletes; inserts flow through the
+-- tenant_isolation policy via InTenantTx.
+CREATE POLICY site_db_size_history_agent ON site_db_size_history
+    USING (current_setting('app.agent', true) = 'on');

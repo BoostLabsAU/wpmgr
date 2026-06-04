@@ -18,7 +18,7 @@
  * order are treated as critical (eager). This is a pragmatic, dependency-free
  * approximation of LCP detection.
  *
- * Original implementation. NOT copied from a third-party plugin.
+ * Standard image lazy-load and dimension-injection technique.
  *
  * @package WPMgr\Agent\Optimizer
  */

@@ -66,6 +66,20 @@ final class PerfReporterTest extends TestCase
         $this->assertSame($ts, $this->optionStore[PerfReporter::OPTION_LAST_PRELOAD_AT]);
     }
 
+    public function test_persist_last_purge_stores_timestamp_and_kind(): void
+    {
+        $ts = time();
+        PerfReporter::persistLastPurge($ts, 'all');
+        $this->assertSame($ts, $this->optionStore[PerfReporter::OPTION_LAST_PURGED_AT]);
+        $this->assertSame('all', $this->optionStore[PerfReporter::OPTION_LAST_PURGE_KIND]);
+    }
+
+    public function test_persist_last_purge_defaults_kind_to_all(): void
+    {
+        PerfReporter::persistLastPurge(time());
+        $this->assertSame('all', $this->optionStore[PerfReporter::OPTION_LAST_PURGE_KIND]);
+    }
+
     public function test_option_keys_are_non_empty_strings(): void
     {
         $this->assertNotEmpty(PerfReporter::OPTION_PERF_CONFIG_VERSION);

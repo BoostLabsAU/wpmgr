@@ -248,6 +248,15 @@ func (d DBConfig) DSN() string {
 
 // MigrateDSN returns the connection string used to run migrations: the explicit
 // MigrationDSN (owner/superuser) when set, otherwise the app DSN (dev fallback).
+//
+// Migrations perform privileged DDL — CREATE ROLE wpmgr_app (m1), ALTER DEFAULT
+// PRIVILEGES, CREATE POLICY, GRANT/REVOKE — so they must run as an owner/
+// superuser role, not the unprivileged app role. In production set the owner
+// DSN; in single-DSN dev the bootstrap superuser doubles as both. The
+// plugin_signatures seed (m40.1) is authored to be resilient to either model:
+// it INSERTs the corpus rows while wpmgr_app still holds the m1 default INSERT
+// grant, then REVOKEs that grant, so the seed succeeds whether the runner is the
+// owner or wpmgr_app itself, ending with wpmgr_app SELECT-only either way.
 func (d DBConfig) MigrateDSN() string {
 	if d.MigrationDSN != "" {
 		return d.MigrationDSN

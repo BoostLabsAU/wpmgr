@@ -3,6 +3,10 @@
  * Minimal $wpdb double for DbCleanup tests: records prepared statements + writes
  * and returns canned id sets so the cleanup tasks can be asserted precisely.
  *
+ * Updated for M38: get_results() now returns the data-free map rows for the
+ * information_schema DATA_FREE query so the new dataFreeMap() path in
+ * DbCleanup::runOptimizeTables() can detect eligible tables.
+ *
  * @package WPMgr\Agent\Tests
  */
 
@@ -17,11 +21,34 @@ final class FakeCleanupWpdb
 {
     public string $prefix = 'wp_';
 
-    /** @var list<int> Canned ids returned by get_col(). */
+    /** @var list<int> Canned ids returned by get_col() for most SELECT queries. */
     public array $idResults = [];
 
-    /** @var list<string> Canned table names returned by get_col() for the
-     *  information_schema (non-InnoDB / DATA_FREE) optimize-eligibility query. */
+    /**
+     * Canned ids returned by get_col() when the SQL is the term_taxonomy
+     * SELECT (the first ids() call in runDeleteOrphanedTermRelationships).
+     * When null, $idResults is used instead.
+     *
+     * @var list<int>|null
+     */
+    public ?array $termTaxonomyIds = null;
+
+    /**
+     * Canned ids returned by get_col() for the orphan object_id SELECT in
+     * runDeleteOrphanedTermRelationships (the loop SELECT). When null,
+     * $idResults is used instead.
+     *
+     * @var list<int>|null
+     */
+    public ?array $orphanObjectIds = null;
+
+    /**
+     * Canned table names that are eligible for OPTIMIZE (non-InnoDB + DATA_FREE > 0).
+     * Used by get_results() for the information_schema DATA_FREE query AND by
+     * get_col() for the legacy tableExists guard.
+     *
+     * @var list<string>
+     */
     public array $optimizableTables = [];
 
     /** @var list<string> Prepared statement strings (post-substitution). */
@@ -65,25 +92,53 @@ final class FakeCleanupWpdb
 
     /**
      * @param string $sql Prepared SELECT.
-     * @return list<int>
+     * @return list<int|string>
      */
     public function get_col(string $sql): array
     {
-        // The optimize-eligibility query (information_schema engine + DATA_FREE)
-        // returns table NAMES; every other get_col returns the canned id list.
-        if (stripos($sql, 'information_schema') !== false || stripos($sql, 'DATA_FREE') !== false) {
+        // tableExists check: returns a list of table names present.
+        if (stripos($sql, 'information_schema') !== false && stripos($sql, 'DATA_FREE') === false) {
+            // Return the table list for existence checks — always "found" for
+            // known tables so action_scheduler guards pass cleanly.
             return $this->optimizableTables;
         }
+
+        // Fix 1/2: discriminate the two ids() calls in runDeleteOrphanedTermRelationships.
+        // First call: collects post-taxonomy term_taxonomy_ids (contains 'term_taxonomy'
+        // and 'taxonomy NOT IN').
+        if (stripos($sql, 'term_taxonomy') !== false && stripos($sql, 'taxonomy NOT IN') !== false) {
+            return $this->termTaxonomyIds ?? $this->idResults;
+        }
+        // Loop call: collects orphan object_ids (contains 'term_relationships' and
+        // 'NOT IN (SELECT ID FROM').
+        if (stripos($sql, 'term_relationships') !== false && stripos($sql, 'NOT IN') !== false) {
+            return $this->orphanObjectIds ?? $this->idResults;
+        }
+
         return $this->idResults;
     }
 
     /**
+     * Returns canned associative rows for the DATA_FREE information_schema query
+     * (used by DbCleanup::dataFreeMap). All other get_results calls return [].
+     *
      * @param string $sql  Prepared SELECT.
      * @param mixed  $mode Output mode (ignored).
      * @return list<array<string,mixed>>
      */
     public function get_results(string $sql, $mode = null): array
     {
+        if (stripos($sql, 'DATA_FREE') !== false && stripos($sql, 'information_schema') !== false) {
+            // Return one row per eligible table with a non-zero DATA_FREE so the
+            // dataFreeMap() BEFORE-scan sees them; the AFTER-scan also returns them
+            // (same fake), so bytes_freed = 0 (before == after). That's fine —
+            // rows_deleted (table count) is what the tests assert.
+            $rows = [];
+            foreach ($this->optimizableTables as $tbl) {
+                $rows[] = ['TABLE_NAME' => $tbl, 'DATA_FREE' => 1024];
+            }
+            return $rows;
+        }
         return [];
     }
 
@@ -96,6 +151,10 @@ final class FakeCleanupWpdb
         $this->writes[] = $sql;
         if (stripos($sql, 'DELETE FROM') === 0 && preg_match('/IN \(([^)]*)\)/', $sql, $m)) {
             return count(array_filter(explode(',', $m[1]), static fn ($x) => trim($x) !== ''));
+        }
+        // OPTIMIZE TABLE returns 1 (success) per table.
+        if (stripos($sql, 'OPTIMIZE TABLE') !== false) {
+            return 1;
         }
         return 1;
     }
