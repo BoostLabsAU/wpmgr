@@ -106,6 +106,14 @@ final class Optimizer
         if (function_exists('is_user_logged_in') && is_user_logged_in()) {
             return $html;
         }
+        // Per-page optimization opt-out via post meta.
+        if (function_exists('is_singular') && is_singular()
+            && function_exists('get_queried_object_id') && function_exists('get_post_meta')
+        ) {
+            if (get_post_meta((int) get_queried_object_id(), '_wpmgr_no_optimize', true) === '1') {
+                return $html;
+            }
+        }
 
         // 1. Fonts.
         if ($this->config->fontsDisplaySwap || $this->config->fontsOptimizeGoogle || $this->config->fontsPreload) {

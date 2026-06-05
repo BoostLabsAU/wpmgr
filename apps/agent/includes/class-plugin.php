@@ -529,6 +529,10 @@ final class Plugin
         if (function_exists('is_admin') && is_admin()) {
             $this->admin->registerHooks();
 
+            // Per-page cache/optimization controls — "WPMgr Cache" side meta box
+            // on all public post types. Admin-only; zero front-end cost.
+            (new \WPMgr\Agent\Cache\PageCacheControlMetaBox())->registerHooks();
+
             // Media Optimizer (Phase 4) — surface per-attachment optimization
             // stats in the Media Library modal + the attachment edit meta box.
             // Read-only, admin-only; the injected HTML is escaped by

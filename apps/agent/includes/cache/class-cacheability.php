@@ -217,6 +217,14 @@ final class Cacheability
         if (!empty($ctx['password_required'])) {
             return false;
         }
+        // Per-page no-cache meta: never store excluded singular pages.
+        if (function_exists('is_singular') && is_singular()
+            && function_exists('get_queried_object_id') && function_exists('get_post_meta')
+        ) {
+            if (get_post_meta((int) get_queried_object_id(), '_wpmgr_no_cache', true) === '1') {
+                return false;
+            }
+        }
         // Any bypass cookie disables caching for this request.
         if ($this->matchesBypassCookie((array) ($ctx['cookies'] ?? []))) {
             return false;
