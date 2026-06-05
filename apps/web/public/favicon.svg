@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32" fill="none">
+  <!-- WPMgr Fleet Hub mark: one filled center node wired to four hollow satellites.
+       Brand teal (matches --primary oklch(68% 0.14 195)); transparent bg so it reads
+       on both light and dark browser tabs. -->
+  <rect x="11.5" y="11.5" width="9" height="9" rx="2.25" fill="#12B5BE" />
+  <g stroke="#12B5BE" stroke-width="2.25" fill="none">
+    <rect x="4" y="4" width="6" height="6" rx="1.75" />
+    <rect x="22" y="4" width="6" height="6" rx="1.75" />
+    <rect x="4" y="22" width="6" height="6" rx="1.75" />
+    <rect x="22" y="22" width="6" height="6" rx="1.75" />
+  </g>
+  <g stroke="#12B5BE" stroke-width="2.25" stroke-linecap="round">
+    <line x1="10.2" y1="10.2" x2="12" y2="12" />
+    <line x1="21.8" y1="10.2" x2="20" y2="12" />
+    <line x1="10.2" y1="21.8" x2="12" y2="20" />
+    <line x1="21.8" y1="21.8" x2="20" y2="20" />
+  </g>
+</svg>
