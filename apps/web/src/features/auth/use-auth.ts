@@ -139,7 +139,7 @@ export function useRegister(): UseMutationResult<RegisterResult, Error, Register
       }
 
       // First-account path: backend returns the Me object + sets a session cookie.
-      return { me: data as unknown as Me, pending: false };
+      return { me: data, pending: false };
     },
     onSuccess: (result) => {
       if (result.me) {
@@ -250,12 +250,12 @@ export function useResetPassword(): UseMutationResult<
       const status = result.response?.status;
 
       if (status === 400 || status === 410 || status === 429) {
-        return { status } as ResetPasswordResult;
+        return { status };
       }
 
       if (result.error !== undefined) throw toError(result.error);
 
-      return { status: 200 } as ResetPasswordResult;
+      return { status: 200 };
     },
   });
 }
@@ -301,12 +301,12 @@ export function useVerifyEmail(): UseMutationResult<
       const status = result.response?.status;
 
       if (status === 410 || status === 429) {
-        return { status } as VerifyEmailResult;
+        return { status };
       }
 
       if (result.error !== undefined) throw toError(result.error);
 
-      const me = result.data as unknown as Me;
+      const me = result.data as Me;
       return { status: 200, me };
     },
     onSuccess: (result) => {

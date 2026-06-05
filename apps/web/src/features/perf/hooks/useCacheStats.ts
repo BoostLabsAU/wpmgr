@@ -58,7 +58,7 @@ export function usePurgeCache(
     mutationFn: async (body: PurgeBody) => {
       const { data, error } = await purgeCache({ path: { siteId }, body });
       if (error) throw toError(error);
-      return (data as PerfActionResult) ?? { ok: false };
+      return data ?? { ok: false };
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: perfKeys.stats(siteId) });

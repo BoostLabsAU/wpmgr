@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Tests;
 
+use Brain\Monkey;
+use Brain\Monkey\Functions;
 use WPMgr\Agent\Cache\Purge;
 use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
@@ -24,6 +26,11 @@ final class CachePurgeTest extends TestCase
     protected function set_up(): void
     {
         parent::set_up();
+        Monkey\setUp();
+        // PerfReporter::persistLastPurge() calls update_option() under a
+        // function_exists guard; Brain Monkey makes that guard pass, so stub it.
+        Functions\when('update_option')->justReturn(true);
+
         $this->root = sys_get_temp_dir() . '/wpmgr-cache-' . uniqid('', true) . '/cache/wpmgr';
         $this->seed('example.com', '', ['index.html.gz', 'index-mobile.html.gz', 'index-logged-in-editor.html.gz']);
         $this->seed('example.com/blog', '', ['index.html.gz']);
@@ -36,6 +43,7 @@ final class CachePurgeTest extends TestCase
     protected function tear_down(): void
     {
         $this->rrmdir(dirname(dirname($this->root)));
+        Monkey\tearDown();
         parent::tear_down();
     }
 

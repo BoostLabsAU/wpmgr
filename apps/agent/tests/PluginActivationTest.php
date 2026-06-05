@@ -76,6 +76,9 @@ final class PluginActivationTest extends TestCase
         }
         Functions\when('is_admin')->justReturn(false);
         Functions\when('is_multisite')->justReturn(false);
+        // plugin_basename() is called under a function_exists guard inside
+        // AdminBarPurge during Plugin::boot(); Brain Monkey makes the guard pass.
+        Functions\when('plugin_basename')->returnArg();
 
         Functions\when('update_option')->alias(function ($name, $value) {
             $this->options[$name] = $value;

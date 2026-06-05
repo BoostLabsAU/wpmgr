@@ -64,6 +64,10 @@ final class EnrollmentTest extends TestCase
         Functions\when('wp_get_theme')->justReturn(null);
         Functions\when('wp_get_themes')->justReturn([]);
         Functions\when('get_plugins')->justReturn([]);
+        // MetadataCommand::collect() calls get_stylesheet() / get_template() under
+        // a function_exists guard; Brain Monkey makes the guard pass, so stub both.
+        Functions\when('get_stylesheet')->justReturn('');
+        Functions\when('get_template')->justReturn('');
         Functions\when('wp_json_encode')->alias(static fn ($d) => json_encode($d));
         Functions\when('esc_url_raw')->returnArg();
         Functions\when('is_wp_error')->justReturn(false);

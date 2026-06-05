@@ -43,6 +43,9 @@ final class CachePurgeActionsTest extends TestCase
         Functions\when('do_action')->alias(function (string $hook, ...$args): void {
             $this->fired[] = [$hook, $args];
         });
+        // PerfReporter::persistLastPurge() calls update_option() under a
+        // function_exists guard; Brain Monkey makes that guard pass, so stub it.
+        Functions\when('update_option')->justReturn(true);
 
         $this->root = sys_get_temp_dir() . '/wpmgr-pa-' . uniqid('', true) . '/cache/wpmgr';
         $this->seed('example.com', ['index.html.gz']);

@@ -95,6 +95,10 @@ final class LifecycleTest extends TestCase
         // trip Brain Monkey's strict "unmocked function" guard.
         Functions\when('wp_get_theme')->justReturn(null);
         Functions\when('wp_get_themes')->justReturn([]);
+        // get_stylesheet() / get_template() are called under function_exists
+        // guards inside MetadataCommand; Brain Monkey makes the guard pass.
+        Functions\when('get_stylesheet')->justReturn('');
+        Functions\when('get_template')->justReturn('');
 
         // Capture every signed POST so we can assert path / timeout / body.
         Functions\when('wp_remote_post')->alias(function ($url, $args) {

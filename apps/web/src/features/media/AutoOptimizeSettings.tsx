@@ -6,7 +6,7 @@ import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "@/components/toast";
 
-import { FORMAT_OPTIONS, QUALITY_OPTIONS } from "./OptimizeDialog";
+import { FORMAT_OPTIONS, QUALITY_OPTIONS } from "./optimize-options";
 import { useMediaSettings, useUpdateMediaSettings } from "./hooks/useMediaSettings";
 import type { MediaSettings, TargetFormat, TargetQuality } from "./types";
 

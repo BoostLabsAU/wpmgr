@@ -47,6 +47,9 @@ final class DbTableActionEmptyGateTest extends TestCase
         Functions\when('get_transient')->justReturn(false);
         Functions\when('set_transient')->justReturn(true);
         Functions\when('delete_transient')->justReturn(true);
+        // is_multisite() is called (after function_exists guard) inside
+        // classifyTable()'s multisite-safety block; single-site default.
+        Functions\when('is_multisite')->justReturn(false);
     }
 
     protected function tear_down(): void
