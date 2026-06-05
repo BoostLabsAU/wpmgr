@@ -49,6 +49,7 @@ use WPMgr\Agent\Commands\DbCleanCommand;
 use WPMgr\Agent\Commands\DbOrphanDeleteCommand;
 use WPMgr\Agent\Commands\DbScanCommand;
 use WPMgr\Agent\Commands\DbTableActionCommand;
+use WPMgr\Agent\Cache\AdminBarPurge;
 use WPMgr\Agent\Cache\CacheManager;
 use WPMgr\Agent\Cache\PreloadQueue;
 use WPMgr\Agent\Commands\CachePreloadQueueStatusCommand;
@@ -181,6 +182,12 @@ final class Plugin
     private CacheManager $cacheManager;
 
     /**
+     * Admin-bar purge controls. Registers the WPMgr Cache node tree and the
+     * two admin_post handlers for purge-all and purge-url.
+     */
+    private AdminBarPurge $adminBarPurge;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -249,6 +256,7 @@ final class Plugin
         // builds its own WP_CACHE editor / drop-in installer / .htaccess manager
         // / nginx helper); inert until a cache_enable command flips it on.
         $this->cacheManager     = new CacheManager();
+        $this->adminBarPurge    = new AdminBarPurge($this->cacheManager, $this->settings);
 
         $this->router           = new Router($this->connector, $this->commands());
         $this->admin            = new Admin($this->settings, $this->enrollment, $this->keystore, $this->lifecycle, $this->updateChecker);
@@ -509,6 +517,14 @@ final class Plugin
         // ADR-042 Phase 2 — bind the CP self-update hooks. Self-gates on
         // isEnrolled() inside UpdateChecker::install(); idempotent (static guard).
         $this->updateChecker->install();
+
+        // Admin-bar cache purge controls — register on EVERY request, not just
+        // admin ones, so the "Purge this page" node can appear on the front-end
+        // admin bar (where is_admin() is false). Every bound hook self-gates:
+        // addBarNodes checks current_user_can('manage_options'); the
+        // admin_post_*, admin_notices, and plugin-row hooks only fire in their
+        // own admin contexts.
+        $this->adminBarPurge->registerHooks();
 
         if (function_exists('is_admin') && is_admin()) {
             $this->admin->registerHooks();

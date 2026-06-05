@@ -94,6 +94,16 @@ location / {
 
     try_files \$uri \$uri/ /index.php?\$args;
 }
+
+# WPMgr Browser Cache — add inside your server {} block manually.
+# Serves all static assets with a 1-year public cache lifetime.
+# Assets served by WordPress include a ?ver= query string that changes on
+# update, so browsers and CDNs revalidate when the URL changes.
+location ~* \.(css|js|mjs|woff2?|ttf|otf|eot|avif|webp|png|jpe?g|gif|svg|ico|mp4|webm|pdf)$ {
+    expires 1y;
+    add_header Cache-Control "public, max-age=31536000";
+    access_log off;
+}
 NGINX;
     }
 }
