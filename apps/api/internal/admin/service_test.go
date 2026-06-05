@@ -94,6 +94,10 @@ func (f *fakeStore) GrantSelfOwnerMembership(_ context.Context, _, _ uuid.UUID) 
 	return uuid.New(), "Test Org", true, nil
 }
 
+func (f *fakeStore) ListSitesByUser(_ context.Context, _ uuid.UUID) ([]AdminUserSite, error) {
+	return []AdminUserSite{}, nil
+}
+
 func (f *fakeStore) AccountsTenancy(_ context.Context, emailSubstr string) (AccountsTenancyReport, error) {
 	// Return users that contain emailSubstr in their email, with no memberships.
 	var users []AccountUser

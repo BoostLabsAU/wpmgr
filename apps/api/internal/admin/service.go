@@ -29,6 +29,7 @@ type userStore interface {
 	SiteTenancy(ctx context.Context, userID, siteID uuid.UUID) (SiteTenancyReport, error)
 	GrantSelfOwnerMembership(ctx context.Context, userID, siteID uuid.UUID) (uuid.UUID, string, bool, error)
 	AccountsTenancy(ctx context.Context, emailSubstr string) (AccountsTenancyReport, error)
+	ListSitesByUser(ctx context.Context, userID uuid.UUID) ([]AdminUserSite, error)
 }
 
 // SiteTenancy returns a read-only diagnostic comparing where a site + its perf
@@ -180,4 +181,19 @@ func (s *Service) ResendVerification(ctx context.Context, targetID uuid.UUID) er
 // Stats returns instance-wide counts for users, orgs, and sites.
 func (s *Service) Stats(ctx context.Context) (AdminStats, error) {
 	return s.repo.Stats(ctx)
+}
+
+// ListSitesByUser returns every site reachable via the membership chain for
+// userID. A pragmatic safety cap of 500 rows guards against pathological
+// accounts; in practice the set is bounded by the number of sites a user's
+// org memberships can reach.
+func (s *Service) ListSitesByUser(ctx context.Context, userID uuid.UUID) ([]AdminUserSite, error) {
+	sites, err := s.repo.ListSitesByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if len(sites) > 500 {
+		return nil, domain.Validation("too_many_sites", "user is associated with more than 500 sites")
+	}
+	return sites, nil
 }

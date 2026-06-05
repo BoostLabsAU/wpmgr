@@ -1,8 +1,9 @@
-import { useId, useState } from "react";
+import { Fragment, useId, useState } from "react";
 import { createFileRoute, redirect } from "@tanstack/react-router";
 import {
   Ban,
   CheckCircle2,
+  ChevronRight,
   MailCheck,
   ShieldCheck,
   Trash2,
@@ -41,7 +42,9 @@ import {
   useAdminDeleteUser,
   useAdminSetStatus,
   useAdminResendVerification,
+  useAdminUserSites,
   type AdminUser,
+  type AdminUserSite,
 } from "@/features/admin/use-admin";
 
 export const Route = createFileRoute("/_authed/admin")({
@@ -62,6 +65,11 @@ function AdminPage() {
   const [search, setSearch] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
   const [confirmText, setConfirmText] = useState("");
+  const [expandedUserId, setExpandedUserId] = useState<string | null>(null);
+
+  function toggleExpand(userId: string) {
+    setExpandedUserId((prev) => (prev === userId ? null : userId));
+  }
 
   const { data: stats } = useAdminStats();
   const {
@@ -178,25 +186,31 @@ function AdminPage() {
               </TableRow>
             ) : (
               users.map((u) => (
-                <UserRow
-                  key={u.id}
-                  user={u}
-                  onDelete={() => openDelete(u)}
-                  onToggleStatus={() =>
-                    setStatus.mutate({
-                      userId: u.id,
-                      status: u.status === "disabled" ? "active" : "disabled",
-                    })
-                  }
-                  onResend={() => resend.mutate(u.id)}
-                  isToggling={
-                    setStatus.isPending &&
-                    setStatus.variables?.userId === u.id
-                  }
-                  isResending={
-                    resend.isPending && resend.variables === u.id
-                  }
-                />
+                <Fragment key={u.id}>
+                  <UserRow
+                    user={u}
+                    onDelete={() => openDelete(u)}
+                    onToggleStatus={() =>
+                      setStatus.mutate({
+                        userId: u.id,
+                        status: u.status === "disabled" ? "active" : "disabled",
+                      })
+                    }
+                    onResend={() => resend.mutate(u.id)}
+                    isToggling={
+                      setStatus.isPending &&
+                      setStatus.variables?.userId === u.id
+                    }
+                    isResending={
+                      resend.isPending && resend.variables === u.id
+                    }
+                    isExpanded={expandedUserId === u.id}
+                    onToggleExpand={() => toggleExpand(u.id)}
+                  />
+                  {expandedUserId === u.id ? (
+                    <ExpandedSitesRow userId={u.id} />
+                  ) : null}
+                </Fragment>
               ))
             )}
           </TableBody>
@@ -230,6 +244,8 @@ function UserRow({
   onResend,
   isToggling,
   isResending,
+  isExpanded,
+  onToggleExpand,
 }: {
   user: AdminUser;
   onDelete: () => void;
@@ -237,6 +253,8 @@ function UserRow({
   onResend: () => void;
   isToggling: boolean;
   isResending: boolean;
+  isExpanded: boolean;
+  onToggleExpand: () => void;
 }) {
   const statusClass =
     user.status === "active"
@@ -281,6 +299,20 @@ function UserRow({
       </TableCell>
       <TableCell>
         <div className="flex items-center justify-end gap-1">
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            title={isExpanded ? "Collapse sites" : "Expand sites"}
+            aria-label={isExpanded ? `Collapse sites for ${user.email}` : `Expand sites for ${user.email}`}
+            aria-expanded={isExpanded}
+            onClick={onToggleExpand}
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={`size-3.5 transition-transform duration-150 ${isExpanded ? "rotate-90" : ""}`}
+            />
+          </Button>
           {user.status === "pending" ? (
             <Button
               type="button"
@@ -335,6 +367,76 @@ function UserRow({
             </>
           ) : null}
         </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ExpandedSitesRow
+// ---------------------------------------------------------------------------
+
+function connectionStatePill(state: string) {
+  if (state === "connected")
+    return (
+      <span className="inline-flex items-center rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-800 dark:bg-green-900/40 dark:text-green-300">
+        {state}
+      </span>
+    );
+  if (state === "degraded")
+    return (
+      <span className="inline-flex items-center rounded-full bg-yellow-100 px-1.5 py-0.5 text-[10px] font-medium text-yellow-800 dark:bg-yellow-900/40 dark:text-yellow-300">
+        {state}
+      </span>
+    );
+  return (
+    <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+      {state}
+    </span>
+  );
+}
+
+function ExpandedSitesRow({ userId }: { userId: string }) {
+  const { data: sites, isPending } = useAdminUserSites(userId);
+
+  return (
+    <TableRow className="bg-muted/30 hover:bg-muted/30">
+      <TableCell colSpan={8} className="py-0 pl-8 pr-4">
+        <ul className="divide-y divide-[var(--color-border)] text-sm">
+          {isPending ? (
+            <li className="py-3 text-xs text-muted-foreground">
+              Loading sites...
+            </li>
+          ) : !sites || sites.length === 0 ? (
+            <li className="py-3 text-xs text-muted-foreground">
+              No sites found for this user.
+            </li>
+          ) : (
+            sites.map((site: AdminUserSite) => (
+              <li key={site.site_id} className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2.5">
+                <span className="font-medium">{site.name || site.url}</span>
+                <a
+                  href={site.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="font-mono text-xs text-muted-foreground hover:underline"
+                >
+                  {site.url}
+                </a>
+                {connectionStatePill(site.connection_state)}
+                <span className="text-xs text-muted-foreground">
+                  {site.tenant_name}
+                </span>
+                <span className="inline-flex items-center rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground">
+                  {site.member_role}
+                </span>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  {new Date(site.site_created_at).toLocaleDateString()}
+                </span>
+              </li>
+            ))
+          )}
+        </ul>
       </TableCell>
     </TableRow>
   );

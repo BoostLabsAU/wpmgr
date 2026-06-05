@@ -32,6 +32,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.DELETE("/users/:userId", h.deleteUser)
 	g.PATCH("/users/:userId", h.setStatus)
 	g.POST("/users/:userId/resend-verification", h.resendVerification)
+	g.GET("/users/:userId/sites", h.userSites)
 	g.GET("/sites/:siteId/tenancy", h.siteTenancy)
 	g.POST("/sites/:siteId/grant-self-membership", h.grantSelfMembership)
 	g.GET("/accounts-tenancy", h.accountsTenancy)
@@ -131,6 +132,42 @@ func (h *Handler) accountsTenancy(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"users": rep.Users,
 		"orgs":  rep.Orgs,
+	})
+}
+
+// userSites returns every site reachable by the given user via their org
+// memberships. The route is lazy — it fires only when a row is expanded in the
+// UI. The :userId path parameter must be a valid UUID; an invalid value returns
+// 400 before any DB call.
+func (h *Handler) userSites(c *gin.Context) {
+	userID, err := uuid.Parse(c.Param("userId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_user_id", "userId is not a valid UUID"))
+		return
+	}
+	sites, err := h.svc.ListSitesByUser(c.Request.Context(), userID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	items := make([]gin.H, 0, len(sites))
+	for _, s := range sites {
+		item := gin.H{
+			"site_id":          s.SiteID,
+			"url":              s.URL,
+			"name":             s.Name,
+			"connection_state": s.ConnectionState,
+			"enrolled_at":      s.EnrolledAt,
+			"site_created_at":  s.SiteCreatedAt,
+			"tenant_id":        s.TenantID,
+			"tenant_name":      s.TenantName,
+			"member_role":      s.MemberRole,
+		}
+		items = append(items, item)
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"user_id": userID,
+		"sites":   items,
 	})
 }
 

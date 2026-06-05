@@ -468,6 +468,77 @@ func (r *Repo) AccountsTenancy(ctx context.Context, emailSubstr string) (Account
 	return rep, nil
 }
 
+// AdminUserSite is one site record in the per-user sites list for the superadmin view.
+type AdminUserSite struct {
+	SiteID          uuid.UUID  `json:"site_id"`
+	URL             string     `json:"url"`
+	Name            string     `json:"name"`
+	ConnectionState string     `json:"connection_state"`
+	EnrolledAt      *time.Time `json:"enrolled_at"`
+	SiteCreatedAt   time.Time  `json:"site_created_at"`
+	TenantID        uuid.UUID  `json:"tenant_id"`
+	TenantName      string     `json:"tenant_name"`
+	MemberRole      string     `json:"member_role"`
+}
+
+// ListSitesByUser returns every site reachable via the membership chain for
+// targetUserID. The query joins memberships → tenants → sites and runs under
+// InAgentTx so the memberships_agent + sites_agent RLS policies expose
+// cross-tenant rows. No LIMIT is applied here; the caller (Service) imposes a
+// pragmatic cap.
+func (r *Repo) ListSitesByUser(ctx context.Context, userID uuid.UUID) ([]AdminUserSite, error) {
+	var out []AdminUserSite
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT
+			    s.id              AS site_id,
+			    s.url,
+			    s.name,
+			    s.connection_state,
+			    s.enrolled_at,
+			    s.created_at      AS site_created_at,
+			    s.tenant_id,
+			    t.name            AS tenant_name,
+			    m.role            AS member_role
+			FROM memberships m
+			JOIN tenants t  ON t.id = m.tenant_id
+			JOIN sites s    ON s.tenant_id = m.tenant_id
+			WHERE m.user_id = $1
+			ORDER BY s.created_at DESC, s.id DESC`,
+			userID,
+		)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		out = make([]AdminUserSite, 0)
+		for rows.Next() {
+			var site AdminUserSite
+			var enrolledAt *time.Time
+			if err := rows.Scan(
+				&site.SiteID,
+				&site.URL,
+				&site.Name,
+				&site.ConnectionState,
+				&enrolledAt,
+				&site.SiteCreatedAt,
+				&site.TenantID,
+				&site.TenantName,
+				&site.MemberRole,
+			); err != nil {
+				return err
+			}
+			site.EnrolledAt = enrolledAt
+			out = append(out, site)
+		}
+		return rows.Err()
+	})
+	if err != nil {
+		return nil, domain.Internal("admin_list_sites_by_user_failed", "failed to list sites for user").WithCause(err)
+	}
+	return out, nil
+}
+
 // collectRefs runs a (tenant_id, name, role) query and returns the refs.
 func collectRefs(ctx context.Context, tx pgx.Tx, sql string, arg uuid.UUID) ([]TenancyRef, error) {
 	rows, err := tx.Query(ctx, sql, arg)

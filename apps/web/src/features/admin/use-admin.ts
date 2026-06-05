@@ -26,10 +26,36 @@ export interface AdminStats {
   sites: number;
 }
 
+export interface AdminUserSite {
+  site_id: string;
+  url: string;
+  name: string;
+  connection_state: string;
+  enrolled_at: string | null;
+  site_created_at: string;
+  tenant_id: string;
+  tenant_name: string;
+  member_role: string;
+}
+
 export const adminKeys = {
   stats: ["admin", "stats"] as const,
   users: (search: string) => ["admin", "users", search] as const,
+  userSites: (userId: string) => ["admin", "user-sites", userId] as const,
 } as const;
+
+export function useAdminUserSites(userId: string | null) {
+  return useQuery({
+    queryKey: userId !== null ? adminKeys.userSites(userId) : (["admin", "user-sites", null] as const),
+    queryFn: async () => {
+      const r = await client.get({ url: `/api/v1/admin/users/${userId}/sites` });
+      if (r.error) throw toError(r.error);
+      return (r.data as { sites: AdminUserSite[] }).sites;
+    },
+    enabled: userId !== null,
+    staleTime: 30_000,
+  });
+}
 
 export function useAdminStats() {
   return useQuery({
