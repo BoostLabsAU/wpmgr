@@ -81,12 +81,46 @@ type Repo interface {
 	ListCompletedSnapshotsForSite(ctx context.Context, tenantID, siteID uuid.UUID) ([]SnapshotMeta, error)
 	ListSiteIDsWithSnapshots(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 	SetSnapshotArchived(ctx context.Context, tenantID, snapshotID uuid.UUID, archived bool) error
-	// DeleteSnapshotAndDecref deletes a snapshot, decrements the refcount of every
-	// chunk its manifest referenced, and returns the s3 keys of chunks that
-	// reached refcount zero (the caller deletes those objects from storage, then
-	// calls DeleteOrphanChunks). Tenant-scoped, atomic.
-	DeleteSnapshotAndDecref(ctx context.Context, tenantID, snapshotID uuid.UUID) (orphans []Orphan, err error)
-	DeleteOrphanChunks(ctx context.Context, tenantID uuid.UUID, hashes []string) error
+
+	// ADR-050 MARK-AND-SWEEP retention GC.
+
+	// DeleteSnapshot removes a snapshot row (manifest entries + file index cascade
+	// via FK ON DELETE CASCADE). Metadata-only: it does NOT touch object storage
+	// and does NOT decref chunks (refcount is observability-only post-ADR-050 —
+	// chunk reachability is decided by the mark-and-sweep pass, never by refcount).
+	// Tenant-scoped.
+	DeleteSnapshot(ctx context.Context, tenantID, snapshotID uuid.UUID) error
+	// ListInFlightSnapshotFloor returns the MIN(created_at) among pending/running
+	// snapshots for the tenant, or the zero time when none are in flight. The GC
+	// uses min(markStart, this) as the chunk-deletion grace floor so an in-flight
+	// backup re-referencing an old chunk (whose manifest is not yet visible at
+	// mark time) cannot have that chunk swept. Tenant-scoped.
+	ListInFlightSnapshotFloor(ctx context.Context, tenantID uuid.UUID) (time.Time, error)
+	// DBNow returns the database clock (SELECT now()). The GC captures markStart
+	// from the DB — never the app clock — so the grace floor compares against the
+	// same time source as backup_chunks.created_at. Tenant-scoped.
+	DBNow(ctx context.Context, tenantID uuid.UUID) (time.Time, error)
+	// SweepTenantChunks runs the ADR-050 chunk sweep for one tenant. It first
+	// takes a SESSION-level per-tenant pg_try_advisory_lock(hashtext('backup_gc'),
+	// hashtext(tenant)) (released via pg_advisory_unlock in a defer). If the lock
+	// is not acquired it sets *acquired=false and returns nil (the tenant is
+	// skipped — another sweep is in progress). Otherwise it sets *acquired=true
+	// and streams every chunk keyset-paged by (created_at, blake3) using SHORT
+	// per-page transactions, so no pooled connection is pinned across object-store
+	// I/O (avoiding Cloud SQL's idle_in_transaction_session_timeout). For each
+	// chunk it invokes del(SweepChunk) OUTSIDE any transaction — del does the
+	// object-FIRST delete and returns true when the row should now be removed; the
+	// repo then removes those rows in a SHORT delete tx, re-checking
+	// GREATEST(created_at, last_referenced_at) < floor at the DB. The session lock
+	// keeps the per-tenant sweep exclusive across the whole pass. Tenant-scoped.
+	SweepTenantChunks(ctx context.Context, tenantID uuid.UUID, floor time.Time, acquired *bool, del func(c SweepChunk) (bool, error)) error
+
+	// CompleteIncrementalManifest atomically records an incremental submission:
+	// it inserts the backup_file_index rows, optionally records the DB-dump
+	// manifest (chunk upsert + refcount + manifest insert), and completes the
+	// snapshot — all in ONE transaction (ADR-050 STEP 2). Returns
+	// (chunkRefs, storedCount). Tenant-scoped.
+	CompleteIncrementalManifest(ctx context.Context, in CompleteIncrementalInput) (chunkRefs, storedCount int64, err error)
 
 	// ADR-049 incremental restore chain planner.
 
@@ -168,16 +202,50 @@ type StalledSnapshot struct {
 }
 
 // SnapshotMeta is the slim projection used by the retention archive computation.
+// ADR-050 widened it to carry the chain columns so the mark-and-sweep GC can do
+// chain-aware expansion (pin a carry-forward chunk's origin generation under a
+// live tip) and pick the highest retained generation per chain.
 type SnapshotMeta struct {
-	ID        uuid.UUID
-	CreatedAt time.Time
-	Archived  bool
+	ID            uuid.UUID
+	CreatedAt     time.Time
+	Archived      bool
+	ChainID       *uuid.UUID
+	Generation    int
+	IsIncremental bool
 }
 
-// Orphan is a chunk that reached refcount zero during snapshot deletion.
-type Orphan struct {
-	Blake3 string
-	S3Key  string
+// SweepChunk is the slim projection the sweep streams: enough to test
+// a chunk against the live set + grace floor and to delete its object + row.
+// ADR-050 data-loss fix: LastReferencedAt is carried so the per-row delete
+// decision uses GREATEST(CreatedAt, LastReferencedAt) < floor — an OLD chunk an
+// in-flight backup re-referenced via tenant-global dedup has a fresh
+// LastReferencedAt and is therefore protected.
+type SweepChunk struct {
+	Blake3           string
+	S3Key            string
+	CreatedAt        time.Time
+	LastReferencedAt time.Time
+}
+
+// CompleteIncrementalInput is the atomic-completion payload for ADR-050 STEP 2:
+// it folds the file-index batch insert, optional DB-manifest recording, and the
+// snapshot completion into ONE transaction so a concurrent sweep can never
+// observe status='completed' before the file_index rows it must walk are
+// visible.
+type CompleteIncrementalInput struct {
+	TenantID   uuid.UUID
+	SnapshotID uuid.UUID
+	// FileEntries are the backup_file_index rows (changed files + tombstones).
+	FileEntries []FileIndexEntry
+	// DBManifest, when non-nil, records the DB-dump manifest entries + chunks via
+	// the same RecordManifest logic (chunk upsert + refcount + manifest insert +
+	// snapshot completion). When nil the snapshot is completed directly with the
+	// supplied TotalSize/ChunkRefs (the files-only path).
+	DBManifest *RecordManifestInput
+	// TotalSize / ChunkRefs are used only on the files-only path (DBManifest nil)
+	// to complete the snapshot.
+	TotalSize int64
+	ChunkRefs int64
 }
 
 // ChunkUpload describes a chunk reference in a submitted manifest: its hash,
@@ -493,6 +561,7 @@ func (r *pgRepo) RecordManifest(ctx context.Context, in RecordManifestInput) (in
 
 		// 2. Insert manifest entries and increment refcounts for every chunk
 		// reference (a chunk referenced N times across entries gets +N).
+		referenced := map[string]struct{}{}
 		for _, e := range in.Entries {
 			if _, err := q.CreateManifestEntry(ctx, sqlc.CreateManifestEntryParams{
 				SnapshotID:  in.SnapshotID,
@@ -511,8 +580,17 @@ func (r *pgRepo) RecordManifest(ctx context.Context, in RecordManifestInput) (in
 				if _, err := q.IncrementChunkRefcount(ctx, sqlc.IncrementChunkRefcountParams{TenantID: in.TenantID, Blake3: h}); err != nil {
 					return domain.Internal("backup_chunk_incref_failed", "failed to increment chunk refcount").WithCause(err)
 				}
+				referenced[h] = struct{}{}
 				chunkRefs++
 			}
+		}
+
+		// 2b. ADR-050 belt: keep every referenced chunk's last_referenced_at fresh
+		// at completion so a just-completed snapshot's chunks also clear the sweep's
+		// GREATEST(created_at, last_referenced_at) < floor predicate, not only the
+		// presign-time dedup touch.
+		if terr := touchReferencedChunks(ctx, tx, in.TenantID, referenced); terr != nil {
+			return terr
 		}
 
 		// 3. Complete the snapshot.
@@ -535,14 +613,41 @@ func (r *pgRepo) ExistingChunkHashes(ctx context.Context, tenantID uuid.UUID, ha
 		return out, nil
 	}
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := sqlc.New(tx).ListBackupChunksByHashes(ctx, sqlc.ListBackupChunksByHashesParams{TenantID: tenantID, Column2: hashes})
+		// ADR-050 mark-and-sweep data-loss fix: this is the dedup oracle
+		// PresignChunks relies on to decide "already stored, skip upload" WITHOUT
+		// re-uploading — which would otherwise leave an OLD chunk's created_at
+		// ancient while an in-flight (status='running', not yet in the mark set)
+		// backup re-references it. So we bump last_referenced_at = now() (DB clock)
+		// for exactly the chunks we report as existing, in the SAME statement as
+		// the existence read (UPDATE ... RETURNING). This guarantees any chunk
+		// reported existing has just been touched, so a concurrent sweep — which
+		// deletes only when GREATEST(created_at, last_referenced_at) < floor —
+		// cannot delete it: its last_referenced_at >= the in-flight snapshot's
+		// start >= inflightFloor >= effectiveFloor. Raw SQL (not sqlc) so the
+		// touch and the read share one round-trip.
+		rows, err := tx.Query(ctx,
+			`UPDATE backup_chunks
+			    SET last_referenced_at = now(), updated_at = now()
+			  WHERE tenant_id = $1 AND blake3 = ANY($2::text[])
+			RETURNING id, tenant_id, blake3, s3_key, size, refcount,
+			          created_at, updated_at`,
+			tenantID, hashes,
+		)
 		if err != nil {
 			return domain.Internal("backup_chunk_existing_failed", "failed to query existing chunks").WithCause(err)
 		}
-		for _, row := range rows {
-			out[row.Blake3] = toChunk(row)
+		defer rows.Close()
+		for rows.Next() {
+			var c Chunk
+			if serr := rows.Scan(
+				&c.ID, &c.TenantID, &c.Blake3, &c.S3Key, &c.Size, &c.Refcount,
+				&c.CreatedAt, &c.UpdatedAt,
+			); serr != nil {
+				return domain.Internal("backup_chunk_existing_scan_failed", "failed to scan existing chunk row").WithCause(serr)
+			}
+			out[c.Blake3] = c
 		}
-		return nil
+		return rows.Err()
 	})
 	return out, err
 }
@@ -667,16 +772,35 @@ func (r *pgRepo) ListExpiredSnapshots(ctx context.Context, tenantID uuid.UUID, b
 
 func (r *pgRepo) ListCompletedSnapshotsForSite(ctx context.Context, tenantID, siteID uuid.UUID) ([]SnapshotMeta, error) {
 	var out []SnapshotMeta
+	// Raw SQL (not sqlc) because ADR-050 widened the projection to carry the
+	// chain columns; regenerating sqlc is out of scope for this migration (same
+	// m44/m46 raw-query precedent).
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := sqlc.New(tx).ListCompletedSnapshotsForSite(ctx, sqlc.ListCompletedSnapshotsForSiteParams{TenantID: tenantID, SiteID: siteID})
+		rows, err := tx.Query(ctx,
+			`SELECT id, created_at, archived, chain_id, generation, is_incremental
+			   FROM backup_snapshots
+			  WHERE tenant_id = $1 AND site_id = $2 AND status = 'completed'
+			  ORDER BY created_at DESC`,
+			tenantID, siteID,
+		)
 		if err != nil {
 			return domain.Internal("backup_completed_list_failed", "failed to list completed snapshots").WithCause(err)
 		}
-		out = make([]SnapshotMeta, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, SnapshotMeta{ID: row.ID, CreatedAt: row.CreatedAt, Archived: row.Archived})
+		defer rows.Close()
+		out = make([]SnapshotMeta, 0)
+		for rows.Next() {
+			var m SnapshotMeta
+			var chainID pgtype.UUID
+			if serr := rows.Scan(&m.ID, &m.CreatedAt, &m.Archived, &chainID, &m.Generation, &m.IsIncremental); serr != nil {
+				return domain.Internal("backup_completed_scan_failed", "failed to scan completed snapshot row").WithCause(serr)
+			}
+			if chainID.Valid {
+				id := uuid.UUID(chainID.Bytes)
+				m.ChainID = &id
+			}
+			out = append(out, m)
 		}
-		return nil
+		return rows.Err()
 	})
 	return out, err
 }
@@ -703,50 +827,415 @@ func (r *pgRepo) SetSnapshotArchived(ctx context.Context, tenantID, snapshotID u
 	})
 }
 
-func (r *pgRepo) DeleteSnapshotAndDecref(ctx context.Context, tenantID, snapshotID uuid.UUID) ([]Orphan, error) {
-	var orphans []Orphan
-	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		q := sqlc.New(tx)
-		entries, err := q.ListManifestEntries(ctx, sqlc.ListManifestEntriesParams{SnapshotID: snapshotID, TenantID: tenantID})
-		if err != nil {
-			return domain.Internal("backup_manifest_list_failed", "failed to list manifest entries").WithCause(err)
-		}
-		for _, e := range entries {
-			for _, h := range e.ChunkHashes {
-				row, derr := q.DecrementChunkRefcount(ctx, sqlc.DecrementChunkRefcountParams{TenantID: tenantID, Blake3: h})
-				if derr != nil {
-					if errors.Is(derr, pgx.ErrNoRows) {
-						continue // chunk already gone (concurrent GC); skip.
-					}
-					return domain.Internal("backup_chunk_decref_failed", "failed to decrement chunk refcount").WithCause(derr)
-				}
-				if row.Refcount == 0 {
-					orphans = append(orphans, Orphan{Blake3: row.Blake3, S3Key: row.S3Key})
-				}
-			}
-		}
-		// Delete the snapshot (manifest entries cascade).
-		if _, err := q.DeleteBackupSnapshot(ctx, sqlc.DeleteBackupSnapshotParams{ID: snapshotID, TenantID: tenantID}); err != nil {
+// DeleteSnapshot removes a snapshot metadata-only (ADR-050). Manifest entries
+// and file-index rows cascade via their FK ON DELETE CASCADE. It deliberately
+// does NOT decref chunks and does NOT touch object storage: post-ADR-050 the
+// only authority over chunk liveness is the mark-and-sweep pass.
+func (r *pgRepo) DeleteSnapshot(ctx context.Context, tenantID, snapshotID uuid.UUID) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := sqlc.New(tx).DeleteBackupSnapshot(ctx, sqlc.DeleteBackupSnapshotParams{ID: snapshotID, TenantID: tenantID}); err != nil {
 			return domain.Internal("backup_snapshot_delete_failed", "failed to delete snapshot").WithCause(err)
 		}
 		return nil
 	})
-	return orphans, err
 }
 
-func (r *pgRepo) DeleteOrphanChunks(ctx context.Context, tenantID uuid.UUID, hashes []string) error {
-	if len(hashes) == 0 {
-		return nil
-	}
-	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		q := sqlc.New(tx)
-		for _, h := range hashes {
-			if _, err := q.DeleteOrphanChunk(ctx, sqlc.DeleteOrphanChunkParams{TenantID: tenantID, Blake3: h}); err != nil {
-				return domain.Internal("backup_orphan_delete_failed", "failed to delete orphan chunk").WithCause(err)
-			}
+func (r *pgRepo) ListInFlightSnapshotFloor(ctx context.Context, tenantID uuid.UUID) (time.Time, error) {
+	var out time.Time
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		var floor pgtype.Timestamptz
+		row := tx.QueryRow(ctx,
+			`SELECT min(created_at)::timestamptz
+			   FROM backup_snapshots
+			  WHERE tenant_id = $1 AND status IN ('pending','running')`,
+			tenantID,
+		)
+		if serr := row.Scan(&floor); serr != nil {
+			return domain.Internal("backup_inflight_floor_failed", "failed to read in-flight snapshot floor").WithCause(serr)
+		}
+		if floor.Valid {
+			out = floor.Time
 		}
 		return nil
 	})
+	return out, err
+}
+
+func (r *pgRepo) DBNow(ctx context.Context, tenantID uuid.UUID) (time.Time, error) {
+	var out time.Time
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if serr := tx.QueryRow(ctx, `SELECT now()`).Scan(&out); serr != nil {
+			return domain.Internal("backup_db_now_failed", "failed to read database clock").WithCause(serr)
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (r *pgRepo) SweepTenantChunks(ctx context.Context, tenantID uuid.UUID, floor time.Time, acquired *bool, del func(c SweepChunk) (bool, error)) (err error) {
+	*acquired = false
+
+	// 1. PIN ONE pooled connection for the WHOLE sweep pass. The per-tenant GC
+	//    advisory lock is SESSION-scoped, so it only stays held while every later
+	//    statement runs on the SAME backing session. Taking it inside a pooled tx
+	//    that commits would return the connection to the pool and silently drop
+	//    the lock — then a second concurrent same-tenant pass could ALSO acquire
+	//    it and both would sweep. Acquire + Release bookends the session; the
+	//    short per-page / per-chunk txns below all run on this one conn.
+	conn, aerr := r.pool.Acquire(ctx)
+	if aerr != nil {
+		return domain.Internal("backup_gc_conn_failed", "failed to acquire GC connection").WithCause(aerr)
+	}
+	defer conn.Release()
+
+	// 2. Take the SESSION-level per-tenant GC advisory lock ON THE PINNED CONN.
+	//    Two-int form: (hashtext('backup_gc'), hashtext(tenant)) — namespaced so
+	//    it collides only with another GC sweep for the SAME tenant. Because it is
+	//    held on this one conn for the whole pass, a concurrent same-tenant pass
+	//    fails pg_try_advisory_lock and skips.
+	var got bool
+	if lerr := conn.QueryRow(ctx,
+		`SELECT pg_try_advisory_lock(hashtext('backup_gc'), hashtext($1))`,
+		tenantID.String(),
+	).Scan(&got); lerr != nil {
+		return domain.Internal("backup_gc_lock_failed", "failed to take GC advisory lock").WithCause(lerr)
+	}
+	if !got {
+		return nil // another sweep holds it; *acquired stays false.
+	}
+	*acquired = true
+	// Always release the session lock on the SAME conn, on every path (incl.
+	// error), BEFORE Release returns the conn to the pool. Best-effort: a failed
+	// unlock is harmless — the lock is session-scoped and also drops when the
+	// session closes.
+	defer func() {
+		_, _ = conn.Exec(ctx,
+			`SELECT pg_advisory_unlock(hashtext('backup_gc'), hashtext($1))`,
+			tenantID.String(),
+		)
+	}()
+
+	// 3. Stream every chunk, keyset-paged by (created_at, blake3). Each page read
+	//    AND each per-chunk delete is its OWN short transaction ON THE PINNED CONN
+	//    (conn.Begin) so no long tx pins idle across object-store I/O (avoiding
+	//    Cloud SQL's idle_in_transaction_session_timeout) while the session lock
+	//    stays held the whole pass. Every such tx replicates InTenantTx's RLS
+	//    setup (SET LOCAL app.tenant_id) so RLS still scopes the reads/deletes.
+	const pageSize = 5000
+	var (
+		haveCursor bool
+		curTime    time.Time
+		curHash    string
+	)
+	for {
+		// 3a. SHORT read tx on the pinned conn: fetch one page of candidates.
+		var batch []SweepChunk
+		readErr := r.inTenantTxOnConn(ctx, conn, tenantID, func(tx pgx.Tx) error {
+			var (
+				rows pgx.Rows
+				qerr error
+			)
+			if !haveCursor {
+				rows, qerr = tx.Query(ctx,
+					`SELECT blake3, s3_key, created_at, last_referenced_at
+					   FROM backup_chunks
+					  WHERE tenant_id = $1
+					  ORDER BY created_at ASC, blake3 ASC
+					  LIMIT $2`,
+					tenantID, pageSize,
+				)
+			} else {
+				rows, qerr = tx.Query(ctx,
+					`SELECT blake3, s3_key, created_at, last_referenced_at
+					   FROM backup_chunks
+					  WHERE tenant_id = $1
+					    AND (created_at, blake3) > ($2, $3)
+					  ORDER BY created_at ASC, blake3 ASC
+					  LIMIT $4`,
+					tenantID, curTime, curHash, pageSize,
+				)
+			}
+			if qerr != nil {
+				return domain.Internal("backup_sweep_list_failed", "failed to list chunks for sweep").WithCause(qerr)
+			}
+			defer rows.Close()
+			for rows.Next() {
+				var c SweepChunk
+				if serr := rows.Scan(&c.Blake3, &c.S3Key, &c.CreatedAt, &c.LastReferencedAt); serr != nil {
+					return domain.Internal("backup_sweep_scan_failed", "failed to scan sweep chunk row").WithCause(serr)
+				}
+				batch = append(batch, c)
+			}
+			if rerr := rows.Err(); rerr != nil {
+				return domain.Internal("backup_sweep_iter_failed", "failed iterating sweep chunks").WithCause(rerr)
+			}
+			return nil
+		})
+		if readErr != nil {
+			return readErr
+		}
+
+		// 3b. Per-candidate: a SHORT per-chunk tx on the pinned conn that holds a
+		//     row-level FOR UPDATE lock ACROSS the object delete. This serializes the
+		//     object delete against a concurrent dedup touch (ExistingChunkHashes'
+		//     UPDATE ... last_referenced_at=now()): once we lock the row, that UPDATE
+		//     BLOCKS until we commit, and we re-check the floor under the lock so a
+		//     touch that won the race makes us skip (no object delete). Because chunk
+		//     keys are content-addressed this serialization is REQUIRED — without the
+		//     held lock a touch->re-upload could re-PUT the same key the sweep then
+		//     deletes.
+		for _, c := range batch {
+			if serr := r.sweepOneChunk(ctx, conn, tenantID, c, floor, del); serr != nil {
+				return serr
+			}
+		}
+
+		if len(batch) < pageSize {
+			return nil
+		}
+		last := batch[len(batch)-1]
+		curTime, curHash, haveCursor = last.CreatedAt, last.Blake3, true
+	}
+}
+
+// sweepOneChunk runs the FIX-A per-chunk critical section for one sweep candidate
+// inside a SHORT transaction on the pinned conn:
+//
+//  1. SELECT ... FOR UPDATE locks the row (a concurrent ExistingChunkHashes dedup
+//     touch on this chunk now BLOCKS until this tx commits) and re-reads the
+//     FRESH created_at / last_referenced_at.
+//  2. Re-check GREATEST(created_at, last_referenced_at) < floor UNDER the lock.
+//     If a touch won the race the boundary is now >= floor -> skip (no delete).
+//  3. del(freshChunk) consults the live set + floor and, when still deletable,
+//     deletes the OBJECT while we STILL HOLD the lock (idempotent; 404 == ok).
+//  4. DELETE the row (object-FIRST/row-SECOND), then COMMIT releases the lock.
+//
+// Object-first/row-second within the locked tx preserves crash self-heal: a
+// crash after the object delete but before COMMIT rolls the tx back, leaving the
+// row present with its object gone — the dangling-row case the next sweep heals
+// idempotently. A missing row (already swept by a prior partial pass) is a no-op.
+func (r *pgRepo) sweepOneChunk(ctx context.Context, conn sweepConn, tenantID uuid.UUID, c SweepChunk, floor time.Time, del func(SweepChunk) (bool, error)) error {
+	return r.inTenantTxOnConn(ctx, conn, tenantID, func(tx pgx.Tx) error {
+		// 1. Lock the row and re-read the fresh liveness boundary.
+		fresh := SweepChunk{Blake3: c.Blake3}
+		row := tx.QueryRow(ctx,
+			`SELECT s3_key, created_at, last_referenced_at
+			   FROM backup_chunks
+			  WHERE tenant_id = $1 AND blake3 = $2
+			  FOR UPDATE`,
+			tenantID, c.Blake3,
+		)
+		if serr := row.Scan(&fresh.S3Key, &fresh.CreatedAt, &fresh.LastReferencedAt); serr != nil {
+			if errors.Is(serr, pgx.ErrNoRows) {
+				return nil // row already gone — nothing to do.
+			}
+			return domain.Internal("backup_sweep_lock_failed", "failed to lock sweep chunk row").WithCause(serr)
+		}
+
+		// 2. Re-check the grace floor under the lock. A dedup touch that committed
+		//    before we took the lock raised last_referenced_at to ~now, so the
+		//    boundary is now >= floor and we MUST keep the chunk.
+		boundary := fresh.CreatedAt
+		if fresh.LastReferencedAt.After(boundary) {
+			boundary = fresh.LastReferencedAt
+		}
+		if !boundary.Before(floor) {
+			return nil // a touch won the race — keep object + row.
+		}
+
+		// 3. del consults the live set + floor on the FRESH projection and, when the
+		//    chunk is still deletable, deletes the OBJECT while we hold the lock.
+		remove, ferr := del(fresh)
+		if ferr != nil {
+			return ferr
+		}
+		if !remove {
+			return nil // del decided to keep (live, or re-checked floor).
+		}
+
+		// 4. Row-SECOND: delete the row, still under the held lock and re-checking
+		//    GREATEST(...) < floor at the DB (defense-in-depth).
+		return r.deleteSweptChunkOnTx(ctx, tx, tenantID, c.Blake3, floor)
+	})
+}
+
+// sweepConn is the minimal pinned-connection surface the sweep needs: just the
+// ability to begin a transaction. *pgxpool.Conn satisfies it.
+type sweepConn interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+// inTenantTxOnConn runs fn inside a transaction begun ON THE PINNED CONN, with
+// app.tenant_id set for the lifetime of the tx (SET LOCAL) — mirroring
+// db.Pool.InTenantTx's RLS setup exactly, but WITHOUT returning the connection to
+// the pool, so the surrounding session advisory lock stays held. The tx commits
+// when fn returns nil and rolls back otherwise.
+func (r *pgRepo) inTenantTxOnConn(ctx context.Context, conn sweepConn, tenantID uuid.UUID, fn func(tx pgx.Tx) error) error {
+	tx, err := conn.Begin(ctx)
+	if err != nil {
+		return domain.Internal("backup_sweep_tx_begin_failed", "failed to begin sweep tx").WithCause(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, serr := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); serr != nil {
+		return domain.Internal("backup_sweep_set_tenant_failed", "failed to set app.tenant_id for sweep tx").WithCause(serr)
+	}
+	if ferr := fn(tx); ferr != nil {
+		return ferr
+	}
+	if cerr := tx.Commit(ctx); cerr != nil {
+		return domain.Internal("backup_sweep_tx_commit_failed", "failed to commit sweep tx").WithCause(cerr)
+	}
+	return nil
+}
+
+// deleteSweptChunkOnTx removes a chunk row by hash, re-checking the grace-floor
+// predicate at the DB (defense-in-depth: a chunk re-referenced after the sweep
+// read it has a fresh last_referenced_at and so fails GREATEST(...) < floor).
+// Runs on the supplied SHORT delete transaction. The caller deletes the object
+// FIRST (idempotent), then this.
+func (r *pgRepo) deleteSweptChunkOnTx(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, blake3 string, floor time.Time) error {
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM backup_chunks
+		  WHERE tenant_id = $1 AND blake3 = $2
+		    AND GREATEST(created_at, last_referenced_at) < $3`,
+		tenantID, blake3, floor,
+	); err != nil {
+		return domain.Internal("backup_swept_chunk_delete_failed", "failed to delete swept chunk row").WithCause(err)
+	}
+	return nil
+}
+
+// touchReferencedChunks bumps last_referenced_at = now() for the given chunk
+// hashes inside the supplied completion transaction (ADR-050 belt). It is a
+// no-op for an empty set. Sharing the tx means a completed snapshot's chunks are
+// stamped fresh atomically with its completion, so the sweep's
+// GREATEST(created_at, last_referenced_at) < floor predicate keeps them.
+func touchReferencedChunks(ctx context.Context, tx pgx.Tx, tenantID uuid.UUID, referenced map[string]struct{}) error {
+	if len(referenced) == 0 {
+		return nil
+	}
+	hashes := make([]string, 0, len(referenced))
+	for h := range referenced {
+		hashes = append(hashes, h)
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE backup_chunks
+		    SET last_referenced_at = now(), updated_at = now()
+		  WHERE tenant_id = $1 AND blake3 = ANY($2::text[])`,
+		tenantID, hashes,
+	); err != nil {
+		return domain.Internal("backup_chunk_touch_failed", "failed to refresh chunk last_referenced_at").WithCause(err)
+	}
+	return nil
+}
+
+// CompleteIncrementalManifest folds the file-index insert, optional DB-manifest
+// recording, and snapshot completion into ONE transaction (ADR-050 STEP 2).
+func (r *pgRepo) CompleteIncrementalManifest(ctx context.Context, in CompleteIncrementalInput) (int64, int64, error) {
+	var chunkRefs, storedCount int64
+	err := r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+
+		// 1. Insert backup_file_index rows (changed files + tombstones).
+		for _, e := range in.FileEntries {
+			hashes := e.ChunkHashes
+			if hashes == nil {
+				hashes = []string{}
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO backup_file_index
+				   (tenant_id, snapshot_id, file_path, file_size, file_mtime,
+				    file_blake3, chunk_hashes, is_tombstone)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				 ON CONFLICT (snapshot_id, file_path) DO UPDATE
+				   SET file_size    = EXCLUDED.file_size,
+				       file_mtime   = EXCLUDED.file_mtime,
+				       file_blake3  = EXCLUDED.file_blake3,
+				       chunk_hashes = EXCLUDED.chunk_hashes,
+				       is_tombstone = EXCLUDED.is_tombstone`,
+				in.TenantID, in.SnapshotID, e.FilePath, e.FileSize, e.FileMtime,
+				e.FileBlake3, hashes, e.IsTombstone,
+			); err != nil {
+				return domain.Internal("backup_file_index_insert_failed", "failed to insert file index entry").WithCause(err)
+			}
+		}
+
+		// 2. DB-inline path: record the DB-dump manifest (chunk upsert + refcount +
+		//    manifest insert + completion) inside this same tx. Mirrors
+		//    RecordManifest's body so completion stays atomic with the file-index
+		//    rows above.
+		if in.DBManifest != nil {
+			var totalSize int64
+			referenced := map[string]struct{}{}
+			for hash, up := range in.DBManifest.Chunks {
+				_, getErr := q.GetBackupChunk(ctx, sqlc.GetBackupChunkParams{TenantID: in.TenantID, Blake3: hash})
+				existed := getErr == nil
+				if getErr != nil && !errors.Is(getErr, pgx.ErrNoRows) {
+					return domain.Internal("backup_chunk_get_failed", "failed to check chunk existence").WithCause(getErr)
+				}
+				if _, err := q.UpsertBackupChunk(ctx, sqlc.UpsertBackupChunkParams{
+					TenantID: in.TenantID, Blake3: hash, S3Key: up.S3Key, Size: up.Size,
+				}); err != nil {
+					return domain.Internal("backup_chunk_upsert_failed", "failed to upsert chunk").WithCause(err)
+				}
+				if !existed {
+					storedCount++
+				}
+			}
+			for _, e := range in.DBManifest.Entries {
+				if _, err := q.CreateManifestEntry(ctx, sqlc.CreateManifestEntryParams{
+					SnapshotID:  in.SnapshotID,
+					TenantID:    in.TenantID,
+					Path:        e.Path,
+					EntryKind:   e.EntryKind,
+					TableName:   e.TableName,
+					ChunkHashes: e.ChunkHashes,
+					Size:        e.Size,
+					Mode:        e.Mode,
+				}); err != nil {
+					return domain.Internal("backup_manifest_insert_failed", "failed to insert manifest entry").WithCause(err)
+				}
+				totalSize += e.Size
+				for _, h := range e.ChunkHashes {
+					if _, err := q.IncrementChunkRefcount(ctx, sqlc.IncrementChunkRefcountParams{TenantID: in.TenantID, Blake3: h}); err != nil {
+						return domain.Internal("backup_chunk_incref_failed", "failed to increment chunk refcount").WithCause(err)
+					}
+					referenced[h] = struct{}{}
+					chunkRefs++
+				}
+			}
+			// ADR-050 belt: refresh last_referenced_at for the DB-dump's chunks at
+			// completion (see RecordManifest). The carry-forward file chunks are kept
+			// fresh by the presign-time touch in ExistingChunkHashes.
+			if terr := touchReferencedChunks(ctx, tx, in.TenantID, referenced); terr != nil {
+				return terr
+			}
+			if _, err := q.CompleteBackupSnapshot(ctx, sqlc.CompleteBackupSnapshotParams{
+				ID: in.SnapshotID, TenantID: in.TenantID, TotalSize: totalSize, ChunkCount: chunkRefs,
+			}); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return domain.NotFound("backup_snapshot_not_found", "backup snapshot not found")
+				}
+				return domain.Internal("backup_snapshot_complete_failed", "failed to complete snapshot").WithCause(err)
+			}
+			return nil
+		}
+
+		// 3. Files-only path: complete the snapshot directly with caller-supplied
+		//    counters.
+		if _, err := q.CompleteBackupSnapshot(ctx, sqlc.CompleteBackupSnapshotParams{
+			ID: in.SnapshotID, TenantID: in.TenantID, TotalSize: in.TotalSize, ChunkCount: in.ChunkRefs,
+		}); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.NotFound("backup_snapshot_not_found", "backup snapshot not found")
+			}
+			return domain.Internal("backup_snapshot_complete_failed", "failed to complete snapshot").WithCause(err)
+		}
+		chunkRefs = in.ChunkRefs
+		return nil
+	})
+	return chunkRefs, storedCount, err
 }
 
 func toSnapshot(s sqlc.BackupSnapshot) Snapshot {

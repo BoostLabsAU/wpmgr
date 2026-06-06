@@ -461,6 +461,125 @@ func (s *Service) PlanRestore(ctx context.Context, tenantID, snapshotID uuid.UUI
 	return out, snap, si, nil
 }
 
+// reachableChunks is the PURE reachability oracle (ADR-050 STEP 3): it returns
+// the set of blake3 chunk hashes that `snap` depends on, with NO presign and NO
+// integrity-abort. Both the restore planner (planRestoreChain) and the retention
+// GC mark pass call it so the two can never disagree about what is reachable.
+//
+// Cases:
+//
+//	(a) base / legacy — chain_id == nil, OR (generation == 0 && !is_incremental):
+//	    a full-base anchor / legacy full backup is restored MANIFEST-ONLY, so its
+//	    reachable chunks are exactly the manifest entries' chunk_hashes.
+//	(b) chain increment — walk generations 0..retainedMaxGen building the
+//	    latest-version-wins winMap (tombstones remove a path), pick the
+//	    highest-gen DB-dump over 0..retainedMaxGen, and union the chunk_hashes of
+//	    the winning file entries + that DB-dump.
+//
+// retainedMaxGen is the highest generation that should be considered reachable.
+// For restore it is snap.Generation (the target tip). For the GC it is the
+// chain's highest RETAINED generation — which pins a carry-forward chunk whose
+// origin file_index row lives in an older generation under a live tip.
+func (s *Service) reachableChunks(ctx context.Context, tenantID uuid.UUID, snap Snapshot, retainedMaxGen int) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+
+	// Case (a): base / legacy — manifest-only reachability.
+	if snap.ChainID == nil || (snap.Generation == 0 && !snap.IsIncremental) {
+		entries, err := s.repo.ListManifest(ctx, tenantID, snap.ID)
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			for _, h := range e.ChunkHashes {
+				out[h] = struct{}{}
+			}
+		}
+		return out, nil
+	}
+
+	// Case (b): chain increment — walk 0..retainedMaxGen.
+	chainID := *snap.ChainID
+	if retainedMaxGen < 0 {
+		retainedMaxGen = 0
+	}
+	chainSnaps, err := s.repo.ListChainSnapshots(ctx, tenantID, chainID, retainedMaxGen)
+	if err != nil {
+		return nil, err
+	}
+
+	// Index by generation so the walk is robust to gaps (the GC may have already
+	// pruned an older non-pinned generation; the mark pass only needs the
+	// generations that survive). We walk in ascending generation order.
+	byGen := map[int]Snapshot{}
+	maxGen := -1
+	for _, cs := range chainSnaps {
+		byGen[cs.Generation] = cs
+		if cs.Generation > maxGen {
+			maxGen = cs.Generation
+		}
+	}
+
+	// Build the winning-entry map (latest-version-wins over the file index).
+	winMap := map[string]*FileIndexEntry{}
+	for gen := 0; gen <= maxGen; gen++ {
+		cs, ok := byGen[gen]
+		if !ok {
+			continue
+		}
+		streamErr := s.repo.StreamFileIndex(ctx, tenantID, cs.ID, func(e FileIndexEntry) error {
+			eCopy := e
+			if e.IsTombstone {
+				delete(winMap, e.FilePath)
+			} else {
+				winMap[e.FilePath] = &eCopy
+			}
+			return nil
+		})
+		if streamErr != nil {
+			return nil, streamErr
+		}
+	}
+	for _, e := range winMap {
+		for _, h := range e.ChunkHashes {
+			out[h] = struct{}{}
+		}
+	}
+
+	// Pick the highest-gen DB-dump over 0..maxGen and union its chunk_hashes.
+	dbSnapID := uuid.Nil
+	for gen := 0; gen <= maxGen; gen++ {
+		cs, ok := byGen[gen]
+		if !ok {
+			continue
+		}
+		dbEntries, derr := s.repo.ListManifest(ctx, tenantID, cs.ID)
+		if derr != nil {
+			return nil, derr
+		}
+		for _, e := range dbEntries {
+			if e.EntryKind == EntryKindDB {
+				dbSnapID = cs.ID
+				break
+			}
+		}
+	}
+	if dbSnapID != uuid.Nil {
+		dbEntries, derr := s.repo.ListManifest(ctx, tenantID, dbSnapID)
+		if derr != nil {
+			return nil, derr
+		}
+		for _, e := range dbEntries {
+			if e.EntryKind == EntryKindDB {
+				for _, h := range e.ChunkHashes {
+					out[h] = struct{}{}
+				}
+			}
+		}
+	}
+
+	return out, nil
+}
+
 // planRestoreChain is the ADR-049 chain-planner path for PlanRestore. It runs
 // when the target snapshot has a non-nil chain_id and is not the full-base
 // anchor (generation 0, is_incremental=false). The caller (PlanRestore) has
@@ -510,8 +629,8 @@ func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap
 	type winEntry struct {
 		entry *FileIndexEntry
 	}
-	winMap := map[string]*FileIndexEntry{}   // file_path -> winning entry
-	deletedPaths := map[string]bool{}         // file_path -> true if tombstoned at targetGen
+	winMap := map[string]*FileIndexEntry{} // file_path -> winning entry
+	deletedPaths := map[string]bool{}      // file_path -> true if tombstoned at targetGen
 
 	for gen := 0; gen <= targetGen; gen++ {
 		snapG := chainSnaps[gen]
@@ -559,17 +678,13 @@ func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap
 	}
 
 	// STEP 6 — validate winning entries have resolvable chunks (GC-awareness gate).
-	// Collect all distinct hashes from winning file entries + DB entries.
-	allHashes := map[string]struct{}{}
-	for _, e := range winMap {
-		for _, h := range e.ChunkHashes {
-			allHashes[h] = struct{}{}
-		}
-	}
-	for _, e := range dbSelected {
-		for _, h := range e.ChunkHashes {
-			allHashes[h] = struct{}{}
-		}
+	// The set of chunks this snapshot depends on is computed by the SHARED
+	// reachableChunks oracle (ADR-050) so the restore planner and the retention
+	// GC can never disagree about reachability. retainedMaxGen == targetGen here:
+	// restore always reaches up to the requested tip.
+	allHashes, err := s.reachableChunks(ctx, tenantID, snap, targetGen)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
 	}
 	hashSlice := make([]string, 0, len(allHashes))
 	for h := range allHashes {
@@ -722,10 +837,11 @@ func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap
 // sanitize. Any path that fails this check is excluded from the wire request.
 //
 // Rules:
-//  a. Non-empty
-//  b. Does not start with "/" or "\"
-//  c. No component equals ".."
-//  d. No NUL byte
+//
+//	a. Non-empty
+//	b. Does not start with "/" or "\"
+//	c. No component equals ".."
+//	d. No NUL byte
 func sanitizeTombstonePathCP(p string) bool {
 	if p == "" {
 		return false
@@ -1923,13 +2039,14 @@ type ChainResolution struct {
 // decides whether the next run should be incremental or a full base.
 //
 // AUTO-BASE conditions (returns IsIncremental=false):
-//   a. No prior completed snapshot → full base.
-//   b. Prior snapshot chain_id is NULL and is_incremental=false but finished_at
-//      is within the base window → start a new chain (generation=1).
-//   c. Prior snapshot's finished_at < now() - 7 days → stale chain, full base.
-//   d. Prior snapshot generation >= BackupMaxChainDepth → force new full base.
-//   e. Prior snapshot has no backup_file_index rows (pre-m44 full zip backup)
-//      AND is NOT incremental → full base (no index to diff against).
+//
+//	a. No prior completed snapshot → full base.
+//	b. Prior snapshot chain_id is NULL and is_incremental=false but finished_at
+//	   is within the base window → start a new chain (generation=1).
+//	c. Prior snapshot's finished_at < now() - 7 days → stale chain, full base.
+//	d. Prior snapshot generation >= BackupMaxChainDepth → force new full base.
+//	e. Prior snapshot has no backup_file_index rows (pre-m44 full zip backup)
+//	   AND is NOT incremental → full base (no index to diff against).
 func (s *Service) resolveChainForSite(ctx context.Context, tenantID, siteID uuid.UUID) (ChainResolution, error) {
 	prev, err := s.repo.GetLatestCompletedSnapshot(ctx, tenantID, siteID)
 	if err != nil {
@@ -2015,9 +2132,15 @@ func (s *Service) SubmitIncrementalManifest(ctx context.Context, tenantID, snaps
 		return 0, 0, domain.Conflict("snapshot_already_completed", "the snapshot manifest was already recorded")
 	}
 
-	var chunkRefs, storedCount, totalSize int64
-
-	// 1. Process DB entries using the existing RecordManifest path.
+	// 1. Build the DB-dump manifest input (if any DB entries were submitted).
+	//    ADR-050 STEP 2 (MF-a): the file-index insert AND the snapshot completion
+	//    must land in ONE transaction so a concurrent retention sweep can never
+	//    observe status='completed' before the file_index rows it must walk are
+	//    visible (which would let the mark omit a re-referenced OLD chunk and
+	//    sweep it, making the snapshot unrestorable). We therefore collect both
+	//    payloads here and hand them to CompleteIncrementalManifest, which does
+	//    the file-index insert + DB-manifest record + completion atomically.
+	var dbManifest *RecordManifestInput
 	if len(req.DBEntries) > 0 {
 		in := RecordManifestInput{
 			TenantID:   tenantID,
@@ -2049,67 +2172,52 @@ func (s *Service) SubmitIncrementalManifest(ctx context.Context, tenantID, snaps
 				Mode:        int32(e.Mode),
 			})
 		}
-		refs, stored, rerr := s.repo.RecordManifest(ctx, in)
-		if rerr != nil {
-			return 0, 0, rerr
-		}
-		chunkRefs += refs
-		storedCount += stored
-		totalSize += func() int64 {
-			var t int64
-			for _, e := range in.Entries {
-				t += e.Size
-			}
-			return t
-		}()
-	} else {
-		// No DB entries: we still need to complete the snapshot.
-		// RecordManifest above handles completion; if there are no DB entries
-		// we complete manually below after inserting file index rows.
-		// Use repo.CompleteSnapshot directly.
-		defer func() {
-			// Completed inline below.
-		}()
+		dbManifest = &in
 	}
 
-	// 2. Insert backup_file_index rows for files_entries.
-	if len(req.FilesEntries) > 0 {
-		batch := make([]FileIndexEntry, 0, len(req.FilesEntries))
-		for _, fe := range req.FilesEntries {
-			hashes := fe.ChunkHashes
-			if hashes == nil {
-				hashes = []string{}
-			}
-			// Validate chunk hashes for non-tombstone entries.
-			if !fe.IsTombstone {
-				for _, h := range hashes {
-					if !isHexHash(h) {
-						return 0, 0, domain.Validation("invalid_chunk_hash", "file index chunk hash is not a valid blake3 hex digest")
-					}
+	// 2. Build the backup_file_index batch for files_entries.
+	batch := make([]FileIndexEntry, 0, len(req.FilesEntries))
+	for _, fe := range req.FilesEntries {
+		hashes := fe.ChunkHashes
+		if hashes == nil {
+			hashes = []string{}
+		}
+		// Validate chunk hashes for non-tombstone entries.
+		if !fe.IsTombstone {
+			for _, h := range hashes {
+				if !isHexHash(h) {
+					return 0, 0, domain.Validation("invalid_chunk_hash", "file index chunk hash is not a valid blake3 hex digest")
 				}
 			}
-			batch = append(batch, FileIndexEntry{
-				TenantID:    tenantID,
-				SnapshotID:  snapshotID,
-				FilePath:    fe.FilePath,
-				FileSize:    fe.FileSize,
-				FileMtime:   fe.FileMtime,
-				FileBlake3:  fe.FileBlake3,
-				ChunkHashes: hashes,
-				IsTombstone: fe.IsTombstone,
-			})
 		}
-		if ierr := s.repo.InsertFileIndexBatch(ctx, tenantID, snapshotID, batch); ierr != nil {
-			return 0, 0, ierr
-		}
+		batch = append(batch, FileIndexEntry{
+			TenantID:    tenantID,
+			SnapshotID:  snapshotID,
+			FilePath:    fe.FilePath,
+			FileSize:    fe.FileSize,
+			FileMtime:   fe.FileMtime,
+			FileBlake3:  fe.FileBlake3,
+			ChunkHashes: hashes,
+			IsTombstone: fe.IsTombstone,
+		})
 	}
 
-	// 3. If we did NOT call RecordManifest above (no DB entries), complete the
-	//    snapshot directly.
-	if len(req.DBEntries) == 0 {
-		if _, cerr := s.repo.CompleteSnapshot(ctx, tenantID, snapshotID, totalSize, chunkRefs); cerr != nil {
-			return 0, 0, cerr
-		}
+	// 3. ATOMIC completion (ADR-050 STEP 2): file-index insert + optional
+	//    DB-manifest record + snapshot completion in ONE transaction. Covers both
+	//    the files-only path (dbManifest == nil) and the DB-inline path.
+	chunkRefs, storedCount, cierr := s.repo.CompleteIncrementalManifest(ctx, CompleteIncrementalInput{
+		TenantID:    tenantID,
+		SnapshotID:  snapshotID,
+		FileEntries: batch,
+		DBManifest:  dbManifest,
+		// Files-only path: file_index rows do not contribute to the snapshot's
+		// chunk_count/total_size (those track DB-manifest chunks only), matching
+		// the pre-ADR-050 behaviour where CompleteSnapshot was called with zeros.
+		TotalSize: 0,
+		ChunkRefs: 0,
+	})
+	if cierr != nil {
+		return 0, 0, cierr
 	}
 
 	// 4. Stamp cycle telemetry counters.

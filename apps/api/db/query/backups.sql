@@ -95,10 +95,25 @@ WHERE id = $1 AND tenant_id = $2;
 
 -- name: ListCompletedSnapshotsForSite :many
 -- Completed snapshots for a site, newest first, used to compute the retention
--- archive set (newest per calendar month).
-SELECT id, created_at, archived FROM backup_snapshots
+-- archive set (newest per calendar month). ADR-050 widened the projection to
+-- carry the chain columns so the mark-and-sweep GC can do chain-aware
+-- expansion (pin a carry-forward chunk's old origin generation under a live
+-- tip) without a second round-trip.
+SELECT id, created_at, archived, chain_id, generation, is_incremental
+FROM backup_snapshots
 WHERE tenant_id = $1 AND site_id = $2 AND status = 'completed'
 ORDER BY created_at DESC;
+
+-- name: ListInFlightSnapshotFloor :one
+-- ADR-050 mark-and-sweep grace floor: the oldest created_at among snapshots
+-- that are still pending or running for the tenant. A chunk created before this
+-- floor cannot be re-referenced by an in-flight backup (its manifest/file_index
+-- rows are not yet visible at mark time), so the sweep uses
+-- min(markStart, inflightFloor) as the deletion horizon. Returns NULL when no
+-- in-flight snapshot exists (the caller then uses markStart alone).
+SELECT min(created_at)::timestamptz AS floor
+FROM backup_snapshots
+WHERE tenant_id = $1 AND status IN ('pending', 'running');
 
 -- name: ListTenantsWithCompletedSnapshots :many
 -- Distinct tenant IDs that have at least one completed snapshot, for the
@@ -161,18 +176,60 @@ WHERE tenant_id = $1 AND blake3 = $2
 RETURNING *;
 
 -- name: DecrementChunkRefcount :one
--- Decrements but never below zero. Returns the new refcount + s3_key so the GC
--- job can delete the object from storage when the count reaches zero.
+-- DEPRECATED (ADR-050): refcount is observability-only post-mark-and-sweep and
+-- is NEVER consulted for a delete. Retained only so the generated querier keeps
+-- compiling; the GC delete path no longer calls it.
 UPDATE backup_chunks
 SET refcount = GREATEST(refcount - 1, 0), updated_at = now()
 WHERE tenant_id = $1 AND blake3 = $2
 RETURNING refcount, s3_key, blake3;
 
 -- name: DeleteOrphanChunk :execrows
--- Deletes a chunk row only if its refcount is zero (the object was already
--- removed from storage by the GC job). Tenant-scoped.
+-- DEPRECATED (ADR-050): the refcount==0 gate is unsound for incremental dedup
+-- (refcount counts ORIGIN refs, not live refs). The mark-and-sweep pass deletes
+-- chunks by reachability + grace floor instead (see ListChunksForSweep /
+-- DeleteSweptChunk below, implemented as raw SQL in repo.go). Retained only so
+-- the generated querier keeps compiling.
 DELETE FROM backup_chunks
 WHERE tenant_id = $1 AND blake3 = $2 AND refcount = 0;
+
+-- ADR-050 MARK-AND-SWEEP retention GC. These are implemented as raw tx.Query /
+-- tx.Exec in repo.go (matching the m44/m46 raw-SQL precedent) rather than
+-- regenerating sqlc; the canonical statements are documented here.
+--
+-- m47 data-loss fix: a chunk's deletion boundary is GREATEST(created_at,
+-- last_referenced_at), not created_at alone. The dedup oracle (the
+-- ExistingChunkHashes path PresignChunks relies on) bumps last_referenced_at =
+-- now() for every chunk it reports as already-stored, so an OLD chunk an
+-- in-flight backup re-references via tenant-global dedup is protected even
+-- though its created_at is ancient and its last completed referrer expired this
+-- run.
+--
+-- TouchExistingChunks (dedup oracle — read + touch in ONE statement):
+--   UPDATE backup_chunks
+--      SET last_referenced_at = now(), updated_at = now()
+--    WHERE tenant_id = $1 AND blake3 = ANY($2::text[])
+--   RETURNING id, tenant_id, blake3, s3_key, size, refcount,
+--             created_at, updated_at;
+--
+-- ListChunksForSweep (keyset-paged by (created_at, blake3)):
+--   SELECT blake3, s3_key, created_at, last_referenced_at FROM backup_chunks
+--    WHERE tenant_id = $1 AND (created_at, blake3) > ($2, $3)
+--    ORDER BY created_at ASC, blake3 ASC LIMIT $4;
+--
+-- DeleteSweptChunk (object deleted first; row only when STILL below the floor by
+-- the GREATEST boundary, so a chunk re-referenced after the read survives):
+--   DELETE FROM backup_chunks
+--    WHERE tenant_id = $1 AND blake3 = $2
+--      AND GREATEST(created_at, last_referenced_at) < $3;
+--
+-- The per-tenant sweep takes a SESSION-level advisory lock (released via
+-- pg_advisory_unlock) spanning SHORT per-page transactions, so no pooled
+-- connection is pinned across object-store I/O (avoiding Cloud SQL's
+-- idle_in_transaction_session_timeout):
+--   SELECT pg_try_advisory_lock(hashtext('backup_gc'), hashtext($1));   -- acquire
+--   SELECT pg_advisory_unlock(hashtext('backup_gc'), hashtext($1));     -- release
+-- so two GC passes never sweep the same tenant concurrently.
 
 -- ---------------------------------------------------------------------------
 -- backup_schedules

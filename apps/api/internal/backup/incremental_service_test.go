@@ -199,11 +199,38 @@ func (r *fakeRepo) ListSiteIDsWithSnapshots(_ context.Context, _ uuid.UUID) ([]u
 func (r *fakeRepo) SetSnapshotArchived(_ context.Context, _, _ uuid.UUID, _ bool) error {
 	panic("fakeRepo.SetSnapshotArchived not implemented")
 }
-func (r *fakeRepo) DeleteSnapshotAndDecref(_ context.Context, _, _ uuid.UUID) ([]Orphan, error) {
-	panic("fakeRepo.DeleteSnapshotAndDecref not implemented")
+func (r *fakeRepo) DeleteSnapshot(_ context.Context, _, _ uuid.UUID) error {
+	panic("fakeRepo.DeleteSnapshot not implemented")
 }
-func (r *fakeRepo) DeleteOrphanChunks(_ context.Context, _ uuid.UUID, _ []string) error {
-	panic("fakeRepo.DeleteOrphanChunks not implemented")
+func (r *fakeRepo) ListInFlightSnapshotFloor(_ context.Context, _ uuid.UUID) (time.Time, error) {
+	panic("fakeRepo.ListInFlightSnapshotFloor not implemented")
+}
+func (r *fakeRepo) DBNow(_ context.Context, _ uuid.UUID) (time.Time, error) {
+	panic("fakeRepo.DBNow not implemented")
+}
+func (r *fakeRepo) SweepTenantChunks(_ context.Context, _ uuid.UUID, _ time.Time, _ *bool, _ func(SweepChunk) (bool, error)) error {
+	panic("fakeRepo.SweepTenantChunks not implemented")
+}
+func (r *fakeRepo) CompleteIncrementalManifest(_ context.Context, in CompleteIncrementalInput) (int64, int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Mirror the real atomic method: insert file-index rows, optionally record the
+	// DB manifest, then complete the snapshot — all observable together.
+	r.fileIndexRows[in.SnapshotID] = append(r.fileIndexRows[in.SnapshotID], in.FileEntries...)
+	var refs, stored int64
+	if in.DBManifest != nil {
+		for _, e := range in.DBManifest.Entries {
+			refs += int64(len(e.ChunkHashes))
+		}
+		stored = int64(len(in.DBManifest.Chunks))
+	} else {
+		refs = in.ChunkRefs
+	}
+	if s, ok := r.snapshots[in.SnapshotID]; ok {
+		s.Status = StatusCompleted
+		r.snapshots[in.SnapshotID] = s
+	}
+	return refs, stored, nil
 }
 func (r *fakeRepo) ListChainSnapshots(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]Snapshot, error) {
 	panic("fakeRepo.ListChainSnapshots not implemented")
@@ -419,11 +446,11 @@ func TestSubmitIncrementalManifest_InsertsFileIndex(t *testing.T) {
 				IsTombstone: false,
 			},
 		},
-		DBEntries:           nil,
-		CycleFilesScanned:   100,
-		CycleFilesChanged:   1,
-		CycleFilesDeleted:   0,
-		CycleBytesUploaded:  1234,
+		DBEntries:          nil,
+		CycleFilesScanned:  100,
+		CycleFilesChanged:  1,
+		CycleFilesDeleted:  0,
+		CycleBytesUploaded: 1234,
 	}
 
 	_, _, err := svc.SubmitIncrementalManifest(context.Background(), tenantID, snapshotID, req)
