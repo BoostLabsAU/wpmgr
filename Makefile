@@ -13,6 +13,10 @@ help: ## Show this help
 bootstrap: ## First-time dev setup
 	./scripts/bootstrap.sh
 
+.PHONY: quickstart
+quickstart: ## One-command self-host bootstrap: write .env + generate secrets
+	./scripts/init-env.sh
+
 COMPOSE := docker compose -f infra/docker-compose.yml
 COMPOSE_DEV := $(COMPOSE) -f infra/docker-compose.dev.yml
 
@@ -128,3 +132,13 @@ agent-release-dry-run: agent-zip ## Preview the agent release (build zip + print
 .PHONY: gen
 gen: ## Regenerate OpenAPI clients (Go + TS)
 	./scripts/gen-openapi.sh
+
+.PHONY: gen-secrets
+gen-secrets: ## Print the boot-critical self-host secrets as ready-to-paste env lines
+	# Self-verifying generator: each secret is decoded back through the server's
+	# own boot parsers before it is printed (see apps/api/cmd/wpmgr-cli).
+	cd apps/api && go run ./cmd/wpmgr-cli gen-secrets
+
+.PHONY: init-env
+init-env: ## Copy .env.example -> .env and inject fresh secrets (preserves existing .env)
+	./scripts/init-env.sh

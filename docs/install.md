@@ -10,26 +10,64 @@ dashboard (React), and data plane (Postgres, Redis, SeaweedFS, ClickHouse).
 
 ## 1. Configure env
 
-```bash
-cp .env.example .env
-```
-
-Edit `.env`. At minimum change these before exposing the service:
+One command copies `.env.example` to `.env` and fills in every boot-critical
+secret with a freshly generated, correctly formatted value:
 
 ```bash
-WPMGR_SESSION_SECRET=...      # 32-byte base64; openssl rand -base64 32
-WPMGR_DB_PASSWORD=...         # not the default
-WPMGR_S3_SECRET_KEY=...       # not the default
+make quickstart        # or: ./scripts/init-env.sh
 ```
 
-Generate the Ed25519 control-plane signing keypair used for the agent protocol:
+This is idempotent and safe to re-run: it never overwrites an existing `.env`
+(pass `./scripts/init-env.sh --force` to regenerate from `.env.example`, keeping
+a `.env.bak`) and only fills secret keys that are still empty or still hold the
+committed dev placeholder.
+
+The four secrets it mints — all in the exact formats the control plane validates
+at boot, so the app accepts them on the first try — are:
+
+| Var | Format | Why it matters |
+|-----|--------|----------------|
+| `WPMGR_SESSION_SECRET` | random ≥32-byte string | hard-fails boot if empty/too short |
+| `WPMGR_AGENT_SIGNING_PRIVATE_KEY` | base64-std of the **raw** 64-byte Ed25519 key | signs CP→agent commands; rejected in prod if it's the committed dev key |
+| `WPMGR_AGENT_SIGNING_PUBLIC_KEY` | base64-std of the **raw** 32-byte Ed25519 key | the public half agents verify with |
+| `WPMGR_SITE_DEST_AGE_SECRET` | age X25519 secret (`AGE-SECRET-KEY-1…`) | secrets-at-rest key; **hard-fails prod boot if empty** |
+
+> The values must be base64 of the **raw key bytes**, not of a PEM file — the old
+> `base64 < key.pem` recipe produced keys the runtime rejected. The generator
+> (`wpmgr-cli gen-secrets`) self-verifies every value by decoding it back through
+> the server's own boot parsers before printing it, so a generated line is
+> guaranteed to load.
+
+To print the four secret lines without touching `.env` (e.g. to paste into a
+secret manager), run the generator directly — it works with a Go toolchain or,
+failing that, through the `api` Docker image:
 
 ```bash
-./scripts/gen-keys.sh
-# writes WPMGR_AGENT_SIGNING_PRIVATE_KEY / _PUBLIC_KEY into .env
+./scripts/gen-keys.sh          # or: make gen-secrets
+# or, with no Go installed:
+docker compose -f infra/docker-compose.yml run --rm --no-deps \
+  --entrypoint wpmgr-cli api gen-secrets
 ```
 
-Key env vars (all prefixed `WPMGR_`):
+Then edit `.env` to set the values the generator cannot infer, before exposing
+the service:
+
+```bash
+WPMGR_ENV=production                              # turns on the prod boot guards
+WPMGR_PUBLIC_BASE_URL=https://wpmgr.example.com   # this control plane, agent-reachable
+WPMGR_S3_ENDPOINT=https://s3.example.com          # MUST be reachable by remote agents
+WPMGR_DB_PASSWORD=...                             # not the dev default
+WPMGR_S3_SECRET_KEY=...                            # not the dev default
+```
+
+`WPMGR_PUBLIC_BASE_URL` and `WPMGR_S3_ENDPOINT` must resolve from the WordPress
+host where the agent runs — the in-network compose default `http://seaweedfs:8333`
+is only reachable inside Docker, so any real (off-host) site needs a publicly
+reachable S3 endpoint (e.g. a tunnel/reverse-proxy URL).
+
+`.env.example` groups every variable as **[REQUIRED — ALWAYS]**,
+**[REQUIRED — PRODUCTION]**, or **[OPTIONAL]** with the exact format and an
+example for each — read it top-to-bottom. Key env vars (all prefixed `WPMGR_`):
 
 | Var | Purpose | Default |
 |-----|---------|---------|
@@ -95,7 +133,13 @@ docker compose -f infra/docker-compose.yml up -d
 ```
 
 This starts Postgres, Redis, SeaweedFS (S3 gateway on `:8333`), ClickHouse, the
-API (`:8080`), and the web dashboard (served by nginx on `:80`).
+API, and the web dashboard (served by nginx). To avoid colliding with anything
+already bound on the host, the **published** host ports default to non-standard
+values — the dashboard on **`:8088`** and the API on **`:8081`** (the
+container-side ports are unchanged, so in-network wiring is unaffected). Override
+any of them in `.env` with the `WPMGR_*_PORT` vars (`WPMGR_WEB_PORT`,
+`WPMGR_API_PORT`, `WPMGR_S3_PORT`, `WPMGR_DEX_PORT`) — e.g. set
+`WPMGR_WEB_PORT=80` to serve the dashboard on the standard HTTP port.
 
 ### Or: run the prebuilt GHCR images (no local build)
 
@@ -121,15 +165,16 @@ is inherited from the base file. Add `--profile media` for the encoder.
 ## 3. Verify
 
 ```bash
-curl localhost:8080/healthz   # {"status":"ok"}
-curl localhost:8080/readyz    # 200 once DB/Redis/S3 are reachable
+curl localhost:8081/healthz   # {"status":"ok"}  (default WPMGR_API_PORT=8081)
+curl localhost:8081/readyz    # 200 once DB/Redis/S3 are reachable
 ```
 
 - `GET /healthz` — liveness (process is up).
 - `GET /readyz` — readiness (dependencies reachable).
 
-Open the dashboard at `http://localhost` (the `web` service serves the built
-SPA via nginx and proxies to the API).
+Open the dashboard at `http://localhost:8088` (the default `WPMGR_WEB_PORT`; the
+`web` service serves the built SPA via nginx and proxies to the API). Set
+`WPMGR_WEB_PORT=80` in `.env` if you want it on the standard HTTP port.
 
 ## Optional: Media Optimizer
 
@@ -161,7 +206,8 @@ Grafana then ships with the WPMgr dashboards pre-provisioned. See
 - **Default credentials in `.env.example` are for local dev only** — rotate the
   session secret, DB password, and S3 keys before any network-exposed deploy.
 - Put a TLS-terminating reverse proxy (the bundled `infra/nginx/` config, or
-  your own) in front of `:8080` for production.
+  your own) in front of the published API port (`WPMGR_API_PORT`, default
+  `:8081`) for production.
 
 For local development with hot-reload overrides, use `make dev` (runs
 `docker-compose.yml` + `docker-compose.dev.yml`) — see

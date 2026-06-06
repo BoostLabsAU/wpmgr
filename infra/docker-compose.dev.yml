@@ -22,6 +22,16 @@ services:
       - "8123:8123"   # HTTP
       - "9000:9000"   # native
 
+  # In dev, a flaky SeaweedFS healthcheck must NEVER wedge the bring-up: object
+  # storage isn't on the boot critical path (backups land later), so the bucket
+  # seed only needs the gateway process to have STARTED, not to be "healthy".
+  # This `depends_on` REPLACES the base file's seaweedfs-init dependency (compose
+  # merges by key, and condition: service_started is the looser of the two).
+  seaweedfs-init:
+    depends_on:
+      seaweedfs:
+        condition: service_started
+
   # Run the API from source with the Go toolchain (live `go run`).
   # Mounts the api module so edits are picked up on container restart.
   api:
@@ -36,6 +46,18 @@ services:
       - ../apps/api:/src/apps/api
       - go-mod-cache:/go/pkg/mod
       - go-build-cache:/root/.cache/go-build
+    # Keep postgres/redis/dex as service_healthy (real boot deps) but require
+    # SeaweedFS only to have STARTED — its slow/occasionally-flaky S3 warmup must
+    # not block the control plane in dev. This merges over the base depends_on.
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      dex:
+        condition: service_healthy
+      seaweedfs:
+        condition: service_started
     command: ["go", "run", "./cmd/wpmgr"]
 
   # Run the Vite dev server (HMR) on port 5173 instead of the nginx image.

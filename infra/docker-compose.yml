@@ -60,17 +60,29 @@ services:
       - -dir=/data
       - -s3.config=/etc/seaweedfs/s3.json
     ports:
-      - "8333:8333"
+      # Host port is env-overridable so it never collides with something already
+      # bound on the host. Container side stays 8333 (the S3 gateway port the api
+      # reaches in-network via WPMGR_S3_ENDPOINT).
+      - "${WPMGR_S3_PORT:-8333}:8333"
     volumes:
       - seaweedfs-data:/data
       - ./seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     healthcheck:
-      # The S3 gateway answers /status with 200 once up.
-      test: ["CMD", "wget", "-qO-", "http://localhost:8333/status"]
+      # The S3 gateway answers GET /status with 200 once it is listening. We probe
+      # it over the loopback INSIDE the container (always container-port 8333,
+      # regardless of the published host port). The seaweedfs:3.80 image ships
+      # busybox (so `wget` is present), but we use CMD-SHELL with a busybox-wget
+      # fallback so the probe is resilient even if the base image's applet set
+      # changes. A generous start_period covers the gateway's volume/filer warmup.
+      test:
+        - CMD-SHELL
+        - >-
+          wget -q -O /dev/null http://127.0.0.1:8333/status
+          || busybox wget -q -O /dev/null http://127.0.0.1:8333/status
       interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 40s
+      retries: 12
+      start_period: 60s
 
   # One-shot init: create the wpmgr-backups bucket via the S3 gateway.
   seaweedfs-init:
@@ -173,7 +185,9 @@ services:
       WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT: ${WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-lgtm:4318}
       WPMGR_OTEL_SERVICE_NAME: ${WPMGR_OTEL_SERVICE_NAME:-wpmgr-api}
     ports:
-      - "8080:8080"
+      # Host port is env-overridable (default 8081 to dodge the common 8080
+      # collision); container side stays 8080 to match WPMGR_HTTP_ADDR.
+      - "${WPMGR_API_PORT:-8081}:8080"
     # Make `dex.localhost` (the OIDC issuer host) resolve to the host gateway so
     # the api container reaches the same published Dex (:5556) that the browser
     # reaches via loopback. Keeps the issuer string identical on both sides.
@@ -259,7 +273,11 @@ services:
       - ./dex/config.yaml:/etc/dex/config.yaml:ro
       - dex-data:/var/dex
     ports:
-      - "5556:5556"
+      # Env-overridable host port. The default MUST stay 5556 because the api's
+      # WPMGR_OIDC_ISSUER / _REDIRECT_URL defaults embed dex.localhost:5556 and
+      # reach this published port via the host-gateway mapping above — change the
+      # host port here and you must change those issuer/redirect URLs in lockstep.
+      - "${WPMGR_DEX_PORT:-5556}:5556"
     healthcheck:
       # Dex serves a healthz endpoint on its telemetry listener (:5558).
       test: ["CMD", "wget", "-qO-", "http://localhost:5558/healthz"]
@@ -275,7 +293,10 @@ services:
     image: wpmgr-web:dev
     restart: unless-stopped
     ports:
-      - "80:80"
+      # Env-overridable host port. Default 8088 (NOT 80) so first boot never
+      # needs root/privileged-port binding and never collides with an existing
+      # web server on :80. Container side stays 80 (nginx).
+      - "${WPMGR_WEB_PORT:-8088}:80"
     depends_on:
       - api
 
@@ -295,9 +316,11 @@ services:
       - ./grafana/provisioning:/otel-lgtm/grafana/conf/provisioning/custom:ro
       - ./grafana/dashboards:/otel-lgtm/grafana/dashboards:ro
     ports:
-      - "3000:3000"   # Grafana UI
-      - "4317:4317"   # OTLP gRPC
-      - "4318:4318"   # OTLP HTTP
+      # Opt-in (observability profile). Host ports are env-overridable; defaults
+      # are the conventional Grafana/OTLP ports.
+      - "${WPMGR_GRAFANA_PORT:-3000}:3000"   # Grafana UI
+      - "${WPMGR_OTLP_GRPC_PORT:-4317}:4317"   # OTLP gRPC
+      - "${WPMGR_OTLP_HTTP_PORT:-4318}:4318"   # OTLP HTTP
 
 volumes:
   postgres-data:

@@ -1,10 +1,9 @@
 // Command wpmgr-cli is the in-tree administrative CLI for the control plane.
-// It currently supports applying database migrations; key generation and seed
-// commands land in later phases.
 //
 // Usage:
 //
-//	wpmgr-cli migrate    # apply embedded versioned migrations
+//	wpmgr-cli migrate        # apply embedded versioned migrations
+//	wpmgr-cli gen-secrets    # mint the boot-critical secrets (KEY=VALUE lines)
 package main
 
 import (
@@ -29,6 +28,11 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("migrations applied")
+	case "gen-secrets":
+		if err := genSecrets(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "gen-secrets:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -52,5 +56,6 @@ func migrate() error {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "wpmgr-cli — admin tooling")
-	fmt.Fprintln(os.Stderr, "  migrate    apply database migrations")
+	fmt.Fprintln(os.Stderr, "  migrate        apply database migrations")
+	fmt.Fprintln(os.Stderr, "  gen-secrets    mint boot-critical secrets as KEY=VALUE lines")
 }
