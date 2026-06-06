@@ -54,6 +54,15 @@ type EncodeEnqueuer interface {
 	EnqueueEncode(ctx context.Context, args model.EncodeArgs) error
 }
 
+// EncoderWaker nudges the scale-to-zero media-encoder awake right after a job is
+// enqueued. The encoder is a pull worker (it polls Postgres), so at
+// min-instances=0 nothing would cold-start it on an enqueue without this poke.
+// *media.EncoderWaker satisfies it; a nil waker (self-host / not wired) is a
+// no-op, as is a disabled one.
+type EncoderWaker interface {
+	Kick()
+}
+
 // AgentMediaClient is the subset of agentcmd.Client the service dispatches.
 // *agentcmd.Client satisfies it; declared as an interface so the service stays
 // free of the SSRF transport in tests, and so a nil/disabled commander degrades

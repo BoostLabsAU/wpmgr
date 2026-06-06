@@ -35,6 +35,8 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
+	"github.com/mosamlife/wpmgr/apps/api/internal/dbclean"
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
@@ -49,8 +51,6 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/metrics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
-	"github.com/mosamlife/wpmgr/apps/api/internal/dbclean"
-	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	rucssrepo "github.com/mosamlife/wpmgr/apps/api/internal/rucss/repo"
 	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
@@ -938,6 +938,17 @@ func run() error {
 	// started. The enqueuer lives in the PURE media package (no encoder import),
 	// so this binary still has no CGO dependency.
 	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(riverClient))
+
+	// Cloud scale-to-zero: the media-encoder is a separate, min-instances=0 Cloud
+	// Run service running a PULL River worker. Nothing cold-starts it when we
+	// enqueue (enqueue is a DB write, not an HTTP call to the encoder), so a waker
+	// reconcile loop holds a /internal/drain request open to keep the cold-started
+	// instance alive until the media_encode queue drains. WPMGR_MEDIA_ENCODER_URL
+	// is the encoder's Cloud Run URL; unset on self-host (the always-on `media`
+	// compose profile), where the waker disables itself.
+	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger)
+	mediaSvc.SetWaker(mediaWaker)
+	go mediaWaker.Run(ctx)
 
 	// M38 — wire the db-clean schedule worker's enqueuer + cpBaseURL now that
 	// River has started. The schedule worker finds due sites and enqueues

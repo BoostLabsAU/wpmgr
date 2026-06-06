@@ -14,6 +14,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -156,10 +157,12 @@ func run() error {
 		slog.String("s3_bucket", cfg.S3.Bucket))
 
 	// Cloud Run (a Service) requires the container to listen on $PORT or the
-	// startup probe fails the revision. This worker otherwise serves no HTTP, so
-	// bind a trivial health server. Self-hosters running this via docker-compose
-	// (the `media` profile) simply ignore the port.
-	healthSrv := startHealthServer(logger)
+	// startup probe fails the revision. The health server also hosts the
+	// /internal/drain wake endpoint: at min-instances=0 the CP holds a request
+	// open there to keep this cold-started instance alive until the media_encode
+	// queue drains. Self-hosters running this via docker-compose (the `media`
+	// profile) run it always-on and never call /internal/drain.
+	healthSrv := startHealthServer(logger, pool, model.MediaEncodeQueue)
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining encode queue")
@@ -174,23 +177,62 @@ func run() error {
 	return nil
 }
 
-// startHealthServer binds a minimal HTTP server on $PORT (default 8080) that
-// returns 200 on every path. Cloud Run's startup/liveness probes need a
-// listening port; the encoder is otherwise a pure River worker. Runs in a
-// goroutine so it never blocks the queue.
-func startHealthServer(logger *slog.Logger) *http.Server {
+// drain hold tuning. The CP holds a POST /internal/drain request open to keep
+// this scale-to-zero instance alive while it works; the handler returns once the
+// media_encode queue has been continuously empty for drainQuietPeriod (so a job
+// enqueued moments after the last one still keeps the instance up), or after
+// drainMaxHold as a hard ceiling (kept under the Cloud Run request timeout).
+const (
+	drainPollInterval = 2 * time.Second
+	drainQuietPeriod  = 20 * time.Second
+	drainMaxHold      = 50 * time.Minute
+	// maxConcurrentDrains caps simultaneous /internal/drain holds. The CP is
+	// singleflighted to a single hold, so this never affects the legitimate path;
+	// it is defense-in-depth that bounds the blast radius (pinned goroutines +
+	// COUNT load) should the encoder ever be misconfigured allow-unauthenticated
+	// or ingress=all. Excess holds get 429 instead of pinning instances.
+	maxConcurrentDrains = 3
+)
+
+// drainConfig parameterizes the /internal/drain hold so it is unit-testable with
+// a fake count func and short durations.
+type drainConfig struct {
+	poll    time.Duration
+	quiet   time.Duration
+	maxHold time.Duration
+	count   func(ctx context.Context) (int, error)
+	logger  *slog.Logger
+	// sem caps concurrent holds (nil = uncapped, used by the pure-loop tests).
+	sem chan struct{}
+}
+
+// startHealthServer binds a minimal HTTP server on $PORT (default 8080). It
+// serves the Cloud Run startup/liveness probe (200 on every other path) and the
+// /internal/drain wake endpoint. Runs in a goroutine so it never blocks the
+// queue. pool/queue drive the drain handler's live-job count.
+func startHealthServer(logger *slog.Logger, pool *db.Pool, queue string) *http.Server {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
 	mux := http.NewServeMux()
+	mux.HandleFunc("/internal/drain", drainHandler(drainConfig{
+		poll:    drainPollInterval,
+		quiet:   drainQuietPeriod,
+		maxHold: drainMaxHold,
+		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, queue) },
+		logger:  logger,
+		sem:     make(chan struct{}, maxConcurrentDrains),
+	}))
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	srv := &http.Server{
-		Addr:              ":" + port,
-		Handler:           mux,
+		Addr:    ":" + port,
+		Handler: mux,
+		// No WriteTimeout: /internal/drain intentionally holds the response open
+		// for the duration of the drain. ReadHeaderTimeout still bounds slowloris.
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -200,6 +242,101 @@ func startHealthServer(logger *slog.Logger) *http.Server {
 	}()
 	logger.Info("media-encoder health server listening", slog.String("port", port))
 	return srv
+}
+
+// drainHandler keeps the instance alive while the media_encode queue has live
+// work. It is gated by Cloud Run IAM (the service is not allow-unauthenticated)
+// and internal ingress, so the container needs no additional auth — only the CP
+// (granted run.invoker, presenting an ID token for this service's audience) can
+// reach it. The River workers do the actual encoding in the background; this
+// handler merely holds the request — and thus the Cloud Run instance — open until
+// the queue is drained.
+func drainHandler(cfg drainConfig) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// Defense-in-depth: cap concurrent holds (non-blocking acquire). The
+		// legitimate CP caller is singleflighted to one hold, so this only bites a
+		// misconfigured-ingress flood.
+		if cfg.sem != nil {
+			select {
+			case cfg.sem <- struct{}{}:
+				defer func() { <-cfg.sem }()
+			default:
+				http.Error(w, "too many concurrent drains", http.StatusTooManyRequests)
+				return
+			}
+		}
+		drained, reason := holdUntilDrained(r.Context(), cfg)
+		// If the client (CP) already disconnected the write is a harmless no-op.
+		writeDrainResult(w, drained, reason)
+	}
+}
+
+// holdUntilDrained blocks until the queue has been continuously empty for
+// cfg.quiet (returns drained=true), the cfg.maxHold ceiling elapses
+// (drained=false, "max-hold"), or ctx is canceled because the client went away
+// (drained=false, "client-gone"). A count error is treated as "not known-empty"
+// so the hold continues rather than releasing the instance prematurely. Pure
+// loop, extracted for unit testing.
+func holdUntilDrained(ctx context.Context, cfg drainConfig) (bool, string) {
+	deadline := time.Now().Add(cfg.maxHold)
+	var quietSince time.Time
+	cfg.logger.Info("drain hold started")
+	for {
+		if ctx.Err() != nil {
+			cfg.logger.Info("drain hold ended: client gone")
+			return false, "client-gone"
+		}
+		n, err := cfg.count(ctx)
+		switch {
+		case err != nil:
+			if ctx.Err() != nil {
+				return false, "client-gone"
+			}
+			cfg.logger.Warn("drain: live-count failed", slog.Any("error", err))
+			quietSince = time.Time{} // an error is not "known empty"
+		case n == 0:
+			if quietSince.IsZero() {
+				quietSince = time.Now()
+			}
+			if time.Since(quietSince) >= cfg.quiet {
+				cfg.logger.Info("drain hold complete: queue drained")
+				return true, "empty"
+			}
+		default:
+			quietSince = time.Time{} // live work — reset the quiet timer
+		}
+		if time.Now().After(deadline) {
+			cfg.logger.Info("drain hold ended: max-hold ceiling")
+			return false, "max-hold"
+		}
+		select {
+		case <-ctx.Done():
+			return false, "client-gone"
+		case <-time.After(cfg.poll):
+		}
+	}
+}
+
+// liveEncodeJobs counts media_encode jobs needing an awake encoder: available,
+// running, or retryable. Mirrors the CP waker's query so both sides agree.
+func liveEncodeJobs(ctx context.Context, pool *db.Pool, queue string) (int, error) {
+	const q = `SELECT count(*) FROM river_job WHERE queue = $1 AND state IN ('available','running','retryable')`
+	var n int
+	if err := pool.QueryRow(ctx, q, queue).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
+// writeDrainResult writes the small JSON drain summary (best-effort).
+func writeDrainResult(w http.ResponseWriter, drained bool, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"drained":%t,"reason":%q}`, drained, reason)
 }
 
 func encodeWorkerCount() int {

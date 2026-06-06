@@ -41,6 +41,7 @@ type Config struct {
 type Service struct {
 	repo     Repo
 	enqueuer EncodeEnqueuer
+	waker    EncoderWaker
 	cmd      AgentMediaClient
 	sites    SiteLookup
 	store    Presigner
@@ -79,6 +80,11 @@ func NewService(r Repo, store Presigner, events EventPublisher, rec *audit.Recor
 
 // SetEnqueuer wires the River EncodeArgs enqueuer after River starts.
 func (s *Service) SetEnqueuer(e EncodeEnqueuer) { s.enqueuer = e }
+
+// SetWaker wires the media-encoder waker (cloud scale-to-zero only). Optional —
+// a nil waker leaves HandleEncodeReady's Kick a no-op (self-host always-on
+// encoder).
+func (s *Service) SetWaker(w EncoderWaker) { s.waker = w }
 
 // SetAgentClient wires the CP→agent commander + site lookup.
 func (s *Service) SetAgentClient(cmd AgentMediaClient, sites SiteLookup) {

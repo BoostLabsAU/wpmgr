@@ -184,6 +184,11 @@ func (s *Service) HandleEncodeReady(ctx context.Context, tenantID, siteID uuid.U
 		s.failJob(ctx, tenantID, siteID, jobID, "encode enqueue failed: "+err.Error())
 		return domain.Internal("media_encode_enqueue_failed", "failed to enqueue encode job").WithCause(err)
 	}
+	// Nudge the scale-to-zero media-encoder awake so it cold-starts and drains the
+	// just-enqueued job. No-op on self-host (always-on encoder) and when unwired.
+	if s.waker != nil {
+		s.waker.Kick()
+	}
 	s.publish(ctx, tenantID, siteID, site.EventMediaOptimizeProgress, map[string]any{
 		"job_id":         jobID,
 		"variants_total": len(encVariants),
