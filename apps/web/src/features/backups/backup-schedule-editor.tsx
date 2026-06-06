@@ -613,7 +613,6 @@ export function BackupScheduleEditor({ siteId }: { siteId: string }) {
                         id="schedule-incremental"
                         checked={field.value}
                         onCheckedChange={field.onChange}
-                        disabled={!enabled}
                       />
                     )}
                   />
