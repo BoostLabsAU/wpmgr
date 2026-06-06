@@ -6,6 +6,7 @@ package backup
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -70,6 +71,58 @@ func (r *chainFakeRepo) ListChainSnapshots(_ context.Context, _ uuid.UUID, chain
 		}
 	}
 	return out, nil
+}
+
+// StreamChainEffectiveFileIndex mirrors the pgRepo merge over the fake's chain
+// bookkeeping: walk generations 0..maxGeneration ascending, apply
+// latest-version-wins (tombstone => delete), then emit surviving entries sorted
+// by file_path. Used by the chain-merged file-index endpoint tests.
+func (r *chainFakeRepo) StreamChainEffectiveFileIndex(ctx context.Context, tenantID, chainID uuid.UUID, maxGeneration int, fn func(FileIndexEntry) error) error {
+	if maxGeneration < 0 {
+		maxGeneration = 0
+	}
+	chainSnaps, err := r.ListChainSnapshots(ctx, tenantID, chainID, maxGeneration)
+	if err != nil {
+		return err
+	}
+	byGen := map[int]Snapshot{}
+	maxGen := -1
+	for _, cs := range chainSnaps {
+		byGen[cs.Generation] = cs
+		if cs.Generation > maxGen {
+			maxGen = cs.Generation
+		}
+	}
+	winMap := map[string]*FileIndexEntry{}
+	for gen := 0; gen <= maxGen; gen++ {
+		cs, ok := byGen[gen]
+		if !ok {
+			continue
+		}
+		streamErr := r.StreamFileIndex(ctx, tenantID, cs.ID, func(e FileIndexEntry) error {
+			eCopy := e
+			if e.IsTombstone {
+				delete(winMap, e.FilePath)
+			} else {
+				winMap[e.FilePath] = &eCopy
+			}
+			return nil
+		})
+		if streamErr != nil {
+			return streamErr
+		}
+	}
+	paths := make([]string, 0, len(winMap))
+	for p := range winMap {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if ferr := fn(*winMap[p]); ferr != nil {
+			return ferr
+		}
+	}
+	return nil
 }
 
 // ListManifest returns registered manifest entries for a snapshot.

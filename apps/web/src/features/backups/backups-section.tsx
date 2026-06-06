@@ -23,7 +23,13 @@ import { Label } from "@/components/ui/label";
 import { PageError } from "@/components/feedback";
 import { StatusChip } from "@/components/status/status-chip";
 import type { StatusTone } from "@/components/status/status-dot";
-import { useBackups, useCreateBackup } from "@/features/backups/use-backups";
+import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
+import {
+  useBackups,
+  useCreateBackup,
+  useDeleteBackup,
+  useCancelBackup,
+} from "@/features/backups/use-backups";
 import {
   StatusBadge,
   KindBadge,
@@ -43,7 +49,7 @@ import {
 } from "@/features/backups/use-schedule-runs";
 import { BackupScheduleEditor } from "@/features/backups/backup-schedule-editor";
 import { formatBytes, relativeTime } from "@/lib/utils";
-import type { BackupCreate } from "@wpmgr/api";
+import type { BackupCreate, BackupSnapshot } from "@wpmgr/api";
 
 // The "Backups" section rendered on the site detail page. One card holds the
 // snapshot list; "Back up now" lives as a header control (not an inset
@@ -77,7 +83,7 @@ export function BackupsSection({
           {canOperate ? <BackupNowControl siteId={siteId} /> : null}
         </CardHeader>
         <CardContent>
-          <SnapshotList siteId={siteId} />
+          <SnapshotList siteId={siteId} canOperate={canOperate} />
         </CardContent>
       </Card>
 
@@ -158,7 +164,13 @@ function BackupNowControl({ siteId }: { siteId: string }) {
   );
 }
 
-function SnapshotList({ siteId }: { siteId: string }) {
+function SnapshotList({
+  siteId,
+  canOperate,
+}: {
+  siteId: string;
+  canOperate: boolean;
+}) {
   const { data, isPending, isError, error, refetch } = useBackups(siteId);
 
   if (isPending) {
@@ -248,16 +260,121 @@ function SnapshotList({ siteId }: { siteId: string }) {
               {relativeTime(snap.finished_at) ?? "–"}
             </TableCell>
             <TableCell className="text-right">
-              <Button asChild variant="outline" size="sm">
-                <Link to="/backups/$snapshotId" params={{ snapshotId: snap.id }}>
-                  View
-                </Link>
-              </Button>
+              <div className="flex items-center justify-end gap-2">
+                <Button asChild variant="outline" size="sm">
+                  <Link
+                    to="/backups/$snapshotId"
+                    params={{ snapshotId: snap.id }}
+                  >
+                    View
+                  </Link>
+                </Button>
+                {canOperate ? (
+                  <BackupRowActions snapshot={snap} siteId={siteId} />
+                ) : null}
+              </div>
             </TableCell>
           </TableRow>
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+/**
+ * Per-row Cancel/Delete actions for a snapshot (operator+).
+ *
+ * Gating:
+ *   - Cancel shows only for running/pending snapshots and stops the in-flight
+ *     run (server marks it failed — there is no "cancelled" status).
+ *   - Delete shows only for terminal snapshots (completed/failed). The server is
+ *     chain-safe and refuses to delete a base/mid-chain increment that still has
+ *     dependents, surfacing that as an inline error in the confirm dialog (we
+ *     don't have the chain tip locally to pre-disable it — task #180).
+ */
+function BackupRowActions({
+  snapshot,
+  siteId,
+}: {
+  snapshot: BackupSnapshot;
+  siteId: string;
+}) {
+  const [confirm, setConfirm] = useState<null | "cancel" | "delete">(null);
+  const del = useDeleteBackup(snapshot.id, siteId);
+  const cancel = useCancelBackup(snapshot.id, siteId);
+
+  const isInFlight =
+    snapshot.status === "running" || snapshot.status === "pending";
+  const shortId = snapshot.id.slice(0, 8);
+
+  function close() {
+    setConfirm(null);
+    del.reset();
+    cancel.reset();
+  }
+
+  return (
+    <>
+      {isInFlight ? (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setConfirm("cancel")}
+        >
+          Cancel
+        </Button>
+      ) : (
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-destructive-subtle-fg"
+          onClick={() => setConfirm("delete")}
+        >
+          Delete
+        </Button>
+      )}
+
+      <DestructiveConfirm
+        open={confirm === "cancel"}
+        onClose={close}
+        onConfirm={() =>
+          cancel.mutate(undefined, { onSuccess: () => setConfirm(null) })
+        }
+        title="Cancel backup"
+        consequencesBody={
+          <p>
+            This stops the in-progress backup. The snapshot is marked failed and
+            no data is kept from this run. You can run a new backup at any time.
+          </p>
+        }
+        resourceName={shortId}
+        confirmLabel="Cancel backup"
+        cancelLabel="Keep running"
+        isPending={cancel.isPending}
+        errorMessage={cancel.isError ? cancel.error.message : null}
+      />
+
+      <DestructiveConfirm
+        open={confirm === "delete"}
+        onClose={close}
+        onConfirm={() =>
+          del.mutate(undefined, { onSuccess: () => setConfirm(null) })
+        }
+        title="Delete backup"
+        consequencesBody={
+          <p>
+            This permanently deletes the snapshot and reclaims its storage.
+            Unique chunks are removed; chunks still used by other snapshots are
+            kept. This cannot be undone.
+          </p>
+        }
+        resourceName={shortId}
+        confirmLabel="Delete backup"
+        cancelLabel="Keep backup"
+        isPending={del.isPending}
+        errorMessage={del.isError ? del.error.message : null}
+      />
+    </>
   );
 }
 

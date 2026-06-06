@@ -97,6 +97,13 @@ func (r *fakeRepo) StreamFileIndex(_ context.Context, _, snapshotID uuid.UUID, f
 	return nil
 }
 
+// StreamChainEffectiveFileIndex is not exercised by the bare fakeRepo (which has
+// no chain bookkeeping); chainFakeRepo provides the real merge. It panics here so
+// any accidental chain use through the base fake is caught loudly.
+func (r *fakeRepo) StreamChainEffectiveFileIndex(_ context.Context, _, _ uuid.UUID, _ int, _ func(FileIndexEntry) error) error {
+	panic("fakeRepo.StreamChainEffectiveFileIndex not implemented")
+}
+
 func (r *fakeRepo) UpdateSnapshotCycleStats(_ context.Context, _, snapshotID uuid.UUID, in CycleStatsInput) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

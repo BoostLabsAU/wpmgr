@@ -10,6 +10,8 @@ import {
   createBackup,
   listBackups,
   getBackup,
+  deleteBackup,
+  cancelBackup,
   createRestore,
   getBackupSchedule,
   putBackupSchedule,
@@ -197,6 +199,69 @@ export function useCreateRestore(
       );
       void queryClient.invalidateQueries({
         queryKey: backupsKeys.detail(snapshotId),
+      });
+    },
+  });
+}
+
+/**
+ * Delete a terminal snapshot (operator+). Chain-safe on the server: deleting a
+ * base/mid-chain increment that has dependent later increments is refused with a
+ * 422 (chain_has_dependents); a running snapshot must be cancelled first.
+ *
+ * On success we invalidate the site's snapshot list (and the detail cache) so
+ * the deleted row disappears. `siteId` is required for the list invalidation —
+ * the snapshot row carries it (snapshot.site_id) for callers in the list view.
+ */
+export function useDeleteBackup(
+  snapshotId: string,
+  siteId: string,
+): UseMutationResult<void, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { error, response } = await deleteBackup({ path: { snapshotId } });
+      // 204 No Content is the success shape; the SDK leaves `data` undefined.
+      if (response?.status === 422) {
+        throw toError(error ?? { message: "This backup cannot be deleted yet" });
+      }
+      if (error) throw toError(error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: backupsKeys.listFor(siteId),
+      });
+      queryClient.removeQueries({ queryKey: backupsKeys.detail(snapshotId) });
+    },
+  });
+}
+
+/**
+ * Cancel a running/pending snapshot (operator+). The server marks it failed
+ * ("cancelled by operator"), which both makes it deletable and rejects any late
+ * agent manifest submit. A terminal snapshot is refused with a 409. On success
+ * we patch the detail cache with the now-failed snapshot and invalidate the
+ * site's list so the badge flips immediately.
+ */
+export function useCancelBackup(
+  snapshotId: string,
+  siteId: string,
+): UseMutationResult<BackupSnapshot, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await cancelBackup({ path: { snapshotId } });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data;
+    },
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData<BackupSnapshotDetail>(
+        backupsKeys.detail(snapshotId),
+        (prev) => (prev ? { ...prev, snapshot } : prev),
+      );
+      void queryClient.invalidateQueries({
+        queryKey: backupsKeys.listFor(siteId),
       });
     },
   });

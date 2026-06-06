@@ -76,6 +76,11 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	r.GET("/backups/:snapshotId", authz.RequirePermission(authz.PermSiteRead), h.getBackup)
 	r.GET("/backups/:snapshotId/events", authz.RequirePermission(authz.PermSiteRead), h.events)
 	r.POST("/backups/:snapshotId/restore", authz.RequirePermission(authz.PermSiteWrite), h.createRestore)
+	// Delete a terminal snapshot (chain-safe) and cancel a running/pending one.
+	// Both are by-snapshotId (no :siteId) so they resolve the snapshot's site and
+	// gate via canReadSite — the same belt-and-braces pattern getBackup/createRestore use.
+	r.DELETE("/backups/:snapshotId", authz.RequirePermission(authz.PermSiteWrite), h.deleteBackup)
+	r.POST("/backups/:snapshotId/cancel", authz.RequirePermission(authz.PermSiteWrite), h.cancelBackup)
 	// ADR-037 Sprint 1, 1D — environment fingerprint. Returns the JSON the
 	// agent shipped as the synthetic `environment.json` manifest entry, or 404
 	// when the snapshot pre-dates the env-fingerprint feature. Reads use the
@@ -510,6 +515,70 @@ func (h *Handler) createRestore(c *gin.Context) {
 	c.JSON(http.StatusAccepted, &resp)
 }
 
+// deleteBackup deletes a terminal snapshot at the operator's request. It is
+// resolved by snapshotId (no :siteId) so it binds the snapshot's site to the
+// caller's access via canReadSite before deleting, then delegates the chain-safe
+// removal + chunk reclamation to the service. A chained snapshot with dependent
+// later increments is refused with a 422 (chain_has_dependents); a running one is
+// refused with a 422 (snapshot_in_progress) so the caller cancels it first.
+func (h *Handler) deleteBackup(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	snapshotID, ok := uuidParam(c, "snapshotId", "invalid_snapshot_id")
+	if !ok {
+		return
+	}
+	snap, _, err := h.svc.GetSnapshot(c.Request.Context(), tenantID, snapshotID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if !canReadSite(c, snap.SiteID) {
+		httpx.Error(c, domain.Forbidden("forbidden", "you do not have access to this site"))
+		return
+	}
+	if derr := h.svc.DeleteSnapshotForUser(c.Request.Context(), tenantID, snapshotID); derr != nil {
+		httpx.Error(c, derr)
+		return
+	}
+	h.recordBackupAction(c, snap, ActionBackupDeleted, nil)
+	c.Status(http.StatusNoContent)
+}
+
+// cancelBackup stops a running/pending snapshot at the operator's request by
+// transitioning it to status=failed('cancelled by operator'). After cancel the
+// snapshot is deletable and a late agent manifest submit is rejected. A terminal
+// snapshot is refused with a 409 (snapshot_not_cancelable).
+func (h *Handler) cancelBackup(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	snapshotID, ok := uuidParam(c, "snapshotId", "invalid_snapshot_id")
+	if !ok {
+		return
+	}
+	snap, _, err := h.svc.GetSnapshot(c.Request.Context(), tenantID, snapshotID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if !canReadSite(c, snap.SiteID) {
+		httpx.Error(c, domain.Forbidden("forbidden", "you do not have access to this site"))
+		return
+	}
+	canceled, cerr := h.svc.CancelSnapshot(c.Request.Context(), tenantID, snapshotID)
+	if cerr != nil {
+		httpx.Error(c, cerr)
+		return
+	}
+	h.recordBackupAction(c, canceled, ActionBackupCanceled, nil)
+	out := toAPISnapshot(canceled)
+	c.JSON(http.StatusOK, &out)
+}
+
 func (h *Handler) getSchedule(c *gin.Context) {
 	tenantID, ok := tenantOf(c)
 	if !ok {
@@ -600,6 +669,33 @@ func (h *Handler) recordRestore(c *gin.Context, snap Snapshot, sel RestoreSelect
 			"components":     sel.Components,
 			"keep_old_files": sel.KeepOldFiles,
 		},
+	})
+}
+
+// recordBackupAction records a delete/cancel audit event for a snapshot. Extra
+// metadata is merged onto the base {site_id, kind, status} so callers can attach
+// action-specific fields without re-stating the common ones.
+func (h *Handler) recordBackupAction(c *gin.Context, snap Snapshot, action string, extra map[string]any) {
+	if h.audit == nil {
+		return
+	}
+	actorType, actorID := actorOf(c)
+	meta := map[string]any{
+		"site_id": snap.SiteID.String(),
+		"kind":    snap.Kind,
+		"status":  snap.Status,
+	}
+	for k, v := range extra {
+		meta[k] = v
+	}
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   snap.TenantID,
+		ActorType:  actorType,
+		ActorID:    actorID,
+		Action:     action,
+		TargetType: "backup_snapshot",
+		TargetID:   snap.ID.String(),
+		Metadata:   meta,
 	})
 }
 

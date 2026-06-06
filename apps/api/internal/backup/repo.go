@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -143,6 +144,17 @@ type Repo interface {
 	// The iteration stops when fn returns a non-nil error. Uses a server-side
 	// cursor to avoid loading all rows into memory. Tenant-scoped.
 	StreamFileIndex(ctx context.Context, tenantID, snapshotID uuid.UUID, fn func(FileIndexEntry) error) error
+	// StreamChainEffectiveFileIndex calls fn for each surviving FileIndexEntry of
+	// the MERGED effective file tree for chainID over generations 0..maxGeneration,
+	// ordered by file_path ASC. It reuses the same latest-version-wins + tombstone
+	// merge that reachableChunks/planRestoreChain apply (walk generations ascending,
+	// a later generation's entry for a path overwrites an earlier one, a tombstone
+	// removes the path), so the streamed view equals the restore view at maxGeneration.
+	// Surviving entries are non-tombstone by construction. The full merged set is
+	// held in memory (bounded by the live file count, the same envelope restore
+	// already pays) so the result can be sorted by file_path before emitting.
+	// Tenant-scoped.
+	StreamChainEffectiveFileIndex(ctx context.Context, tenantID, chainID uuid.UUID, maxGeneration int, fn func(FileIndexEntry) error) error
 	// UpdateSnapshotCycleStats stamps the incremental cycle telemetry counters
 	// on a snapshot row after SubmitIncrementalManifest completes the snapshot.
 	UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapshotID uuid.UUID, in CycleStatsInput) error
@@ -1519,6 +1531,67 @@ func (r *pgRepo) StreamFileIndex(ctx context.Context, tenantID, snapshotID uuid.
 		}
 		return rows.Err()
 	})
+}
+
+// StreamChainEffectiveFileIndex builds the merged effective file tree for a
+// chain and streams the surviving entries sorted by file_path. The merge is the
+// SAME latest-version-wins + tombstone walk that reachableChunks (service.go)
+// and planRestoreChain use, so the agent's prev-index equals the restore view.
+func (r *pgRepo) StreamChainEffectiveFileIndex(ctx context.Context, tenantID, chainID uuid.UUID, maxGeneration int, fn func(FileIndexEntry) error) error {
+	if maxGeneration < 0 {
+		maxGeneration = 0
+	}
+	chainSnaps, err := r.ListChainSnapshots(ctx, tenantID, chainID, maxGeneration)
+	if err != nil {
+		return err
+	}
+
+	// Index by generation so the walk tolerates GC gaps (an older non-pinned
+	// generation may already be pruned). Walk ascending so a later generation's
+	// entry for the same path OVERWRITES the earlier one (latest-version-wins).
+	byGen := map[int]Snapshot{}
+	maxGen := -1
+	for _, cs := range chainSnaps {
+		byGen[cs.Generation] = cs
+		if cs.Generation > maxGen {
+			maxGen = cs.Generation
+		}
+	}
+
+	winMap := map[string]*FileIndexEntry{}
+	for gen := 0; gen <= maxGen; gen++ {
+		cs, ok := byGen[gen]
+		if !ok {
+			continue
+		}
+		streamErr := r.StreamFileIndex(ctx, tenantID, cs.ID, func(e FileIndexEntry) error {
+			eCopy := e // copy to heap so the pointer is stable
+			if e.IsTombstone {
+				delete(winMap, e.FilePath)
+			} else {
+				winMap[e.FilePath] = &eCopy
+			}
+			return nil
+		})
+		if streamErr != nil {
+			return streamErr
+		}
+	}
+
+	// Emit sorted by file_path ASC to match the single-snapshot stream contract
+	// (the agent's CASE-A matcher and clients may rely on path order). winMap is
+	// a Go map (unordered) so an explicit sort is required.
+	paths := make([]string, 0, len(winMap))
+	for p := range winMap {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	for _, p := range paths {
+		if ferr := fn(*winMap[p]); ferr != nil {
+			return ferr
+		}
+	}
+	return nil
 }
 
 func (r *pgRepo) UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapshotID uuid.UUID, in CycleStatsInput) error {

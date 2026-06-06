@@ -22,6 +22,8 @@ const (
 	ActionBackupStarted    = "backup.started"
 	ActionBackupCompleted  = "backup.completed"
 	ActionBackupFailed     = "backup.failed"
+	ActionBackupDeleted    = "backup.deleted"
+	ActionBackupCanceled   = "backup.canceled"
 	ActionRestoreStarted   = "restore.started"
 	ActionRestoreCompleted = "restore.completed"
 	ActionRestoreFailed    = "restore.failed"

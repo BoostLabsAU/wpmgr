@@ -153,6 +153,9 @@ func (r *wiringRepo) InsertFileIndexBatch(_ context.Context, _, _ uuid.UUID, _ [
 func (r *wiringRepo) StreamFileIndex(_ context.Context, _, _ uuid.UUID, _ func(FileIndexEntry) error) error {
 	panic("unused")
 }
+func (r *wiringRepo) StreamChainEffectiveFileIndex(_ context.Context, _, _ uuid.UUID, _ int, _ func(FileIndexEntry) error) error {
+	panic("unused")
+}
 func (r *wiringRepo) UpdateSnapshotCycleStats(_ context.Context, _, _ uuid.UUID, _ CycleStatsInput) error {
 	panic("unused")
 }

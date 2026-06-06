@@ -4383,6 +4383,40 @@ export type CreateBackupResponses = {
 export type CreateBackupResponse =
   CreateBackupResponses[keyof CreateBackupResponses];
 
+export type DeleteBackupData = {
+  body?: never;
+  path: {
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/backups/{snapshotId}";
+};
+
+export type DeleteBackupErrors = {
+  /**
+   * Snapshot not found
+   */
+  404: Error;
+  /**
+   * The snapshot cannot be deleted yet — it has dependent increments
+   * (chain_has_dependents) or is still running (snapshot_in_progress).
+   *
+   */
+  422: Error;
+};
+
+export type DeleteBackupError = DeleteBackupErrors[keyof DeleteBackupErrors];
+
+export type DeleteBackupResponses = {
+  /**
+   * The snapshot was deleted
+   */
+  204: void;
+};
+
+export type DeleteBackupResponse =
+  DeleteBackupResponses[keyof DeleteBackupResponses];
+
 export type GetBackupData = {
   body?: never;
   path: {
@@ -4409,6 +4443,38 @@ export type GetBackupResponses = {
 };
 
 export type GetBackupResponse = GetBackupResponses[keyof GetBackupResponses];
+
+export type CancelBackupData = {
+  body?: never;
+  path: {
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/backups/{snapshotId}/cancel";
+};
+
+export type CancelBackupErrors = {
+  /**
+   * Snapshot not found
+   */
+  404: Error;
+  /**
+   * The snapshot is not running and cannot be cancelled
+   */
+  409: Error;
+};
+
+export type CancelBackupError = CancelBackupErrors[keyof CancelBackupErrors];
+
+export type CancelBackupResponses = {
+  /**
+   * The snapshot was cancelled (now status=failed)
+   */
+  200: BackupSnapshot;
+};
+
+export type CancelBackupResponse =
+  CancelBackupResponses[keyof CancelBackupResponses];
 
 export type StreamBackupSnapshotEventsData = {
   body?: never;

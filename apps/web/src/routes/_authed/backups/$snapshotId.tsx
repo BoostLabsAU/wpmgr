@@ -13,7 +13,13 @@ import { PageError } from "@/components/feedback";
 import { PageHeader } from "@/components/shared/page-header";
 import { DefinitionList } from "@/components/shared/definition-list";
 import { LiveIndicator } from "@/components/shared/live-indicator";
-import { useBackup, NotFoundError } from "@/features/backups/use-backups";
+import {
+  useBackup,
+  useDeleteBackup,
+  useCancelBackup,
+  NotFoundError,
+} from "@/features/backups/use-backups";
+import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
 import {
   StatusBadge,
   KindBadge,
@@ -125,10 +131,21 @@ function SnapshotDetailView({
 }) {
   const { snapshot, entries } = detail;
   const [restoreOpen, setRestoreOpen] = useState(false);
+  const [confirm, setConfirm] = useState<null | "cancel" | "delete">(null);
   const [restoreRequestedAt, setRestoreRequestedAt] = useState<number | null>(
     null,
   );
   const navigate = useNavigate();
+
+  const deleteBackup = useDeleteBackup(snapshot.id, snapshot.site_id);
+  const cancelBackup = useCancelBackup(snapshot.id, snapshot.site_id);
+
+  function backToSiteBackups() {
+    void navigate({
+      to: "/sites/$siteId/backups",
+      params: { siteId: snapshot.site_id },
+    });
+  }
 
   // Resolve the originating site so the back-link returns to the right
   // Backups tab (not the global sites list) and so the destructive-confirm
@@ -196,20 +213,42 @@ function SnapshotDetailView({
           ? "This snapshot failed and cannot be restored."
           : "";
 
-  const restoreButton = canRestore ? (
-    <span title={canPressRestore ? undefined : restoreDisabledReason}>
-      <Button
-        variant="destructive"
-        onClick={() => setRestoreOpen(true)}
-        disabled={!canPressRestore}
-        aria-disabled={!canPressRestore}
-        aria-label={
-          canPressRestore ? "Restore site" : `Restore site (${restoreDisabledReason})`
-        }
-      >
-        Restore site
-      </Button>
-    </span>
+  const snapInFlight =
+    snapshot.status === "running" || snapshot.status === "pending";
+  const canDelete = snapshot.status === "completed" || snapshot.status === "failed";
+
+  // Operator action group: Restore (completed only), Cancel (in-flight backup),
+  // Delete (terminal). canRestore is the operator gate for the whole group.
+  const headerActions = canRestore ? (
+    <div className="flex items-center gap-2">
+      {snapInFlight ? (
+        <Button variant="outline" onClick={() => setConfirm("cancel")}>
+          Cancel backup
+        </Button>
+      ) : null}
+      {canDelete ? (
+        <Button
+          variant="outline"
+          className="text-destructive-subtle-fg"
+          onClick={() => setConfirm("delete")}
+        >
+          Delete
+        </Button>
+      ) : null}
+      <span title={canPressRestore ? undefined : restoreDisabledReason}>
+        <Button
+          variant="destructive"
+          onClick={() => setRestoreOpen(true)}
+          disabled={!canPressRestore}
+          aria-disabled={!canPressRestore}
+          aria-label={
+            canPressRestore ? "Restore site" : `Restore site (${restoreDisabledReason})`
+          }
+        >
+          Restore site
+        </Button>
+      </span>
+    </div>
   ) : null;
 
   return (
@@ -232,7 +271,7 @@ function SnapshotDetailView({
           </span>
         }
         subline={subline}
-        actions={restoreButton}
+        actions={headerActions}
         backTo={{
           to: "/sites/$siteId/backups",
           params: { siteId: snapshot.site_id },
@@ -303,22 +342,82 @@ function SnapshotDetailView({
       </div>
 
       {canRestore ? (
-        <RestoreDialog
-          open={restoreOpen}
-          onClose={() => setRestoreOpen(false)}
-          onRequested={() => setRestoreRequestedAt(Date.now())}
-          onRestoreRunId={(runId) => {
-            void navigate({
-              to: "/restores/$restoreId",
-              params: { restoreId: runId },
-            });
-          }}
-          snapshotId={snapshot.id}
-          entries={entries}
-          siteHost={site ? hostOf(site.url) : undefined}
-          snapshotTakenAt={snapshot.created_at}
-          targetSiteUrl={site?.url}
-        />
+        <>
+          <RestoreDialog
+            open={restoreOpen}
+            onClose={() => setRestoreOpen(false)}
+            onRequested={() => setRestoreRequestedAt(Date.now())}
+            onRestoreRunId={(runId) => {
+              void navigate({
+                to: "/restores/$restoreId",
+                params: { restoreId: runId },
+              });
+            }}
+            snapshotId={snapshot.id}
+            entries={entries}
+            siteHost={site ? hostOf(site.url) : undefined}
+            snapshotTakenAt={snapshot.created_at}
+            targetSiteUrl={site?.url}
+          />
+
+          <DestructiveConfirm
+            open={confirm === "cancel"}
+            onClose={() => {
+              setConfirm(null);
+              cancelBackup.reset();
+            }}
+            onConfirm={() =>
+              cancelBackup.mutate(undefined, {
+                onSuccess: () => setConfirm(null),
+              })
+            }
+            title="Cancel backup"
+            consequencesBody={
+              <p>
+                This stops the in-progress backup. The snapshot is marked failed
+                and no data is kept from this run. You can run a new backup at
+                any time.
+              </p>
+            }
+            resourceName={snapshot.id.slice(0, 8)}
+            confirmLabel="Cancel backup"
+            cancelLabel="Keep running"
+            isPending={cancelBackup.isPending}
+            errorMessage={
+              cancelBackup.isError ? cancelBackup.error.message : null
+            }
+          />
+
+          <DestructiveConfirm
+            open={confirm === "delete"}
+            onClose={() => {
+              setConfirm(null);
+              deleteBackup.reset();
+            }}
+            onConfirm={() =>
+              deleteBackup.mutate(undefined, {
+                onSuccess: backToSiteBackups,
+              })
+            }
+            title="Delete backup"
+            consequencesBody={
+              <p>
+                This permanently deletes this snapshot and reclaims its storage.
+                Unique chunks are removed; chunks still used by other snapshots
+                are kept. If this backup anchors an incremental chain with newer
+                increments, deletion is refused until those are removed first.
+                This cannot be undone.
+              </p>
+            }
+            resourceName={snapshot.id.slice(0, 8)}
+            confirmLabel="Delete backup"
+            cancelLabel="Keep backup"
+            isPending={deleteBackup.isPending}
+            errorMessage={
+              deleteBackup.isError ? deleteBackup.error.message : null
+            }
+          />
+        </>
       ) : null}
     </div>
   );

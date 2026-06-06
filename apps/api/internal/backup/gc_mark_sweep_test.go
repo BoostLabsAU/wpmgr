@@ -204,6 +204,10 @@ func (r *gcFakeRepo) StreamFileIndex(_ context.Context, _, snapshotID uuid.UUID,
 	return nil
 }
 
+func (r *gcFakeRepo) StreamChainEffectiveFileIndex(_ context.Context, _, _ uuid.UUID, _ int, _ func(FileIndexEntry) error) error {
+	panic("gcFakeRepo.StreamChainEffectiveFileIndex not implemented")
+}
+
 func (r *gcFakeRepo) DeleteSnapshot(_ context.Context, _, snapshotID uuid.UUID) error {
 	r.deletedSnaps[snapshotID] = true
 	delete(r.snaps, snapshotID)

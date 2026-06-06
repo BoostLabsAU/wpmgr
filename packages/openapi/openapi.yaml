@@ -2152,6 +2152,70 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+    delete:
+      operationId: deleteBackup
+      summary: Delete a terminal backup snapshot (chain-safe)
+      description: |
+        Deletes a completed or failed snapshot and reclaims any now-unreferenced
+        chunks via the reachability-based retention GC over the surviving
+        snapshots — a chunk a surviving snapshot still needs is never deleted.
+        CHAIN-SAFE: deleting a base or mid-chain increment that still has
+        dependent later-generation increments is refused with 422
+        (chain_has_dependents); delete the newer increments first. A
+        running/pending snapshot is refused with 422 (snapshot_in_progress) —
+        cancel it first. Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "204":
+          description: The snapshot was deleted
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: |
+            The snapshot cannot be deleted yet — it has dependent increments
+            (chain_has_dependents) or is still running (snapshot_in_progress).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/cancel:
+    post:
+      operationId: cancelBackup
+      summary: Cancel a running or pending backup snapshot
+      description: |
+        Stops an in-flight backup by marking the snapshot failed
+        ("cancelled by operator"). After cancel the snapshot is deletable and a
+        late agent manifest submit is rejected. A snapshot that is already
+        terminal (completed/failed) is refused with 409 (snapshot_not_cancelable).
+        Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: The snapshot was cancelled (now status=failed)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: The snapshot is not running and cannot be cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/backups/{snapshotId}/events:
     get:
       operationId: streamBackupSnapshotEvents

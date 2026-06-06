@@ -173,60 +173,119 @@ func (h *AgentHandler) fileIndex(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if err := h.assertSnapshotSite(c, id.TenantID, snapshotID, id.SiteID); err != nil {
-		httpx.Error(c, err)
-		return
-	}
 
-	// Soft cap: if there are more than fileIndexSoftCap rows return 204 so
-	// the agent falls back to AUTO-BASE rather than streaming a multi-GB blob.
-	count, err := h.svc.repo.CountFileIndex(c.Request.Context(), id.TenantID, snapshotID)
+	// Load the PARENT snapshot once: it gates the request to this agent's site
+	// AND tells us whether to serve the chain-MERGED effective tree (gen>=1
+	// increment) or the single-snapshot index (gen-0 base / legacy non-chain).
+	parent, err := h.svc.repo.GetSnapshot(c.Request.Context(), id.TenantID, snapshotID)
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
-	if count > fileIndexSoftCap {
+	if parent.SiteID != id.SiteID {
+		httpx.Error(c, domain.Forbidden("snapshot_site_mismatch", "the snapshot does not belong to this site"))
+		return
+	}
+
+	// A gen-0 base (or a legacy non-chain snapshot) serves its own index, which
+	// IS the full effective tree. A chained increment must serve the merged
+	// view of generations 0..parent.Generation so the agent diffs against the
+	// live file set (the same view a restore would reconstruct), not just this
+	// increment's delta rows. This is the exact base-vs-chain predicate used by
+	// reachableChunks and PlanRestore.
+	isBase := parent.ChainID == nil || (parent.Generation == 0 && !parent.IsIncremental)
+
+	if isBase {
+		// Soft cap over this snapshot's own row count.
+		count, cerr := h.svc.repo.CountFileIndex(c.Request.Context(), id.TenantID, snapshotID)
+		if cerr != nil {
+			httpx.Error(c, cerr)
+			return
+		}
+		if count > fileIndexSoftCap {
+			c.Status(http.StatusNoContent)
+			return
+		}
+
+		c.Header("Content-Type", "application/x-ndjson")
+		c.Status(http.StatusOK)
+		enc := json.NewEncoder(c.Writer)
+		var rowsWritten int
+		streamErr := h.svc.repo.StreamFileIndex(c.Request.Context(), id.TenantID, snapshotID, func(e FileIndexEntry) error {
+			if encErr := enc.Encode(fileIndexRow(e)); encErr != nil {
+				return encErr
+			}
+			rowsWritten++
+			if rowsWritten%1000 == 0 {
+				c.Writer.Flush()
+			}
+			return nil
+		})
+		if streamErr != nil {
+			// The response headers are already sent; we can only log here.
+			_ = streamErr
+		}
+		c.Writer.Flush()
+		return
+	}
+
+	// Chained increment: build the MERGED effective tree (gen 0..parent.Generation),
+	// then apply the soft cap over the MERGED path count (the single-snapshot
+	// CountFileIndex would under-count this increment's own delta rows). The merge
+	// already materialises the surviving set in memory (bounded by the live file
+	// count), so collecting once and counting is a single DB pass.
+	merged := make([]FileIndexEntry, 0)
+	collectErr := h.svc.repo.StreamChainEffectiveFileIndex(
+		c.Request.Context(), id.TenantID, *parent.ChainID, parent.Generation,
+		func(e FileIndexEntry) error {
+			merged = append(merged, e)
+			return nil
+		},
+	)
+	if collectErr != nil {
+		httpx.Error(c, collectErr)
+		return
+	}
+	if int64(len(merged)) > fileIndexSoftCap {
 		c.Status(http.StatusNoContent)
 		return
 	}
 
-	// Stream NDJSON rows.
 	c.Header("Content-Type", "application/x-ndjson")
 	c.Status(http.StatusOK)
-
 	enc := json.NewEncoder(c.Writer)
-	var rowsWritten int
-	streamErr := h.svc.repo.StreamFileIndex(c.Request.Context(), id.TenantID, snapshotID, func(e FileIndexEntry) error {
-		row := struct {
-			FilePath    string   `json:"file_path"`
-			FileSize    int64    `json:"file_size"`
-			FileMtime   int64    `json:"file_mtime"`
-			FileBlake3  string   `json:"file_blake3"`
-			ChunkHashes []string `json:"chunk_hashes"`
-			IsTombstone bool     `json:"is_tombstone"`
-		}{
-			FilePath:    e.FilePath,
-			FileSize:    e.FileSize,
-			FileMtime:   e.FileMtime,
-			FileBlake3:  e.FileBlake3,
-			ChunkHashes: e.ChunkHashes,
-			IsTombstone: e.IsTombstone,
+	for i, e := range merged {
+		if encErr := enc.Encode(fileIndexRow(e)); encErr != nil {
+			// Headers already sent; nothing to do but stop.
+			break
 		}
-		if err := enc.Encode(row); err != nil {
-			return err
-		}
-		rowsWritten++
 		// Flush every 1000 rows so the agent can start processing early.
-		if rowsWritten%1000 == 0 {
+		if (i+1)%1000 == 0 {
 			c.Writer.Flush()
 		}
-		return nil
-	})
-	if streamErr != nil {
-		// The response headers are already sent; we can only log here.
-		_ = streamErr
 	}
 	c.Writer.Flush()
+}
+
+// fileIndexRow is the NDJSON wire shape the agent consumes (a SUBSET of
+// FileIndexEntry): file_path, file_size, file_mtime, file_blake3, chunk_hashes,
+// is_tombstone. Merged effective-tree entries are non-tombstone by construction.
+func fileIndexRow(e FileIndexEntry) any {
+	return struct {
+		FilePath    string   `json:"file_path"`
+		FileSize    int64    `json:"file_size"`
+		FileMtime   int64    `json:"file_mtime"`
+		FileBlake3  string   `json:"file_blake3"`
+		ChunkHashes []string `json:"chunk_hashes"`
+		IsTombstone bool     `json:"is_tombstone"`
+	}{
+		FilePath:    e.FilePath,
+		FileSize:    e.FileSize,
+		FileMtime:   e.FileMtime,
+		FileBlake3:  e.FileBlake3,
+		ChunkHashes: e.ChunkHashes,
+		IsTombstone: e.IsTombstone,
+	}
 }
 
 // progressDTO is the agent's progress POST shape. snapshot_id comes from the

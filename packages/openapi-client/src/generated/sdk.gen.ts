@@ -53,6 +53,9 @@ import type {
   BulkConfigCacheResponses,
   BulkPurgeCacheData,
   BulkPurgeCacheResponses,
+  CancelBackupData,
+  CancelBackupErrors,
+  CancelBackupResponses,
   CancelMediaData,
   CancelMediaResponses,
   CleanDatabaseData,
@@ -94,6 +97,9 @@ import type {
   CreateUpdateRunData,
   CreateUpdateRunErrors,
   CreateUpdateRunResponses,
+  DeleteBackupData,
+  DeleteBackupErrors,
+  DeleteBackupResponses,
   DeleteMediaOriginalsData,
   DeleteMediaOriginalsResponses,
   DeleteMemberData,
@@ -1645,6 +1651,28 @@ export const createBackup = <ThrowOnError extends boolean = false>(
   });
 
 /**
+ * Delete a terminal backup snapshot (chain-safe)
+ *
+ * Deletes a completed or failed snapshot and reclaims any now-unreferenced
+ * chunks via the reachability-based retention GC over the surviving
+ * snapshots — a chunk a surviving snapshot still needs is never deleted.
+ * CHAIN-SAFE: deleting a base or mid-chain increment that still has
+ * dependent later-generation increments is refused with 422
+ * (chain_has_dependents); delete the newer increments first. A
+ * running/pending snapshot is refused with 422 (snapshot_in_progress) —
+ * cancel it first. Requires operator+.
+ *
+ */
+export const deleteBackup = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteBackupData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteBackupResponses,
+    DeleteBackupErrors,
+    ThrowOnError
+  >({ url: "/api/v1/backups/{snapshotId}", ...options });
+
+/**
  * Get a backup snapshot with its manifest summary
  */
 export const getBackup = <ThrowOnError extends boolean = false>(
@@ -1655,6 +1683,25 @@ export const getBackup = <ThrowOnError extends boolean = false>(
     GetBackupErrors,
     ThrowOnError
   >({ url: "/api/v1/backups/{snapshotId}", ...options });
+
+/**
+ * Cancel a running or pending backup snapshot
+ *
+ * Stops an in-flight backup by marking the snapshot failed
+ * ("cancelled by operator"). After cancel the snapshot is deletable and a
+ * late agent manifest submit is rejected. A snapshot that is already
+ * terminal (completed/failed) is refused with 409 (snapshot_not_cancelable).
+ * Requires operator+.
+ *
+ */
+export const cancelBackup = <ThrowOnError extends boolean = false>(
+  options: Options<CancelBackupData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CancelBackupResponses,
+    CancelBackupErrors,
+    ThrowOnError
+  >({ url: "/api/v1/backups/{snapshotId}/cancel", ...options });
 
 /**
  * Stream live backup snapshot progress (SSE)

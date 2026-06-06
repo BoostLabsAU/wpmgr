@@ -963,6 +963,11 @@ func (s *Service) SubmitManifest(ctx context.Context, tenantID, snapshotID uuid.
 	if snap.Status == StatusCompleted {
 		return 0, 0, domain.Conflict("snapshot_already_completed", "the snapshot manifest was already recorded")
 	}
+	// A cancelled (status==failed) snapshot must not be resurrected by a late
+	// agent submit that finished after the operator cancelled the run.
+	if snap.Status == StatusFailed {
+		return 0, 0, domain.Conflict("snapshot_canceled", "the snapshot was cancelled and no longer accepts a manifest")
+	}
 
 	in := RecordManifestInput{
 		TenantID:   tenantID,
@@ -1171,6 +1176,109 @@ func (s *Service) FailSnapshot(ctx context.Context, tenantID, snapshotID uuid.UU
 	}
 	return snap, nil
 }
+
+// cancelByOperatorMsg is the error message stamped on a snapshot a user cancels.
+// It is also the marker the submit guards look for is purely cosmetic — the
+// status==failed transition is what rejects a late agent submit. Kept as a
+// constant so the UI label and the audit metadata stay in sync.
+const cancelByOperatorMsg = "cancelled by operator"
+
+// CancelSnapshot marks a RUNNING (or PENDING) snapshot failed at the operator's
+// request. There is no separate "cancelled" status: a cancel is a fail with a
+// well-known error message, which (a) makes the snapshot deletable via
+// DeleteSnapshotForUser and (b) auto-rejects a late agent manifest submit — both
+// SubmitManifest and SubmitIncrementalManifest reject status==failed rows. The
+// progress watchdog only catches STALLED runs, so this is the only path that can
+// stop an actively-running-but-unwanted backup immediately.
+//
+// A snapshot that is already in a terminal state (completed/failed) is rejected
+// with a Conflict so the caller can surface "nothing to cancel".
+func (s *Service) CancelSnapshot(ctx context.Context, tenantID, snapshotID uuid.UUID) (Snapshot, error) {
+	if tenantID == uuid.Nil {
+		return Snapshot{}, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	snap, err := s.repo.GetSnapshot(ctx, tenantID, snapshotID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if snap.Status != StatusRunning && snap.Status != StatusPending {
+		return Snapshot{}, domain.Conflict("snapshot_not_cancelable",
+			"only a running or pending backup can be cancelled")
+	}
+	return s.FailSnapshot(ctx, tenantID, snapshotID, cancelByOperatorMsg)
+}
+
+// DeleteSnapshotForUser removes a snapshot at the operator's request and
+// reclaims any now-unreferenced chunks. It is CHAIN-SAFE: deleting a base or a
+// mid-chain increment that still has dependent later-generation increments would
+// break planRestoreChain CHECK 1 (which requires every generation 0..tip to
+// exist) and orphan the dependents, so this REFUSES with a domain.Validation
+// error in that case. A leaf increment, the whole-chain case (the snapshot IS
+// the highest generation), and a standalone non-chained full backup are all safe
+// to delete on their own.
+//
+// Chunk reclamation reuses the proven ADR-050 mark-and-sweep: after removing the
+// snapshot row we run RunRetentionGC for the tenant, which recomputes the live
+// set over the SURVIVING snapshots and sweeps only chunks no survivor can reach.
+// Because the live oracle is reachability (not refcount), a chunk a surviving
+// snapshot still needs is never deleted, and the in-flight grace floor protects
+// chunks a concurrent backup re-references. GC reclamation is best-effort: a
+// sweep error does not fail the delete (the row is already gone; the next
+// periodic GC reclaims the orphans).
+//
+// Only TERMINAL snapshots (completed/failed) may be deleted. A running/pending
+// snapshot must be cancelled first (CancelSnapshot) — deleting an in-flight row
+// would race the agent's chunk uploads and the grace floor.
+func (s *Service) DeleteSnapshotForUser(ctx context.Context, tenantID, snapshotID uuid.UUID) error {
+	if tenantID == uuid.Nil {
+		return domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	snap, err := s.repo.GetSnapshot(ctx, tenantID, snapshotID)
+	if err != nil {
+		return err
+	}
+	if snap.Status == StatusRunning || snap.Status == StatusPending {
+		return domain.Validation("snapshot_in_progress",
+			"this backup is still running; cancel it before deleting")
+	}
+
+	// Chain-safety: never orphan a dependent increment. If this snapshot anchors
+	// or sits mid-chain (i.e. a sibling exists at a HIGHER generation in the same
+	// chain), refuse — the dependents would become unrestorable.
+	if snap.ChainID != nil {
+		siblings, lerr := s.repo.ListChainSnapshots(ctx, tenantID, *snap.ChainID, maxChainEnumGeneration)
+		if lerr != nil {
+			return lerr
+		}
+		for _, sib := range siblings {
+			if sib.Generation > snap.Generation {
+				return domain.Validation("chain_has_dependents",
+					"this backup is part of an incremental chain and later increments depend on it; "+
+						"delete the newer increments first")
+			}
+		}
+	}
+
+	// Remove the snapshot row (cascades file_index + manifest via FK). Chunks are
+	// NOT freed here (post-ADR-050 only the mark-and-sweep frees objects).
+	if derr := s.repo.DeleteSnapshot(ctx, tenantID, snapshotID); derr != nil {
+		return derr
+	}
+
+	// Reclaim orphaned chunks via the reachability-based GC over the survivors.
+	// Best-effort: the row is already gone; a sweep error is logged, not fatal.
+	if _, _, gerr := s.RunRetentionGC(ctx, tenantID); gerr != nil {
+		slog.WarnContext(ctx, "backup delete: post-delete GC sweep failed (orphans reclaimed on next periodic GC)",
+			slog.String("tenant_id", tenantID.String()),
+			slog.String("snapshot_id", snapshotID.String()), slog.Any("error", gerr))
+	}
+	return nil
+}
+
+// maxChainEnumGeneration bounds ListChainSnapshots when we want EVERY generation
+// in a chain (the dependent-detection walk). BackupMaxChainDepth caps real chain
+// length; this is comfortably above any chain the scheduler will build.
+const maxChainEnumGeneration = 1 << 30
 
 // MaxProgressPayloadBytes bounds the size of a single agent progress POST. The
 // shape is `{phase: "...", phase_detail: {...}}` — phase is one of a fixed set
@@ -2241,6 +2349,11 @@ func (s *Service) SubmitIncrementalManifest(ctx context.Context, tenantID, snaps
 	}
 	if snap.Status == StatusCompleted {
 		return 0, 0, domain.Conflict("snapshot_already_completed", "the snapshot manifest was already recorded")
+	}
+	// A cancelled (status==failed) snapshot must not be resurrected by a late
+	// incremental agent submit that finished after the operator cancelled it.
+	if snap.Status == StatusFailed {
+		return 0, 0, domain.Conflict("snapshot_canceled", "the snapshot was cancelled and no longer accepts a manifest")
 	}
 
 	// 1. Build the DB-dump manifest input (if any DB entries were submitted).
