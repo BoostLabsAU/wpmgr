@@ -97,6 +97,13 @@ final class BackupCommand implements CommandInterface
             ? (int) $params['chunk_bytes']
             : self::DEFAULT_CHUNK_BYTES;
 
+        // --- ADR-048 incremental fields (absent/false on a full-base run) ----
+        $isIncremental     = !empty($params['is_incremental']);
+        $parentSnapshotId  = isset($params['parent_snapshot_id']) && is_string($params['parent_snapshot_id']) ? $params['parent_snapshot_id'] : '';
+        $baseSnapshotId    = isset($params['base_snapshot_id']) && is_string($params['base_snapshot_id']) ? $params['base_snapshot_id'] : '';
+        $generation        = isset($params['generation']) && is_numeric($params['generation']) ? (int) $params['generation'] : 0;
+        $fileIndexEndpoint = isset($params['file_index_endpoint']) && is_string($params['file_index_endpoint']) ? $params['file_index_endpoint'] : '';
+
         // --- 1. Input validation -------------------------------------------
         if ($snapshotId === '' || $presign === '' || $manifestEp === '') {
             return $this->refuse('missing snapshot or callback endpoints');
@@ -176,6 +183,13 @@ final class BackupCommand implements CommandInterface
             // be surfaced to the operator. TaskRunner attaches these to the
             // first progress event as `preflight_warnings`.
             'preflight_warnings' => $preflight['warnings'],
+            // ADR-048 incremental backup fields. All default to no-op values
+            // when is_incremental=false so the full-backup pipeline is unchanged.
+            'is_incremental'      => $isIncremental,
+            'parent_snapshot_id'  => $parentSnapshotId,
+            'base_snapshot_id'    => $baseSnapshotId,
+            'generation'          => $generation,
+            'file_index_endpoint' => $fileIndexEndpoint,
         ];
 
         // --- 4. Seed the task row (with params nested in sub_state) -------

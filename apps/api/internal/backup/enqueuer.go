@@ -29,6 +29,32 @@ func (e *RiverEnqueuer) EnqueueBackup(ctx context.Context, tenantID, snapshotID 
 	return nil
 }
 
+// EnqueueBackupWithChain inserts one backup job with ADR-048 incremental chain
+// fields pre-populated from the snapshot row. For full-base snapshots all the
+// incremental fields are zero/nil and the worker behaves identically to
+// EnqueueBackup.
+func (e *RiverEnqueuer) EnqueueBackupWithChain(ctx context.Context, snap Snapshot) error {
+	args := BackupArgs{
+		TenantID:      snap.TenantID,
+		SnapshotID:    snap.ID,
+		IsIncremental: snap.IsIncremental,
+		Generation:    snap.Generation,
+	}
+	if snap.ParentSnapshotID != nil {
+		args.ParentSnapshotID = *snap.ParentSnapshotID
+	}
+	if snap.BaseSnapshotID != nil {
+		args.BaseSnapshotID = *snap.BaseSnapshotID
+	}
+	if snap.ChainID != nil {
+		args.ChainID = *snap.ChainID
+	}
+	if _, err := e.client.Insert(ctx, args, nil); err != nil {
+		return fmt.Errorf("enqueue backup (incremental): %w", err)
+	}
+	return nil
+}
+
 // EnqueueSqlInspectLegacy inserts one M6 / Track 4 SqlInspectLegacy job.
 //
 // Unique opts are used so a flurry of operator-poll-driven GETs against a

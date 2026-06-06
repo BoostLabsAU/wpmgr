@@ -77,6 +77,14 @@ const (
 	CadenceMonthly     = "monthly"
 )
 
+// BackupMaxChainDepth is the maximum number of incremental generations before
+// the CP forces a new full base. Configurable via env BACKUP_MAX_CHAIN_DEPTH.
+const BackupMaxChainDepth = 6
+
+// BackupBaseWindowDays is the number of days after which a chain is considered
+// stale and the next run falls back to a full base.
+const BackupBaseWindowDays = 7
+
 // Snapshot is one backup of a site.
 type Snapshot struct {
 	ID           uuid.UUID
@@ -113,6 +121,33 @@ type Snapshot struct {
 	// chunks belong to. uuid.Nil routes to the legacy CP-global bucket and is
 	// the value used by every pre-P1 snapshot row.
 	DestinationID uuid.UUID
+	// ADR-048 incremental backup fields. All zero/nil/false for pre-m44 rows
+	// and for full-base snapshots.
+	IsIncremental      bool
+	ParentSnapshotID   *uuid.UUID
+	BaseSnapshotID     *uuid.UUID
+	ChainID            *uuid.UUID
+	Generation         int
+	CycleFilesScanned  int64
+	CycleFilesChanged  int64
+	CycleFilesDeleted  int64
+	CycleBytesUploaded int64
+}
+
+// FileIndexEntry is one row of the backup_file_index table: a single file's
+// content fingerprint for a completed snapshot. Used by the NDJSON streaming
+// endpoint and by SubmitIncrementalManifest inserts.
+type FileIndexEntry struct {
+	ID          uuid.UUID
+	TenantID    uuid.UUID
+	SnapshotID  uuid.UUID
+	FilePath    string
+	FileSize    int64
+	FileMtime   int64
+	FileBlake3  string
+	ChunkHashes []string
+	IsTombstone bool
+	CreatedAt   time.Time
 }
 
 // ManifestEntry is one file/db entry of a snapshot: an ordered list of

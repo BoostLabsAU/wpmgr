@@ -46,6 +46,10 @@ type Repo interface {
 	// watchdog periodic. The caller marks each stalled snapshot failed via
 	// FailSnapshot (which IS tenant-scoped).
 	ListStalledRunningSnapshots(ctx context.Context, threshold time.Duration) ([]StalledSnapshot, error)
+	// GetLatestCompletedSnapshot returns the most recent completed snapshot for
+	// (tenantID, siteID). Used by resolveChainForSite to determine is_incremental.
+	// Returns domain.NotFound when no completed snapshot exists.
+	GetLatestCompletedSnapshot(ctx context.Context, tenantID, siteID uuid.UUID) (Snapshot, error)
 
 	// Manifest.
 	ListManifest(ctx context.Context, tenantID, snapshotID uuid.UUID) ([]ManifestEntry, error)
@@ -83,6 +87,22 @@ type Repo interface {
 	// calls DeleteOrphanChunks). Tenant-scoped, atomic.
 	DeleteSnapshotAndDecref(ctx context.Context, tenantID, snapshotID uuid.UUID) (orphans []Orphan, err error)
 	DeleteOrphanChunks(ctx context.Context, tenantID uuid.UUID, hashes []string) error
+
+	// ADR-048 incremental backup file index.
+
+	// InsertFileIndexBatch inserts a batch of FileIndexEntry rows into
+	// backup_file_index for a completed incremental snapshot. Tenant-scoped.
+	InsertFileIndexBatch(ctx context.Context, tenantID, snapshotID uuid.UUID, entries []FileIndexEntry) error
+	// CountFileIndex returns the number of backup_file_index rows for a snapshot.
+	// Used by the streaming endpoint's soft-cap check. Tenant-scoped.
+	CountFileIndex(ctx context.Context, tenantID, snapshotID uuid.UUID) (int64, error)
+	// StreamFileIndex calls fn for each FileIndexEntry ordered by file_path ASC.
+	// The iteration stops when fn returns a non-nil error. Uses a server-side
+	// cursor to avoid loading all rows into memory. Tenant-scoped.
+	StreamFileIndex(ctx context.Context, tenantID, snapshotID uuid.UUID, fn func(FileIndexEntry) error) error
+	// UpdateSnapshotCycleStats stamps the incremental cycle telemetry counters
+	// on a snapshot row after SubmitIncrementalManifest completes the snapshot.
+	UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapshotID uuid.UUID, in CycleStatsInput) error
 }
 
 // CreateSnapshotInput creates a pending snapshot.
@@ -92,6 +112,21 @@ type CreateSnapshotInput struct {
 	CreatedBy    uuid.UUID
 	Kind         string
 	AgeRecipient string
+	// ADR-048 incremental fields. Zero values produce a full-base snapshot row.
+	IsIncremental    bool
+	ParentSnapshotID *uuid.UUID
+	BaseSnapshotID   *uuid.UUID
+	ChainID          *uuid.UUID
+	Generation       int
+}
+
+// CycleStatsInput is the set of incremental telemetry counters stamped at
+// SubmitIncrementalManifest time.
+type CycleStatsInput struct {
+	CycleFilesScanned  int64
+	CycleFilesChanged  int64
+	CycleFilesDeleted  int64
+	CycleBytesUploaded int64
 }
 
 // UpsertScheduleInput creates/updates a per-site schedule.
@@ -189,6 +224,75 @@ func (r *pgRepo) CreateSnapshot(ctx context.Context, in CreateSnapshotInput) (Sn
 			return domain.Internal("backup_snapshot_create_failed", "failed to create snapshot").WithCause(err)
 		}
 		out = toSnapshot(row)
+
+		// ADR-048: stamp incremental chain fields when this is an incremental run.
+		// We do this with a raw UPDATE because the sqlc-generated CreateBackupSnapshot
+		// predates the m44 columns — updating the generated code requires regenerating
+		// sqlc which is out of scope for this migration. The UPDATE is within the
+		// same transaction and is a no-op when all values are zero/nil/false.
+		if in.IsIncremental || in.Generation > 0 || in.ParentSnapshotID != nil {
+			var parentID, baseID, chainID *[16]byte
+			if in.ParentSnapshotID != nil {
+				b := [16]byte(*in.ParentSnapshotID)
+				parentID = &b
+			}
+			if in.BaseSnapshotID != nil {
+				b := [16]byte(*in.BaseSnapshotID)
+				baseID = &b
+			}
+			if in.ChainID != nil {
+				b := [16]byte(*in.ChainID)
+				chainID = &b
+			}
+			_, uerr := tx.Exec(ctx,
+				`UPDATE backup_snapshots
+				    SET is_incremental=$3, parent_snapshot_id=$4, base_snapshot_id=$5,
+				        chain_id=$6, generation=$7
+				  WHERE id=$1 AND tenant_id=$2`,
+				out.ID, in.TenantID,
+				in.IsIncremental,
+				parentID,
+				baseID,
+				chainID,
+				in.Generation,
+			)
+			if uerr != nil {
+				return domain.Internal("backup_snapshot_create_failed", "failed to stamp incremental fields").WithCause(uerr)
+			}
+			out.IsIncremental = in.IsIncremental
+			out.ParentSnapshotID = in.ParentSnapshotID
+			out.BaseSnapshotID = in.BaseSnapshotID
+			out.ChainID = in.ChainID
+			out.Generation = in.Generation
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (r *pgRepo) GetLatestCompletedSnapshot(ctx context.Context, tenantID, siteID uuid.UUID) (Snapshot, error) {
+	var out Snapshot
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient,
+			        total_size, chunk_count, error, archived, progress, progress_updated_at,
+			        started_at, finished_at, created_at, updated_at,
+			        is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
+			        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded
+			   FROM backup_snapshots
+			  WHERE tenant_id=$1 AND site_id=$2 AND status='completed'
+			  ORDER BY created_at DESC
+			  LIMIT 1`,
+			tenantID, siteID,
+		)
+		s, err := scanSnapshotWithChainFields(row)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return domain.NotFound("backup_snapshot_not_found", "no completed snapshot found for site")
+			}
+			return domain.Internal("backup_snapshot_get_failed", "failed to query latest snapshot").WithCause(err)
+		}
+		out = s
 		return nil
 	})
 	return out, err
@@ -724,4 +828,171 @@ func toSchedule(s sqlc.BackupSchedule) Schedule {
 		out.LastRunAt = &t
 	}
 	return out
+}
+
+// rowScanner is a minimal interface satisfied by pgx.Row and pgx.Rows.Scan.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanSnapshotWithChainFields scans a row that includes the ADR-048 chain
+// columns (is_incremental … cycle_bytes_uploaded). The SELECT must project all
+// standard snapshot columns plus the four chain UUID columns and the four cycle
+// counter columns in the exact order listed here.
+func scanSnapshotWithChainFields(row rowScanner) (Snapshot, error) {
+	var (
+		s               Snapshot
+		createdBy       pgtype.UUID
+		startedAt       pgtype.Timestamptz
+		finishedAt      pgtype.Timestamptz
+		progressUpdated pgtype.Timestamptz
+		parentID        pgtype.UUID
+		baseID          pgtype.UUID
+		chainID         pgtype.UUID
+	)
+	err := row.Scan(
+		&s.ID, &s.TenantID, &s.SiteID, &createdBy, &s.Kind, &s.Status,
+		&s.AgeRecipient, &s.TotalSize, &s.ChunkCount, &s.Error, &s.Archived,
+		&s.Progress, &progressUpdated, &startedAt, &finishedAt,
+		&s.CreatedAt, &s.UpdatedAt,
+		&s.IsIncremental, &parentID, &baseID, &chainID, &s.Generation,
+		&s.CycleFilesScanned, &s.CycleFilesChanged, &s.CycleFilesDeleted, &s.CycleBytesUploaded,
+	)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if createdBy.Valid {
+		id := uuid.UUID(createdBy.Bytes)
+		s.CreatedBy = &id
+	}
+	if startedAt.Valid {
+		t := startedAt.Time
+		s.StartedAt = &t
+	}
+	if finishedAt.Valid {
+		t := finishedAt.Time
+		s.FinishedAt = &t
+	}
+	if progressUpdated.Valid {
+		t := progressUpdated.Time
+		s.ProgressUpdatedAt = &t
+	}
+	if parentID.Valid {
+		id := uuid.UUID(parentID.Bytes)
+		s.ParentSnapshotID = &id
+	}
+	if baseID.Valid {
+		id := uuid.UUID(baseID.Bytes)
+		s.BaseSnapshotID = &id
+	}
+	if chainID.Valid {
+		id := uuid.UUID(chainID.Bytes)
+		s.ChainID = &id
+	}
+	return s, nil
+}
+
+// ----------------------------------------------------------------------------
+// ADR-048 file index repo implementations
+// ----------------------------------------------------------------------------
+
+func (r *pgRepo) InsertFileIndexBatch(ctx context.Context, tenantID, snapshotID uuid.UUID, entries []FileIndexEntry) error {
+	if len(entries) == 0 {
+		return nil
+	}
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		for _, e := range entries {
+			hashes := e.ChunkHashes
+			if hashes == nil {
+				hashes = []string{}
+			}
+			_, err := tx.Exec(ctx,
+				`INSERT INTO backup_file_index
+				   (tenant_id, snapshot_id, file_path, file_size, file_mtime,
+				    file_blake3, chunk_hashes, is_tombstone)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+				 ON CONFLICT (snapshot_id, file_path) DO UPDATE
+				   SET file_size    = EXCLUDED.file_size,
+				       file_mtime   = EXCLUDED.file_mtime,
+				       file_blake3  = EXCLUDED.file_blake3,
+				       chunk_hashes = EXCLUDED.chunk_hashes,
+				       is_tombstone = EXCLUDED.is_tombstone`,
+				tenantID, snapshotID, e.FilePath, e.FileSize, e.FileMtime,
+				e.FileBlake3, hashes, e.IsTombstone,
+			)
+			if err != nil {
+				return domain.Internal("backup_file_index_insert_failed", "failed to insert file index entry").WithCause(err)
+			}
+		}
+		return nil
+	})
+}
+
+func (r *pgRepo) CountFileIndex(ctx context.Context, tenantID, snapshotID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`SELECT count(*) FROM backup_file_index WHERE tenant_id=$1 AND snapshot_id=$2`,
+			tenantID, snapshotID,
+		)
+		return row.Scan(&count)
+	})
+	if err != nil {
+		return 0, domain.Internal("backup_file_index_count_failed", "failed to count file index").WithCause(err)
+	}
+	return count, nil
+}
+
+func (r *pgRepo) StreamFileIndex(ctx context.Context, tenantID, snapshotID uuid.UUID, fn func(FileIndexEntry) error) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, tenant_id, snapshot_id, file_path, file_size, file_mtime,
+			        file_blake3, chunk_hashes, is_tombstone, created_at
+			   FROM backup_file_index
+			  WHERE tenant_id=$1 AND snapshot_id=$2
+			  ORDER BY file_path ASC`,
+			tenantID, snapshotID,
+		)
+		if err != nil {
+			return domain.Internal("backup_file_index_stream_failed", "failed to stream file index").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var e FileIndexEntry
+			var hashes []string
+			if serr := rows.Scan(
+				&e.ID, &e.TenantID, &e.SnapshotID, &e.FilePath, &e.FileSize,
+				&e.FileMtime, &e.FileBlake3, &hashes, &e.IsTombstone, &e.CreatedAt,
+			); serr != nil {
+				return domain.Internal("backup_file_index_scan_failed", "failed to scan file index row").WithCause(serr)
+			}
+			if hashes == nil {
+				hashes = []string{}
+			}
+			e.ChunkHashes = hashes
+			if ferr := fn(e); ferr != nil {
+				return ferr
+			}
+		}
+		return rows.Err()
+	})
+}
+
+func (r *pgRepo) UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapshotID uuid.UUID, in CycleStatsInput) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE backup_snapshots
+			    SET cycle_files_scanned=$3, cycle_files_changed=$4,
+			        cycle_files_deleted=$5, cycle_bytes_uploaded=$6,
+			        updated_at=now()
+			  WHERE id=$1 AND tenant_id=$2`,
+			snapshotID, tenantID,
+			in.CycleFilesScanned, in.CycleFilesChanged,
+			in.CycleFilesDeleted, in.CycleBytesUploaded,
+		)
+		if err != nil {
+			return domain.Internal("backup_snapshot_cycle_stats_failed", "failed to update cycle stats").WithCause(err)
+		}
+		return nil
+	})
 }

@@ -275,3 +275,56 @@ type RestoreResponse struct {
 	Verified        bool   `json:"verified"`
 	Log             string `json:"log,omitempty"`
 }
+
+// ============================================================================
+// ADR-048 — Incremental Backup V1 wire contract additions.
+// Both sides (Go CP + PHP agent) use these field names verbatim.
+// DO NOT rename without bumping both sides simultaneously.
+// ============================================================================
+
+// IncrementalBackupRequest extends BackupRequest for incremental runs.
+// The CP sends this INSTEAD OF BackupRequest when is_incremental=true.
+// When is_incremental=false the CP sends the existing BackupRequest unchanged.
+type IncrementalBackupRequest struct {
+	// Fields shared with BackupRequest (identical names, identical semantics).
+	SnapshotID       string `json:"snapshot_id"`
+	Kind             string `json:"kind"`
+	AgeRecipient     string `json:"age_recipient"`
+	ChunkBytes       int    `json:"chunk_bytes"`
+	PresignEndpoint  string `json:"presign_endpoint"`
+	ManifestEndpoint string `json:"manifest_endpoint"`
+	ProgressEndpoint string `json:"progress_endpoint"`
+	// Incremental-specific fields.
+	IsIncremental     bool   `json:"is_incremental"`
+	ParentSnapshotID  string `json:"parent_snapshot_id"`
+	BaseSnapshotID    string `json:"base_snapshot_id"`
+	Generation        int    `json:"generation"`
+	FileIndexEndpoint string `json:"file_index_endpoint"`
+}
+
+// IncrementalManifestEntry is one entry in the incremental SubmitManifestRequest.
+// The agent submits these INSTEAD OF the regular ManifestEntry for the files component.
+// DB entries still use the existing ManifestEntry shape (entry_kind="db").
+type IncrementalManifestEntry struct {
+	FilePath    string   `json:"file_path"`
+	FileSize    int64    `json:"file_size"`
+	FileMtime   int64    `json:"file_mtime"`
+	FileBlake3  string   `json:"file_blake3"`
+	ChunkHashes []string `json:"chunk_hashes"`
+	IsTombstone bool     `json:"is_tombstone"`
+}
+
+// IncrementalSubmitManifestRequest is the agent->CP submission for an
+// incremental snapshot. Posted to the same ManifestEndpoint as the full backup.
+// The CP distinguishes by snapshot.is_incremental (already recorded on the row).
+type IncrementalSubmitManifestRequest struct {
+	SnapshotID          string                     `json:"snapshot_id"`
+	AgeRecipient        string                     `json:"age_recipient"`
+	IsIncremental       bool                       `json:"is_incremental"`
+	FilesEntries        []IncrementalManifestEntry `json:"files_entries"`
+	DBEntries           []ManifestEntry            `json:"db_entries"`
+	CycleFilesScanned   int64                      `json:"cycle_files_scanned"`
+	CycleFilesChanged   int64                      `json:"cycle_files_changed"`
+	CycleFilesDeleted   int64                      `json:"cycle_files_deleted"`
+	CycleBytesUploaded  int64                      `json:"cycle_bytes_uploaded"`
+}

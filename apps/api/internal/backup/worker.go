@@ -33,6 +33,10 @@ const (
 // different tenant's site.
 type Commander interface {
 	Backup(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.BackupRequest) (agentcmd.BackupResponse, error)
+	// IncrementalBackup sends an ADR-048 incremental backup command to the agent.
+	// The agent decodes IncrementalBackupRequest and runs the incremental pipeline
+	// (or falls back to AUTO-BASE if file_index_endpoint is empty or returns non-200).
+	IncrementalBackup(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.IncrementalBackupRequest) (agentcmd.BackupResponse, error)
 	Restore(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.RestoreRequest) (agentcmd.RestoreResponse, error)
 }
 
@@ -42,9 +46,16 @@ type Commander interface {
 
 // BackupArgs is the River job payload for one backup. It carries only IDs; the
 // worker re-reads authoritative state (tenant-scoped) from the DB.
+// ADR-048: incremental fields are omitempty; zero values mean full backup.
 type BackupArgs struct {
 	TenantID   uuid.UUID `json:"tenant_id"`
 	SnapshotID uuid.UUID `json:"snapshot_id"`
+	// ADR-048 incremental chain fields. All omitempty; absent = full backup.
+	IsIncremental    bool      `json:"is_incremental,omitempty"`
+	ParentSnapshotID uuid.UUID `json:"parent_snapshot_id,omitempty"`
+	BaseSnapshotID   uuid.UUID `json:"base_snapshot_id,omitempty"`
+	ChainID          uuid.UUID `json:"chain_id,omitempty"`
+	Generation       int       `json:"generation,omitempty"`
 }
 
 // Kind implements river.JobArgs.
@@ -118,16 +129,37 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 	}
 	w.recordAudit(ctx, running, ActionBackupStarted, nil)
 
-	req := agentcmd.BackupRequest{
-		SnapshotID:       snap.ID.String(),
-		Kind:             snap.Kind,
-		AgeRecipient:     snap.AgeRecipient, // PUBLIC recipient only — NEVER a key.
-		ChunkBytes:       agentcmd.ChunkBytes,
-		PresignEndpoint:  w.presignEndpoint(snap.ID),
-		ManifestEndpoint: w.manifestEndpoint(snap.ID),
-		ProgressEndpoint: w.progressEndpoint(snap.ID),
+	// ADR-048: when the job was enqueued as incremental, build an
+	// IncrementalBackupRequest; otherwise use the existing BackupRequest.
+	var resp agentcmd.BackupResponse
+	if a.IsIncremental && a.ParentSnapshotID != uuid.Nil {
+		incReq := agentcmd.IncrementalBackupRequest{
+			SnapshotID:        snap.ID.String(),
+			Kind:              snap.Kind,
+			AgeRecipient:      snap.AgeRecipient,
+			ChunkBytes:        agentcmd.ChunkBytes,
+			PresignEndpoint:   w.presignEndpoint(snap.ID),
+			ManifestEndpoint:  w.manifestEndpoint(snap.ID),
+			ProgressEndpoint:  w.progressEndpoint(snap.ID),
+			IsIncremental:     true,
+			ParentSnapshotID:  a.ParentSnapshotID.String(),
+			BaseSnapshotID:    a.BaseSnapshotID.String(),
+			Generation:        a.Generation,
+			FileIndexEndpoint: w.fileIndexEndpoint(a.ParentSnapshotID),
+		}
+		resp, err = w.cmd.IncrementalBackup(ctx, snap.SiteID, si.URL, incReq)
+	} else {
+		req := agentcmd.BackupRequest{
+			SnapshotID:       snap.ID.String(),
+			Kind:             snap.Kind,
+			AgeRecipient:     snap.AgeRecipient, // PUBLIC recipient only — NEVER a key.
+			ChunkBytes:       agentcmd.ChunkBytes,
+			PresignEndpoint:  w.presignEndpoint(snap.ID),
+			ManifestEndpoint: w.manifestEndpoint(snap.ID),
+			ProgressEndpoint: w.progressEndpoint(snap.ID),
+		}
+		resp, err = w.cmd.Backup(ctx, snap.SiteID, si.URL, req)
 	}
-	resp, err := w.cmd.Backup(ctx, snap.SiteID, si.URL, req)
 	if err != nil {
 		// Transport/SSRF/agent-reject: retryable infra error.
 		return fmt.Errorf("backup command to agent failed: %w", err)
@@ -168,6 +200,16 @@ func (w *BackupWorker) progressEndpoint(snapshotID uuid.UUID) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/agent/v1/backups/%s/progress", w.cpBaseURL, snapshotID)
+}
+
+func (w *BackupWorker) fileIndexEndpoint(parentSnapshotID uuid.UUID) string {
+	if w.cpBaseURL == "" {
+		return ""
+	}
+	if parentSnapshotID == uuid.Nil {
+		return ""
+	}
+	return fmt.Sprintf("%s/agent/v1/backups/%s/file-index", w.cpBaseURL, parentSnapshotID)
 }
 
 func (w *BackupWorker) recordAudit(ctx context.Context, snap Snapshot, action string, extra map[string]any) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -40,6 +41,10 @@ type SiteLookup interface {
 // main).
 type Enqueuer interface {
 	EnqueueBackup(ctx context.Context, tenantID, snapshotID uuid.UUID) error
+	// EnqueueBackupWithChain enqueues a backup job with ADR-048 incremental
+	// chain fields pre-populated in BackupArgs. Used when CreateSnapshot already
+	// resolved is_incremental/generation/chain_id at enqueue time.
+	EnqueueBackupWithChain(ctx context.Context, snap Snapshot) error
 	// EnqueueRestore enqueues a restore job. restoreRunID is the restore_run row
 	// that was already persisted by CreateRestore; the worker reads it from the
 	// job args to update the run status as it progresses. uuid.Nil is accepted
@@ -745,6 +750,11 @@ var allowedProgressPhases = map[string]struct{}{
 	"queued":               {},
 	"archiving_files":      {},
 	"encrypting_uploading": {},
+	// ADR-048 incremental backup phases.
+	"fetching_file_index":   {},
+	"scanning_files":        {},
+	"uploading_incremental": {},
+	"incremental_fallback":  {},
 	// ADR-033 / ADR-034 RESTORE phases (closed set; match the agent's exact
 	// strings). `completed` and `failed` are reused as the terminal phases for
 	// both backup AND restore.
@@ -1588,3 +1598,250 @@ func archiveIDs(metas []SnapshotMeta, keep int) map[uuid.UUID]bool {
 	}
 	return out
 }
+
+// ----------------------------------------------------------------------------
+// ADR-048 — Incremental Backup V1
+// ----------------------------------------------------------------------------
+
+// ChainResolution is the result of resolveChainForSite: it describes whether
+// the next backup for a site should be incremental or a full base.
+type ChainResolution struct {
+	IsIncremental    bool
+	ParentSnapshotID *uuid.UUID
+	BaseSnapshotID   *uuid.UUID
+	ChainID          *uuid.UUID
+	Generation       int
+}
+
+// resolveChainForSite implements the AUTO-BASE rule from ADR-048.
+// It queries the most recently completed snapshot for (tenantID, siteID) and
+// decides whether the next run should be incremental or a full base.
+//
+// AUTO-BASE conditions (returns IsIncremental=false):
+//   a. No prior completed snapshot → full base.
+//   b. Prior snapshot chain_id is NULL and is_incremental=false but finished_at
+//      is within the base window → start a new chain (generation=1).
+//   c. Prior snapshot's finished_at < now() - 7 days → stale chain, full base.
+//   d. Prior snapshot generation >= BackupMaxChainDepth → force new full base.
+//   e. Prior snapshot has no backup_file_index rows (pre-m44 full zip backup)
+//      AND is NOT incremental → full base (no index to diff against).
+func (s *Service) resolveChainForSite(ctx context.Context, tenantID, siteID uuid.UUID) (ChainResolution, error) {
+	prev, err := s.repo.GetLatestCompletedSnapshot(ctx, tenantID, siteID)
+	if err != nil {
+		var de *domain.Error
+		if errors.As(err, &de) && de.Kind == domain.KindNotFound {
+			// No prior snapshot → full base.
+			return ChainResolution{}, nil
+		}
+		return ChainResolution{}, err
+	}
+
+	now := s.clock.Now()
+
+	// AUTO-BASE: stale chain (base window elapsed).
+	if prev.FinishedAt != nil && now.Sub(*prev.FinishedAt) > time.Duration(BackupBaseWindowDays)*24*time.Hour {
+		return ChainResolution{}, nil
+	}
+
+	// AUTO-BASE: chain too deep.
+	if prev.Generation >= BackupMaxChainDepth {
+		return ChainResolution{}, nil
+	}
+
+	// AUTO-BASE: previous snapshot is a pre-m44 full backup (no file index) —
+	// check whether it has backup_file_index rows.
+	if !prev.IsIncremental {
+		count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
+		if cerr != nil || count == 0 {
+			// No index rows: this is a full zip-based snapshot. Start a new chain
+			// with generation=1 off this snapshot as the base, but only if the
+			// snapshot itself can serve as the chain anchor.
+			// For V1 we require an existing file index to do an actual diff,
+			// so if count==0 we fall back to a full base run for THIS cycle too.
+			return ChainResolution{}, nil
+		}
+	}
+
+	// We have a usable prior snapshot. Build the chain fields.
+	parentID := prev.ID
+	var baseID uuid.UUID
+	var chainID uuid.UUID
+	generation := prev.Generation + 1
+
+	if prev.IsIncremental && prev.ChainID != nil {
+		// Continue an existing chain.
+		chainID = *prev.ChainID
+		if prev.BaseSnapshotID != nil {
+			baseID = *prev.BaseSnapshotID
+		}
+	} else {
+		// Prior snapshot was a full base. Start a new chain anchored there.
+		baseID = prev.ID
+		chainID = prev.ID // chain_id = base_snapshot_id per spec.
+		generation = 1
+	}
+
+	return ChainResolution{
+		IsIncremental:    true,
+		ParentSnapshotID: &parentID,
+		BaseSnapshotID:   &baseID,
+		ChainID:          &chainID,
+		Generation:       generation,
+	}, nil
+}
+
+// SubmitIncrementalManifest handles the agent's manifest submission for an
+// incremental snapshot. It:
+//  1. Validates the snapshot is owned by the tenant and is running.
+//  2. Upserts chunk rows for changed-file chunks.
+//  3. Inserts backup_file_index rows for files_entries (including tombstones).
+//  4. Inserts backup_manifest_entries for db_entries (same as full-backup path).
+//  5. Completes the snapshot with cycle telemetry counters.
+//  6. Publishes a "completed" SSE event.
+//  7. Reconciles the linked schedule run (best-effort).
+//
+// Returns (chunkRefs, storedChunks, error).
+func (s *Service) SubmitIncrementalManifest(ctx context.Context, tenantID, snapshotID uuid.UUID, req agentcmd.IncrementalSubmitManifestRequest) (int64, int64, error) {
+	snap, err := s.repo.GetSnapshot(ctx, tenantID, snapshotID)
+	if err != nil {
+		return 0, 0, err
+	}
+	if snap.Status == StatusCompleted {
+		return 0, 0, domain.Conflict("snapshot_already_completed", "the snapshot manifest was already recorded")
+	}
+
+	var chunkRefs, storedCount, totalSize int64
+
+	// 1. Process DB entries using the existing RecordManifest path.
+	if len(req.DBEntries) > 0 {
+		in := RecordManifestInput{
+			TenantID:   tenantID,
+			SnapshotID: snapshotID,
+			Chunks:     map[string]ChunkUpload{},
+		}
+		for _, e := range req.DBEntries {
+			if e.Path == "" {
+				return 0, 0, domain.Validation("invalid_manifest_entry", "db manifest entry has empty path")
+			}
+			entryKind := e.EntryKind
+			if entryKind == "" {
+				entryKind = EntryKindDB
+			}
+			hashes := make([]string, 0, len(e.Chunks))
+			for _, c := range e.Chunks {
+				if !isHexHash(c.Blake3) {
+					return 0, 0, domain.Validation("invalid_chunk_hash", "manifest chunk hash is not a valid blake3 hex digest")
+				}
+				hashes = append(hashes, c.Blake3)
+				in.Chunks[c.Blake3] = ChunkUpload{Blake3: c.Blake3, Size: c.Size, S3Key: chunkS3Key(tenantID, c.Blake3)}
+			}
+			in.Entries = append(in.Entries, ManifestEntryInput{
+				Path:        e.Path,
+				EntryKind:   entryKind,
+				TableName:   e.TableName,
+				ChunkHashes: hashes,
+				Size:        e.Size,
+				Mode:        int32(e.Mode),
+			})
+		}
+		refs, stored, rerr := s.repo.RecordManifest(ctx, in)
+		if rerr != nil {
+			return 0, 0, rerr
+		}
+		chunkRefs += refs
+		storedCount += stored
+		totalSize += func() int64 {
+			var t int64
+			for _, e := range in.Entries {
+				t += e.Size
+			}
+			return t
+		}()
+	} else {
+		// No DB entries: we still need to complete the snapshot.
+		// RecordManifest above handles completion; if there are no DB entries
+		// we complete manually below after inserting file index rows.
+		// Use repo.CompleteSnapshot directly.
+		defer func() {
+			// Completed inline below.
+		}()
+	}
+
+	// 2. Insert backup_file_index rows for files_entries.
+	if len(req.FilesEntries) > 0 {
+		batch := make([]FileIndexEntry, 0, len(req.FilesEntries))
+		for _, fe := range req.FilesEntries {
+			hashes := fe.ChunkHashes
+			if hashes == nil {
+				hashes = []string{}
+			}
+			// Validate chunk hashes for non-tombstone entries.
+			if !fe.IsTombstone {
+				for _, h := range hashes {
+					if !isHexHash(h) {
+						return 0, 0, domain.Validation("invalid_chunk_hash", "file index chunk hash is not a valid blake3 hex digest")
+					}
+				}
+			}
+			batch = append(batch, FileIndexEntry{
+				TenantID:    tenantID,
+				SnapshotID:  snapshotID,
+				FilePath:    fe.FilePath,
+				FileSize:    fe.FileSize,
+				FileMtime:   fe.FileMtime,
+				FileBlake3:  fe.FileBlake3,
+				ChunkHashes: hashes,
+				IsTombstone: fe.IsTombstone,
+			})
+		}
+		if ierr := s.repo.InsertFileIndexBatch(ctx, tenantID, snapshotID, batch); ierr != nil {
+			return 0, 0, ierr
+		}
+	}
+
+	// 3. If we did NOT call RecordManifest above (no DB entries), complete the
+	//    snapshot directly.
+	if len(req.DBEntries) == 0 {
+		if _, cerr := s.repo.CompleteSnapshot(ctx, tenantID, snapshotID, totalSize, chunkRefs); cerr != nil {
+			return 0, 0, cerr
+		}
+	}
+
+	// 4. Stamp cycle telemetry counters.
+	if serr := s.repo.UpdateSnapshotCycleStats(ctx, tenantID, snapshotID, CycleStatsInput{
+		CycleFilesScanned:  req.CycleFilesScanned,
+		CycleFilesChanged:  req.CycleFilesChanged,
+		CycleFilesDeleted:  req.CycleFilesDeleted,
+		CycleBytesUploaded: req.CycleBytesUploaded,
+	}); serr != nil {
+		// Best-effort: log and continue; the backup is already recorded.
+		slog.WarnContext(ctx, "backup: incremental cycle stats update failed (best-effort)",
+			slog.String("snapshot_id", snapshotID.String()),
+			slog.Any("error", serr))
+	}
+
+	// 5. Publish completed SSE event.
+	if completed, gerr := s.repo.GetSnapshot(ctx, tenantID, snapshotID); gerr == nil {
+		s.publish(BackupEvent{
+			SnapshotID:  snapshotID,
+			Phase:       "completed",
+			PhaseDetail: map[string]any{"chunk_refs": chunkRefs, "stored": storedCount, "incremental": true},
+			Status:      completed.Status,
+		})
+	}
+
+	// 6. Reconcile schedule run.
+	if s.scheduleRuns != nil {
+		_, _ = s.scheduleRuns.SetScheduleRunStatusBySnapshot(ctx, tenantID, snapshotID, SetScheduleRunStatusInput{
+			TenantID:    tenantID,
+			Status:      ScheduleRunStatusCompleted,
+			SetFinished: true,
+		})
+	}
+
+	return chunkRefs, storedCount, nil
+}
+
+// fileIndexSoftCap is the maximum number of backup_file_index rows for a
+// snapshot before the streaming endpoint returns 204 (agent AUTO-BASEs).
+const fileIndexSoftCap = 2_000_000

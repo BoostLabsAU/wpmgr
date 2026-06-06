@@ -86,6 +86,12 @@ final class TaskRunner
     public const PHASE_COMPLETED            = 'completed';
     public const PHASE_FAILED               = 'failed';
 
+    // ADR-048 incremental phases (agent → CP SSE events).
+    public const PHASE_FETCH_INDEX         = 'fetching_file_index';
+    public const PHASE_SCAN_FILES          = 'scanning_files';
+    public const PHASE_UPLOAD_INCREMENTAL  = 'uploading_incremental';
+    public const PHASE_INCREMENTAL_FALLBACK = 'incremental_fallback';
+
     /** Valid snapshot kinds (mirror of the CP backup_contract.go Kind enum). */
     public const KIND_FILES = 'files';
     public const KIND_DB    = 'db';
@@ -94,7 +100,13 @@ final class TaskRunner
     /** Minimum seconds between in-phase DB writes to last_progress_at. */
     private const PROGRESS_DB_THROTTLE_SECONDS = 5;
 
-    /** @var array{snapshot_id:string,kind:string,age_recipient:string,presign_endpoint:string,manifest_endpoint:string,progress_endpoint:string,chunk_bytes:int,scratch_dir:string,wp_content_path:string,db:array<string,string>} */
+    /**
+     * @var array{snapshot_id:string,kind:string,age_recipient:string,presign_endpoint:string,
+     *            manifest_endpoint:string,progress_endpoint:string,chunk_bytes:int,
+     *            scratch_dir:string,wp_content_path:string,db:array<string,string>,
+     *            is_incremental?:bool,parent_snapshot_id?:string,base_snapshot_id?:string,
+     *            generation?:int,file_index_endpoint?:string}
+     */
     private array $params;
 
     /** Unix-seconds of the last DB write to last_progress_at (throttle). */
@@ -189,9 +201,51 @@ final class TaskRunner
                         $currentPhase = $next;
                         break;
 
+                    // ---- ADR-048 incremental phases ----
+
+                    case self::PHASE_FETCH_INDEX:
+                        $subState = $this->runFetchIndex($subState);
+                        $next = $subState['_auto_base'] ?? false
+                            ? self::PHASE_INCREMENTAL_FALLBACK
+                            : self::PHASE_SCAN_FILES;
+                        $this->saveTaskState($next, $subState);
+                        $currentPhase = $next;
+                        break;
+
+                    case self::PHASE_SCAN_FILES:
+                        $subState = $this->runScanFiles($subState);
+                        $this->saveTaskState(self::PHASE_DUMPING_DB, $subState);
+                        $currentPhase = self::PHASE_DUMPING_DB;
+                        break;
+
+                    case self::PHASE_INCREMENTAL_FALLBACK:
+                        // AUTO-BASE: emit progress and convert to a full-backup run.
+                        $this->postProgress(self::PHASE_INCREMENTAL_FALLBACK, [
+                            'reason' => (string) ($subState['_fallback_reason'] ?? 'no usable base index'),
+                        ]);
+                        // Clear incremental flag so the subsequent phases use
+                        // the full-backup pipeline unchanged.
+                        $subState['_is_incremental'] = false;
+                        $this->saveTaskState(self::PHASE_DUMPING_DB, $subState);
+                        $currentPhase = self::PHASE_DUMPING_DB;
+                        break;
+
+                    case self::PHASE_UPLOAD_INCREMENTAL:
+                        // runUploadIncremental both uploads chunks AND submits
+                        // the IncrementalSubmitManifestRequest in one phase, so
+                        // we transition directly to COMPLETED (skipping the full-
+                        // backup PHASE_SUBMITTING_MANIFEST which uses a different
+                        // manifest shape and would throw on missing encrypt.entries).
+                        $subState = $this->runUploadIncremental($subState);
+                        $this->saveTaskState(self::PHASE_COMPLETED, $subState);
+                        $currentPhase = self::PHASE_COMPLETED;
+                        break;
+
+                    // ---- standard full-backup phases ----
+
                     case self::PHASE_DUMPING_DB:
                         $subState = $this->runDumpingDb($subState);
-                        $next     = $this->nextAfterDumpingDb();
+                        $next     = $this->nextAfterDumpingDb($subState);
                         $this->saveTaskState($next, $subState);
                         $currentPhase = $next;
                         break;
@@ -271,22 +325,39 @@ final class TaskRunner
     // ==================================================================
 
     /**
-     * Decide the next phase after `queued`. Files-only snapshots skip the DB
-     * dump; everything else dumps DB first.
+     * Decide the next phase after `queued`.
+     *
+     * For incremental runs (is_incremental=true in params): PHASE_FETCH_INDEX.
+     * For files-only full snapshots: PHASE_ARCHIVING_FILES (skip DB dump).
+     * For all other full runs (db or full kind): PHASE_DUMPING_DB.
      */
     private function nextAfterQueued(): string
     {
+        if ($this->isIncremental()) {
+            return self::PHASE_FETCH_INDEX;
+        }
         return $this->kind() === self::KIND_FILES
             ? self::PHASE_ARCHIVING_FILES
             : self::PHASE_DUMPING_DB;
     }
 
     /**
-     * Decide the next phase after `dumping_db`. DB-only snapshots skip the
-     * files archive; full snapshots fall through.
+     * Decide the next phase after `dumping_db`.
+     *
+     * For incremental runs that haven't fallen back to AUTO-BASE:
+     *   → PHASE_UPLOAD_INCREMENTAL (skip the zip-archiver).
+     * For DB-only full snapshots: PHASE_ENCRYPTING_UPLOADING.
+     * For full snapshots: PHASE_ARCHIVING_FILES.
+     *
+     * @param array<string,mixed> $subState Current sub_state (used to detect AUTO-BASE).
      */
-    private function nextAfterDumpingDb(): string
+    private function nextAfterDumpingDb(array $subState = []): string
     {
+        // If we are in an incremental run that has NOT fallen back to AUTO-BASE,
+        // skip the files archiver and go straight to per-file chunk upload.
+        if ($this->isIncremental() && !empty($subState['_is_incremental'])) {
+            return self::PHASE_UPLOAD_INCREMENTAL;
+        }
         return $this->kind() === self::KIND_DB
             ? self::PHASE_ENCRYPTING_UPLOADING
             : self::PHASE_ARCHIVING_FILES;
@@ -432,6 +503,305 @@ final class TaskRunner
         $pipeline->submitManifest($entries, function (string $phase, array $detail): void {
             $this->onPhaseProgress($phase, $detail);
         });
+    }
+
+    // ==================================================================
+    // ADR-048 Incremental phase handlers
+    // ==================================================================
+
+    /**
+     * PHASE_FETCH_INDEX — stream the previous NDJSON file-index from the CP
+     * to a scratch file. On any failure (non-200, I/O error, empty endpoint)
+     * set _auto_base=true so the caller falls back to the full-backup pipeline.
+     *
+     * @param array<string,mixed> $subState
+     * @return array<string,mixed> Updated sub_state.
+     */
+    private function runFetchIndex(array $subState): array
+    {
+        $this->ensureScratchDir();
+        $this->saveTaskState(self::PHASE_FETCH_INDEX, $subState);
+
+        $endpoint = $this->fileIndexEndpoint();
+
+        if ($endpoint === '') {
+            $subState['_auto_base']        = true;
+            $subState['_is_incremental']   = false;
+            $subState['_fallback_reason']  = 'file_index_endpoint is empty';
+            return $subState;
+        }
+
+        $scanner = $this->makeScanner();
+
+        $indexPath = $scanner->fetchPreviousIndex(
+            $endpoint,
+            $this->scratchDir(),
+            function (string $phase, array $detail): void {
+                $this->onPhaseProgress($phase, $detail);
+            }
+        );
+
+        if ($indexPath === null) {
+            $subState['_auto_base']       = true;
+            $subState['_is_incremental']  = false;
+            $subState['_fallback_reason'] = 'file_index fetch failed or returned 204';
+            return $subState;
+        }
+
+        $subState['_auto_base']          = false;
+        $subState['_is_incremental']     = true;
+        $subState['_prev_index_path']    = $indexPath;
+        return $subState;
+    }
+
+    /**
+     * PHASE_SCAN_FILES — walk WP_CONTENT_DIR, classify files against the
+     * previous index, write plaintext chunks for changed/new files.
+     *
+     * @param array<string,mixed> $subState
+     * @return array<string,mixed> Updated sub_state with scan result.
+     */
+    private function runScanFiles(array $subState): array
+    {
+        $this->ensureScratchDir();
+        $this->saveTaskState(self::PHASE_SCAN_FILES, $subState);
+
+        $indexPath = (string) ($subState['_prev_index_path'] ?? '');
+        $scanner   = $this->makeScanner();
+
+        // Build prev-index map line-by-line.
+        $prevIndex = $scanner->buildPrevIndexMap($indexPath);
+        if ($prevIndex === null) {
+            // Soft cap triggered — AUTO-BASE.
+            $this->postProgress(self::PHASE_INCREMENTAL_FALLBACK, [
+                'reason' => 'prev index exceeds 2,000,000 lines (soft cap)',
+            ]);
+            $subState['_auto_base']       = true;
+            $subState['_is_incremental']  = false;
+            $subState['_fallback_reason'] = 'prev index soft cap exceeded';
+            // Fast-path to dumping_db as a full base.
+            return $subState;
+        }
+
+        $scanResume = isset($subState['scan']) && is_array($subState['scan']) ? $subState['scan'] : [];
+
+        $scanResult = $scanner->scanFiles(
+            $prevIndex,
+            $this->scratchDir(),
+            $scanResume,
+            function (string $phase, array $detail): void {
+                $this->onPhaseProgress($phase, $detail);
+            }
+        );
+
+        $subState['scan']            = $scanResult;
+        $subState['_is_incremental'] = true;  // Confirm incremental path is live.
+        return $subState;
+    }
+
+    /**
+     * PHASE_UPLOAD_INCREMENTAL — upload per-file plaintext chunks for
+     * changed/new files, then submit the IncrementalSubmitManifestRequest.
+     *
+     * DB dump entries are assembled from sub_state.db (same as the full-backup
+     * pipeline) and included in the manifest submission.
+     *
+     * @param array<string,mixed> $subState
+     * @return array<string,mixed> Updated sub_state.
+     */
+    private function runUploadIncremental(array $subState): array
+    {
+        $this->ensureScratchDir();
+        $this->saveTaskState(self::PHASE_UPLOAD_INCREMENTAL, $subState);
+
+        $scanResult  = isset($subState['scan']) && is_array($subState['scan']) ? $subState['scan'] : [];
+        $changedFiles = isset($scanResult['changed']) && is_array($scanResult['changed']) ? array_values($scanResult['changed']) : [];
+        $tombstones   = isset($scanResult['tombstones']) && is_array($scanResult['tombstones']) ? array_values($scanResult['tombstones']) : [];
+        $filesScanned = (int) ($scanResult['files_scanned'] ?? 0);
+        $filesChanged = (int) ($scanResult['files_changed'] ?? 0);
+        $filesDeleted = (int) ($scanResult['files_deleted'] ?? 0);
+
+        $pipeline = new IncrementalEncryptAndUpload(
+            new \WPMgr\Agent\Support\BackupTransport(new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore())),
+            $this->snapshotId(),
+            (string) $this->params['age_recipient'],
+            (string) $this->params['presign_endpoint'],
+            (string) $this->params['manifest_endpoint'],
+            (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024)
+        );
+
+        // Upload changed-file chunks.
+        $uploadResume = isset($subState['incr_upload']) && is_array($subState['incr_upload']) ? $subState['incr_upload'] : [];
+        $uploadCursor = $pipeline->uploadChunks(
+            $changedFiles,
+            $this->scratchDir(),
+            $uploadResume,
+            function (string $phase, array $detail): void {
+                $this->onPhaseProgress($phase, $detail);
+            }
+        );
+        $subState['incr_upload'] = $uploadCursor;
+        $this->saveTaskState(self::PHASE_UPLOAD_INCREMENTAL, $subState);
+
+        $bytesUploaded = (int) ($uploadCursor['bytes_uploaded'] ?? 0);
+
+        // Build DB entries from the DB dump (same as assembleArtifacts but only
+        // the DB component).
+        $dbEntries = $this->assembleIncrementalDbEntries($subState);
+
+        // Submit the incremental manifest.
+        $pipeline->submitIncrementalManifest(
+            $changedFiles,
+            $tombstones,
+            $dbEntries,
+            $filesScanned,
+            $filesChanged,
+            $filesDeleted,
+            $bytesUploaded,
+            function (string $phase, array $detail): void {
+                $this->onPhaseProgress($phase, $detail);
+            }
+        );
+
+        $subState['incr_manifest_done'] = true;
+        return $subState;
+    }
+
+    /**
+     * Build the DB manifest entries for an incremental manifest submission.
+     * These use the existing ManifestEntry shape (entry_kind='db') and are
+     * assembled from sub_state.db + the encrypted DB chunk files on disk.
+     *
+     * In the incremental pipeline, the DB dump is still fully encrypted and
+     * uploaded via the standard EncryptAndUpload pass (in PHASE_DUMPING_DB +
+     * PHASE_UPLOAD_INCREMENTAL). We re-run the encrypt pass over the DB
+     * artifact here to get the chunk list.
+     *
+     * @param array<string,mixed> $subState
+     * @return list<array<string,mixed>>
+     */
+    private function assembleIncrementalDbEntries(array $subState): array
+    {
+        // If a prior pass already prepared db_entries in subState, reuse them.
+        if (!empty($subState['incr_db_entries']) && is_array($subState['incr_db_entries'])) {
+            return array_values($subState['incr_db_entries']);
+        }
+
+        $db      = (isset($subState['db']) && is_array($subState['db'])) ? $subState['db'] : [];
+        $dbPath  = isset($db['output_path']) && is_string($db['output_path']) ? $db['output_path'] : '';
+
+        if ($dbPath === '' || !is_file($dbPath)) {
+            return [];
+        }
+
+        // Chunk the DB dump into plaintext BLAKE3-addressed entries.
+        $chunkBytes = (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024);
+        $chunkList  = [];
+        $handle     = @fopen($dbPath, 'rb');
+        if ($handle === false) {
+            return [];
+        }
+        try {
+            while (!feof($handle)) {
+                $plain = fread($handle, $chunkBytes);
+                if ($plain === false || $plain === '') {
+                    break;
+                }
+                $hash      = \WPMgr\Agent\Support\Blake3::hashHex($plain);
+                $size      = strlen($plain);
+                $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                if (!is_file($chunkPath)) {
+                    @file_put_contents($chunkPath, $plain, LOCK_EX);
+                }
+                $plain       = '';
+                $chunkList[] = ['blake3' => $hash, 'size' => $size];
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        // Upload DB chunks via presign dedup.
+        $allHashes = array_column($chunkList, 'blake3');
+        if (!empty($allHashes)) {
+            try {
+                $transport = new \WPMgr\Agent\Support\BackupTransport(
+                    new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore())
+                );
+                $uploads = $transport->presignChunks(
+                    (string) $this->params['presign_endpoint'],
+                    $this->snapshotId(),
+                    $allHashes
+                );
+                foreach ($uploads as $hash => $url) {
+                    if (!is_string($hash) || !is_string($url) || $url === '') {
+                        continue;
+                    }
+                    $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                    if (!is_file($chunkPath)) {
+                        continue;
+                    }
+                    $bytes = @file_get_contents($chunkPath);
+                    if ($bytes === false) {
+                        continue;
+                    }
+                    if ($transport->putChunk($url, $bytes)) {
+                        @unlink($chunkPath);
+                    }
+                    $bytes = '';
+                }
+                // Unlink dedup hits.
+                foreach ($allHashes as $hash) {
+                    if (!isset($uploads[$hash])) {
+                        $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                        if (is_file($chunkPath)) {
+                            @unlink($chunkPath);
+                        }
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Non-fatal — the manifest submit will still carry the chunk list.
+                error_log('WPMgr TaskRunner: incremental DB chunk upload error: ' . $e->getMessage());
+            }
+        }
+
+        $dbSize = array_sum(array_column($chunkList, 'size'));
+
+        return [[
+            'path'       => 'database.sql.gz',
+            'entry_kind' => 'db',
+            'table_name' => '',
+            'mode'       => 0,
+            'size'       => $dbSize,
+            'chunks'     => $chunkList,
+        ]];
+    }
+
+    // ==================================================================
+    // Incremental helpers
+    // ==================================================================
+
+    /** Whether this run is incremental (set in params by BackupCommand). */
+    private function isIncremental(): bool
+    {
+        return !empty($this->params['is_incremental']);
+    }
+
+    /** file_index_endpoint from params (empty string if not incremental). */
+    private function fileIndexEndpoint(): string
+    {
+        return isset($this->params['file_index_endpoint']) && is_string($this->params['file_index_endpoint'])
+            ? $this->params['file_index_endpoint']
+            : '';
+    }
+
+    /** Build an IncrementalScanner using current params. */
+    private function makeScanner(): IncrementalScanner
+    {
+        return new IncrementalScanner(
+            $this->wpContentPath(),
+            (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024),
+            new \WPMgr\Agent\Support\BackupTransport(new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore()))
+        );
     }
 
     /**
@@ -685,6 +1055,18 @@ final class TaskRunner
             foreach ($chunks as $f) {
                 @unlink($f);
             }
+        }
+        // ADR-048: also clean up plaintext incremental chunks (.bin).
+        $plainChunks = @glob($scratch . DIRECTORY_SEPARATOR . 'chunks-*.bin');
+        if (is_array($plainChunks)) {
+            foreach ($plainChunks as $f) {
+                @unlink($f);
+            }
+        }
+        // ADR-048: remove the previous-index NDJSON scratch file.
+        $prevIndex = $scratch . DIRECTORY_SEPARATOR . 'prev_index.ndjson';
+        if (is_file($prevIndex)) {
+            @unlink($prevIndex);
         }
 
         // 2. Artifact files (DB dump + zip parts).

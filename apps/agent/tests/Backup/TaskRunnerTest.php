@@ -84,6 +84,11 @@ final class TaskRunnerTest extends TestCase
             'PHASE_SUBMITTING_MANIFEST',
             'PHASE_COMPLETED',
             'PHASE_FAILED',
+            // ADR-048 incremental phases.
+            'PHASE_FETCH_INDEX',
+            'PHASE_SCAN_FILES',
+            'PHASE_UPLOAD_INCREMENTAL',
+            'PHASE_INCREMENTAL_FALLBACK',
         ];
         sort($expected);
         $actual = array_keys($phases);

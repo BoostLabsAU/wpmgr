@@ -96,6 +96,20 @@ func (c *Client) Restore(ctx context.Context, siteID uuid.UUID, siteURL string, 
 	return out, nil
 }
 
+// IncrementalBackup sends the signed `backup` command with an incremental
+// payload (ADR-048). The command name on the wire is still "backup"; the agent
+// detects is_incremental=true in the body and runs the incremental pipeline.
+// file_index_endpoint carries the URL the agent GETs to stream the previous
+// snapshot's NDJSON file index. An empty file_index_endpoint signals the agent
+// to fall back to a full-base run (AUTO-BASE).
+func (c *Client) IncrementalBackup(ctx context.Context, siteID uuid.UUID, siteURL string, req IncrementalBackupRequest) (BackupResponse, error) {
+	var out BackupResponse
+	if err := c.post(ctx, siteID, siteURL, "backup", req, &out); err != nil {
+		return BackupResponse{}, err
+	}
+	return out, nil
+}
+
 // RefreshInventory sends the signed `refresh_inventory` command to the site's
 // agent. siteID is the target site's stable enrollment UUID, bound into the
 // JWT's aud claim. The agent re-reads its plugin/theme inventory + update
