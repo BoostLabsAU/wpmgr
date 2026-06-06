@@ -385,6 +385,47 @@ func TestResolveChainForSite_IncrementOffBaseIncrement(t *testing.T) {
 	}
 }
 
+// TestResolveChainForSite_IncrementalBaseWithEmptyIndex_Rebases covers the
+// version-skew bug: a base taken on an old agent records is_incremental=true but
+// writes ZERO backup_file_index rows (full-zip fallback). The next run must NOT
+// try to diff against it (that re-hashes the whole tree — the 24-min QA bug); it
+// must re-base to a fresh gen-0 base-increment.
+func TestResolveChainForSite_IncrementalBaseWithEmptyIndex_Rebases(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Now()
+	svc := buildIncrementalSvc(repo, now)
+
+	tenantID := uuid.New()
+	siteID := uuid.New()
+	prevID := uuid.New()
+	finishedAt := now.Add(-1 * time.Hour)
+
+	prevChain := prevID
+	repo.setSnapshot(Snapshot{
+		ID:            prevID,
+		TenantID:      tenantID,
+		SiteID:        siteID,
+		Status:        StatusCompleted,
+		IsIncremental: true,
+		Generation:    0,
+		ChainID:       &prevChain,
+		FinishedAt:    &finishedAt,
+	})
+	repo.fileIndexCounts[prevID] = 0 // empty index — cannot be diffed
+
+	res, err := svc.resolveChainForSite(context.Background(), tenantID, siteID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// Must re-base: gen-0 base-increment with no parent (NOT a gen-1 increment).
+	if !res.IsIncremental || res.Generation != 0 {
+		t.Fatalf("expected a gen-0 base-increment re-base, got incremental=%v gen=%d", res.IsIncremental, res.Generation)
+	}
+	if res.ParentSnapshotID != nil {
+		t.Errorf("expected no parent on a re-base, got %v", res.ParentSnapshotID)
+	}
+}
+
 func TestResolveChainForSite_StaleChain(t *testing.T) {
 	repo := newFakeRepo()
 	now := time.Now()

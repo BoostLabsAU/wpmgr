@@ -2175,14 +2175,18 @@ func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, s
 		return baseIncrement, nil
 	}
 
-	// Previous snapshot is a pre-m44 full backup (no file index) — check whether
-	// it has backup_file_index rows. If not, we can't diff against it, so start a
-	// fresh gen-0 base-increment (which writes its own full file index).
-	if !prev.IsIncremental {
-		count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
-		if cerr != nil || count == 0 {
-			return baseIncrement, nil
-		}
+	// The prior snapshot has no usable per-file index — we can't diff against it,
+	// so start a fresh gen-0 base-increment (which writes its own full file index).
+	// This MUST run regardless of prev.IsIncremental: a base taken on an old agent
+	// (0.20.1's empty-endpoint AUTO-BASE → full-zip fallback) records itself as a
+	// gen-0 snapshot with is_incremental=true yet writes ZERO backup_file_index
+	// rows. Gating this check on !prev.IsIncremental let such a base through, and
+	// the next increment diffed against an empty index → CASE A never matched →
+	// the agent re-read+re-hashed the whole tree (the 24-min live-QA bug). Always
+	// re-base when the parent carries no file index.
+	count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
+	if cerr != nil || count == 0 {
+		return baseIncrement, nil
 	}
 
 	// We have a usable prior snapshot. Build the chain fields.
