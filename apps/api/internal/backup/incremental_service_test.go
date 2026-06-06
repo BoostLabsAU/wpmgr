@@ -331,6 +331,60 @@ func TestResolveChainForSite_FirstIncrement(t *testing.T) {
 	}
 }
 
+// TestResolveChainForSite_IncrementOffBaseIncrement covers the bootstrap chain:
+// the prior snapshot is the gen-0 BASE-INCREMENT (is_incremental=true,
+// generation=0, chain_id=self, base_snapshot_id=NULL). The next run must resolve
+// to gen-1 with base_snapshot_id = the base itself (prev.ID) — NOT the zero UUID,
+// which previously stamped a non-existent base_snapshot_id FK and 500'd the first
+// increment.
+func TestResolveChainForSite_IncrementOffBaseIncrement(t *testing.T) {
+	repo := newFakeRepo()
+	now := time.Now()
+	svc := buildIncrementalSvc(repo, now)
+
+	tenantID := uuid.New()
+	siteID := uuid.New()
+	baseID := uuid.New()
+	finishedAt := now.Add(-1 * time.Hour)
+
+	// The prior snapshot is the gen-0 base-increment: incremental, chain anchored
+	// to itself, with NO base above it.
+	prev := Snapshot{
+		ID:            baseID,
+		TenantID:      tenantID,
+		SiteID:        siteID,
+		Status:        StatusCompleted,
+		IsIncremental: true,
+		Generation:    0,
+		ChainID:       &baseID,
+		// BaseSnapshotID intentionally nil — it IS the base.
+		FinishedAt: &finishedAt,
+	}
+	repo.setSnapshot(prev)
+	repo.fileIndexCounts[baseID] = 42 // the base wrote a full file index
+
+	res, err := svc.resolveChainForSite(context.Background(), tenantID, siteID)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.IsIncremental || res.Generation != 1 {
+		t.Fatalf("expected incremental gen 1, got incremental=%v gen=%d", res.IsIncremental, res.Generation)
+	}
+	if res.ParentSnapshotID == nil || *res.ParentSnapshotID != baseID {
+		t.Errorf("expected ParentSnapshotID=%v, got %v", baseID, res.ParentSnapshotID)
+	}
+	if res.ChainID == nil || *res.ChainID != baseID {
+		t.Errorf("expected ChainID=%v, got %v", baseID, res.ChainID)
+	}
+	// The crux: base must be the gen-0 base itself, never the zero UUID.
+	if res.BaseSnapshotID == nil || *res.BaseSnapshotID != baseID {
+		t.Errorf("expected BaseSnapshotID=%v (the base), got %v", baseID, res.BaseSnapshotID)
+	}
+	if res.BaseSnapshotID != nil && *res.BaseSnapshotID == uuid.Nil {
+		t.Error("BaseSnapshotID is the zero UUID — would FK-violate and 500 the first increment")
+	}
+}
+
 func TestResolveChainForSite_StaleChain(t *testing.T) {
 	repo := newFakeRepo()
 	now := time.Now()

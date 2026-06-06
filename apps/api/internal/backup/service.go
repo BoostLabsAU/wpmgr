@@ -2196,6 +2196,12 @@ func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, s
 		chainID = *prev.ChainID
 		if prev.BaseSnapshotID != nil {
 			baseID = *prev.BaseSnapshotID
+		} else {
+			// prev is the chain's gen-0 base-increment: its own base_snapshot_id
+			// is NULL (nothing anchors above it), so the base of THIS increment is
+			// prev itself. Without this, baseID stays the zero UUID and the
+			// base_snapshot_id FK stamp fails (the 500 on the first increment).
+			baseID = prev.ID
 		}
 	} else {
 		// Prior snapshot was a full base. Start a new chain anchored there.
