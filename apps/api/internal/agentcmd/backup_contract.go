@@ -261,6 +261,35 @@ type RestoreRequest struct {
 	SourceHomeURL    string `json:"source_home_url,omitempty"`
 	SourceContentURL string `json:"source_content_url,omitempty"`
 	SourceUploadURL  string `json:"source_upload_url,omitempty"`
+
+	// ADR-049: chain-restore additions. All omitempty; absent = non-chain restore.
+	// Older agents receiving these fields ignore them harmlessly (unknown JSON
+	// fields are discarded by PHP json_decode / Go json.Unmarshal when the target
+	// type has no matching field).
+
+	// IsChainRestore is true when the CP resolved a multi-generation chain.
+	// The agent uses this to activate the tombstone-delete pass in stage_files.
+	IsChainRestore bool `json:"is_chain_restore,omitempty"`
+
+	// TargetGeneration is the chain generation being restored to (0 = base,
+	// 1 = first incremental, etc.). Informational for the agent's progress log.
+	TargetGeneration int `json:"target_generation,omitempty"`
+
+	// EstimatedBytes is the CP-computed sum of FileSize for the winning file set
+	// (plaintext bytes, advisory). The agent uses this in the preflight disk check
+	// instead of totaling artifact sizes, which only covers the current snapshot.
+	// 0 means unknown (pre-ADR-049 or non-chain path).
+	EstimatedBytes int64 `json:"estimated_bytes,omitempty"`
+
+	// TombstonePaths is the list of file paths that existed in the chain but
+	// were deleted (tombstoned) by generation TargetGeneration. The agent MUST
+	// delete these paths from the STAGING directory during the stage_files phase,
+	// AFTER extracting the winning file set but BEFORE the atomic swap.
+	// Every path has been sanitized by the CP (no ".." segments, no leading "/");
+	// the agent MUST independently sanitize and realpath-verify each path before
+	// any syscall (see tombstone-path-safety rules). Empty when IsChainRestore is
+	// false OR when no files were deleted across the chain.
+	TombstonePaths []string `json:"tombstone_paths,omitempty"`
 }
 
 // RestoreResponse is the agent's response to the `restore` command.

@@ -345,6 +345,9 @@ func (s *Service) CreateRestore(ctx context.Context, tenantID, snapshotID uuid.U
 //
 // `restoreID` is the CP-generated dedup key the worker minted for this attempt;
 // it is echoed back in every agent /progress POST so the SSE event carries it.
+//
+// ADR-049: when the target snapshot has a non-nil chain_id the chain-planner
+// path is taken; otherwise the existing single-snapshot path runs unchanged.
 func (s *Service) PlanRestore(ctx context.Context, tenantID, snapshotID uuid.UUID, sel RestoreSelection, restoreID, progressEndpoint string) (agentcmd.RestoreRequest, Snapshot, SiteInfo, error) {
 	// M5.7 P4: use scoped snapshot lookup so RLS denies non-granted sites for
 	// site-scoped principals before any presigned GET URL is minted.
@@ -356,6 +359,17 @@ func (s *Service) PlanRestore(ctx context.Context, tenantID, snapshotID uuid.UUI
 	if err != nil {
 		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
 	}
+
+	// ADR-049: detect chain path. A non-nil chain_id means this snapshot belongs
+	// to an incremental chain. Generation 0 with is_incremental=false is the
+	// full-base anchor — treat it like a non-chain restore (manifest entries only,
+	// no file-index walk) for correctness: the base was taken as a full zip backup
+	// and its restore path is unchanged.
+	if snap.ChainID != nil && !(snap.Generation == 0 && !snap.IsIncremental) {
+		return s.planRestoreChain(ctx, tenantID, snap, si, sel, restoreID, progressEndpoint)
+	}
+
+	// --- Non-chain (original) path ---
 	entries, err := s.repo.ListManifest(ctx, tenantID, snapshotID)
 	if err != nil {
 		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
@@ -445,6 +459,297 @@ func (s *Service) PlanRestore(ctx context.Context, tenantID, snapshotID uuid.UUI
 		out.Manifest.Entries = append(out.Manifest.Entries, re)
 	}
 	return out, snap, si, nil
+}
+
+// planRestoreChain is the ADR-049 chain-planner path for PlanRestore. It runs
+// when the target snapshot has a non-nil chain_id and is not the full-base
+// anchor (generation 0, is_incremental=false). The caller (PlanRestore) has
+// already loaded `snap` and `si`.
+func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap Snapshot, si SiteInfo, sel RestoreSelection, restoreID, progressEndpoint string) (agentcmd.RestoreRequest, Snapshot, SiteInfo, error) {
+	chainID := *snap.ChainID
+	targetGen := snap.Generation
+
+	// STEP 2 — load all chain snapshots 0..targetGen.
+	chainSnaps, err := s.repo.ListChainSnapshots(ctx, tenantID, chainID, targetGen)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
+	}
+
+	// STEP 3 — strict chain integrity gate (before any presign or destructive work).
+
+	// CHECK 1: no missing generations.
+	if len(chainSnaps) != targetGen+1 {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Validation(
+			"chain_integrity_violation",
+			fmt.Sprintf("chain %s is missing generations: expected %d snapshots (0..%d) but found %d",
+				chainID, targetGen+1, targetGen, len(chainSnaps)),
+		)
+	}
+	// Verify each entry's generation equals its index (guards middle gaps).
+	for i, cs := range chainSnaps {
+		if cs.Generation != i {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Validation(
+				"chain_integrity_violation",
+				fmt.Sprintf("chain generation sequence broken at index %d: got generation %d", i, cs.Generation),
+			)
+		}
+	}
+
+	// CHECK 2: all generations completed.
+	for _, cs := range chainSnaps {
+		if cs.Status != StatusCompleted {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Validation(
+				"chain_integrity_violation",
+				fmt.Sprintf("chain generation %d (snapshot %s) has status %q: only completed snapshots can be used in a chain restore",
+					cs.Generation, cs.ID, cs.Status),
+			)
+		}
+	}
+
+	// STEP 4 — build the winning-entry map (latest-version-wins over file-index).
+	type winEntry struct {
+		entry *FileIndexEntry
+	}
+	winMap := map[string]*FileIndexEntry{}   // file_path -> winning entry
+	deletedPaths := map[string]bool{}         // file_path -> true if tombstoned at targetGen
+
+	for gen := 0; gen <= targetGen; gen++ {
+		snapG := chainSnaps[gen]
+		streamErr := s.repo.StreamFileIndex(ctx, tenantID, snapG.ID, func(e FileIndexEntry) error {
+			eCopy := e // copy to heap so pointer is stable
+			if e.IsTombstone {
+				delete(winMap, e.FilePath)
+				deletedPaths[e.FilePath] = true
+			} else {
+				winMap[e.FilePath] = &eCopy
+				delete(deletedPaths, e.FilePath) // un-delete if re-added after tombstone
+			}
+			return nil
+		})
+		if streamErr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, streamErr
+		}
+	}
+
+	// STEP 5 — pick the DB dump snapshot (highest generation with DB entries).
+	dbSnapID := chainSnaps[0].ID
+	dbSnapGen := 0
+	for gen := 0; gen <= targetGen; gen++ {
+		dbEntries, derr := s.repo.ListManifest(ctx, tenantID, chainSnaps[gen].ID)
+		if derr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, derr
+		}
+		for _, e := range dbEntries {
+			if e.EntryKind == EntryKindDB {
+				dbSnapID = chainSnaps[gen].ID
+				dbSnapGen = gen
+				break
+			}
+		}
+	}
+	dbEntries, err := s.repo.ListManifest(ctx, tenantID, dbSnapID)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
+	}
+	var dbSelected []ManifestEntry
+	for _, e := range dbEntries {
+		if e.EntryKind == EntryKindDB {
+			dbSelected = append(dbSelected, e)
+		}
+	}
+
+	// STEP 6 — validate winning entries have resolvable chunks (GC-awareness gate).
+	// Collect all distinct hashes from winning file entries + DB entries.
+	allHashes := map[string]struct{}{}
+	for _, e := range winMap {
+		for _, h := range e.ChunkHashes {
+			allHashes[h] = struct{}{}
+		}
+	}
+	for _, e := range dbSelected {
+		for _, h := range e.ChunkHashes {
+			allHashes[h] = struct{}{}
+		}
+	}
+	hashSlice := make([]string, 0, len(allHashes))
+	for h := range allHashes {
+		hashSlice = append(hashSlice, h)
+	}
+	chunks, err := s.repo.ExistingChunkHashes(ctx, tenantID, hashSlice)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
+	}
+
+	// CHECK 3: chunk resolvability — file-index entries.
+	for path, e := range winMap {
+		for _, h := range e.ChunkHashes {
+			if _, ok := chunks[h]; !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal(
+					"chain_chunk_missing",
+					fmt.Sprintf("file %q references chunk %s which is no longer in object storage: chain restore aborted (possible GC before restore)",
+						path, h[:min16(h)]),
+				)
+			}
+		}
+	}
+	// CHECK 3 continued: DB dump entries.
+	for _, e := range dbSelected {
+		for _, h := range e.ChunkHashes {
+			if _, ok := chunks[h]; !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal(
+					"chain_chunk_missing",
+					fmt.Sprintf("db dump entry %q references chunk %s which is no longer in object storage: chain restore aborted (possible GC before restore)",
+						e.Path, h[:min16(h)]),
+				)
+			}
+		}
+	}
+
+	// STEP 7 — presign chunk GET URLs.
+	getURLs := make(map[string]agentcmd.RestoreChunk, len(chunks))
+	for h, c := range chunks {
+		expected := chunkS3Key(tenantID, h)
+		if c.S3Key != expected {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_key_mismatch", "stored chunk key is outside the tenant prefix")
+		}
+		url, perr := s.store.PresignGet(ctx, c.S3Key, s.presignTTL)
+		if perr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_presign_get_failed", "failed to presign chunk").WithCause(perr)
+		}
+		getURLs[h] = agentcmd.RestoreChunk{Hash: h, URL: url, Size: c.Size}
+	}
+
+	// STEP 8 — assemble RestoreRequest.
+	var estimatedBytes int64
+	for _, e := range winMap {
+		estimatedBytes += e.FileSize
+	}
+
+	// CP-side tombstone path sanitization (defense-in-depth; agent re-sanitizes).
+	tombstonePaths := make([]string, 0, len(deletedPaths))
+	for p := range deletedPaths {
+		if sanitizeTombstonePathCP(p) {
+			tombstonePaths = append(tombstonePaths, p)
+		} else {
+			slog.WarnContext(ctx, "backup: chain restore: tombstone path failed CP sanitization, excluded",
+				slog.String("path", p),
+				slog.String("chain_id", chainID.String()))
+		}
+	}
+
+	wireKind := deriveWireKind(snap.Kind, sel.Components)
+	targetSiteURL := strings.TrimRight(si.URL, "/")
+	targetHomeURL := targetSiteURL
+
+	out := agentcmd.RestoreRequest{
+		SnapshotID:       snap.ID.String(),
+		RestoreID:        restoreID,
+		Kind:             wireKind,
+		ProgressEndpoint: progressEndpoint,
+		ChunkBytes:       agentcmd.ChunkBytes,
+		KeepOldFiles:     sel.KeepOldFiles,
+		TargetSiteURL:    targetSiteURL,
+		TargetHomeURL:    targetHomeURL,
+		SourceSiteURL:    snap.SourceSiteURL,
+		SourceHomeURL:    snap.SourceHomeURL,
+		SourceContentURL: snap.SourceContentURL,
+		SourceUploadURL:  snap.SourceUploadURL,
+		// ADR-049 chain fields.
+		IsChainRestore:   true,
+		TargetGeneration: targetGen,
+		EstimatedBytes:   estimatedBytes,
+		TombstonePaths:   tombstonePaths,
+	}
+
+	// File entries from winMap (non-tombstone, each as a RestoreEntry).
+	for _, e := range winMap {
+		re := agentcmd.RestoreEntry{LogicalPath: e.FilePath}
+		for _, h := range e.ChunkHashes {
+			rc, ok := getURLs[h]
+			if !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_missing", "file-index references a chunk that is no longer stored")
+			}
+			re.Chunks = append(re.Chunks, rc)
+		}
+		out.Manifest.Entries = append(out.Manifest.Entries, re)
+	}
+
+	// DB entries from the highest-gen DB dump snapshot.
+	for _, e := range dbSelected {
+		re := agentcmd.RestoreEntry{LogicalPath: e.Path}
+		for _, h := range e.ChunkHashes {
+			rc, ok := getURLs[h]
+			if !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_missing", "db manifest references a chunk that is no longer stored")
+			}
+			re.Chunks = append(re.Chunks, rc)
+		}
+		out.Manifest.Entries = append(out.Manifest.Entries, re)
+	}
+
+	// Surface the db_snap_generation for the worker to include in the SSE event.
+	// We store it as an unexported field via the snapshot's Progress bytes — instead
+	// we return it embedded in the snap for the worker to read. For simplicity the
+	// worker reads plan.IsChainRestore and derives chain details from plan fields.
+	// We stash dbSnapGen in a custom field we can pass to the worker by encoding
+	// it in the returned Snapshot's Generation field (which is already targetGen).
+	// The worker accesses it via plan.TargetGeneration and len(chainSnaps) — we
+	// need to surface dbSnapGen. We use a sentinel approach: attach it as a custom
+	// field to the base snapshot we return so the caller (RestoreWorker.Work) can
+	// read plan.Manifest.Entries and infer chain_length from the generation.
+	// The simplest approach: the worker just uses snap.Generation as targetGen
+	// and computes chain_length = targetGen+1. For db_snap_generation the worker
+	// does not need it for correctness — it is informational in the SSE event.
+	// We embed it in the base snap's Generation field as a local convention:
+	// Snapshot returned is the target snap; dbSnapGen lives in the RestoreRequest
+	// indirectly. The worker reads dbSnapGen by scanning plan.Manifest.Entries
+	// for DB entries. For the SSE event we pass 0 when it cannot be inferred —
+	// acceptable per spec ("informational").
+	//
+	// Actually, per spec the worker simply includes it in the phase_detail map.
+	// We pass dbSnapGen via the Snapshot.CycleFilesScanned field temporarily
+	// (that field is read-only metadata on completed snaps, not acted upon by the
+	// restore path). This avoids any API surface change.
+	snap.CycleFilesScanned = int64(dbSnapGen)
+
+	_ = dbSnapGen // suppress unused-variable warning — used via snap.CycleFilesScanned above
+
+	return out, snap, si, nil
+}
+
+// sanitizeTombstonePathCP validates a tombstone path on the CP side before
+// adding it to TombstonePaths. This is defense-in-depth: the agent MUST also
+// sanitize. Any path that fails this check is excluded from the wire request.
+//
+// Rules:
+//  a. Non-empty
+//  b. Does not start with "/" or "\"
+//  c. No component equals ".."
+//  d. No NUL byte
+func sanitizeTombstonePathCP(p string) bool {
+	if p == "" {
+		return false
+	}
+	if strings.HasPrefix(p, "/") || strings.HasPrefix(p, "\\") {
+		return false
+	}
+	if strings.ContainsRune(p, 0) {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(p, func(r rune) bool { return r == '/' || r == '\\' }) {
+		if part == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+// min16 returns min(16, len(s)) for truncating hash strings in error messages.
+func min16(s string) int {
+	if len(s) < 16 {
+		return len(s)
+	}
+	return 16
 }
 
 // PresignChunks is the agent-facing dedup step: given candidate ciphertext chunk

@@ -88,6 +88,15 @@ type Repo interface {
 	DeleteSnapshotAndDecref(ctx context.Context, tenantID, snapshotID uuid.UUID) (orphans []Orphan, err error)
 	DeleteOrphanChunks(ctx context.Context, tenantID uuid.UUID, hashes []string) error
 
+	// ADR-049 incremental restore chain planner.
+
+	// ListChainSnapshots returns all snapshots belonging to chainID whose
+	// generation is <= maxGeneration, ordered by generation ASC. The base
+	// (generation 0) is included because the base snapshot's chain_id is set to
+	// its own ID. Tenant-scoped. Returns an empty slice (not an error) when no
+	// rows match.
+	ListChainSnapshots(ctx context.Context, tenantID uuid.UUID, chainID uuid.UUID, maxGeneration int) ([]Snapshot, error)
+
 	// ADR-048 incremental backup file index.
 
 	// InsertFileIndexBatch inserts a batch of FileIndexEntry rows into
@@ -995,4 +1004,45 @@ func (r *pgRepo) UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapsho
 		}
 		return nil
 	})
+}
+
+// ----------------------------------------------------------------------------
+// ADR-049 incremental restore chain planner repo methods
+// ----------------------------------------------------------------------------
+
+// ListChainSnapshots returns all snapshots for (tenantID, chainID) with
+// generation <= maxGeneration, ordered by generation ASC. The base snapshot
+// (generation 0) has chain_id = its own ID, so it is included when chainID
+// matches. This uses the raw-SQL path (not sqlc) because the result columns
+// include the ADR-048 chain fields that the generated queries do not select.
+func (r *pgRepo) ListChainSnapshots(ctx context.Context, tenantID uuid.UUID, chainID uuid.UUID, maxGeneration int) ([]Snapshot, error) {
+	var out []Snapshot
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient,
+			        total_size, chunk_count, error, archived, progress, progress_updated_at,
+			        started_at, finished_at, created_at, updated_at,
+			        is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
+			        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded
+			   FROM backup_snapshots
+			  WHERE tenant_id = $1
+			    AND chain_id  = $2
+			    AND generation <= $3
+			  ORDER BY generation ASC`,
+			tenantID, chainID, maxGeneration,
+		)
+		if err != nil {
+			return domain.Internal("backup_chain_snapshots_list_failed", "failed to list chain snapshots").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			s, serr := scanSnapshotWithChainFields(rows)
+			if serr != nil {
+				return domain.Internal("backup_chain_snapshots_scan_failed", "failed to scan chain snapshot row").WithCause(serr)
+			}
+			out = append(out, s)
+		}
+		return rows.Err()
+	})
+	return out, err
 }

@@ -161,6 +161,17 @@ final class RestoreCommand implements CommandInterface
         $sourceContentUrl = $this->str($params, 'source_content_url');
         $sourceUploadUrl  = $this->str($params, 'source_upload_url');
 
+        // ADR-049: incremental chain restore wire fields. All are backward-
+        // compatible: absent = non-chain restore (zero/empty defaults).
+        $isChainRestore   = isset($params['is_chain_restore']) && (bool) $params['is_chain_restore'];
+        $targetGeneration = isset($params['target_generation']) && is_numeric($params['target_generation'])
+            ? (int) $params['target_generation'] : 0;
+        $estimatedBytes   = isset($params['estimated_bytes']) && is_numeric($params['estimated_bytes'])
+            ? (int) $params['estimated_bytes'] : 0;
+        $tombstonePaths   = isset($params['tombstone_paths']) && is_array($params['tombstone_paths'])
+            ? array_values(array_filter($params['tombstone_paths'], 'is_string'))
+            : [];
+
         $runnerParams = [
             'snapshot_id'       => $snapshotId,
             'restore_id'        => $restoreId,
@@ -184,6 +195,11 @@ final class RestoreCommand implements CommandInterface
             // ADR-037 Sprint 1, 1B: preflight warnings ride along with the
             // first progress event (same surface as BackupCommand).
             'preflight_warnings' => $preflight['warnings'],
+            // ADR-049: chain restore fields (sanitized again inside runner).
+            'is_chain_restore'   => $isChainRestore,
+            'target_generation'  => $targetGeneration,
+            'estimated_bytes'    => $estimatedBytes,
+            'tombstone_paths'    => $tombstonePaths,
         ];
 
         // --- 4. Seed the task row ------------------------------------------

@@ -205,6 +205,9 @@ func (r *fakeRepo) DeleteSnapshotAndDecref(_ context.Context, _, _ uuid.UUID) ([
 func (r *fakeRepo) DeleteOrphanChunks(_ context.Context, _ uuid.UUID, _ []string) error {
 	panic("fakeRepo.DeleteOrphanChunks not implemented")
 }
+func (r *fakeRepo) ListChainSnapshots(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]Snapshot, error) {
+	panic("fakeRepo.ListChainSnapshots not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // fakeClock — deterministic clock for tests.

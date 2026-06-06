@@ -373,6 +373,13 @@ final class RestoreRunner
         $artifactsTotal = $this->totalArtifactBytes();
         $wpContent      = $this->wpContentPath();
 
+        // ADR-049: when the CP pre-computed the winning-set estimated_bytes for
+        // a chain restore, use that figure for the staging leg. The manifest
+        // entries for an incremental snapshot cover only the CHANGED files so
+        // totalArtifactBytes() would drastically undercount the true footprint.
+        $estimatedBytes = (int) ($this->params['estimated_bytes'] ?? 0);
+        $isChainRestore = (bool) ($this->params['is_chain_restore'] ?? false);
+
         // Two-leg disk-free precheck — see PREFLIGHT_*_MULTIPLIER constants.
         // Leg 1: enough room for the downloaded artifacts + tmp tables.
         // Leg 2: enough room for the staging tree (same size as live
@@ -380,7 +387,14 @@ final class RestoreRunner
         // overlap in time — when staging is being filled, the artifacts on
         // disk are smaller than the bytes already extracted out of them.
         $legArtifact = (int) ($artifactsTotal * self::PREFLIGHT_ARTIFACT_MULTIPLIER);
-        $legStaging  = (int) (FilesRestorer::estimateWpContentBytes($wpContent) * self::PREFLIGHT_STAGING_MULTIPLIER);
+        if ($isChainRestore && $estimatedBytes > 0) {
+            // Use CP-provided estimated_bytes for the staging leg so the disk
+            // preflight reflects the full winning file set size, not just the
+            // bytes in this generation's incremental snapshot.
+            $legStaging = (int) ($estimatedBytes * self::PREFLIGHT_STAGING_MULTIPLIER);
+        } else {
+            $legStaging = (int) (FilesRestorer::estimateWpContentBytes($wpContent) * self::PREFLIGHT_STAGING_MULTIPLIER);
+        }
         $required    = max($legArtifact, $legStaging);
 
         // Disk free on wp-content's volume. disk_free_space returns the
@@ -760,11 +774,71 @@ final class RestoreRunner
             $this->onPhaseProgress($phase, $detail);
         });
 
+        // ADR-049: tombstone delete pass — runs AFTER artifact extraction, BEFORE
+        // swap. Only active when is_chain_restore=true and tombstone_paths is
+        // non-empty. Each path is independently sanitized; a bad path is skipped
+        // (Rule 9: tombstone delete errors are non-fatal).
+        $tombstonesDeleted = 0;
+        $tombstoneErrors   = 0;
+        $isChainRestore    = (bool) ($this->params['is_chain_restore'] ?? false);
+        $tombstonePaths    = isset($this->params['tombstone_paths']) && is_array($this->params['tombstone_paths'])
+            ? $this->params['tombstone_paths']
+            : [];
+
+        if ($isChainRestore && $tombstonePaths !== []) {
+            $stagingRoot = realpath($stagingDir);
+            if ($stagingRoot !== false) {
+                foreach ($tombstonePaths as $rawPath) {
+                    if (!is_string($rawPath)) {
+                        $tombstoneErrors++;
+                        continue;
+                    }
+                    $safePath = $this->sanitizeTombstonePath($rawPath, $stagingRoot);
+                    if ($safePath === null) {
+                        // Path does not exist in staging (already absent) or
+                        // was rejected by a sanitization rule — either way
+                        // it is not an error that should abort the restore.
+                        continue;
+                    }
+                    if (is_file($safePath)) {
+                        if (@unlink($safePath)) {
+                            $tombstonesDeleted++;
+                        } else {
+                            error_log('WPMgr RestoreRunner: tombstone unlink failed: ' . $safePath);
+                            $tombstoneErrors++;
+                        }
+                    } elseif (is_dir($safePath)) {
+                        // Recursively remove the directory — mirrors the cleanup
+                        // helper used elsewhere in the runner.
+                        $this->rrmdir($safePath);
+                        // rrmdir is best-effort; count the directory as deleted
+                        // if the path is now gone.
+                        if (!is_dir($safePath)) {
+                            $tombstonesDeleted++;
+                        } else {
+                            error_log('WPMgr RestoreRunner: tombstone rmdir failed: ' . $safePath);
+                            $tombstoneErrors++;
+                        }
+                    }
+                    // If neither file nor dir: path was already absent in
+                    // staging — this is a normal no-op, not an error.
+                }
+            }
+
+            $this->onPhaseProgress(self::PHASE_STAGE_FILES, [
+                'tombstones_deleted' => $tombstonesDeleted,
+                'tombstone_errors'   => $tombstoneErrors,
+            ]);
+        }
+
         $subState['stage'] = [
             'done'                 => true,
             'staging_dir'          => $stagingDir,
             'components_present'   => array_keys($componentsPresent),
             'has_legacy_file_kind' => $hasLegacyFileEntry,
+            // ADR-049: tombstone pass counts (zero for non-chain restores).
+            'tombstones_deleted'   => $tombstonesDeleted,
+            'tombstone_errors'     => $tombstoneErrors,
         ];
         return $subState;
     }
@@ -1895,6 +1969,66 @@ final class RestoreRunner
             }
         }
         return true;
+    }
+
+    /**
+     * ADR-049: sanitize a tombstone path and confirm it resolves inside the
+     * staging root. Returns the realpath'd absolute path on success, or null
+     * if the path should be skipped (absent, rejected, or a traversal attempt).
+     *
+     * Rules 1-10 from the ADR-049 agent_flow spec are implemented here. The
+     * delete caller acts only on the non-null return — every null means either
+     * "skip silently (already absent)" or "skip with security log (attack)".
+     *
+     * @param string $rawPath    The tombstone path as received from the CP wire.
+     * @param string $stagingRoot The realpath-resolved absolute staging dir.
+     * @return string|null Realpath'd safe path, or null to skip.
+     */
+    private function sanitizeTombstonePath(string $rawPath, string $stagingRoot): ?string
+    {
+        // Rule 1: reject empty.
+        if ($rawPath === '') {
+            return null;
+        }
+        // Rule 2: reject absolute paths (must not start with / or \).
+        if ($rawPath[0] === '/' || $rawPath[0] === '\\') {
+            error_log('WPMgr RestoreRunner: tombstone path escape attempt (absolute): ' . $rawPath);
+            return null;
+        }
+        // Rule 3: reject any '..' or '.' component (split on both / and \).
+        $parts = preg_split('/[\/\\\\]/', $rawPath);
+        if ($parts === false) {
+            return null;
+        }
+        foreach ($parts as $part) {
+            if ($part === '..' || $part === '.') {
+                error_log('WPMgr RestoreRunner: tombstone path escape attempt (dot-segment): ' . $rawPath);
+                return null;
+            }
+        }
+        // Rule 4: reject NUL bytes.
+        if (str_contains($rawPath, "\x00")) {
+            error_log('WPMgr RestoreRunner: tombstone path NUL byte rejected: ' . substr($rawPath, 0, 120));
+            return null;
+        }
+        // Rule 5: build candidate path inside staging root.
+        $candidate = $stagingRoot . DIRECTORY_SEPARATOR . ltrim($rawPath, '/\\');
+        // Rule 6: resolve symlinks + verify containment. realpath() returns
+        // false when the path does not exist — treat as "not present in
+        // staging, nothing to do" and return null (skip, no action).
+        $real = realpath($candidate);
+        if ($real === false) {
+            // Path doesn't exist in staging: already absent, no action needed.
+            return null;
+        }
+        // Rule 7: verify the resolved path starts with staging root + separator.
+        // Catches symlink escapes: a symlink inside staging pointing outside
+        // staging would resolve to a path outside the prefix.
+        if (!str_starts_with($real . DIRECTORY_SEPARATOR, $stagingRoot . DIRECTORY_SEPARATOR)) {
+            error_log('WPMgr RestoreRunner: tombstone path escape attempt (symlink/resolve): ' . $rawPath);
+            return null;
+        }
+        return $real;
     }
 
     private function tableName(): string
