@@ -135,52 +135,79 @@ final class IncrementalEncryptAndUpload
             // Presign: CP returns {hash => presignedPutURL} for ONLY missing hashes.
             $uploads = $this->transport->presignChunks($this->presignEndpoint, $this->snapshotId, $allHashes);
 
-            // PUT missing chunks.
+            // Build the set of hashes we still need to PUT (presigned, not already
+            // uploaded inline during the scan pass or in a prior upload pass).
+            /** @var array<string,string> $toPut hash => presigned PUT URL */
+            $toPut = [];
             foreach ($uploads as $hash => $url) {
                 if (!is_string($hash) || $hash === '' || !is_string($url) || $url === '') {
                     continue;
                 }
                 if (isset($uploadedHashes[$hash])) {
-                    continue;
+                    continue; // Already PUT (inline or prior pass).
                 }
 
                 $chunkPath = $scratchDir . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
                 if (!is_file($chunkPath)) {
-                    // If the chunk file is gone it means a prior pass already
-                    // PUT it and unlinked it, but the cursor wasn't saved. Since
-                    // the CP asked for it again (it's in $uploads), we have a
-                    // consistency issue. Treat as fatal — the caller's top-level
-                    // catch will increment resume_count.
+                    // The CP asked for this hash but it's neither uploaded nor on
+                    // scratch. A prior pass may have PUT + unlinked it without
+                    // flushing the cursor — a genuine consistency hole. Treat as
+                    // fatal so the top-level catch increments resume_count and the
+                    // watchdog re-derives it from source on re-entry.
                     throw new \RuntimeException('IncrementalEncryptAndUpload: missing local chunk for upload: ' . $hash);
                 }
+                $toPut[$hash] = $url;
+            }
 
-                $bytes = @file_get_contents($chunkPath);
-                if ($bytes === false) {
-                    throw new \RuntimeException('IncrementalEncryptAndUpload: cannot read chunk: ' . $chunkPath);
+            // FIX D: PUT the missing chunks concurrently via a bounded curl_multi
+            // pool (serial putChunk fallback on hosts without ext-curl). The byte
+            // payload is read lazily from scratch per hash. A hash is marked
+            // uploaded ONLY on its own 2xx, so the resume cursor stays exact.
+            if ($toPut !== []) {
+                $sizes = [];
+                $results = $this->transport->putChunksMulti(
+                    $toPut,
+                    static function (string $hash) use ($scratchDir, &$sizes) {
+                        $path  = $scratchDir . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                        $bytes = @file_get_contents($path);
+                        if ($bytes === false) {
+                            return false;
+                        }
+                        $sizes[$hash] = strlen($bytes);
+                        return $bytes;
+                    }
+                );
+
+                $firstFailure = null;
+                foreach ($toPut as $hash => $_url) {
+                    if (!empty($results[$hash])) {
+                        $bytesUploaded += (int) ($sizes[$hash] ?? 0);
+                        $chunkPath      = $scratchDir . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                        @unlink($chunkPath);
+                        $uploadedHashes[$hash] = 1;
+                        $putCount++;
+                        $chunksDone++;
+                        $sinceTick++;
+
+                        if ($sinceTick >= self::PROGRESS_EVERY_UPLOAD) {
+                            $this->safeProgress($progress, 'uploading_incremental', [
+                                'chunks_done'    => $chunksDone,
+                                'chunks_total'   => $chunksTotal,
+                                'bytes_uploaded' => $bytesUploaded,
+                                'files_done'     => $filesDone,
+                            ]);
+                            $sinceTick = 0;
+                        }
+                    } elseif ($firstFailure === null) {
+                        $firstFailure = $hash;
+                    }
                 }
 
-                $ok = $this->transport->putChunk($url, $bytes);
-                if (!$ok) {
-                    throw new \RuntimeException('IncrementalEncryptAndUpload: PUT failed for chunk: ' . $hash);
-                }
-                $bytesUploaded += strlen($bytes);
-                $bytes          = '';
-
-                @unlink($chunkPath);
-
-                $uploadedHashes[$hash] = 1;
-                $putCount++;
-                $chunksDone++;
-                $sinceTick++;
-
-                if ($sinceTick >= self::PROGRESS_EVERY_UPLOAD) {
-                    $this->safeProgress($progress, 'uploading_incremental', [
-                        'chunks_done'    => $chunksDone,
-                        'chunks_total'   => $chunksTotal,
-                        'bytes_uploaded' => $bytesUploaded,
-                        'files_done'     => $filesDone,
-                    ]);
-                    $sinceTick = 0;
+                // Any un-acked hash fails the run for retry (same semantics as the
+                // old serial throw-on-first-failure). Successfully-PUT hashes are
+                // already in $uploadedHashes, so the retry re-PUTs only the rest.
+                if ($firstFailure !== null) {
+                    throw new \RuntimeException('IncrementalEncryptAndUpload: PUT failed for chunk: ' . $firstFailure);
                 }
             }
 

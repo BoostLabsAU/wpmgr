@@ -66,9 +66,53 @@ final class IncrementalScanner
         'upgrade-temp-backup',
     ];
 
+    /**
+     * Hard memory cap for the in-memory chunk path (FIX 1 — memory safety).
+     *
+     * A file is eligible for in-memory treatment (inline upload from RAM, or
+     * carry-buffer hold awaiting content dedup) ONLY when it fits within one
+     * chunk (file size <= INLINE_MAX_BYTES). Single-chunk files occupy at most
+     * one chunk's worth of RAM at a time regardless of how many changed files
+     * the walk processes.
+     *
+     * Multi-chunk files (file size > INLINE_MAX_BYTES, or any file that produces
+     * more than one fread() slice) MUST spill each chunk to scratch immediately,
+     * even when $bufferForCarry is set. The carry-buffer hold is a memory
+     * optimisation (avoids orphan scratch files on content carry-forward), not
+     * a correctness requirement. On a 128–256 MB shared host, buffering a 64 MiB
+     * file's chunks in RAM would double peak resident memory.
+     *
+     * Net invariant: peak additional memory is bounded by ~one chunk (4 MiB)
+     * plus curl_multi in-flight bodies, never proportional to a file's size.
+     */
+    private const INLINE_MAX_BYTES = self::DEFAULT_CHUNK_BYTES; // 4 MiB
+
+    /**
+     * Largest file we keep in a single in-memory buffer to upload straight
+     * from RAM (FIX B). Alias of INLINE_MAX_BYTES for inline-upload eligibility
+     * checks. Files at or below this size are exactly one chunk, so we PUT them
+     * inline during the scan pass without ever touching scratch. Larger files
+     * spill each chunk to `chunks-<hash>.bin` so a mid-file crash resumes from
+     * disk.
+     */
+    private const SMALL_FILE_INLINE_MAX = self::INLINE_MAX_BYTES;
+
+    /**
+     * Flush the in-memory small-file upload buffer once it reaches this many
+     * pending chunks. Bounds resident memory to ~(this × INLINE_MAX_BYTES)
+     * during the scan pass.
+     */
+    private const INLINE_FLUSH_EVERY = 6;
+
     private string $sourceDir;
     private int $chunkBytes;
     private BackupTransport $transport;
+
+    /** Absolute CP presign endpoint (enables inline small-file upload). */
+    private string $presignEndpoint = '';
+
+    /** In-flight snapshot id (for presign). */
+    private string $snapshotId = '';
 
     /**
      * @param string         $sourceDir  WP_CONTENT_DIR (absolute).
@@ -80,6 +124,32 @@ final class IncrementalScanner
         $this->sourceDir  = rtrim($sourceDir, DIRECTORY_SEPARATOR);
         $this->chunkBytes = max(1, $chunkBytes);
         $this->transport  = $transport;
+    }
+
+    /**
+     * Enable inline small-file upload during the scan pass (FIX B). When both
+     * the presign endpoint and snapshot id are set, single-chunk files are
+     * presigned + PUT straight from the in-memory read buffer — no scratch
+     * write/read round-trip. The hashes that get uploaded this way are returned
+     * in the scan result under `uploaded_hashes` so the upload phase skips them.
+     *
+     * If left unset (e.g. unit tests), the scanner falls back to the original
+     * behavior: every changed-file chunk is spilled to scratch and the upload
+     * phase PUTs it later.
+     *
+     * @param string $presignEndpoint Absolute CP presign URL.
+     * @param string $snapshotId      In-flight snapshot id.
+     */
+    public function enableInlineUpload(string $presignEndpoint, string $snapshotId): void
+    {
+        $this->presignEndpoint = $presignEndpoint;
+        $this->snapshotId      = $snapshotId;
+    }
+
+    /** Whether inline small-file upload is wired up. */
+    private function inlineUploadEnabled(): bool
+    {
+        return $this->presignEndpoint !== '' && $this->snapshotId !== '';
     }
 
     // ==========================================================================
@@ -311,10 +381,28 @@ final class IncrementalScanner
         $carryForward = isset($resume['carry_forward']) && is_array($resume['carry_forward']) ? array_values($resume['carry_forward']) : [];
         /** @var list<string> */
         $tombstones   = isset($resume['tombstones']) && is_array($resume['tombstones']) ? array_values($resume['tombstones']) : [];
+        /** @var list<string> Hashes already PUT inline during the scan pass (FIX B). */
+        $uploadedHashes = isset($resume['uploaded_hashes']) && is_array($resume['uploaded_hashes'])
+            ? array_values(array_filter($resume['uploaded_hashes'], 'is_string'))
+            : [];
 
         $srcLen   = strlen($this->sourceDir) + 1;
         $sinceProgress   = 0;
         $sinceCheckpoint = 0;
+
+        // FIX B inline-upload state: a bounded in-memory buffer of small-file
+        // chunk bytes (hash => bytes) that we presign + PUT straight from RAM,
+        // never touching scratch. $inlineUploaded accumulates the hashes that
+        // were successfully PUT this way so the upload phase skips them.
+        /** @var array<string,string> $inlineBuffer hash => plaintext bytes */
+        $inlineBuffer   = [];
+        $inlineBytes    = 0;
+        /** @var array<string,int> $inlineUploaded hash => 1 */
+        $inlineUploaded = [];
+        foreach ($uploadedHashes as $h) {
+            $inlineUploaded[$h] = 1;
+        }
+        $inlineActive = $this->inlineUploadEnabled();
 
         // Use a RecursiveDirectoryIterator over sourceDir. We skip directories
         // that match our exclude list and only pack regular files.
@@ -390,7 +478,7 @@ final class IncrementalScanner
                 continue;
             }
 
-            // --- CASE B: mtime/size differ (or new file) → read + hash ---
+            // --- CASE B: mtime/size differ (or new file) → single-pass read ---
             $prevEntry = (!empty($prevIndex[$rel]) && empty($prevIndex[$rel]['_tombstone']))
                 ? $prevIndex[$rel]
                 : null;
@@ -398,9 +486,16 @@ final class IncrementalScanner
             $fileSize   = (int) $fileInfo->getSize();
             $fileMtime  = (int) $fileInfo->getMTime();
 
-            // Compute file-level BLAKE3 (used for carry-forward content dedup).
-            $fileBlake3 = $this->computeFileBlake3($abs);
-            if ($fileBlake3 === null) {
+            // FIX A: one fopen/fread pass computes BOTH the ordered per-chunk
+            // hashes AND the file-level blake3 — no second whole-file read.
+            // When $prevEntry is present we buffer the chunk bytes so we can
+            // carry-forward (discard the bytes) if the finalized file_blake3
+            // matches the previous snapshot; a BASE has no prevEntry, so chunks
+            // are committed (spilled / inline-queued) as they stream.
+            $bufferForCarry = ($prevEntry !== null) && ((string) $prevEntry['file_blake3'] !== '');
+            $pass = $this->chunkFileAndHash($abs, $scratchDir, $bufferForCarry, $inlineActive, $fileSize);
+
+            if ($pass === null) {
                 // Unreadable file — skip silently (matches FilesArchiver behavior).
                 unset($prevIndex[$rel]);
                 $filesScanned++;
@@ -408,7 +503,11 @@ final class IncrementalScanner
                 continue;
             }
 
-            // If the file's full hash matches the prev index, carry-forward the chunks.
+            $fileBlake3  = $pass['file_blake3'];
+            $chunkHashes = $pass['chunk_hashes'];
+
+            // If the file's full hash matches the prev index, carry-forward the
+            // chunks (and discard the buffered bytes — nothing was committed).
             if ($prevEntry !== null && hash_equals((string) $prevEntry['file_blake3'], $fileBlake3) && $prevEntry['file_blake3'] !== '') {
                 $carryForward[] = [
                     'file_path'    => $rel,
@@ -434,8 +533,39 @@ final class IncrementalScanner
                 continue;
             }
 
-            // New or genuinely changed file: chunk it.
-            $chunkHashes = $this->chunkFile($abs, $fileSize, $fileBlake3, $scratchDir);
+            // New or genuinely changed file. Commit its chunks: large/multi-chunk
+            // files were already spilled to scratch inside chunkFileAndHash; for
+            // a carry-buffered or inline-eligible single-chunk file we either
+            // queue the bytes for inline upload (FIX B) or spill them now.
+            if (isset($pass['inline']) && is_array($pass['inline']) && $pass['inline'] !== []) {
+                foreach ($pass['inline'] as $h => $bytes) {
+                    if (!is_string($h) || !is_string($bytes)) {
+                        continue;
+                    }
+                    if (isset($inlineUploaded[$h])) {
+                        continue; // Already PUT in a prior pass.
+                    }
+                    if (!isset($inlineBuffer[$h])) {
+                        $inlineBuffer[$h] = $bytes;
+                        $inlineBytes     += strlen($bytes);
+                    }
+                }
+                if (count($inlineBuffer) >= self::INLINE_FLUSH_EVERY) {
+                    $this->flushInlineBuffer($inlineBuffer, $inlineUploaded, $scratchDir);
+                    $inlineBytes = 0;
+                }
+            }
+            if (isset($pass['spill']) && is_array($pass['spill'])) {
+                // Carry-buffered chunks that must now be written to scratch
+                // (inline disabled, or multi-chunk so resume granularity matters).
+                foreach ($pass['spill'] as $h => $bytes) {
+                    if (!is_string($h) || !is_string($bytes)) {
+                        continue;
+                    }
+                    $this->spillChunk($scratchDir, $h, $bytes);
+                }
+            }
+
             $bytesToUpload += $fileSize;
             $filesChanged++;
 
@@ -463,6 +593,13 @@ final class IncrementalScanner
             }
         }
 
+        // Flush any remaining inline small-file chunks before leaving the walk.
+        if ($inlineBuffer !== []) {
+            $this->flushInlineBuffer($inlineBuffer, $inlineUploaded, $scratchDir);
+            $inlineBytes = 0;
+        }
+        $uploadedHashes = array_keys($inlineUploaded);
+
         // After the walk: remaining $prevIndex keys (that are not tombstones
         // themselves) are paths that were in the previous snapshot but are
         // absent on disk now → tombstones.
@@ -489,6 +626,9 @@ final class IncrementalScanner
             'files_changed'  => $filesChanged,
             'files_deleted'  => count($tombstones),
             'bytes_to_upload'=> $bytesToUpload,
+            // FIX B: hashes already PUT inline during the scan pass. The upload
+            // phase treats these as done (no re-presign, no scratch read).
+            'uploaded_hashes'=> $uploadedHashes,
         ];
     }
 
@@ -497,70 +637,67 @@ final class IncrementalScanner
     // ==========================================================================
 
     /**
-     * Compute the file-level BLAKE3 hash (full file, one-shot).
+     * FIX A: single-pass read that computes BOTH the ordered per-chunk hashes
+     * AND the file-level BLAKE3 in one fopen/fread loop — no second whole-file
+     * read.
      *
-     * Reads the file in chunkBytes slices to keep memory bounded at ~8 MiB
-     * (one slice in memory at a time). Returns null on I/O failure.
+     * Per `chunkBytes` slice we compute the per-chunk hash (Blake3::hashHex,
+     * unchanged chunk id, unchanged fread order). For the file-level hash:
+     *   - single-chunk file (the WP common case): file_blake3 == chunk_hashes[0],
+     *     so we set it directly and never re-hash.
+     *   - multi-chunk file: we accumulate the slices in a buffer and hash the
+     *     whole buffer once at EOF (the same one-shot sodium digest the CP
+     *     stores and carry-forward-dedups against).
      *
-     * @param string $abs Absolute file path.
-     * @return string|null Lowercase hex digest, or null on failure.
+     * Chunk-byte handling (FIX B / carry-forward):
+     *   - Large / multi-chunk files: each slice is spilled to scratch as
+     *     `chunks-<hash>.bin` immediately so a mid-large-file crash resumes from
+     *     disk. Idempotent: an existing file (same hash) is left in place.
+     *   - A carry-buffered single-chunk file ($buffer=true) is NOT spilled in
+     *     the loop; we hold its one chunk's bytes and return them under 'spill'
+     *     (caller writes to scratch only if the file is genuinely changed) so a
+     *     content carry-forward never touches scratch.
+     *   - An inline-eligible single-chunk file ($inlineActive=true, no carry
+     *     buffer needed) returns its bytes under 'inline' for direct in-memory
+     *     PUT — no scratch round-trip at all.
+     *
+     * @param string $abs          Absolute file path.
+     * @param string $scratchDir   Per-run scratch dir.
+     * @param bool   $bufferForCarry Hold chunk bytes (don't spill) so the caller
+     *                              can decide carry-forward vs commit at EOF.
+     * @param bool   $inlineActive Inline small-file upload is wired up (FIX B).
+     * @param int    $fileSize     File size in bytes (decides inline eligibility).
+     * @return array{file_blake3:string,chunk_hashes:list<string>,inline?:array<string,string>,spill?:array<string,string>}|null
+     *         Null on I/O failure (unreadable file — caller skips silently).
+     * @throws \RuntimeException On a read/write error mid-stream (fails the run
+     *         for watchdog retry, same as the old chunkFile()).
      */
-    private function computeFileBlake3(string $abs): ?string
-    {
+    private function chunkFileAndHash(
+        string $abs,
+        string $scratchDir,
+        bool $bufferForCarry,
+        bool $inlineActive,
+        int $fileSize
+    ): ?array {
         $handle = @fopen($abs, 'rb');
         if ($handle === false) {
             return null;
         }
 
-        // Streaming hash via update()/finalize() for memory safety.
-        // The underlying Blake3::hashHex uses sodium_crypto_generichash which
-        // doesn't support streaming — so we accumulate the full plaintext.
-        // For very large files this is the same memory cost as one chunk read
-        // per iteration, bounded by chunkBytes per fread() call.
-        //
-        // Implementation: read entire file and hash it. The sodium path in
-        // Blake3::hashHex hashes the full string at once (C ext, fast).
-        $data = '';
-        try {
-            while (!feof($handle)) {
-                $chunk = fread($handle, $this->chunkBytes);
-                if ($chunk === false) {
-                    fclose($handle);
-                    return null;
-                }
-                $data .= $chunk;
-            }
-        } finally {
-            fclose($handle);
-        }
-
-        return Blake3::hashHex($data);
-    }
-
-    /**
-     * Split the file into ~chunkBytes plaintext slices, write each to scratch
-     * as `chunks-<hash>.bin`, and return the ordered list of chunk hashes.
-     *
-     * The scratch files are unlinked by IncrementalEncryptAndUpload after each
-     * successful PUT. Chunk files that already exist on disk (from a prior
-     * watchdog pass) are left in place — identical content = identical hash =
-     * same filename = idempotent.
-     *
-     * @param string $abs       Absolute file path.
-     * @param int    $fileSize  Expected size in bytes (used for progress only).
-     * @param string $fileBlake3 File-level hash (computed by computeFileBlake3).
-     * @param string $scratchDir Per-run scratch dir.
-     * @return list<string> Ordered chunk hashes.
-     * @throws \RuntimeException On unrecoverable I/O failure.
-     */
-    private function chunkFile(string $abs, int $fileSize, string $fileBlake3, string $scratchDir): array
-    {
-        $handle = @fopen($abs, 'rb');
-        if ($handle === false) {
-            throw new \RuntimeException('IncrementalScanner: cannot open file for chunking: ' . $abs);
-        }
-
         $chunkHashes = [];
+        $accum       = '';     // Whole-file buffer (only built for a multi-chunk hash).
+        $multiChunk  = false;
+        $chunkIndex  = 0;
+        $firstHash   = '';
+        $firstPlain  = '';     // Chunk 0 bytes, kept until we know single vs multi.
+
+        // FIX 1 (memory safety): the carry-buffer hold (don't-touch-scratch while
+        // we might carry-forward) is only safe for SINGLE-CHUNK files. Once we
+        // discover the file is multi-chunk (chunkIndex reaches 1) we MUST spill
+        // eagerly, regardless of $bufferForCarry. Holding all chunks of a large
+        // file in RAM would make peak memory proportional to the file size.
+        // Peak RAM is capped at one chunk (INLINE_MAX_BYTES) per file regardless
+        // of how large the file is.
 
         try {
             while (!feof($handle)) {
@@ -573,24 +710,187 @@ final class IncrementalScanner
                 }
 
                 // ENCRYPT_CHUNKS = false (V1). Hash the plaintext directly.
-                $hash      = Blake3::hashHex($plain);
-                $chunkPath = $scratchDir . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-
-                if (!is_file($chunkPath)) {
-                    $written = @file_put_contents($chunkPath, $plain, LOCK_EX);
-                    if ($written !== strlen($plain)) {
-                        throw new \RuntimeException('IncrementalScanner: write failed for chunk ' . $hash);
-                    }
-                }
-                $plain = ''; // Free memory promptly.
-
+                $hash          = Blake3::hashHex($plain);
                 $chunkHashes[] = $hash;
+
+                if ($chunkIndex === 0) {
+                    // Defer chunk 0 until we know single vs multi.
+                    $firstHash  = $hash;
+                    $firstPlain = $plain;
+                } elseif ($chunkIndex === 1) {
+                    // Now known MULTI-chunk. FIX 1: always eager-spill — never
+                    // buffer multi-chunk files in RAM regardless of $bufferForCarry.
+                    // Seed the whole-file hash accumulator with chunks 0+1 and
+                    // spill both to scratch immediately so a mid-file crash resumes.
+                    $multiChunk = true;
+                    $accum      = $firstPlain . $plain;
+                    $this->spillChunk($scratchDir, $firstHash, $firstPlain);
+                    $this->spillChunk($scratchDir, $hash, $plain);
+                    $firstPlain = '';
+                } else {
+                    // chunkIndex >= 2: always spill (multi-chunk path).
+                    $accum .= $plain;
+                    $this->spillChunk($scratchDir, $hash, $plain);
+                }
+
+                $plain = ''; // Free the slice promptly.
+                $chunkIndex++;
             }
         } finally {
             fclose($handle);
         }
 
-        return $chunkHashes;
+        $isSingleChunk = !$multiChunk;
+
+        // file_blake3: for a single-chunk file it equals the lone chunk hash
+        // (same one-shot sodium digest, computed once); otherwise hash the
+        // accumulated whole-file buffer once.
+        if ($isSingleChunk) {
+            $fileBlake3 = ($firstHash !== '') ? $firstHash : Blake3::hashHex('');
+        } else {
+            $fileBlake3 = Blake3::hashHex($accum);
+        }
+        $accum = ''; // Release the whole-file buffer.
+
+        $result = [
+            'file_blake3'  => $fileBlake3,
+            'chunk_hashes' => $chunkHashes,
+        ];
+
+        // Decide how the caller commits the bytes for a genuinely-changed file.
+        //
+        // Single-chunk path: $firstPlain holds the sole chunk's bytes (never
+        // spilled during the loop). Return them under 'inline' (RAM PUT) when
+        // inline upload is active and the chunk is within INLINE_MAX_BYTES, or
+        // under 'spill' when carry-buffered or inline is disabled.
+        //
+        // Multi-chunk path (FIX 1): ALL chunks were spilled eagerly in-loop.
+        // Nothing to hand back — the upload phase reads them from scratch. We
+        // never buffer a multi-chunk file's bytes in $carryBuf; doing so would
+        // make peak RAM proportional to the file's total size.
+        $inlineEligible = ($firstPlain !== '' && strlen($firstPlain) <= self::INLINE_MAX_BYTES);
+        if ($isSingleChunk) {
+            if ($firstHash === '' || $firstPlain === '') {
+                // Empty file: no chunk bytes at all.
+                $firstPlain = '';
+            } elseif ($inlineActive && !$bufferForCarry && $inlineEligible) {
+                // Inline-eligible single-chunk file (FIX B): PUT from RAM.
+                $result['inline'] = [$firstHash => $firstPlain];
+            } else {
+                // Carry-buffered single chunk, OR inline disabled: hand the bytes
+                // back under 'spill'. A carry-forward discards them; a changed
+                // file is spilled by the caller (never touches scratch otherwise).
+                $result['spill'] = [$firstHash => $firstPlain];
+            }
+            $firstPlain = '';
+        }
+        // Multi-chunk files already spilled in-loop (FIX 1): nothing to hand back.
+        // Their hashes are in chunk_hashes; the upload phase reads from scratch.
+        // (If the file content-matches the prev snapshot's blake3, the orphan
+        // scratch chunks are cleaned up by cleanupOnCompleted at run end.)
+
+        return $result;
+    }
+
+    /**
+     * Spill one plaintext chunk to scratch as `chunks-<hash>.bin`.
+     *
+     * Idempotent: an existing file (identical content = identical hash = same
+     * filename, e.g. a prior watchdog pass) is left in place.
+     *
+     * @throws \RuntimeException On write failure (fails the run for retry).
+     */
+    private function spillChunk(string $scratchDir, string $hash, string $bytes): void
+    {
+        if ($hash === '') {
+            return;
+        }
+        $chunkPath = $scratchDir . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+        if (is_file($chunkPath)) {
+            return;
+        }
+        $written = @file_put_contents($chunkPath, $bytes, LOCK_EX);
+        if ($written !== strlen($bytes)) {
+            throw new \RuntimeException('IncrementalScanner: write failed for chunk ' . $hash);
+        }
+    }
+
+    /**
+     * FIX B: presign + PUT the buffered small-file chunks straight from RAM via
+     * the bounded curl_multi pool. Hashes that PUT 2xx (or that the CP already
+     * has — dedup) are recorded in $inlineUploaded and removed from the buffer.
+     *
+     * If inline upload is not wired up (no presign endpoint), or a hash fails to
+     * upload, its bytes are spilled to scratch so the upload phase can retry it
+     * the normal way — the run never silently drops a chunk.
+     *
+     * @param array<string,string> $buffer         hash => bytes (cleared on return).
+     * @param array<string,int>    $inlineUploaded hash => 1 (accumulated).
+     * @param string               $scratchDir     Per-run scratch dir.
+     */
+    private function flushInlineBuffer(array &$buffer, array &$inlineUploaded, string $scratchDir): void
+    {
+        if ($buffer === []) {
+            return;
+        }
+
+        if (!$this->inlineUploadEnabled()) {
+            // No presign endpoint — fall back to scratch so the upload phase
+            // handles these. (Used by unit tests that don't wire inline upload.)
+            foreach ($buffer as $h => $bytes) {
+                if (is_string($h) && is_string($bytes)) {
+                    $this->spillChunk($scratchDir, $h, $bytes);
+                }
+            }
+            $buffer = [];
+            return;
+        }
+
+        $hashes = array_keys($buffer);
+
+        // Presign: CP returns {hash => PUT URL} for ONLY the missing hashes.
+        // Hashes the CP omits are dedup hits — already stored, mark done.
+        try {
+            $uploads = $this->transport->presignChunks($this->presignEndpoint, $this->snapshotId, $hashes);
+        } catch (\Throwable $e) {
+            // Presign failed — spill everything so the upload phase retries.
+            foreach ($buffer as $h => $bytes) {
+                if (is_string($h) && is_string($bytes)) {
+                    $this->spillChunk($scratchDir, $h, $bytes);
+                }
+            }
+            $buffer = [];
+            return;
+        }
+
+        // Dedup hits: hashes not in $uploads are already stored.
+        foreach ($hashes as $h) {
+            if (!isset($uploads[$h])) {
+                $inlineUploaded[$h] = 1;
+            }
+        }
+
+        if ($uploads !== []) {
+            $results = $this->transport->putChunksMulti(
+                $uploads,
+                static function (string $h) use ($buffer) {
+                    return $buffer[$h] ?? false;
+                }
+            );
+            foreach ($uploads as $h => $_url) {
+                if (!empty($results[$h])) {
+                    $inlineUploaded[$h] = 1;
+                } else {
+                    // PUT failed — spill so the upload phase retries it; do NOT
+                    // mark uploaded.
+                    if (isset($buffer[$h]) && is_string($buffer[$h])) {
+                        $this->spillChunk($scratchDir, $h, $buffer[$h]);
+                    }
+                }
+            }
+        }
+
+        $buffer = [];
     }
 
     /**

@@ -115,6 +115,29 @@ final class TaskRunner
     private ?ProgressClient $progressClient = null;
 
     /**
+     * Per-run incremental backup timing + counter accumulator (FIX 3).
+     *
+     * Populated by runScanFiles() and runUploadIncremental(). Keys:
+     *   scan_s           float  — wall-clock seconds in the scan phase.
+     *   upload_s         float  — wall-clock seconds in the upload phase.
+     *   files_scanned    int    — total files walked.
+     *   files_changed    int    — files with new/changed content.
+     *   chunks_created   int    — total unique chunks across changed files.
+     *   bytes_read       int    — bytes of changed files (bytes_to_upload).
+     *   scratch_chunk_writes int — chunks written to scratch (not inline).
+     *   inline_uploads   int    — single-chunk files PUT inline from RAM.
+     *   presign_calls    int    — presign round-trips (upload phase).
+     *   put_count        int    — chunks actually PUT over the wire.
+     *   bytes_uploaded   int    — bytes uploaded to object store.
+     *
+     * Emitted at end of PHASE_UPLOAD_INCREMENTAL via error_log() + a
+     * non-breaking 'timings' field in the final progress payload.
+     *
+     * @var array<string,int|float>
+     */
+    private array $incrTimings = [];
+
+    /**
      * @param array{snapshot_id:string,kind:string,age_recipient:string,
      *              presign_endpoint:string,manifest_endpoint:string,
      *              progress_endpoint:string,chunk_bytes:int,scratch_dir:string,
@@ -577,6 +600,15 @@ final class TaskRunner
         $indexPath = (string) ($subState['_prev_index_path'] ?? '');
         $scanner   = $this->makeScanner();
 
+        // FIX B: enable inline small-file upload during the scan pass. Single-
+        // chunk files are presigned + PUT straight from the read buffer (no
+        // scratch round-trip); the hashes uploaded this way come back in the
+        // scan result under 'uploaded_hashes' and the upload phase skips them.
+        $scanner->enableInlineUpload(
+            (string) $this->params['presign_endpoint'],
+            $this->snapshotId()
+        );
+
         // Build prev-index map line-by-line.
         $prevIndex = $scanner->buildPrevIndexMap($indexPath);
         if ($prevIndex === null) {
@@ -593,6 +625,9 @@ final class TaskRunner
 
         $scanResume = isset($subState['scan']) && is_array($subState['scan']) ? $subState['scan'] : [];
 
+        // FIX 3 (instrumentation): measure wall-clock time for the scan pass.
+        $scanStart  = microtime(true);
+
         $scanResult = $scanner->scanFiles(
             $prevIndex,
             $this->scratchDir(),
@@ -601,6 +636,18 @@ final class TaskRunner
                 $this->onPhaseProgress($phase, $detail);
             }
         );
+
+        $scanElapsed = microtime(true) - $scanStart;
+
+        // Accumulate scan-phase counters in $incrTimings (FIX 3).
+        $inlineUploaded = isset($scanResult['uploaded_hashes']) && is_array($scanResult['uploaded_hashes'])
+            ? count($scanResult['uploaded_hashes'])
+            : 0;
+        $this->incrTimings['scan_s']           = ($this->incrTimings['scan_s'] ?? 0.0) + $scanElapsed;
+        $this->incrTimings['files_scanned']    = (int) ($scanResult['files_scanned'] ?? 0);
+        $this->incrTimings['files_changed']    = (int) ($scanResult['files_changed'] ?? 0);
+        $this->incrTimings['bytes_read']       = (int) ($scanResult['bytes_to_upload'] ?? 0);
+        $this->incrTimings['inline_uploads']   = $inlineUploaded;
 
         $subState['scan']            = $scanResult;
         $subState['_is_incremental'] = true;  // Confirm incremental path is live.
@@ -638,8 +685,23 @@ final class TaskRunner
             (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024)
         );
 
-        // Upload changed-file chunks.
+        // Upload changed-file chunks. Seed the resume cursor with the hashes the
+        // scanner already PUT inline (FIX B) so the upload phase neither re-PUTs
+        // them nor expects them on scratch.
         $uploadResume = isset($subState['incr_upload']) && is_array($subState['incr_upload']) ? $subState['incr_upload'] : [];
+        $scanUploaded = isset($scanResult['uploaded_hashes']) && is_array($scanResult['uploaded_hashes'])
+            ? array_values(array_filter($scanResult['uploaded_hashes'], 'is_string'))
+            : [];
+        if ($scanUploaded !== []) {
+            $existing = isset($uploadResume['uploaded_hashes']) && is_array($uploadResume['uploaded_hashes'])
+                ? $uploadResume['uploaded_hashes']
+                : [];
+            $uploadResume['uploaded_hashes'] = array_values(array_unique(array_merge($existing, $scanUploaded)));
+        }
+
+        // FIX 3 (instrumentation): measure wall-clock time for the upload pass.
+        $uploadStart = microtime(true);
+
         $uploadCursor = $pipeline->uploadChunks(
             $changedFiles,
             $this->scratchDir(),
@@ -648,6 +710,9 @@ final class TaskRunner
                 $this->onPhaseProgress($phase, $detail);
             }
         );
+
+        $uploadElapsed = microtime(true) - $uploadStart;
+
         $subState['incr_upload'] = $uploadCursor;
         $this->saveTaskState(self::PHASE_UPLOAD_INCREMENTAL, $subState);
 
@@ -670,6 +735,58 @@ final class TaskRunner
                 $this->onPhaseProgress($phase, $detail);
             }
         );
+
+        // FIX 3 (instrumentation): accumulate upload-phase counters and emit the
+        // end-of-run timing summary two ways — (1) a single error_log line for
+        // server-side grep, and (2) a 'timings' object in the final progress
+        // payload (non-breaking optional field; the Go CP ignores unknown keys).
+        $chunksTotal    = (int) ($uploadCursor['chunks_total'] ?? 0);
+        $putCount       = (int) ($uploadCursor['chunks_put'] ?? 0);
+        $inlineUploads  = (int) ($this->incrTimings['inline_uploads'] ?? 0);
+        // Chunks written to scratch = total chunks for changed files minus those
+        // PUT inline during the scan pass (inline path never touches scratch).
+        $scratchWrites  = max(0, $chunksTotal - $inlineUploads);
+
+        $this->incrTimings['upload_s']           = ($this->incrTimings['upload_s'] ?? 0.0) + $uploadElapsed;
+        $this->incrTimings['chunks_created']     = $chunksTotal;
+        $this->incrTimings['scratch_chunk_writes'] = $scratchWrites;
+        $this->incrTimings['presign_calls']      = 1; // One presign round-trip in the upload phase.
+        $this->incrTimings['put_count']          = $putCount;
+        $this->incrTimings['bytes_uploaded']     = $bytesUploaded;
+
+        $t = $this->incrTimings;
+        error_log(sprintf(
+            '[wpmgr-agent] incr timings: scan=%.2fs upload=%.2fs files=%d changed=%d chunks=%d scratch_writes=%d inline=%d puts=%d bytes_up=%d',
+            (float) ($t['scan_s'] ?? 0.0),
+            (float) ($t['upload_s'] ?? 0.0),
+            (int)   ($t['files_scanned'] ?? 0),
+            (int)   ($t['files_changed'] ?? 0),
+            (int)   ($t['chunks_created'] ?? 0),
+            (int)   ($t['scratch_chunk_writes'] ?? 0),
+            (int)   ($t['inline_uploads'] ?? 0),
+            (int)   ($t['put_count'] ?? 0),
+            (int)   ($t['bytes_uploaded'] ?? 0)
+        ));
+
+        // Emit the timings object in a progress payload so it lands in the CP
+        // event log. 'timings' is an optional unknown field; the Go side ignores
+        // it without a schema change.
+        $this->postProgress('uploading_incremental', [
+            'done'    => true,
+            'timings' => [
+                'scan_s'               => round((float) ($t['scan_s'] ?? 0.0), 3),
+                'upload_s'             => round((float) ($t['upload_s'] ?? 0.0), 3),
+                'files_scanned'        => (int) ($t['files_scanned'] ?? 0),
+                'files_changed'        => (int) ($t['files_changed'] ?? 0),
+                'chunks_created'       => (int) ($t['chunks_created'] ?? 0),
+                'bytes_read'           => (int) ($t['bytes_read'] ?? 0),
+                'scratch_chunk_writes' => (int) ($t['scratch_chunk_writes'] ?? 0),
+                'inline_uploads'       => (int) ($t['inline_uploads'] ?? 0),
+                'presign_calls'        => (int) ($t['presign_calls'] ?? 0),
+                'put_count'            => (int) ($t['put_count'] ?? 0),
+                'bytes_uploaded'       => (int) ($t['bytes_uploaded'] ?? 0),
+            ],
+        ]);
 
         $subState['incr_manifest_done'] = true;
         return $subState;
@@ -740,22 +857,36 @@ final class TaskRunner
                     $this->snapshotId(),
                     $allHashes
                 );
+
+                // FIX D: PUT the missing DB chunks concurrently (serial fallback
+                // on hosts without ext-curl). Non-fatal: a failed PUT just leaves
+                // the scratch file in place; the manifest still carries the chunk
+                // list, preserving the prior DB-restore behavior.
+                $toPut = [];
                 foreach ($uploads as $hash => $url) {
                     if (!is_string($hash) || !is_string($url) || $url === '') {
                         continue;
                     }
                     $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-                    if (!is_file($chunkPath)) {
-                        continue;
+                    if (is_file($chunkPath)) {
+                        $toPut[$hash] = $url;
                     }
-                    $bytes = @file_get_contents($chunkPath);
-                    if ($bytes === false) {
-                        continue;
+                }
+                if ($toPut !== []) {
+                    $scratch = $this->scratchDir();
+                    $results = $transport->putChunksMulti(
+                        $toPut,
+                        static function (string $hash) use ($scratch) {
+                            $path  = $scratch . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
+                            $bytes = @file_get_contents($path);
+                            return $bytes === false ? false : $bytes;
+                        }
+                    );
+                    foreach ($toPut as $hash => $_url) {
+                        if (!empty($results[$hash])) {
+                            @unlink($scratch . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin');
+                        }
                     }
-                    if ($transport->putChunk($url, $bytes)) {
-                        @unlink($chunkPath);
-                    }
-                    $bytes = '';
                 }
                 // Unlink dedup hits.
                 foreach ($allHashes as $hash) {
