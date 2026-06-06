@@ -234,12 +234,25 @@ func (r *pgRepo) CreateSnapshot(ctx context.Context, in CreateSnapshotInput) (Sn
 		}
 		out = toSnapshot(row)
 
-		// ADR-048: stamp incremental chain fields when this is an incremental run.
-		// We do this with a raw UPDATE because the sqlc-generated CreateBackupSnapshot
-		// predates the m44 columns — updating the generated code requires regenerating
-		// sqlc which is out of scope for this migration. The UPDATE is within the
-		// same transaction and is a no-op when all values are zero/nil/false.
-		if in.IsIncremental || in.Generation > 0 || in.ParentSnapshotID != nil {
+		// ADR-048/050: stamp incremental chain fields when this is an incremental
+		// run. We do this with a raw UPDATE because the sqlc-generated
+		// CreateBackupSnapshot predates the m44 columns — updating the generated
+		// code requires regenerating sqlc which is out of scope for this migration.
+		// The UPDATE is within the same transaction.
+		//
+		// chain_id resolution (ADR-050, m46): a generation-0 snapshot (a full base
+		// OR a plain full backup) anchors its OWN chain, so chain_id = its own id
+		// when no explicit chain_id was supplied. Without this a base's chain_id
+		// stays NULL and the whole chain is unresolvable by ListChainSnapshots /
+		// planRestoreChain / the retention-GC mark walk. Increments always pass an
+		// explicit ChainID (the base's). This is the forward counterpart to the m46
+		// backfill of existing bases.
+		resolvedChainID := in.ChainID
+		if resolvedChainID == nil && in.Generation == 0 {
+			id := out.ID
+			resolvedChainID = &id
+		}
+		if in.IsIncremental || in.Generation > 0 || in.ParentSnapshotID != nil || resolvedChainID != nil {
 			var parentID, baseID, chainID *[16]byte
 			if in.ParentSnapshotID != nil {
 				b := [16]byte(*in.ParentSnapshotID)
@@ -249,8 +262,8 @@ func (r *pgRepo) CreateSnapshot(ctx context.Context, in CreateSnapshotInput) (Sn
 				b := [16]byte(*in.BaseSnapshotID)
 				baseID = &b
 			}
-			if in.ChainID != nil {
-				b := [16]byte(*in.ChainID)
+			if resolvedChainID != nil {
+				b := [16]byte(*resolvedChainID)
 				chainID = &b
 			}
 			_, uerr := tx.Exec(ctx,
@@ -271,7 +284,7 @@ func (r *pgRepo) CreateSnapshot(ctx context.Context, in CreateSnapshotInput) (Sn
 			out.IsIncremental = in.IsIncremental
 			out.ParentSnapshotID = in.ParentSnapshotID
 			out.BaseSnapshotID = in.BaseSnapshotID
-			out.ChainID = in.ChainID
+			out.ChainID = resolvedChainID
 			out.Generation = in.Generation
 		}
 		return nil
