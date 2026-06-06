@@ -658,6 +658,11 @@ CREATE TABLE backup_schedules (
     day_of_month  smallint    NULL                 CHECK (day_of_month BETWEEN 1 AND 28),
     frequency_hours smallint  NULL                 CHECK (frequency_hours BETWEEN 1 AND 24),
     keep_last     integer     NOT NULL DEFAULT 7   CHECK (keep_last >= 0),
+    -- ADR-048 P5: per-schedule incremental opt-in. Default false preserves the
+    -- full-backup behaviour for every existing/new schedule (no regression).
+    incremental_enabled boolean NOT NULL DEFAULT false,
+    -- Optional override of BackupBaseWindowDays (7). NULL = use the constant.
+    base_window_days    integer NULL CHECK (base_window_days IS NULL OR base_window_days BETWEEN 1 AND 365),
     next_run_at   timestamptz NOT NULL DEFAULT now(),
     last_run_at   timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),

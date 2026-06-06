@@ -196,10 +196,16 @@ type Schedule struct {
 	Timezone           string  // resolved IANA name (or fixed-offset label) for DTO display
 	GmtOffset          float64 // GMT offset hours from the site's wp_gmt_offset (for DTO display)
 	KeepLast           int32
-	NextRunAt          time.Time
-	LastRunAt          *time.Time
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+	// ADR-048 P5: when true, scheduled and run-now backups for this site consult
+	// the auto-base chain rule and may take incremental snapshots.
+	IncrementalEnabled bool
+	// Optional per-schedule override of BackupBaseWindowDays. nil = use the
+	// constant.
+	BaseWindowDays *int32
+	NextRunAt      time.Time
+	LastRunAt      *time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // validKind reports whether kind is a known snapshot kind.

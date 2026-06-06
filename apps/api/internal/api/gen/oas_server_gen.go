@@ -416,6 +416,15 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/cache/stats
 	GetCacheStats(ctx context.Context, params GetCacheStatsParams) (*CacheStats, error)
+	// GetDbScanResult implements getDbScanResult operation.
+	//
+	// Returns the most recently persisted db_scan result including the
+	// per-category counts and the full per-table inventory (Phase 2.1).
+	// Returns `{"result": null}` when no scan has been run yet.
+	// Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/db/scan
+	GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (*GetDbScanResultOK, error)
 	// GetHealthz implements getHealthz operation.
 	//
 	// Liveness probe.
@@ -888,6 +897,16 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/destinations/test
 	TestSiteDestination(ctx context.Context, req *SiteDestinationTest, params TestSiteDestinationParams) (TestSiteDestinationRes, error)
+	// TriggerDbScan implements triggerDbScan operation.
+	//
+	// Runs a synchronous read-only scan against the site's WordPress database
+	// via the agent. Returns the job_id. The full result (categories + per-table
+	// inventory) is pushed via the `db.scan.completed` SSE event and persisted
+	// for retrieval via the GET endpoint. Requires the `site.cache.manage`
+	// permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/scan
+	TriggerDbScan(ctx context.Context, req OptTriggerDbScanReq, params TriggerDbScanParams) (*TriggerDbScanOK, error)
 	// UnblockSiteIP implements unblockSiteIP operation.
 	//
 	// Sends the signed `unblock_ip` command to the site's agent, removing any

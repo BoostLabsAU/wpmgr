@@ -189,6 +189,9 @@ type UpsertScheduleInput struct {
 	DayOfMonth     *int32
 	FrequencyHours *int32
 	KeepLast       int32
+	// ADR-048 P5: per-schedule incremental opt-in + optional base-window override.
+	IncrementalEnabled bool
+	BaseWindowDays     *int32
 }
 
 // StalledSnapshot is the cross-tenant projection used by the M5.6 progress
@@ -702,6 +705,8 @@ func (r *pgRepo) UpsertSchedule(ctx context.Context, in UpsertScheduleInput) (Sc
 			DayOfMonth:         dom,
 			FrequencyHours:     fh,
 			KeepLast:           in.KeepLast,
+			IncrementalEnabled: in.IncrementalEnabled,
+			BaseWindowDays:     in.BaseWindowDays,
 		})
 		if err != nil {
 			return domain.Internal("backup_schedule_upsert_failed", "failed to save schedule").WithCause(err)
@@ -1318,6 +1323,8 @@ func toSchedule(s sqlc.BackupSchedule) Schedule {
 		RunHour:            int32(s.RunHour),
 		RunMinute:          int32(s.RunMinute),
 		KeepLast:           s.KeepLast,
+		IncrementalEnabled: s.IncrementalEnabled,
+		BaseWindowDays:     s.BaseWindowDays,
 		NextRunAt:          s.NextRunAt,
 		CreatedAt:          s.CreatedAt,
 		UpdatedAt:          s.UpdatedAt,

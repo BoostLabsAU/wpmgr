@@ -207,6 +207,38 @@ func (s *Service) CreateBackup(ctx context.Context, tenantID, siteID, createdBy 
 		return Snapshot{}, domain.Validation("age_recipient_missing", "the site has no age recipient set; configure backup encryption (PUT the backup schedule with a recipient or set it on the site) before backing up")
 	}
 
+	// ADR-048 P5: run-now honours the same per-schedule incremental toggle as the
+	// scheduled path, so an operator can enable the toggle and then drive the
+	// base→increment→restore QA flow via run-now. A site with no schedule row (or
+	// the toggle off) keeps the full-backup path byte-for-byte: a zero-value
+	// CreateSnapshotInput + EnqueueBackup, exactly as before.
+	if sched, serr := s.repo.GetSchedule(ctx, tenantID, siteID); serr == nil && sched.IncrementalEnabled {
+		res, rerr := s.resolveChainForSiteWithWindow(ctx, tenantID, siteID, baseWindowDaysOr(sched.BaseWindowDays))
+		if rerr != nil {
+			// Degrade to a full base rather than fail the whole backup.
+			res = ChainResolution{}
+		}
+		snap, err := s.repo.CreateSnapshot(ctx, CreateSnapshotInput{
+			TenantID:         tenantID,
+			SiteID:           siteID,
+			CreatedBy:        createdBy,
+			Kind:             kind,
+			AgeRecipient:     si.AgeRecipient,
+			IsIncremental:    res.IsIncremental,
+			ParentSnapshotID: res.ParentSnapshotID,
+			BaseSnapshotID:   res.BaseSnapshotID,
+			ChainID:          res.ChainID,
+			Generation:       res.Generation,
+		})
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if err := s.enqueuer.EnqueueBackupWithChain(ctx, snap); err != nil {
+			return snap, err
+		}
+		return snap, nil
+	}
+
 	snap, err := s.repo.CreateSnapshot(ctx, CreateSnapshotInput{
 		TenantID:     tenantID,
 		SiteID:       siteID,
@@ -1376,6 +1408,9 @@ type PutScheduleInput struct {
 	DayOfMonth     *int32
 	FrequencyHours *int32
 	KeepLast       int32
+	// ADR-048 P5: per-schedule incremental opt-in + optional base-window override.
+	IncrementalEnabled bool
+	BaseWindowDays     *int32
 }
 
 // PutSchedule creates/updates a site's backup schedule.
@@ -1424,6 +1459,9 @@ func (s *Service) PutSchedule(ctx context.Context, in PutScheduleInput) (Schedul
 	}
 	if in.FrequencyHours != nil && (*in.FrequencyHours < 1 || *in.FrequencyHours > 24) {
 		return Schedule{}, domain.Validation("invalid_frequency_hours", "frequency_hours must be between 1 and 24")
+	}
+	if in.BaseWindowDays != nil && (*in.BaseWindowDays < 1 || *in.BaseWindowDays > 365) {
+		return Schedule{}, domain.Validation("invalid_base_window_days", "base_window_days must be between 1 and 365")
 	}
 	retention := in.RetentionDays
 	if retention <= 0 {
@@ -1498,6 +1536,8 @@ func (s *Service) PutSchedule(ctx context.Context, in PutScheduleInput) (Schedul
 		DayOfMonth:         in.DayOfMonth,
 		FrequencyHours:     in.FrequencyHours,
 		KeepLast:           keepLast,
+		IncrementalEnabled: in.IncrementalEnabled,
+		BaseWindowDays:     in.BaseWindowDays,
 	})
 	if upsertErr != nil {
 		return Schedule{}, upsertErr
@@ -1619,12 +1659,38 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 		runID = run.ID
 	}
 
-	snap, err := s.repo.CreateSnapshot(ctx, CreateSnapshotInput{
-		TenantID:     sched.TenantID,
-		SiteID:       sched.SiteID,
-		Kind:         sched.Kind,
-		AgeRecipient: si.AgeRecipient,
-	})
+	// ADR-048 P5: when the schedule opts into incremental backups, consult the
+	// auto-base chain rule and stamp the snapshot's chain fields. When the toggle
+	// is OFF this takes the existing full path (zero-value CreateSnapshotInput +
+	// EnqueueBackup) byte-for-byte. resolveChainForSite encodes first-run / stale
+	// / depth>=max → full base, so a toggle-ON full base is identical to today's
+	// full backup; only a resolved increment diverges.
+	var snap Snapshot
+	if sched.IncrementalEnabled {
+		res, rerr := s.resolveChainForSiteWithWindow(ctx, sched.TenantID, sched.SiteID, baseWindowDaysOr(sched.BaseWindowDays))
+		if rerr != nil {
+			// Degrade to a full base rather than fail the whole scheduled run.
+			res = ChainResolution{}
+		}
+		snap, err = s.repo.CreateSnapshot(ctx, CreateSnapshotInput{
+			TenantID:         sched.TenantID,
+			SiteID:           sched.SiteID,
+			Kind:             sched.Kind,
+			AgeRecipient:     si.AgeRecipient,
+			IsIncremental:    res.IsIncremental,
+			ParentSnapshotID: res.ParentSnapshotID,
+			BaseSnapshotID:   res.BaseSnapshotID,
+			ChainID:          res.ChainID,
+			Generation:       res.Generation,
+		})
+	} else {
+		snap, err = s.repo.CreateSnapshot(ctx, CreateSnapshotInput{
+			TenantID:     sched.TenantID,
+			SiteID:       sched.SiteID,
+			Kind:         sched.Kind,
+			AgeRecipient: si.AgeRecipient,
+		})
+	}
 	if err != nil {
 		return err
 	}
@@ -1636,10 +1702,18 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 
 	// Enqueue the backup job. If this fails the snapshot exists but no worker
 	// will ever run it — mark the (now snapshot-linked) run failed so history
-	// does not stick on "queued".
-	if err := s.enqueuer.EnqueueBackup(ctx, sched.TenantID, snap.ID); err != nil {
+	// does not stick on "queued". EnqueueBackupWithChain carries the snapshot's
+	// chain fields onto the job args; for a full-base snapshot they are all
+	// zero/nil so the worker behaves identically to EnqueueBackup.
+	var enqueueErr error
+	if sched.IncrementalEnabled {
+		enqueueErr = s.enqueuer.EnqueueBackupWithChain(ctx, snap)
+	} else {
+		enqueueErr = s.enqueuer.EnqueueBackup(ctx, sched.TenantID, snap.ID)
+	}
+	if enqueueErr != nil {
 		if s.scheduleRuns != nil && runID != uuid.Nil {
-			msg := "enqueue failed: " + err.Error()
+			msg := "enqueue failed: " + enqueueErr.Error()
 			_, _ = s.scheduleRuns.SetScheduleRunStatusBySnapshot(ctx, sched.TenantID, snap.ID, SetScheduleRunStatusInput{
 				TenantID:    sched.TenantID,
 				Status:      ScheduleRunStatusFailed,
@@ -1647,7 +1721,7 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 				SetFinished: true,
 			})
 		}
-		return err
+		return enqueueErr
 	}
 
 	return nil
@@ -1954,6 +2028,16 @@ func optInt32ToInt(p *int32) *int {
 	return &v
 }
 
+// baseWindowDaysOr returns the schedule's base-window override as a plain int,
+// or 0 when unset. resolveChainForSiteWithWindow treats a non-positive value as
+// "use the BackupBaseWindowDays constant".
+func baseWindowDaysOr(p *int32) int {
+	if p == nil {
+		return 0
+	}
+	return int(*p)
+}
+
 // optInt32Equal reports whether two nullable int32 pointers hold the same value.
 func optInt32Equal(a, b *int32) bool {
 	if a == nil && b == nil {
@@ -2048,6 +2132,17 @@ type ChainResolution struct {
 //	e. Prior snapshot has no backup_file_index rows (pre-m44 full zip backup)
 //	   AND is NOT incremental → full base (no index to diff against).
 func (s *Service) resolveChainForSite(ctx context.Context, tenantID, siteID uuid.UUID) (ChainResolution, error) {
+	return s.resolveChainForSiteWithWindow(ctx, tenantID, siteID, BackupBaseWindowDays)
+}
+
+// resolveChainForSiteWithWindow is resolveChainForSite with an explicit
+// base-window (in days) for the stale-chain check. A non-positive window falls
+// back to the BackupBaseWindowDays constant so callers can pass a schedule's
+// optional override (nil → constant) safely.
+func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, siteID uuid.UUID, baseWindowDays int) (ChainResolution, error) {
+	if baseWindowDays <= 0 {
+		baseWindowDays = BackupBaseWindowDays
+	}
 	prev, err := s.repo.GetLatestCompletedSnapshot(ctx, tenantID, siteID)
 	if err != nil {
 		var de *domain.Error
@@ -2061,7 +2156,7 @@ func (s *Service) resolveChainForSite(ctx context.Context, tenantID, siteID uuid
 	now := s.clock.Now()
 
 	// AUTO-BASE: stale chain (base window elapsed).
-	if prev.FinishedAt != nil && now.Sub(*prev.FinishedAt) > time.Duration(BackupBaseWindowDays)*24*time.Hour {
+	if prev.FinishedAt != nil && now.Sub(*prev.FinishedAt) > time.Duration(baseWindowDays)*24*time.Hour {
 		return ChainResolution{}, nil
 	}
 

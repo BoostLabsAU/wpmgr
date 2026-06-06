@@ -553,6 +553,7 @@ func (h *Handler) putSchedule(c *gin.Context) {
 		RunHour:            req.RunHour.Or(2),
 		RunMinute:          req.RunMinute.Or(0),
 		KeepLast:           req.KeepLast.Or(7),
+		IncrementalEnabled: req.IncrementalEnabled.Or(false),
 	}
 	// Map nullable int32 timing fields (OptNilInt32 → *int32).
 	if v, ok := req.DayOfWeek.Get(); ok {
@@ -563,6 +564,9 @@ func (h *Handler) putSchedule(c *gin.Context) {
 	}
 	if v, ok := req.FrequencyHours.Get(); ok {
 		in.FrequencyHours = &v
+	}
+	if v, ok := req.BaseWindowDays.Get(); ok {
+		in.BaseWindowDays = &v
 	}
 	sched, err := h.svc.PutSchedule(c.Request.Context(), in)
 	if err != nil {
@@ -612,9 +616,10 @@ func (h *Handler) recordScheduleChange(c *gin.Context, sched Schedule) {
 		TargetType: "backup_schedule",
 		TargetID:   sched.SiteID.String(),
 		Metadata: map[string]any{
-			"cadence": sched.Cadence,
-			"kind":    sched.Kind,
-			"enabled": sched.Enabled,
+			"cadence":             sched.Cadence,
+			"kind":                sched.Kind,
+			"enabled":             sched.Enabled,
+			"incremental_enabled": sched.IncrementalEnabled,
 		},
 	})
 }
@@ -691,11 +696,17 @@ func toAPISchedule(s Schedule) gen.BackupSchedule {
 		RunHour:            s.RunHour,
 		RunMinute:          s.RunMinute,
 		KeepLast:           s.KeepLast,
+		IncrementalEnabled: s.IncrementalEnabled,
 		Timezone:           s.Timezone,
 		GmtOffset:          s.GmtOffset,
 		NextRunAt:          s.NextRunAt,
 		CreatedAt:          s.CreatedAt,
 		UpdatedAt:          s.UpdatedAt,
+	}
+	if s.BaseWindowDays != nil {
+		out.BaseWindowDays = gen.NewOptNilInt32(*s.BaseWindowDays)
+	} else {
+		out.BaseWindowDays.SetToNull()
 	}
 	// Map nullable timing fields (*int32 → OptNilInt32).
 	if s.DayOfWeek != nil {

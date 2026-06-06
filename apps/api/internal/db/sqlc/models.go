@@ -120,6 +120,8 @@ type BackupSchedule struct {
 	DayOfMonth         *int16             `json:"day_of_month"`
 	FrequencyHours     *int16             `json:"frequency_hours"`
 	KeepLast           int32              `json:"keep_last"`
+	IncrementalEnabled bool               `json:"incremental_enabled"`
+	BaseWindowDays     *int32             `json:"base_window_days"`
 	NextRunAt          time.Time          `json:"next_run_at"`
 	LastRunAt          pgtype.Timestamptz `json:"last_run_at"`
 	CreatedAt          time.Time          `json:"created_at"`

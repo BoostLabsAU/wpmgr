@@ -32,6 +32,10 @@ func (s *BackupScheduleUpdate) setDefaults() {
 		val := bool(true)
 		s.Enabled.SetTo(val)
 	}
+	{
+		val := bool(false)
+		s.IncrementalEnabled.SetTo(val)
+	}
 }
 
 // setDefaults set default value of fields.
@@ -39,6 +43,26 @@ func (s *PHPErrorSilence) setDefaults() {
 	{
 		val := bool(true)
 		s.Silenced.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *PerfConfig) setDefaults() {
+	{
+		val := int(1)
+		s.PreloadConcurrency.SetTo(val)
+	}
+	{
+		val := int(500)
+		s.PreloadDelayMs.SetTo(val)
+	}
+	{
+		val := int(50)
+		s.PreloadBatchSize.SetTo(val)
+	}
+	{
+		val := float32(0)
+		s.PreloadMaxLoad.SetTo(val)
 	}
 }
 

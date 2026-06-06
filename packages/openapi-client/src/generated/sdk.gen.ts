@@ -128,6 +128,8 @@ import type {
   GetBackupSqlInspectionResponses,
   GetCacheStatsData,
   GetCacheStatsResponses,
+  GetDbScanResultData,
+  GetDbScanResultResponses,
   GetHealthzData,
   GetHealthzResponses,
   GetMeData,
@@ -292,6 +294,8 @@ import type {
   TestSiteDestinationData,
   TestSiteDestinationErrors,
   TestSiteDestinationResponses,
+  TriggerDbScanData,
+  TriggerDbScanResponses,
   UnblockSiteIpData,
   UnblockSiteIpErrors,
   UnblockSiteIpResponses,
@@ -2321,6 +2325,50 @@ export const disableCache = <ThrowOnError extends boolean = false>(
   (options.client ?? client).post<DisableCacheResponses, unknown, ThrowOnError>(
     { url: "/api/v1/sites/{siteId}/perf/cache/disable", ...options },
   );
+
+/**
+ * Get the latest stored database scan result for a site
+ *
+ * Returns the most recently persisted db_scan result including the
+ * per-category counts and the full per-table inventory (Phase 2.1).
+ * Returns `{"result": null}` when no scan has been run yet.
+ * Requires the `site:read` permission.
+ *
+ */
+export const getDbScanResult = <ThrowOnError extends boolean = false>(
+  options: Options<GetDbScanResultData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetDbScanResultResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/db/scan", ...options });
+
+/**
+ * Trigger a synchronous read-only database scan for a site
+ *
+ * Runs a synchronous read-only scan against the site's WordPress database
+ * via the agent. Returns the job_id. The full result (categories + per-table
+ * inventory) is pushed via the `db.scan.completed` SSE event and persisted
+ * for retrieval via the GET endpoint. Requires the `site.cache.manage`
+ * permission.
+ *
+ */
+export const triggerDbScan = <ThrowOnError extends boolean = false>(
+  options: Options<TriggerDbScanData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    TriggerDbScanResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/db/scan",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
 
 /**
  * Run the configured database cleanup now for a site

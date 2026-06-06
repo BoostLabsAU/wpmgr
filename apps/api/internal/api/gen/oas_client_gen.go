@@ -436,6 +436,15 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/cache/stats
 	GetCacheStats(ctx context.Context, params GetCacheStatsParams) (*CacheStats, error)
+	// GetDbScanResult invokes getDbScanResult operation.
+	//
+	// Returns the most recently persisted db_scan result including the
+	// per-category counts and the full per-table inventory (Phase 2.1).
+	// Returns `{"result": null}` when no scan has been run yet.
+	// Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/db/scan
+	GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (*GetDbScanResultOK, error)
 	// GetHealthz invokes getHealthz operation.
 	//
 	// Liveness probe.
@@ -908,6 +917,16 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/destinations/test
 	TestSiteDestination(ctx context.Context, request *SiteDestinationTest, params TestSiteDestinationParams) (TestSiteDestinationRes, error)
+	// TriggerDbScan invokes triggerDbScan operation.
+	//
+	// Runs a synchronous read-only scan against the site's WordPress database
+	// via the agent. Returns the job_id. The full result (categories + per-table
+	// inventory) is pushed via the `db.scan.completed` SSE event and persisted
+	// for retrieval via the GET endpoint. Requires the `site.cache.manage`
+	// permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/scan
+	TriggerDbScan(ctx context.Context, request OptTriggerDbScanReq, params TriggerDbScanParams) (*TriggerDbScanOK, error)
 	// UnblockSiteIP invokes unblockSiteIP operation.
 	//
 	// Sends the signed `unblock_ip` command to the site's agent, removing any
@@ -5363,6 +5382,102 @@ func (c *Client) sendGetCacheStats(ctx context.Context, params GetCacheStatsPara
 
 	stage = "DecodeResponse"
 	result, err := decodeGetCacheStatsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetDbScanResult invokes getDbScanResult operation.
+//
+// Returns the most recently persisted db_scan result including the
+// per-category counts and the full per-table inventory (Phase 2.1).
+// Returns `{"result": null}` when no scan has been run yet.
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/db/scan
+func (c *Client) GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (*GetDbScanResultOK, error) {
+	res, err := c.sendGetDbScanResult(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetDbScanResult(ctx context.Context, params GetDbScanResultParams) (res *GetDbScanResultOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getDbScanResult"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/scan"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetDbScanResultOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/scan"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetDbScanResultResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11554,6 +11669,106 @@ func (c *Client) sendTestSiteDestination(ctx context.Context, request *SiteDesti
 
 	stage = "DecodeResponse"
 	result, err := decodeTestSiteDestinationResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// TriggerDbScan invokes triggerDbScan operation.
+//
+// Runs a synchronous read-only scan against the site's WordPress database
+// via the agent. Returns the job_id. The full result (categories + per-table
+// inventory) is pushed via the `db.scan.completed` SSE event and persisted
+// for retrieval via the GET endpoint. Requires the `site.cache.manage`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/db/scan
+func (c *Client) TriggerDbScan(ctx context.Context, request OptTriggerDbScanReq, params TriggerDbScanParams) (*TriggerDbScanOK, error) {
+	res, err := c.sendTriggerDbScan(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendTriggerDbScan(ctx context.Context, request OptTriggerDbScanReq, params TriggerDbScanParams) (res *TriggerDbScanOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("triggerDbScan"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/scan"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, TriggerDbScanOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/scan"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeTriggerDbScanRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeTriggerDbScanResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

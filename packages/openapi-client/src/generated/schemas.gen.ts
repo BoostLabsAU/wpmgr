@@ -2090,6 +2090,7 @@ export const BackupScheduleSchema = {
     "run_hour",
     "run_minute",
     "keep_last",
+    "incremental_enabled",
     "timezone",
     "gmt_offset",
     "next_run_at",
@@ -2175,6 +2176,20 @@ export const BackupScheduleSchema = {
       type: "integer",
       format: "int32",
       description: "Minimum number of snapshots to retain regardless of age.",
+    },
+    incremental_enabled: {
+      type: "boolean",
+      description:
+        "Beta. When true, scheduled and run-now backups for this site may take incremental snapshots (the control plane auto-decides full base vs increment per ADR-048).",
+    },
+    base_window_days: {
+      type: "integer",
+      format: "int32",
+      minimum: 1,
+      maximum: 365,
+      nullable: true,
+      description:
+        "Optional override of the default incremental base window (7 days). null means use the default.",
     },
     timezone: {
       type: "string",
@@ -2290,6 +2305,21 @@ export const BackupScheduleUpdateSchema = {
       type: "integer",
       format: "int32",
       description: "Minimum number of snapshots to retain regardless of age.",
+    },
+    incremental_enabled: {
+      type: "boolean",
+      default: false,
+      description:
+        "Beta. Take incremental backups on this schedule (and via run-now). The control plane auto-decides full base vs increment.",
+    },
+    base_window_days: {
+      type: "integer",
+      format: "int32",
+      minimum: 1,
+      maximum: 365,
+      nullable: true,
+      description:
+        "Optional override of the default incremental base window (7 days). Omit/null to use the default.",
     },
   },
 } as const;
@@ -3769,6 +3799,31 @@ export const PerfConfigSchema = {
         type: "string",
       },
     },
+    preload_concurrency: {
+      type: "integer",
+      minimum: 1,
+      maximum: 4,
+      default: 1,
+    },
+    preload_delay_ms: {
+      type: "integer",
+      minimum: 0,
+      maximum: 10000,
+      default: 500,
+    },
+    preload_batch_size: {
+      type: "integer",
+      minimum: 1,
+      maximum: 500,
+      default: 50,
+    },
+    preload_max_load: {
+      type: "number",
+      format: "float",
+      minimum: 0,
+      maximum: 64,
+      default: 0,
+    },
     css_js_minify: {
       type: "boolean",
     },
@@ -4013,6 +4068,113 @@ export const PerfActionResultSchema = {
   },
 } as const;
 
+export const DbScanTableInventoryRowSchema = {
+  type: "object",
+  description:
+    "One row in the per-table inventory returned by the db_scan agent command\n(Phase 2.1). Ownership is classified locally on the agent using the WP\ncore table list + active plugin/theme slugs; no cloud lookup is performed.\n",
+  required: [
+    "name",
+    "rows",
+    "size_bytes",
+    "engine",
+    "overhead_bytes",
+    "belongs_to",
+    "owner_type",
+  ],
+  properties: {
+    name: {
+      type: "string",
+      description:
+        'Full table name including the wp_ prefix (e.g. "wp_posts").',
+    },
+    rows: {
+      type: "integer",
+      format: "int64",
+      description:
+        'TABLE_ROWS from information_schema. An estimate for InnoDB tables\n(can be 40-50% off); exact for MyISAM/ARIA. Rendered with a "~"\nprefix in the UI to signal InnoDB estimate.\n',
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "DATA_LENGTH + INDEX_LENGTH in bytes.",
+    },
+    engine: {
+      type: "string",
+      description: 'Storage engine (e.g. "InnoDB", "MyISAM").',
+    },
+    overhead_bytes: {
+      type: "integer",
+      format: "int64",
+      description:
+        "DATA_FREE in bytes (reclaimable fragmented space; often 0 for InnoDB).",
+    },
+    belongs_to: {
+      type: "string",
+      description:
+        'Human-readable ownership label: "WordPress core", an active plugin\ndisplay name (e.g. "WooCommerce"), an active theme display name\n(e.g. "Astra"), or "Orphan".\n',
+    },
+    owner_type: {
+      type: "string",
+      enum: ["core", "plugin", "theme", "orphan", "unknown"],
+      description:
+        'Machine-readable ownership category used for client-side filtering.\n"unknown" is reserved for forward-compat and should not appear in\nPhase 2.1 results.\n',
+    },
+  },
+} as const;
+
+export const DbScanResultSchema = {
+  type: "object",
+  description:
+    "The latest db_scan result for a site, as stored by the control plane\nafter the agent's synchronous ACK. Includes both the per-category\ncounts/bytes preview and the full per-table inventory (Phase 2.1).\n",
+  required: [
+    "job_id",
+    "db_size_bytes",
+    "table_count",
+    "scanned_at",
+    "created_at",
+  ],
+  properties: {
+    job_id: {
+      type: "string",
+      description: "Correlation ID for this scan run.",
+    },
+    categories: {
+      type: "object",
+      description: "Per-category count/bytes map (keyed by category id).",
+      additionalProperties: true,
+    },
+    tables: {
+      type: "array",
+      description:
+        "Full per-table inventory. Sorted by size_bytes DESC (largest first)\nwhen returned from the agent. Client-side pagination (25 rows/page)\nand filtering (All / WP Core / Plugins / Themes / Orphans) are\napplied in the browser.\n",
+      items: {
+        $ref: "#/components/schemas/DbScanTableInventoryRow",
+      },
+    },
+    db_size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Total database size in bytes at scan time.",
+    },
+    table_count: {
+      type: "integer",
+      description: "Number of tables at scan time.",
+    },
+    scanned_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Unix timestamp (seconds) when the agent performed the scan.",
+    },
+    created_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Unix timestamp (seconds) when the control plane persisted this result.",
+    },
+  },
+} as const;
+
 export const DbCleanResultSchema = {
   type: "object",
   description: "The acknowledgement returned by the database-cleanup endpoint.",
@@ -4198,6 +4360,31 @@ export const PerfConfigWritableSchema = {
       items: {
         type: "string",
       },
+    },
+    preload_concurrency: {
+      type: "integer",
+      minimum: 1,
+      maximum: 4,
+      default: 1,
+    },
+    preload_delay_ms: {
+      type: "integer",
+      minimum: 0,
+      maximum: 10000,
+      default: 500,
+    },
+    preload_batch_size: {
+      type: "integer",
+      minimum: 1,
+      maximum: 500,
+      default: 50,
+    },
+    preload_max_load: {
+      type: "number",
+      format: "float",
+      minimum: 0,
+      maximum: 64,
+      default: 0,
     },
     css_js_minify: {
       type: "boolean",

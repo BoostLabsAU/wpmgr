@@ -1617,6 +1617,71 @@ func decodeGetCacheStatsParams(args [1]string, argsEscaped bool, r *http.Request
 	return params, nil
 }
 
+// GetDbScanResultParams is parameters of getDbScanResult operation.
+type GetDbScanResultParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackGetDbScanResultParams(packed middleware.Parameters) (params GetDbScanResultParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeGetDbScanResultParams(args [1]string, argsEscaped bool, r *http.Request) (params GetDbScanResultParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // GetMediaJobParams is parameters of getMediaJob operation.
 type GetMediaJobParams struct {
 	SiteId uuid.UUID
@@ -7520,6 +7585,71 @@ func unpackTestSiteDestinationParams(packed middleware.Parameters) (params TestS
 }
 
 func decodeTestSiteDestinationParams(args [1]string, argsEscaped bool, r *http.Request) (params TestSiteDestinationParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// TriggerDbScanParams is parameters of triggerDbScan operation.
+type TriggerDbScanParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackTriggerDbScanParams(packed middleware.Parameters) (params TriggerDbScanParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeTriggerDbScanParams(args [1]string, argsEscaped bool, r *http.Request) (params TriggerDbScanParams, _ error) {
 	// Decode path: siteId.
 	if err := func() error {
 		param := args[0]

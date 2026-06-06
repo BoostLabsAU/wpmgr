@@ -247,9 +247,10 @@ WHERE tenant_id = $1 AND site_id = $2;
 INSERT INTO backup_schedules (
     tenant_id, site_id, cadence, kind, enabled, retention_days,
     monthly_archive_keep, next_run_at,
-    run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last
+    run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last,
+    incremental_enabled, base_window_days
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (site_id)
 DO UPDATE SET cadence              = EXCLUDED.cadence,
               kind                 = EXCLUDED.kind,
@@ -262,6 +263,8 @@ DO UPDATE SET cadence              = EXCLUDED.cadence,
               day_of_month         = EXCLUDED.day_of_month,
               frequency_hours      = EXCLUDED.frequency_hours,
               keep_last            = EXCLUDED.keep_last,
+              incremental_enabled  = EXCLUDED.incremental_enabled,
+              base_window_days     = EXCLUDED.base_window_days,
               updated_at           = now()
 RETURNING *;
 

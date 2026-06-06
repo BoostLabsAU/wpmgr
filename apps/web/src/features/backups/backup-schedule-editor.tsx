@@ -78,6 +78,7 @@ export type FormValues = {
   day_of_week: number | null;
   day_of_month: number | null;
   frequency_hours: number | null;
+  incremental_enabled: boolean;
 };
 
 const formSchema = z
@@ -93,6 +94,7 @@ const formSchema = z
     day_of_week: z.number().int().min(0).max(6).nullable(),
     day_of_month: z.number().int().min(1).max(28).nullable(),
     frequency_hours: z.number().int().min(1).max(24).nullable(),
+    incremental_enabled: z.boolean(),
   })
   .superRefine((val, ctx) => {
     if (val.cadence === "weekly" && val.day_of_week === null) {
@@ -130,6 +132,7 @@ const DEFAULTS: FormValues = {
   day_of_week: null,
   day_of_month: null,
   frequency_hours: null,
+  incremental_enabled: false,
 };
 
 const DAY_NAMES = [
@@ -185,6 +188,7 @@ export function BackupScheduleEditor({ siteId }: { siteId: string }) {
       day_of_week: schedule.day_of_week ?? null,
       day_of_month: schedule.day_of_month ?? null,
       frequency_hours: schedule.frequency_hours ?? null,
+      incremental_enabled: schedule.incremental_enabled ?? false,
     });
   }, [schedule, isPending, reset]);
 
@@ -214,6 +218,7 @@ export function BackupScheduleEditor({ siteId }: { siteId: string }) {
       day_of_week: values.cadence === "weekly" ? (values.day_of_week ?? 0) : undefined,
       day_of_month: values.cadence === "monthly" ? (values.day_of_month ?? 1) : undefined,
       frequency_hours: values.cadence === "every_n_hours" ? (values.frequency_hours ?? 6) : undefined,
+      incremental_enabled: values.incremental_enabled,
     };
     save.mutate(body, {
       onSuccess: () => {
@@ -592,6 +597,30 @@ export function BackupScheduleEditor({ siteId }: { siteId: string }) {
                     />
                   </div>
                 </fieldset>
+              </FormSection>
+
+              {/* Incremental backups (beta) */}
+              <FormSection
+                title="Incremental backups"
+                description="Beta: store only changed files after the first full backup. Restore reassembles the chain automatically."
+              >
+                <div className="flex items-center gap-3">
+                  <Controller
+                    control={control}
+                    name="incremental_enabled"
+                    render={({ field }) => (
+                      <Switch
+                        id="schedule-incremental"
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                        disabled={!enabled}
+                      />
+                    )}
+                  />
+                  <Label htmlFor="schedule-incremental" className="cursor-pointer">
+                    Incremental backups (beta)
+                  </Label>
+                </div>
               </FormSection>
 
               {/* Always-visible action row pinned inside the card so the Save

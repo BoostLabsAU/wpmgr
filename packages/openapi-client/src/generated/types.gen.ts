@@ -1011,6 +1011,14 @@ export type BackupSchedule = {
    */
   keep_last: number;
   /**
+   * Beta. When true, scheduled and run-now backups for this site may take incremental snapshots (the control plane auto-decides full base vs increment per ADR-048).
+   */
+  incremental_enabled: boolean;
+  /**
+   * Optional override of the default incremental base window (7 days). null means use the default.
+   */
+  base_window_days?: number;
+  /**
    * Read-only. IANA timezone name (or fixed-offset label) resolved from the site's WordPress timezone. Used by the UI to display run times.
    */
   timezone: string;
@@ -1067,6 +1075,14 @@ export type BackupScheduleUpdate = {
    * Minimum number of snapshots to retain regardless of age.
    */
   keep_last?: number;
+  /**
+   * Beta. Take incremental backups on this schedule (and via run-now). The control plane auto-decides full base vs increment.
+   */
+  incremental_enabled?: boolean;
+  /**
+   * Optional override of the default incremental base window (7 days). Omit/null to use the default.
+   */
+  base_window_days?: number;
 };
 
 /**
@@ -1909,6 +1925,10 @@ export type PerfConfig = {
   cache_bypass_cookies?: Array<string>;
   cache_include_queries?: Array<string>;
   cache_include_cookies?: Array<string>;
+  preload_concurrency?: number;
+  preload_delay_ms?: number;
+  preload_batch_size?: number;
+  preload_max_load?: number;
   css_js_minify?: boolean;
   css_rucss?: boolean;
   css_rucss_include_selectors?: Array<string>;
@@ -2008,6 +2028,95 @@ export type PerfActionResult = {
 };
 
 /**
+ * One row in the per-table inventory returned by the db_scan agent command
+ * (Phase 2.1). Ownership is classified locally on the agent using the WP
+ * core table list + active plugin/theme slugs; no cloud lookup is performed.
+ *
+ */
+export type DbScanTableInventoryRow = {
+  /**
+   * Full table name including the wp_ prefix (e.g. "wp_posts").
+   */
+  name: string;
+  /**
+   * TABLE_ROWS from information_schema. An estimate for InnoDB tables
+   * (can be 40-50% off); exact for MyISAM/ARIA. Rendered with a "~"
+   * prefix in the UI to signal InnoDB estimate.
+   *
+   */
+  rows: number;
+  /**
+   * DATA_LENGTH + INDEX_LENGTH in bytes.
+   */
+  size_bytes: number;
+  /**
+   * Storage engine (e.g. "InnoDB", "MyISAM").
+   */
+  engine: string;
+  /**
+   * DATA_FREE in bytes (reclaimable fragmented space; often 0 for InnoDB).
+   */
+  overhead_bytes: number;
+  /**
+   * Human-readable ownership label: "WordPress core", an active plugin
+   * display name (e.g. "WooCommerce"), an active theme display name
+   * (e.g. "Astra"), or "Orphan".
+   *
+   */
+  belongs_to: string;
+  /**
+   * Machine-readable ownership category used for client-side filtering.
+   * "unknown" is reserved for forward-compat and should not appear in
+   * Phase 2.1 results.
+   *
+   */
+  owner_type: "core" | "plugin" | "theme" | "orphan" | "unknown";
+};
+
+/**
+ * The latest db_scan result for a site, as stored by the control plane
+ * after the agent's synchronous ACK. Includes both the per-category
+ * counts/bytes preview and the full per-table inventory (Phase 2.1).
+ *
+ */
+export type DbScanResult = {
+  /**
+   * Correlation ID for this scan run.
+   */
+  job_id: string;
+  /**
+   * Per-category count/bytes map (keyed by category id).
+   */
+  categories?: {
+    [key: string]: unknown;
+  };
+  /**
+   * Full per-table inventory. Sorted by size_bytes DESC (largest first)
+   * when returned from the agent. Client-side pagination (25 rows/page)
+   * and filtering (All / WP Core / Plugins / Themes / Orphans) are
+   * applied in the browser.
+   *
+   */
+  tables?: Array<DbScanTableInventoryRow>;
+  /**
+   * Total database size in bytes at scan time.
+   */
+  db_size_bytes: number;
+  /**
+   * Number of tables at scan time.
+   */
+  table_count: number;
+  /**
+   * Unix timestamp (seconds) when the agent performed the scan.
+   */
+  scanned_at: number;
+  /**
+   * Unix timestamp (seconds) when the control plane persisted this result.
+   */
+  created_at: number;
+};
+
+/**
  * The acknowledgement returned by the database-cleanup endpoint.
  */
 export type DbCleanResult = {
@@ -2081,6 +2190,10 @@ export type PerfConfigWritable = {
   cache_bypass_cookies?: Array<string>;
   cache_include_queries?: Array<string>;
   cache_include_cookies?: Array<string>;
+  preload_concurrency?: number;
+  preload_delay_ms?: number;
+  preload_batch_size?: number;
+  preload_max_load?: number;
   css_js_minify?: boolean;
   css_rucss?: boolean;
   css_rucss_include_selectors?: Array<string>;
@@ -5129,6 +5242,55 @@ export type DisableCacheResponses = {
 
 export type DisableCacheResponse =
   DisableCacheResponses[keyof DisableCacheResponses];
+
+export type GetDbScanResultData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/scan";
+};
+
+export type GetDbScanResultResponses = {
+  /**
+   * Latest scan result (null when none)
+   */
+  200: {
+    result?: DbScanResult;
+  };
+};
+
+export type GetDbScanResultResponse =
+  GetDbScanResultResponses[keyof GetDbScanResultResponses];
+
+export type TriggerDbScanData = {
+  body?: {
+    /**
+     * Subset of categories to scan; empty means all 14.
+     */
+    categories?: Array<string>;
+  };
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/scan";
+};
+
+export type TriggerDbScanResponses = {
+  /**
+   * Scan triggered
+   */
+  200: {
+    ok: boolean;
+    job_id: string;
+    detail?: string;
+  };
+};
+
+export type TriggerDbScanResponse =
+  TriggerDbScanResponses[keyof TriggerDbScanResponses];
 
 export type CleanDatabaseData = {
   body?: never;

@@ -343,7 +343,7 @@ func (q *Queries) GetBackupChunk(ctx context.Context, arg GetBackupChunkParams) 
 
 const getBackupScheduleForSite = `-- name: GetBackupScheduleForSite :one
 
-SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
+SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
 WHERE tenant_id = $1 AND site_id = $2
 `
 
@@ -373,6 +373,8 @@ func (q *Queries) GetBackupScheduleForSite(ctx context.Context, arg GetBackupSch
 		&i.DayOfMonth,
 		&i.FrequencyHours,
 		&i.KeepLast,
+		&i.IncrementalEnabled,
+		&i.BaseWindowDays,
 		&i.NextRunAt,
 		&i.LastRunAt,
 		&i.CreatedAt,
@@ -650,7 +652,7 @@ func (q *Queries) ListCompletedSnapshotsForSite(ctx context.Context, arg ListCom
 }
 
 const listDueBackupSchedules = `-- name: ListDueBackupSchedules :many
-SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
+SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
 WHERE enabled = true AND next_run_at <= $1
 ORDER BY next_run_at ASC
 LIMIT $2
@@ -687,6 +689,8 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, arg ListDueBackupS
 			&i.DayOfMonth,
 			&i.FrequencyHours,
 			&i.KeepLast,
+			&i.IncrementalEnabled,
+			&i.BaseWindowDays,
 			&i.NextRunAt,
 			&i.LastRunAt,
 			&i.CreatedAt,
@@ -1022,9 +1026,10 @@ const upsertBackupSchedule = `-- name: UpsertBackupSchedule :one
 INSERT INTO backup_schedules (
     tenant_id, site_id, cadence, kind, enabled, retention_days,
     monthly_archive_keep, next_run_at,
-    run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last
+    run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last,
+    incremental_enabled, base_window_days
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 ON CONFLICT (site_id)
 DO UPDATE SET cadence              = EXCLUDED.cadence,
               kind                 = EXCLUDED.kind,
@@ -1037,8 +1042,10 @@ DO UPDATE SET cadence              = EXCLUDED.cadence,
               day_of_month         = EXCLUDED.day_of_month,
               frequency_hours      = EXCLUDED.frequency_hours,
               keep_last            = EXCLUDED.keep_last,
+              incremental_enabled  = EXCLUDED.incremental_enabled,
+              base_window_days     = EXCLUDED.base_window_days,
               updated_at           = now()
-RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, next_run_at, last_run_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at
 `
 
 type UpsertBackupScheduleParams struct {
@@ -1056,6 +1063,8 @@ type UpsertBackupScheduleParams struct {
 	DayOfMonth         *int16    `json:"day_of_month"`
 	FrequencyHours     *int16    `json:"frequency_hours"`
 	KeepLast           int32     `json:"keep_last"`
+	IncrementalEnabled bool      `json:"incremental_enabled"`
+	BaseWindowDays     *int32    `json:"base_window_days"`
 }
 
 // Inserts or updates a backup schedule. next_run_at is intentionally NOT
@@ -1078,6 +1087,8 @@ func (q *Queries) UpsertBackupSchedule(ctx context.Context, arg UpsertBackupSche
 		arg.DayOfMonth,
 		arg.FrequencyHours,
 		arg.KeepLast,
+		arg.IncrementalEnabled,
+		arg.BaseWindowDays,
 	)
 	var i BackupSchedule
 	err := row.Scan(
@@ -1095,6 +1106,8 @@ func (q *Queries) UpsertBackupSchedule(ctx context.Context, arg UpsertBackupSche
 		&i.DayOfMonth,
 		&i.FrequencyHours,
 		&i.KeepLast,
+		&i.IncrementalEnabled,
+		&i.BaseWindowDays,
 		&i.NextRunAt,
 		&i.LastRunAt,
 		&i.CreatedAt,

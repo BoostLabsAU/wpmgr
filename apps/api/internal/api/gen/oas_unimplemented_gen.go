@@ -556,6 +556,18 @@ func (UnimplementedHandler) GetCacheStats(ctx context.Context, params GetCacheSt
 	return r, ht.ErrNotImplemented
 }
 
+// GetDbScanResult implements getDbScanResult operation.
+//
+// Returns the most recently persisted db_scan result including the
+// per-category counts and the full per-table inventory (Phase 2.1).
+// Returns `{"result": null}` when no scan has been run yet.
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/db/scan
+func (UnimplementedHandler) GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (r *GetDbScanResultOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetHealthz implements getHealthz operation.
 //
 // Liveness probe.
@@ -1202,6 +1214,19 @@ func (UnimplementedHandler) SyncMedia(ctx context.Context, params SyncMediaParam
 //
 // POST /api/v1/sites/{siteId}/destinations/test
 func (UnimplementedHandler) TestSiteDestination(ctx context.Context, req *SiteDestinationTest, params TestSiteDestinationParams) (r TestSiteDestinationRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// TriggerDbScan implements triggerDbScan operation.
+//
+// Runs a synchronous read-only scan against the site's WordPress database
+// via the agent. Returns the job_id. The full result (categories + per-table
+// inventory) is pushed via the `db.scan.completed` SSE event and persisted
+// for retrieval via the GET endpoint. Requires the `site.cache.manage`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/db/scan
+func (UnimplementedHandler) TriggerDbScan(ctx context.Context, req OptTriggerDbScanReq, params TriggerDbScanParams) (r *TriggerDbScanOK, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

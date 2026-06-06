@@ -4771,7 +4771,7 @@ components:
           description: When the report was assembled (agent or CP wall clock).
     BackupSchedule:
       type: object
-      required: [id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, keep_last, timezone, gmt_offset, next_run_at, next_runs, created_at, updated_at]
+      required: [id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, keep_last, incremental_enabled, timezone, gmt_offset, next_run_at, next_runs, created_at, updated_at]
       properties:
         id:
           type: string
@@ -4833,6 +4833,16 @@ components:
           type: integer
           format: int32
           description: Minimum number of snapshots to retain regardless of age.
+        incremental_enabled:
+          type: boolean
+          description: "Beta. When true, scheduled and run-now backups for this site may take incremental snapshots (the control plane auto-decides full base vs increment per ADR-048)."
+        base_window_days:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 365
+          nullable: true
+          description: "Optional override of the default incremental base window (7 days). null means use the default."
         timezone:
           type: string
           description: "Read-only. IANA timezone name (or fixed-offset label) resolved from the site's WordPress timezone. Used by the UI to display run times."
@@ -4917,6 +4927,17 @@ components:
           type: integer
           format: int32
           description: Minimum number of snapshots to retain regardless of age.
+        incremental_enabled:
+          type: boolean
+          default: false
+          description: "Beta. Take incremental backups on this schedule (and via run-now). The control plane auto-decides full base vs increment."
+        base_window_days:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 365
+          nullable: true
+          description: "Optional override of the default incremental base window (7 days). Omit/null to use the default."
     UptimeStatus:
       type: object
       description: Windowed uptime status for a single site (from the metrics store).

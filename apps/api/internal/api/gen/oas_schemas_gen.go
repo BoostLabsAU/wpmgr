@@ -2006,6 +2006,11 @@ type BackupSchedule struct {
 	FrequencyHours OptNilInt32 `json:"frequency_hours"`
 	// Minimum number of snapshots to retain regardless of age.
 	KeepLast int32 `json:"keep_last"`
+	// Beta. When true, scheduled and run-now backups for this site may take incremental snapshots (the
+	// control plane auto-decides full base vs increment per ADR-048).
+	IncrementalEnabled bool `json:"incremental_enabled"`
+	// Optional override of the default incremental base window (7 days). null means use the default.
+	BaseWindowDays OptNilInt32 `json:"base_window_days"`
 	// Read-only. IANA timezone name (or fixed-offset label) resolved from the site's WordPress timezone.
 	// Used by the UI to display run times.
 	Timezone string `json:"timezone"`
@@ -2088,6 +2093,16 @@ func (s *BackupSchedule) GetFrequencyHours() OptNilInt32 {
 // GetKeepLast returns the value of KeepLast.
 func (s *BackupSchedule) GetKeepLast() int32 {
 	return s.KeepLast
+}
+
+// GetIncrementalEnabled returns the value of IncrementalEnabled.
+func (s *BackupSchedule) GetIncrementalEnabled() bool {
+	return s.IncrementalEnabled
+}
+
+// GetBaseWindowDays returns the value of BaseWindowDays.
+func (s *BackupSchedule) GetBaseWindowDays() OptNilInt32 {
+	return s.BaseWindowDays
 }
 
 // GetTimezone returns the value of Timezone.
@@ -2193,6 +2208,16 @@ func (s *BackupSchedule) SetFrequencyHours(val OptNilInt32) {
 // SetKeepLast sets the value of KeepLast.
 func (s *BackupSchedule) SetKeepLast(val int32) {
 	s.KeepLast = val
+}
+
+// SetIncrementalEnabled sets the value of IncrementalEnabled.
+func (s *BackupSchedule) SetIncrementalEnabled(val bool) {
+	s.IncrementalEnabled = val
+}
+
+// SetBaseWindowDays sets the value of BaseWindowDays.
+func (s *BackupSchedule) SetBaseWindowDays(val OptNilInt32) {
+	s.BaseWindowDays = val
 }
 
 // SetTimezone sets the value of Timezone.
@@ -2365,6 +2390,11 @@ type BackupScheduleUpdate struct {
 	FrequencyHours OptNilInt32 `json:"frequency_hours"`
 	// Minimum number of snapshots to retain regardless of age.
 	KeepLast OptInt32 `json:"keep_last"`
+	// Beta. Take incremental backups on this schedule (and via run-now). The control plane auto-decides
+	// full base vs increment.
+	IncrementalEnabled OptBool `json:"incremental_enabled"`
+	// Optional override of the default incremental base window (7 days). Omit/null to use the default.
+	BaseWindowDays OptNilInt32 `json:"base_window_days"`
 }
 
 // GetCadence returns the value of Cadence.
@@ -2422,6 +2452,16 @@ func (s *BackupScheduleUpdate) GetKeepLast() OptInt32 {
 	return s.KeepLast
 }
 
+// GetIncrementalEnabled returns the value of IncrementalEnabled.
+func (s *BackupScheduleUpdate) GetIncrementalEnabled() OptBool {
+	return s.IncrementalEnabled
+}
+
+// GetBaseWindowDays returns the value of BaseWindowDays.
+func (s *BackupScheduleUpdate) GetBaseWindowDays() OptNilInt32 {
+	return s.BaseWindowDays
+}
+
 // SetCadence sets the value of Cadence.
 func (s *BackupScheduleUpdate) SetCadence(val OptBackupScheduleUpdateCadence) {
 	s.Cadence = val
@@ -2475,6 +2515,16 @@ func (s *BackupScheduleUpdate) SetFrequencyHours(val OptNilInt32) {
 // SetKeepLast sets the value of KeepLast.
 func (s *BackupScheduleUpdate) SetKeepLast(val OptInt32) {
 	s.KeepLast = val
+}
+
+// SetIncrementalEnabled sets the value of IncrementalEnabled.
+func (s *BackupScheduleUpdate) SetIncrementalEnabled(val OptBool) {
+	s.IncrementalEnabled = val
+}
+
+// SetBaseWindowDays sets the value of BaseWindowDays.
+func (s *BackupScheduleUpdate) SetBaseWindowDays(val OptNilInt32) {
+	s.BaseWindowDays = val
 }
 
 type BackupScheduleUpdateCadence string
@@ -3474,6 +3524,274 @@ func (s *DbCleanResult) SetRowsCleaned(val OptInt) {
 	s.RowsCleaned = val
 }
 
+// The latest db_scan result for a site, as stored by the control plane
+// after the agent's synchronous ACK. Includes both the per-category
+// counts/bytes preview and the full per-table inventory (Phase 2.1).
+// Ref: #/components/schemas/DbScanResult
+type DbScanResult struct {
+	// Correlation ID for this scan run.
+	JobID string `json:"job_id"`
+	// Per-category count/bytes map (keyed by category id).
+	Categories OptDbScanResultCategories `json:"categories"`
+	// Full per-table inventory. Sorted by size_bytes DESC (largest first)
+	// when returned from the agent. Client-side pagination (25 rows/page)
+	// and filtering (All / WP Core / Plugins / Themes / Orphans) are
+	// applied in the browser.
+	Tables []DbScanTableInventoryRow `json:"tables"`
+	// Total database size in bytes at scan time.
+	DbSizeBytes int64 `json:"db_size_bytes"`
+	// Number of tables at scan time.
+	TableCount int `json:"table_count"`
+	// Unix timestamp (seconds) when the agent performed the scan.
+	ScannedAt int64 `json:"scanned_at"`
+	// Unix timestamp (seconds) when the control plane persisted this result.
+	CreatedAt int64 `json:"created_at"`
+}
+
+// GetJobID returns the value of JobID.
+func (s *DbScanResult) GetJobID() string {
+	return s.JobID
+}
+
+// GetCategories returns the value of Categories.
+func (s *DbScanResult) GetCategories() OptDbScanResultCategories {
+	return s.Categories
+}
+
+// GetTables returns the value of Tables.
+func (s *DbScanResult) GetTables() []DbScanTableInventoryRow {
+	return s.Tables
+}
+
+// GetDbSizeBytes returns the value of DbSizeBytes.
+func (s *DbScanResult) GetDbSizeBytes() int64 {
+	return s.DbSizeBytes
+}
+
+// GetTableCount returns the value of TableCount.
+func (s *DbScanResult) GetTableCount() int {
+	return s.TableCount
+}
+
+// GetScannedAt returns the value of ScannedAt.
+func (s *DbScanResult) GetScannedAt() int64 {
+	return s.ScannedAt
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *DbScanResult) GetCreatedAt() int64 {
+	return s.CreatedAt
+}
+
+// SetJobID sets the value of JobID.
+func (s *DbScanResult) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetCategories sets the value of Categories.
+func (s *DbScanResult) SetCategories(val OptDbScanResultCategories) {
+	s.Categories = val
+}
+
+// SetTables sets the value of Tables.
+func (s *DbScanResult) SetTables(val []DbScanTableInventoryRow) {
+	s.Tables = val
+}
+
+// SetDbSizeBytes sets the value of DbSizeBytes.
+func (s *DbScanResult) SetDbSizeBytes(val int64) {
+	s.DbSizeBytes = val
+}
+
+// SetTableCount sets the value of TableCount.
+func (s *DbScanResult) SetTableCount(val int) {
+	s.TableCount = val
+}
+
+// SetScannedAt sets the value of ScannedAt.
+func (s *DbScanResult) SetScannedAt(val int64) {
+	s.ScannedAt = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *DbScanResult) SetCreatedAt(val int64) {
+	s.CreatedAt = val
+}
+
+// Per-category count/bytes map (keyed by category id).
+type DbScanResultCategories map[string]jx.Raw
+
+func (s *DbScanResultCategories) init() DbScanResultCategories {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+// One row in the per-table inventory returned by the db_scan agent command
+// (Phase 2.1). Ownership is classified locally on the agent using the WP
+// core table list + active plugin/theme slugs; no cloud lookup is performed.
+// Ref: #/components/schemas/DbScanTableInventoryRow
+type DbScanTableInventoryRow struct {
+	// Full table name including the wp_ prefix (e.g. "wp_posts").
+	Name string `json:"name"`
+	// TABLE_ROWS from information_schema. An estimate for InnoDB tables
+	// (can be 40-50% off); exact for MyISAM/ARIA. Rendered with a "~"
+	// prefix in the UI to signal InnoDB estimate.
+	Rows int64 `json:"rows"`
+	// DATA_LENGTH + INDEX_LENGTH in bytes.
+	SizeBytes int64 `json:"size_bytes"`
+	// Storage engine (e.g. "InnoDB", "MyISAM").
+	Engine string `json:"engine"`
+	// DATA_FREE in bytes (reclaimable fragmented space; often 0 for InnoDB).
+	OverheadBytes int64 `json:"overhead_bytes"`
+	// Human-readable ownership label: "WordPress core", an active plugin
+	// display name (e.g. "WooCommerce"), an active theme display name
+	// (e.g. "Astra"), or "Orphan".
+	BelongsTo string `json:"belongs_to"`
+	// Machine-readable ownership category used for client-side filtering.
+	// "unknown" is reserved for forward-compat and should not appear in
+	// Phase 2.1 results.
+	OwnerType DbScanTableInventoryRowOwnerType `json:"owner_type"`
+}
+
+// GetName returns the value of Name.
+func (s *DbScanTableInventoryRow) GetName() string {
+	return s.Name
+}
+
+// GetRows returns the value of Rows.
+func (s *DbScanTableInventoryRow) GetRows() int64 {
+	return s.Rows
+}
+
+// GetSizeBytes returns the value of SizeBytes.
+func (s *DbScanTableInventoryRow) GetSizeBytes() int64 {
+	return s.SizeBytes
+}
+
+// GetEngine returns the value of Engine.
+func (s *DbScanTableInventoryRow) GetEngine() string {
+	return s.Engine
+}
+
+// GetOverheadBytes returns the value of OverheadBytes.
+func (s *DbScanTableInventoryRow) GetOverheadBytes() int64 {
+	return s.OverheadBytes
+}
+
+// GetBelongsTo returns the value of BelongsTo.
+func (s *DbScanTableInventoryRow) GetBelongsTo() string {
+	return s.BelongsTo
+}
+
+// GetOwnerType returns the value of OwnerType.
+func (s *DbScanTableInventoryRow) GetOwnerType() DbScanTableInventoryRowOwnerType {
+	return s.OwnerType
+}
+
+// SetName sets the value of Name.
+func (s *DbScanTableInventoryRow) SetName(val string) {
+	s.Name = val
+}
+
+// SetRows sets the value of Rows.
+func (s *DbScanTableInventoryRow) SetRows(val int64) {
+	s.Rows = val
+}
+
+// SetSizeBytes sets the value of SizeBytes.
+func (s *DbScanTableInventoryRow) SetSizeBytes(val int64) {
+	s.SizeBytes = val
+}
+
+// SetEngine sets the value of Engine.
+func (s *DbScanTableInventoryRow) SetEngine(val string) {
+	s.Engine = val
+}
+
+// SetOverheadBytes sets the value of OverheadBytes.
+func (s *DbScanTableInventoryRow) SetOverheadBytes(val int64) {
+	s.OverheadBytes = val
+}
+
+// SetBelongsTo sets the value of BelongsTo.
+func (s *DbScanTableInventoryRow) SetBelongsTo(val string) {
+	s.BelongsTo = val
+}
+
+// SetOwnerType sets the value of OwnerType.
+func (s *DbScanTableInventoryRow) SetOwnerType(val DbScanTableInventoryRowOwnerType) {
+	s.OwnerType = val
+}
+
+// Machine-readable ownership category used for client-side filtering.
+// "unknown" is reserved for forward-compat and should not appear in
+// Phase 2.1 results.
+type DbScanTableInventoryRowOwnerType string
+
+const (
+	DbScanTableInventoryRowOwnerTypeCore    DbScanTableInventoryRowOwnerType = "core"
+	DbScanTableInventoryRowOwnerTypePlugin  DbScanTableInventoryRowOwnerType = "plugin"
+	DbScanTableInventoryRowOwnerTypeTheme   DbScanTableInventoryRowOwnerType = "theme"
+	DbScanTableInventoryRowOwnerTypeOrphan  DbScanTableInventoryRowOwnerType = "orphan"
+	DbScanTableInventoryRowOwnerTypeUnknown DbScanTableInventoryRowOwnerType = "unknown"
+)
+
+// AllValues returns all DbScanTableInventoryRowOwnerType values.
+func (DbScanTableInventoryRowOwnerType) AllValues() []DbScanTableInventoryRowOwnerType {
+	return []DbScanTableInventoryRowOwnerType{
+		DbScanTableInventoryRowOwnerTypeCore,
+		DbScanTableInventoryRowOwnerTypePlugin,
+		DbScanTableInventoryRowOwnerTypeTheme,
+		DbScanTableInventoryRowOwnerTypeOrphan,
+		DbScanTableInventoryRowOwnerTypeUnknown,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s DbScanTableInventoryRowOwnerType) MarshalText() ([]byte, error) {
+	switch s {
+	case DbScanTableInventoryRowOwnerTypeCore:
+		return []byte(s), nil
+	case DbScanTableInventoryRowOwnerTypePlugin:
+		return []byte(s), nil
+	case DbScanTableInventoryRowOwnerTypeTheme:
+		return []byte(s), nil
+	case DbScanTableInventoryRowOwnerTypeOrphan:
+		return []byte(s), nil
+	case DbScanTableInventoryRowOwnerTypeUnknown:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *DbScanTableInventoryRowOwnerType) UnmarshalText(data []byte) error {
+	switch DbScanTableInventoryRowOwnerType(data) {
+	case DbScanTableInventoryRowOwnerTypeCore:
+		*s = DbScanTableInventoryRowOwnerTypeCore
+		return nil
+	case DbScanTableInventoryRowOwnerTypePlugin:
+		*s = DbScanTableInventoryRowOwnerTypePlugin
+		return nil
+	case DbScanTableInventoryRowOwnerTypeTheme:
+		*s = DbScanTableInventoryRowOwnerTypeTheme
+		return nil
+	case DbScanTableInventoryRowOwnerTypeOrphan:
+		*s = DbScanTableInventoryRowOwnerTypeOrphan
+		return nil
+	case DbScanTableInventoryRowOwnerTypeUnknown:
+		*s = DbScanTableInventoryRowOwnerTypeUnknown
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // Merged schema.
 type DeleteMediaOriginalsAccepted struct {
 	BatchJobID   OptString `json:"batch_job_id"`
@@ -3807,6 +4125,20 @@ func (s *GetBackupSqlInspectionAccepted) SetLocation(val OptString) {
 }
 
 func (*GetBackupSqlInspectionAccepted) getBackupSqlInspectionRes() {}
+
+type GetDbScanResultOK struct {
+	Result OptDbScanResult `json:"result"`
+}
+
+// GetResult returns the value of Result.
+func (s *GetDbScanResultOK) GetResult() OptDbScanResult {
+	return s.Result
+}
+
+// SetResult sets the value of Result.
+func (s *GetDbScanResultOK) SetResult(val OptDbScanResult) {
+	s.Result = val
+}
 
 type GetReadyzOK Readiness
 
@@ -6495,6 +6827,98 @@ func (o OptDateTime) Or(d time.Time) time.Time {
 	return d
 }
 
+// NewOptDbScanResult returns new OptDbScanResult with value set to v.
+func NewOptDbScanResult(v DbScanResult) OptDbScanResult {
+	return OptDbScanResult{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptDbScanResult is optional DbScanResult.
+type OptDbScanResult struct {
+	Value DbScanResult
+	Set   bool
+}
+
+// IsSet returns true if OptDbScanResult was set.
+func (o OptDbScanResult) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptDbScanResult) Reset() {
+	var v DbScanResult
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptDbScanResult) SetTo(v DbScanResult) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptDbScanResult) Get() (v DbScanResult, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptDbScanResult) Or(d DbScanResult) DbScanResult {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptDbScanResultCategories returns new OptDbScanResultCategories with value set to v.
+func NewOptDbScanResultCategories(v DbScanResultCategories) OptDbScanResultCategories {
+	return OptDbScanResultCategories{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptDbScanResultCategories is optional DbScanResultCategories.
+type OptDbScanResultCategories struct {
+	Value DbScanResultCategories
+	Set   bool
+}
+
+// IsSet returns true if OptDbScanResultCategories was set.
+func (o OptDbScanResultCategories) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptDbScanResultCategories) Reset() {
+	var v DbScanResultCategories
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptDbScanResultCategories) SetTo(v DbScanResultCategories) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptDbScanResultCategories) Get() (v DbScanResultCategories, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptDbScanResultCategories) Or(d DbScanResultCategories) DbScanResultCategories {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptErrorDetails returns new OptErrorDetails with value set to v.
 func NewOptErrorDetails(v ErrorDetails) OptErrorDetails {
 	return OptErrorDetails{
@@ -6535,6 +6959,52 @@ func (o OptErrorDetails) Get() (v ErrorDetails, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptErrorDetails) Or(d ErrorDetails) ErrorDetails {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptFloat32 returns new OptFloat32 with value set to v.
+func NewOptFloat32(v float32) OptFloat32 {
+	return OptFloat32{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFloat32 is optional float32.
+type OptFloat32 struct {
+	Value float32
+	Set   bool
+}
+
+// IsSet returns true if OptFloat32 was set.
+func (o OptFloat32) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFloat32) Reset() {
+	var v float32
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFloat32) SetTo(v float32) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFloat32) Get() (v float32, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFloat32) Or(d float32) float32 {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -8580,6 +9050,52 @@ func (o OptString) Or(d string) string {
 	return d
 }
 
+// NewOptTriggerDbScanReq returns new OptTriggerDbScanReq with value set to v.
+func NewOptTriggerDbScanReq(v TriggerDbScanReq) OptTriggerDbScanReq {
+	return OptTriggerDbScanReq{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptTriggerDbScanReq is optional TriggerDbScanReq.
+type OptTriggerDbScanReq struct {
+	Value TriggerDbScanReq
+	Set   bool
+}
+
+// IsSet returns true if OptTriggerDbScanReq was set.
+func (o OptTriggerDbScanReq) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptTriggerDbScanReq) Reset() {
+	var v TriggerDbScanReq
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptTriggerDbScanReq) SetTo(v TriggerDbScanReq) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptTriggerDbScanReq) Get() (v TriggerDbScanReq, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptTriggerDbScanReq) Or(d TriggerDbScanReq) TriggerDbScanReq {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptUUID returns new OptUUID with value set to v.
 func NewOptUUID(v uuid.UUID) OptUUID {
 	return OptUUID{
@@ -9109,6 +9625,10 @@ type PerfConfig struct {
 	CacheBypassCookies        []string          `json:"cache_bypass_cookies"`
 	CacheIncludeQueries       []string          `json:"cache_include_queries"`
 	CacheIncludeCookies       []string          `json:"cache_include_cookies"`
+	PreloadConcurrency        OptInt            `json:"preload_concurrency"`
+	PreloadDelayMs            OptInt            `json:"preload_delay_ms"`
+	PreloadBatchSize          OptInt            `json:"preload_batch_size"`
+	PreloadMaxLoad            OptFloat32        `json:"preload_max_load"`
 	CSSJsMinify               OptBool           `json:"css_js_minify"`
 	CSSRucss                  OptBool           `json:"css_rucss"`
 	CSSRucssIncludeSelectors  []string          `json:"css_rucss_include_selectors"`
@@ -9206,6 +9726,26 @@ func (s *PerfConfig) GetCacheIncludeQueries() []string {
 // GetCacheIncludeCookies returns the value of CacheIncludeCookies.
 func (s *PerfConfig) GetCacheIncludeCookies() []string {
 	return s.CacheIncludeCookies
+}
+
+// GetPreloadConcurrency returns the value of PreloadConcurrency.
+func (s *PerfConfig) GetPreloadConcurrency() OptInt {
+	return s.PreloadConcurrency
+}
+
+// GetPreloadDelayMs returns the value of PreloadDelayMs.
+func (s *PerfConfig) GetPreloadDelayMs() OptInt {
+	return s.PreloadDelayMs
+}
+
+// GetPreloadBatchSize returns the value of PreloadBatchSize.
+func (s *PerfConfig) GetPreloadBatchSize() OptInt {
+	return s.PreloadBatchSize
+}
+
+// GetPreloadMaxLoad returns the value of PreloadMaxLoad.
+func (s *PerfConfig) GetPreloadMaxLoad() OptFloat32 {
+	return s.PreloadMaxLoad
 }
 
 // GetCSSJsMinify returns the value of CSSJsMinify.
@@ -9491,6 +10031,26 @@ func (s *PerfConfig) SetCacheIncludeQueries(val []string) {
 // SetCacheIncludeCookies sets the value of CacheIncludeCookies.
 func (s *PerfConfig) SetCacheIncludeCookies(val []string) {
 	s.CacheIncludeCookies = val
+}
+
+// SetPreloadConcurrency sets the value of PreloadConcurrency.
+func (s *PerfConfig) SetPreloadConcurrency(val OptInt) {
+	s.PreloadConcurrency = val
+}
+
+// SetPreloadDelayMs sets the value of PreloadDelayMs.
+func (s *PerfConfig) SetPreloadDelayMs(val OptInt) {
+	s.PreloadDelayMs = val
+}
+
+// SetPreloadBatchSize sets the value of PreloadBatchSize.
+func (s *PerfConfig) SetPreloadBatchSize(val OptInt) {
+	s.PreloadBatchSize = val
+}
+
+// SetPreloadMaxLoad sets the value of PreloadMaxLoad.
+func (s *PerfConfig) SetPreloadMaxLoad(val OptFloat32) {
+	s.PreloadMaxLoad = val
 }
 
 // SetCSSJsMinify sets the value of CSSJsMinify.
@@ -13777,6 +14337,57 @@ func (*TestSiteDestinationForbidden) testSiteDestinationRes() {}
 type TestSiteDestinationUnauthorized Error
 
 func (*TestSiteDestinationUnauthorized) testSiteDestinationRes() {}
+
+type TriggerDbScanOK struct {
+	Ok     bool      `json:"ok"`
+	JobID  string    `json:"job_id"`
+	Detail OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *TriggerDbScanOK) GetOk() bool {
+	return s.Ok
+}
+
+// GetJobID returns the value of JobID.
+func (s *TriggerDbScanOK) GetJobID() string {
+	return s.JobID
+}
+
+// GetDetail returns the value of Detail.
+func (s *TriggerDbScanOK) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *TriggerDbScanOK) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *TriggerDbScanOK) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *TriggerDbScanOK) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+type TriggerDbScanReq struct {
+	// Subset of categories to scan; empty means all 14.
+	Categories []string `json:"categories"`
+}
+
+// GetCategories returns the value of Categories.
+func (s *TriggerDbScanReq) GetCategories() []string {
+	return s.Categories
+}
+
+// SetCategories sets the value of Categories.
+func (s *TriggerDbScanReq) SetCategories(val []string) {
+	s.Categories = val
+}
 
 // Ref: #/components/schemas/UnblockIPRequest
 type UnblockIPRequest struct {
