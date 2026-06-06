@@ -208,6 +208,70 @@ func TestBackupWorker_DispatchesIncrementalRequest(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// TestBackupWorker_DispatchesBaseIncrement — a no-parent gen-0 base-increment
+// (ADR-048 bootstrap) takes the IncrementalBackup path with an EMPTY
+// file_index_endpoint, which the agent treats as "scan everything as new".
+// ---------------------------------------------------------------------------
+
+func TestBackupWorker_DispatchesBaseIncrement(t *testing.T) {
+	repo := &fakeWorkerRepo{fakeRepo: newFakeRepo()}
+	cmd := &fakeCommander{ok: true}
+	tenantID := uuid.New()
+	snapshotID := uuid.New()
+
+	snap := Snapshot{
+		ID:           snapshotID,
+		TenantID:     tenantID,
+		SiteID:       uuid.New(),
+		Kind:         KindFull,
+		Status:       StatusPending,
+		AgeRecipient: "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
+		// gen-0 base-increment: no parent/base/chain.
+		IsIncremental: true,
+		Generation:    0,
+	}
+	repo.setSnapshot(snap)
+
+	svc := &Service{repo: repo, sites: fakeWorkerSiteLookup{}, clock: fakeClock{t: time.Now()}}
+
+	worker := NewBackupWorker(svc, cmd, nil, nil, "https://cp.example.com", 0)
+	job := &river.Job[BackupArgs]{
+		Args: BackupArgs{
+			TenantID:      tenantID,
+			SnapshotID:    snapshotID,
+			IsIncremental: true,
+			Generation:    0,
+			// ParentSnapshotID/BaseSnapshotID/ChainID intentionally zero.
+		},
+	}
+	if err := worker.Work(context.Background(), job); err != nil {
+		t.Fatalf("Work() error: %v", err)
+	}
+
+	if cmd.lastBackup != nil {
+		t.Error("expected Backup NOT to be called for a gen-0 base-increment")
+	}
+	if cmd.lastIncrementalBackup == nil {
+		t.Fatal("expected IncrementalBackup to be called for a gen-0 base-increment")
+	}
+	req := cmd.lastIncrementalBackup
+	if !req.IsIncremental {
+		t.Error("IncrementalBackupRequest.IsIncremental must be true")
+	}
+	if req.Generation != 0 {
+		t.Errorf("Generation must be 0 for a base, got %d", req.Generation)
+	}
+	if req.FileIndexEndpoint != "" {
+		t.Errorf("FileIndexEndpoint must be EMPTY for a no-parent base (the base signal), got %q", req.FileIndexEndpoint)
+	}
+	// ParentSnapshotID is the zero UUID stringified for a base; the empty
+	// file-index endpoint is what actually signals the base scan to the agent.
+	if req.ParentSnapshotID != uuid.Nil.String() {
+		t.Errorf("expected nil-UUID parent for a base, got %q", req.ParentSnapshotID)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // TestFileIndexEndpoint_StreamsNDJSON — functional test of the fileIndex
 // handler using an httptest server with a stubbed AgentHandler.
 // ---------------------------------------------------------------------------

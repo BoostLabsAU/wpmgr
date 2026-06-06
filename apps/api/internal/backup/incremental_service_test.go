@@ -269,11 +269,23 @@ func TestResolveChainForSite_NoHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.IsIncremental {
-		t.Error("expected full base (no history), got is_incremental=true")
+	// BASE bootstrap (ADR-048 fix): no history → gen-0 base-increment, NOT a
+	// plain full. The agent writes a full file index off an empty baseline so
+	// the next run can produce a real increment.
+	if !res.IsIncremental {
+		t.Error("expected gen-0 base-increment (no history), got is_incremental=false")
 	}
 	if res.Generation != 0 {
 		t.Errorf("expected generation=0, got %d", res.Generation)
+	}
+	if res.ParentSnapshotID != nil {
+		t.Errorf("expected nil parent for a gen-0 base, got %v", res.ParentSnapshotID)
+	}
+	if res.BaseSnapshotID != nil {
+		t.Errorf("expected nil base for a gen-0 base, got %v", res.BaseSnapshotID)
+	}
+	if res.ChainID != nil {
+		t.Errorf("expected nil chain (repo self-anchors at create), got %v", res.ChainID)
 	}
 }
 
@@ -345,8 +357,15 @@ func TestResolveChainForSite_StaleChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.IsIncremental {
-		t.Error("expected full base (stale chain >7 days), got is_incremental=true")
+	// Stale chain re-bases as a gen-0 base-increment (no parent), not a plain full.
+	if !res.IsIncremental {
+		t.Error("expected gen-0 base-increment (stale chain >7 days), got is_incremental=false")
+	}
+	if res.Generation != 0 {
+		t.Errorf("expected generation=0 on re-base, got %d", res.Generation)
+	}
+	if res.ParentSnapshotID != nil {
+		t.Errorf("expected nil parent on stale re-base, got %v", res.ParentSnapshotID)
 	}
 }
 
@@ -378,9 +397,16 @@ func TestResolveChainForSite_MaxDepth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.IsIncremental {
-		t.Errorf("expected full base (generation=%d >= max %d), got is_incremental=true",
+	// Max-depth re-bases as a gen-0 base-increment (no parent), not a plain full.
+	if !res.IsIncremental {
+		t.Errorf("expected gen-0 base-increment (generation=%d >= max %d), got is_incremental=false",
 			BackupMaxChainDepth, BackupMaxChainDepth)
+	}
+	if res.Generation != 0 {
+		t.Errorf("expected generation=0 on re-base, got %d", res.Generation)
+	}
+	if res.ParentSnapshotID != nil {
+		t.Errorf("expected nil parent on max-depth re-base, got %v", res.ParentSnapshotID)
 	}
 }
 
@@ -411,8 +437,17 @@ func TestResolveChainForSite_NoFileIndex_AutoBase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if res.IsIncremental {
-		t.Error("expected full base (no file index rows on prior snapshot), got is_incremental=true")
+	// A prior full backup with no file index can't be diffed, so we bootstrap a
+	// fresh gen-0 base-increment (writes its own full file index) rather than
+	// dispatching another plain full.
+	if !res.IsIncremental {
+		t.Error("expected gen-0 base-increment (no file index rows on prior), got is_incremental=false")
+	}
+	if res.Generation != 0 {
+		t.Errorf("expected generation=0, got %d", res.Generation)
+	}
+	if res.ParentSnapshotID != nil {
+		t.Errorf("expected nil parent for a gen-0 base, got %v", res.ParentSnapshotID)
 	}
 }
 

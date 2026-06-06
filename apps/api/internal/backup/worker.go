@@ -131,8 +131,11 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 
 	// ADR-048: when the job was enqueued as incremental, build an
 	// IncrementalBackupRequest; otherwise use the existing BackupRequest.
+	// A no-parent gen-0 base-increment also takes the incremental path: its
+	// empty FileIndexEndpoint is the documented base signal, which the agent
+	// treats as "scan everything as new" and uploads a full file index.
 	var resp agentcmd.BackupResponse
-	if a.IsIncremental && a.ParentSnapshotID != uuid.Nil {
+	if a.IsIncremental && (a.ParentSnapshotID != uuid.Nil || a.Generation == 0) {
 		incReq := agentcmd.IncrementalBackupRequest{
 			SnapshotID:        snap.ID.String(),
 			Kind:              snap.Kind,

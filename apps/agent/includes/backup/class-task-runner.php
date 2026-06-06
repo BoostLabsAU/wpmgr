@@ -525,9 +525,17 @@ final class TaskRunner
         $endpoint = $this->fileIndexEndpoint();
 
         if ($endpoint === '') {
-            $subState['_auto_base']        = true;
-            $subState['_is_incremental']   = false;
-            $subState['_fallback_reason']  = 'file_index_endpoint is empty';
+            // ADR-048 BASE bootstrap: an empty file_index_endpoint is the CP's
+            // signal that this is a gen-0 base increment with no parent index to
+            // diff against. Stay incremental with an EMPTY previous index so the
+            // scan phase classifies every on-disk file as new and the upload
+            // phase writes a full backup_file_index (instead of falling back to a
+            // full zip, which would write manifest entries and no file index).
+            // buildPrevIndexMap() returns an empty map for a missing path, so an
+            // empty _prev_index_path yields a clean base baseline.
+            $subState['_auto_base']        = false;
+            $subState['_is_incremental']   = true;
+            $subState['_prev_index_path']  = '';
             return $subState;
         }
 

@@ -245,7 +245,7 @@ func TestCreateBackup_NoSchedule_TreatedAsOff(t *testing.T) {
 	}
 }
 
-func TestCreateBackup_ToggleOn_NoPrior_FullBase(t *testing.T) {
+func TestCreateBackup_ToggleOn_NoPrior_BaseIncrement(t *testing.T) {
 	repo := &wiringRepo{schedule: &Schedule{IncrementalEnabled: true}} // no latestCompleted → NotFound
 	enq := &recordingEnqueuer{}
 	svc := buildWiringSvc(repo, enq, time.Now())
@@ -260,12 +260,22 @@ func TestCreateBackup_ToggleOn_NoPrior_FullBase(t *testing.T) {
 	if repo.getLatestCalled != 1 {
 		t.Errorf("resolveChainForSite should be consulted once; got %d", repo.getLatestCalled)
 	}
-	// First run self-bases: the enqueued snapshot must be a full base.
-	if enq.chainCalls[0].IsIncremental {
-		t.Error("first run (no prior snapshot) must resolve to a full base, not incremental")
+	// ADR-048 fix: the first run bootstraps a gen-0 base-INCREMENT (no parent)
+	// so the agent writes a full file index instead of a plain full zip.
+	if !enq.chainCalls[0].IsIncremental {
+		t.Error("first run (no prior snapshot) must resolve to a gen-0 base-increment, not a plain full")
 	}
-	if repo.createInputs[0].IsIncremental {
-		t.Error("CreateSnapshotInput must be a full base on first run")
+	if enq.chainCalls[0].Generation != 0 {
+		t.Errorf("first run must be generation=0, got %d", enq.chainCalls[0].Generation)
+	}
+	if enq.chainCalls[0].ParentSnapshotID != nil {
+		t.Errorf("first run base-increment must have nil parent, got %v", enq.chainCalls[0].ParentSnapshotID)
+	}
+	if !repo.createInputs[0].IsIncremental || repo.createInputs[0].Generation != 0 {
+		t.Errorf("CreateSnapshotInput must be a gen-0 base-increment on first run: %+v", repo.createInputs[0])
+	}
+	if repo.createInputs[0].ParentSnapshotID != nil {
+		t.Errorf("CreateSnapshotInput must have nil parent on first run, got %v", repo.createInputs[0].ParentSnapshotID)
 	}
 }
 

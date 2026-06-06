@@ -2143,39 +2143,45 @@ func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, s
 	if baseWindowDays <= 0 {
 		baseWindowDays = BackupBaseWindowDays
 	}
+	// baseIncrement is the gen-0 BASE bootstrap resolution: an incremental run
+	// with NO parent. The agent treats an empty file_index_endpoint as a base
+	// scan (every file is new) and uploads a full backup_file_index; repo.
+	// CreateSnapshot self-anchors chain_id to the snapshot's own id for a
+	// nil-chain gen-0. This is what bootstraps a chain so the NEXT run finds a
+	// usable file index and produces a real gen-1 increment. This branch is
+	// only reached when incremental is ENABLED (the caller gates on the
+	// schedule flag), so toggle-off still gets a plain full backup.
+	baseIncrement := ChainResolution{IsIncremental: true, Generation: 0}
+
 	prev, err := s.repo.GetLatestCompletedSnapshot(ctx, tenantID, siteID)
 	if err != nil {
 		var de *domain.Error
 		if errors.As(err, &de) && de.Kind == domain.KindNotFound {
-			// No prior snapshot → full base.
-			return ChainResolution{}, nil
+			// No prior snapshot → gen-0 base-increment (bootstrap the chain).
+			return baseIncrement, nil
 		}
 		return ChainResolution{}, err
 	}
 
 	now := s.clock.Now()
 
-	// AUTO-BASE: stale chain (base window elapsed).
+	// Stale chain (base window elapsed): re-base as a gen-0 base-increment.
 	if prev.FinishedAt != nil && now.Sub(*prev.FinishedAt) > time.Duration(baseWindowDays)*24*time.Hour {
-		return ChainResolution{}, nil
+		return baseIncrement, nil
 	}
 
-	// AUTO-BASE: chain too deep.
+	// Chain too deep: re-base as a gen-0 base-increment.
 	if prev.Generation >= BackupMaxChainDepth {
-		return ChainResolution{}, nil
+		return baseIncrement, nil
 	}
 
-	// AUTO-BASE: previous snapshot is a pre-m44 full backup (no file index) —
-	// check whether it has backup_file_index rows.
+	// Previous snapshot is a pre-m44 full backup (no file index) — check whether
+	// it has backup_file_index rows. If not, we can't diff against it, so start a
+	// fresh gen-0 base-increment (which writes its own full file index).
 	if !prev.IsIncremental {
 		count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
 		if cerr != nil || count == 0 {
-			// No index rows: this is a full zip-based snapshot. Start a new chain
-			// with generation=1 off this snapshot as the base, but only if the
-			// snapshot itself can serve as the chain anchor.
-			// For V1 we require an existing file index to do an actual diff,
-			// so if count==0 we fall back to a full base run for THIS cycle too.
-			return ChainResolution{}, nil
+			return baseIncrement, nil
 		}
 	}
 
