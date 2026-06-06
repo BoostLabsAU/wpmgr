@@ -1090,9 +1090,20 @@ final class TaskRunner
         }
 
         $now            = time();
-        $encoded        = json_encode($subState);
-        if ($encoded === false) {
-            $encoded = '{}';
+        // JSON_INVALID_UTF8_SUBSTITUTE: a real WP site can hold file paths with
+        // invalid UTF-8 bytes (e.g. latin1 filenames). Plain json_encode() returns
+        // false on those, and the old `?: '{}'` fallback silently WIPED the entire
+        // sub_state — including the just-computed scan.changed[] cursor — so a
+        // watchdog re-entry would reload '{}' and submit an incremental manifest
+        // with ZERO files_entries (a useless DB-only snapshot). Substituting the
+        // bad bytes keeps the cursor intact across re-entries.
+        $encoded        = json_encode($subState, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($encoded === false || $encoded === '') {
+            // Last-resort: never persist '{}' OVER a non-empty sub_state (that
+            // would drop the resume cursor). Skip the write so the watchdog re-enters
+            // from the last good state instead of a wiped one.
+            error_log('WPMgr TaskRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
+            return;
         }
         $this->lastDbUpdate = $now;
 

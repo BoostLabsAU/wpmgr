@@ -187,6 +187,74 @@ final class TaskRunnerTest extends TestCase
     }
 
     /**
+     * REGRESSION (0.21.x empty-files_entries / DB-only base): a real WP site can
+     * hold file paths with invalid UTF-8 bytes (e.g. a latin1 `café/` directory).
+     * Those bytes land verbatim in scan.changed[].file_path. Plain json_encode()
+     * returns false on invalid UTF-8, and the old `$encoded ?: '{}'` fallback
+     * silently WIPED the entire sub_state — dropping scan.changed[] — so the
+     * upload phase (and any watchdog re-entry) submitted an incremental manifest
+     * with ZERO files_entries (a useless DB-only snapshot).
+     *
+     * saveTaskState() must persist the changed[] cursor INTACT (substituting the
+     * bad bytes), and must NEVER write '{}' over a non-empty sub_state.
+     */
+    public function test_save_task_state_preserves_changed_cursor_with_non_utf8_paths(): void
+    {
+        $wpdb = new CapturingWpdb();
+        $GLOBALS['wpdb'] = $wpdb;
+
+        try {
+            $runner = $this->buildRunner(TaskRunner::KIND_FULL);
+
+            // sub_state with a NON-UTF-8 file path (0xE9 = latin1 'é', invalid
+            // standalone UTF-8) in the incremental scan cursor.
+            $subState = [
+                'scan' => [
+                    'done'          => true,
+                    'files_changed' => 2,
+                    'changed'       => [
+                        [
+                            'file_path'    => "plugins/caf\xE9/file.php",
+                            'file_size'    => 10,
+                            'file_mtime'   => 1,
+                            'file_blake3'  => 'h1',
+                            'chunk_hashes' => ['h1'],
+                        ],
+                        [
+                            'file_path'    => 'plugins/ok.php',
+                            'file_size'    => 12,
+                            'file_mtime'   => 2,
+                            'file_blake3'  => 'h2',
+                            'chunk_hashes' => ['h2'],
+                        ],
+                    ],
+                ],
+            ];
+
+            $reflection = new ReflectionClass(TaskRunner::class);
+            $save       = $reflection->getMethod('saveTaskState');
+            $save->invoke($runner, TaskRunner::PHASE_UPLOAD_INCREMENTAL, $subState);
+
+            $this->assertNotNull($wpdb->lastSubState, 'saveTaskState skipped the write — sub_state was lost');
+            $this->assertNotSame('{}', $wpdb->lastSubState, 'sub_state was wiped to {} (the regression)');
+
+            $decoded = json_decode((string) $wpdb->lastSubState, true);
+            $this->assertIsArray($decoded);
+            $this->assertArrayHasKey('scan', $decoded);
+            $this->assertCount(
+                2,
+                $decoded['scan']['changed'],
+                'changed[] cursor must survive json_encode of a non-UTF-8 path'
+            );
+            // The clean ASCII path round-trips verbatim.
+            $paths = array_column($decoded['scan']['changed'], 'file_path');
+            $this->assertContains('plugins/ok.php', $paths);
+        } finally {
+            unset($GLOBALS['wpdb']);
+        }
+    }
+
+    /**
      * Build a TaskRunner with a minimal, syntactically-valid params payload.
      * We never actually touch the network/disk in these tests — the
      * reflection-driven asserts target pure transition helpers.
@@ -213,5 +281,32 @@ final class TaskRunnerTest extends TestCase
                 'prefix'   => 'wp_',
             ],
         ]);
+    }
+}
+
+/**
+ * In-memory $wpdb double that captures the sub_state passed to update(), so the
+ * regression test can assert the serialized cursor survives non-UTF-8 paths.
+ */
+final class CapturingWpdb
+{
+    public string $prefix = 'wp_';
+
+    /** @var string|null The sub_state value of the last update() call. */
+    public ?string $lastSubState = null;
+
+    /**
+     * @param string               $table  Table name.
+     * @param array<string,mixed>   $data   Column => value.
+     * @param array<string,mixed>   $where  WHERE column => value.
+     * @param list<string>|null     $format Value formats.
+     * @param list<string>|null     $whereFormat WHERE formats.
+     */
+    public function update($table, $data, $where, $format = null, $whereFormat = null): int
+    {
+        if (isset($data['sub_state']) && is_string($data['sub_state'])) {
+            $this->lastSubState = $data['sub_state'];
+        }
+        return 1;
     }
 }

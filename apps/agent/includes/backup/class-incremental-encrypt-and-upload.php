@@ -307,6 +307,23 @@ final class IncrementalEncryptAndUpload
             ];
         }
 
+        // INVARIANT (regression guard for the 0.21.0 empty-files_entries bug):
+        // the scan reported changed/new files, so the manifest MUST carry one
+        // files_entries row per changed file. If $filesEntries is empty while
+        // $filesChanged > 0 the per-file records were lost somewhere between the
+        // scanner and here (e.g. a wiped sub_state on watchdog re-entry). Submitting
+        // anyway records a snapshot with ZERO files — a silent, useless DB-only
+        // backup. Fail loudly instead so the run is retried/auto-based rather than
+        // completing with no files. (A zero-change increment legitimately submits an
+        // empty files list, hence the $filesChanged > 0 condition.)
+        if ($filesEntries === [] && $filesChanged > 0) {
+            throw new \RuntimeException(sprintf(
+                'IncrementalEncryptAndUpload: refusing to submit manifest with empty files_entries '
+                . 'while the scan reported %d changed file(s) — per-file records were lost upstream',
+                $filesChanged
+            ));
+        }
+
         $body = (string) wp_json_encode([
             'snapshot_id'           => $this->snapshotId,
             'age_recipient'         => $this->ageRecipient,

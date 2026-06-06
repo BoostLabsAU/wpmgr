@@ -160,6 +160,72 @@ final class IncrementalUploadMultiTest extends TestCase
         $this->expectException(\RuntimeException::class);
         $this->pipeline($transport)->uploadChunks($changed, $this->scratch, [], $this->noopProgress());
     }
+
+    /**
+     * REGRESSION (0.21.x DB-only base): the scan reported changed files but the
+     * per-file records were lost upstream (e.g. a wiped sub_state). Submitting an
+     * empty files_entries while filesChanged > 0 would record a silent, useless
+     * DB-only snapshot. submitIncrementalManifest() must refuse and throw so the
+     * run is retried instead of completing with zero files.
+     */
+    public function test_submit_manifest_refuses_empty_files_when_scan_reported_changes(): void
+    {
+        $transport = new RecordingTransport([], static fn(string $h): bool => true);
+        $pipeline  = $this->pipeline($transport);
+
+        // changedFiles empty, but the scan reported 7 changed files.
+        $this->expectException(\RuntimeException::class);
+        $this->expectExceptionMessageMatches('/empty files_entries/');
+        $pipeline->submitIncrementalManifest(
+            [],            // changedFiles — LOST upstream
+            [],            // tombstones
+            [['path' => 'database.sql.gz', 'entry_kind' => 'db', 'chunks' => []]], // db_entries present
+            10,            // filesScanned
+            7,             // filesChanged > 0 -> guard fires
+            0,             // filesDeleted
+            0,             // bytesUploaded
+            $this->noopProgress()
+        );
+    }
+
+    /**
+     * The guard must NOT fire for a legitimate zero-change increment: no changed
+     * files AND filesChanged == 0 is a valid (metadata-only / tombstone-only)
+     * submission. Here we also have no tombstones, so the only way this throws is
+     * a false-positive guard. We stub wp_remote_post to a 2xx so the real submit
+     * path completes without network.
+     */
+    public function test_submit_manifest_allows_empty_files_on_zero_change_increment(): void
+    {
+        Monkey\Functions\when('wp_json_encode')->alias(static fn($d) => json_encode($d));
+        Monkey\Functions\when('wp_remote_post')->justReturn(['response' => ['code' => 200]]);
+        Monkey\Functions\when('wp_remote_retrieve_response_code')->justReturn(200);
+        Monkey\Functions\when('is_wp_error')->justReturn(false);
+
+        $transport = new RecordingTransport([], static fn(string $h): bool => true);
+        // Use a manifest endpoint with a path so parse_url succeeds.
+        $pipeline  = new IncrementalEncryptAndUpload(
+            $transport,
+            'snap-1',
+            'age1xxxx',
+            'https://cp.example/presign',
+            'https://cp.example/manifest',
+            4 * 1024 * 1024
+        );
+
+        // Signer is constructed inside submitIncrementalManifest; if it fails the
+        // test would error before our assertion. Guard that with a try/skip.
+        try {
+            $pipeline->submitIncrementalManifest(
+                [], [], [], 5, 0, 0, 0, $this->noopProgress()
+            );
+            $this->addToAssertionCount(1); // Reached here = guard did not false-fire.
+        } catch (\RuntimeException $e) {
+            // A signing failure (no keystore in unit env) is acceptable and is NOT
+            // the empty-files guard; only fail if the guard misfired.
+            $this->assertStringNotContainsString('empty files_entries', $e->getMessage());
+        }
+    }
 }
 
 /**

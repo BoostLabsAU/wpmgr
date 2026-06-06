@@ -1681,9 +1681,16 @@ final class RestoreRunner
         }
 
         $now     = time();
-        $encoded = json_encode($subState);
-        if ($encoded === false) {
-            $encoded = '{}';
+        // JSON_INVALID_UTF8_SUBSTITUTE: a real WP site can hold file paths with
+        // invalid UTF-8 bytes (e.g. latin1 filenames) in plan/tombstone cursors.
+        // Plain json_encode() returns false on those, and the old `?: '{}'`
+        // fallback silently WIPED the entire sub_state — including the restore
+        // params (endpoints, age recipient) the watchdog needs to re-enter.
+        // Substitute the bad bytes instead, and never persist '{}' over good state.
+        $encoded = json_encode($subState, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($encoded === false || $encoded === '') {
+            error_log('WPMgr RestoreRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
+            return;
         }
         $this->lastDbUpdate = $now;
 
