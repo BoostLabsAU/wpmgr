@@ -367,12 +367,7 @@ func (r *pgRepo) GetLatestCompletedSnapshot(ctx context.Context, tenantID, siteI
 	var out Snapshot
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
-			`SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient,
-			        total_size, chunk_count, error, archived, progress, progress_updated_at,
-			        started_at, finished_at, created_at, updated_at,
-			        is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
-			        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded
-			   FROM backup_snapshots
+			snapshotSelectColumns+` FROM backup_snapshots
 			  WHERE tenant_id=$1 AND site_id=$2 AND status='completed'
 			  ORDER BY created_at DESC
 			  LIMIT 1`,
@@ -394,14 +389,18 @@ func (r *pgRepo) GetLatestCompletedSnapshot(ctx context.Context, tenantID, siteI
 func (r *pgRepo) GetSnapshot(ctx context.Context, tenantID, snapshotID uuid.UUID) (Snapshot, error) {
 	var out Snapshot
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		row, err := sqlc.New(tx).GetBackupSnapshot(ctx, sqlc.GetBackupSnapshotParams{ID: snapshotID, TenantID: tenantID})
+		row := tx.QueryRow(ctx,
+			snapshotSelectColumns+` FROM backup_snapshots WHERE id=$1 AND tenant_id=$2`,
+			snapshotID, tenantID,
+		)
+		s, err := scanSnapshotWithChainFields(row)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return domain.NotFound("backup_snapshot_not_found", "backup snapshot not found")
 			}
 			return domain.Internal("backup_snapshot_get_failed", "failed to load snapshot").WithCause(err)
 		}
-		out = toSnapshot(row)
+		out = s
 		return nil
 	})
 	return out, err
@@ -414,14 +413,18 @@ func (r *pgRepo) GetSnapshot(ctx context.Context, tenantID, snapshotID uuid.UUID
 func (r *pgRepo) GetSnapshotScoped(ctx context.Context, p db.ScopedPrincipal, tenantID, snapshotID uuid.UUID) (Snapshot, error) {
 	var out Snapshot
 	err := r.pool.RunTenantTx(ctx, p, func(tx pgx.Tx) error {
-		row, err := sqlc.New(tx).GetBackupSnapshot(ctx, sqlc.GetBackupSnapshotParams{ID: snapshotID, TenantID: tenantID})
+		row := tx.QueryRow(ctx,
+			snapshotSelectColumns+` FROM backup_snapshots WHERE id=$1 AND tenant_id=$2`,
+			snapshotID, tenantID,
+		)
+		s, err := scanSnapshotWithChainFields(row)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return domain.NotFound("backup_snapshot_not_found", "backup snapshot not found")
 			}
 			return domain.Internal("backup_snapshot_get_failed", "failed to load snapshot").WithCause(err)
 		}
-		out = toSnapshot(row)
+		out = s
 		return nil
 	})
 	return out, err
@@ -430,17 +433,26 @@ func (r *pgRepo) GetSnapshotScoped(ctx context.Context, p db.ScopedPrincipal, te
 func (r *pgRepo) ListSnapshotsForSite(ctx context.Context, tenantID, siteID uuid.UUID, limit, offset int32) ([]Snapshot, error) {
 	var out []Snapshot
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		rows, err := sqlc.New(tx).ListBackupSnapshotsForSite(ctx, sqlc.ListBackupSnapshotsForSiteParams{
-			TenantID: tenantID, SiteID: siteID, Limit: limit, Offset: offset,
-		})
+		rows, err := tx.Query(ctx,
+			snapshotSelectColumns+` FROM backup_snapshots
+			  WHERE tenant_id=$1 AND site_id=$2
+			  ORDER BY created_at DESC
+			  LIMIT $3 OFFSET $4`,
+			tenantID, siteID, limit, offset,
+		)
 		if err != nil {
 			return domain.Internal("backup_snapshot_list_failed", "failed to list snapshots").WithCause(err)
 		}
-		out = make([]Snapshot, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, toSnapshot(row))
+		defer rows.Close()
+		out = make([]Snapshot, 0)
+		for rows.Next() {
+			s, serr := scanSnapshotWithChainFields(rows)
+			if serr != nil {
+				return domain.Internal("backup_snapshot_list_scan_failed", "failed to scan snapshot row").WithCause(serr)
+			}
+			out = append(out, s)
 		}
-		return nil
+		return rows.Err()
 	})
 	return out, err
 }
@@ -1353,6 +1365,19 @@ type rowScanner interface {
 	Scan(dest ...any) error
 }
 
+// snapshotSelectColumns is the canonical projection for a full backup_snapshots
+// row, including the ADR-048/050 chain columns (is_incremental … chain_id,
+// generation) and the cycle counter columns. The sqlc-generated SELECT *
+// queries expand to the pre-m44 column list and so omit these; raw reads that
+// must surface incremental metadata use this constant paired with
+// scanSnapshotWithChainFields. The column order MUST match that scan helper's
+// Scan() argument order exactly.
+const snapshotSelectColumns = `SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient,
+        total_size, chunk_count, error, archived, progress, progress_updated_at,
+        started_at, finished_at, created_at, updated_at,
+        is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
+        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded`
+
 // scanSnapshotWithChainFields scans a row that includes the ADR-048 chain
 // columns (is_incremental … cycle_bytes_uploaded). The SELECT must project all
 // standard snapshot columns plus the four chain UUID columns and the four cycle
@@ -1528,12 +1553,7 @@ func (r *pgRepo) ListChainSnapshots(ctx context.Context, tenantID uuid.UUID, cha
 	var out []Snapshot
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient,
-			        total_size, chunk_count, error, archived, progress, progress_updated_at,
-			        started_at, finished_at, created_at, updated_at,
-			        is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
-			        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded
-			   FROM backup_snapshots
+			snapshotSelectColumns+` FROM backup_snapshots
 			  WHERE tenant_id = $1
 			    AND chain_id  = $2
 			    AND generation <= $3

@@ -1850,6 +1850,34 @@ export const BackupSnapshotSchema = {
       type: "string",
       format: "date-time",
     },
+    is_incremental: {
+      type: "boolean",
+      description:
+        "ADR-048 incremental backup. True if this snapshot only stores files\nchanged since its parent; false for full-base snapshots and all\npre-m44 rows.\n",
+    },
+    generation: {
+      type: "integer",
+      description:
+        "Position of this snapshot within its incremental chain. 0 is the\nfull base; 1+ are successive incrementals.\n",
+    },
+    chain_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "Groups a full base and its incrementals into one chain. Null for legacy/full-base rows.",
+    },
+    parent_snapshot_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "The snapshot this incremental was diffed against. Null for full-base rows.",
+    },
+    base_snapshot_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "The full-base snapshot at the root of this chain. Null for legacy/full-base rows.",
+    },
   },
 } as const;
 

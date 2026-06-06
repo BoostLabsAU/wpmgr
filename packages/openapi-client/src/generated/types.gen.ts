@@ -820,6 +820,31 @@ export type BackupSnapshot = {
   finished_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * ADR-048 incremental backup. True if this snapshot only stores files
+   * changed since its parent; false for full-base snapshots and all
+   * pre-m44 rows.
+   *
+   */
+  is_incremental?: boolean;
+  /**
+   * Position of this snapshot within its incremental chain. 0 is the
+   * full base; 1+ are successive incrementals.
+   *
+   */
+  generation?: number;
+  /**
+   * Groups a full base and its incrementals into one chain. Null for legacy/full-base rows.
+   */
+  chain_id?: string;
+  /**
+   * The snapshot this incremental was diffed against. Null for full-base rows.
+   */
+  parent_snapshot_id?: string;
+  /**
+   * The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
+   */
+  base_snapshot_id?: string;
 };
 
 export type BackupSnapshotList = {

@@ -6829,9 +6829,39 @@ func (s *BackupSnapshot) encodeFields(e *jx.Encoder) {
 		e.FieldStart("updated_at")
 		json.EncodeDateTime(e, s.UpdatedAt)
 	}
+	{
+		if s.IsIncremental.Set {
+			e.FieldStart("is_incremental")
+			s.IsIncremental.Encode(e)
+		}
+	}
+	{
+		if s.Generation.Set {
+			e.FieldStart("generation")
+			s.Generation.Encode(e)
+		}
+	}
+	{
+		if s.ChainID.Set {
+			e.FieldStart("chain_id")
+			s.ChainID.Encode(e)
+		}
+	}
+	{
+		if s.ParentSnapshotID.Set {
+			e.FieldStart("parent_snapshot_id")
+			s.ParentSnapshotID.Encode(e)
+		}
+	}
+	{
+		if s.BaseSnapshotID.Set {
+			e.FieldStart("base_snapshot_id")
+			s.BaseSnapshotID.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfBackupSnapshot = [17]string{
+var jsonFieldsNameOfBackupSnapshot = [22]string{
 	0:  "id",
 	1:  "tenant_id",
 	2:  "site_id",
@@ -6849,6 +6879,11 @@ var jsonFieldsNameOfBackupSnapshot = [17]string{
 	14: "finished_at",
 	15: "created_at",
 	16: "updated_at",
+	17: "is_incremental",
+	18: "generation",
+	19: "chain_id",
+	20: "parent_snapshot_id",
+	21: "base_snapshot_id",
 }
 
 // Decode decodes BackupSnapshot from json.
@@ -7039,6 +7074,56 @@ func (s *BackupSnapshot) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"updated_at\"")
+			}
+		case "is_incremental":
+			if err := func() error {
+				s.IsIncremental.Reset()
+				if err := s.IsIncremental.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"is_incremental\"")
+			}
+		case "generation":
+			if err := func() error {
+				s.Generation.Reset()
+				if err := s.Generation.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"generation\"")
+			}
+		case "chain_id":
+			if err := func() error {
+				s.ChainID.Reset()
+				if err := s.ChainID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"chain_id\"")
+			}
+		case "parent_snapshot_id":
+			if err := func() error {
+				s.ParentSnapshotID.Reset()
+				if err := s.ParentSnapshotID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"parent_snapshot_id\"")
+			}
+		case "base_snapshot_id":
+			if err := func() error {
+				s.BaseSnapshotID.Reset()
+				if err := s.BaseSnapshotID.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"base_snapshot_id\"")
 			}
 		default:
 			return d.Skip()

@@ -24,7 +24,11 @@ import { PageError } from "@/components/feedback";
 import { StatusChip } from "@/components/status/status-chip";
 import type { StatusTone } from "@/components/status/status-dot";
 import { useBackups, useCreateBackup } from "@/features/backups/use-backups";
-import { StatusBadge, KindBadge } from "@/features/backups/backup-badges";
+import {
+  StatusBadge,
+  KindBadge,
+  IncrementalBadge,
+} from "@/features/backups/backup-badges";
 import { InlineSnapshotProgress } from "@/features/backups/inline-snapshot-progress";
 import { isRestoreActive, PHASE_LABEL } from "@/features/backups/format-progress";
 import {
@@ -202,7 +206,13 @@ function SnapshotList({ siteId }: { siteId: string }) {
         {data.map((snap) => (
           <TableRow key={snap.id} data-testid="backup-row">
             <TableCell>
-              <KindBadge kind={snap.kind} />
+              <div className="flex flex-col items-start gap-1">
+                <KindBadge kind={snap.kind} />
+                <IncrementalBadge
+                  isIncremental={snap.is_incremental}
+                  generation={snap.generation}
+                />
+              </div>
             </TableCell>
             <TableCell>
               <div className="flex flex-col gap-1">

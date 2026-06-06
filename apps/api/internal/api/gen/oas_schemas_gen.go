@@ -2666,6 +2666,19 @@ type BackupSnapshot struct {
 	FinishedAt        OptDateTime `json:"finished_at"`
 	CreatedAt         time.Time   `json:"created_at"`
 	UpdatedAt         time.Time   `json:"updated_at"`
+	// ADR-048 incremental backup. True if this snapshot only stores files
+	// changed since its parent; false for full-base snapshots and all
+	// pre-m44 rows.
+	IsIncremental OptBool `json:"is_incremental"`
+	// Position of this snapshot within its incremental chain. 0 is the
+	// full base; 1+ are successive incrementals.
+	Generation OptInt `json:"generation"`
+	// Groups a full base and its incrementals into one chain. Null for legacy/full-base rows.
+	ChainID OptUUID `json:"chain_id"`
+	// The snapshot this incremental was diffed against. Null for full-base rows.
+	ParentSnapshotID OptUUID `json:"parent_snapshot_id"`
+	// The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
+	BaseSnapshotID OptUUID `json:"base_snapshot_id"`
 }
 
 // GetID returns the value of ID.
@@ -2753,6 +2766,31 @@ func (s *BackupSnapshot) GetUpdatedAt() time.Time {
 	return s.UpdatedAt
 }
 
+// GetIsIncremental returns the value of IsIncremental.
+func (s *BackupSnapshot) GetIsIncremental() OptBool {
+	return s.IsIncremental
+}
+
+// GetGeneration returns the value of Generation.
+func (s *BackupSnapshot) GetGeneration() OptInt {
+	return s.Generation
+}
+
+// GetChainID returns the value of ChainID.
+func (s *BackupSnapshot) GetChainID() OptUUID {
+	return s.ChainID
+}
+
+// GetParentSnapshotID returns the value of ParentSnapshotID.
+func (s *BackupSnapshot) GetParentSnapshotID() OptUUID {
+	return s.ParentSnapshotID
+}
+
+// GetBaseSnapshotID returns the value of BaseSnapshotID.
+func (s *BackupSnapshot) GetBaseSnapshotID() OptUUID {
+	return s.BaseSnapshotID
+}
+
 // SetID sets the value of ID.
 func (s *BackupSnapshot) SetID(val uuid.UUID) {
 	s.ID = val
@@ -2836,6 +2874,31 @@ func (s *BackupSnapshot) SetCreatedAt(val time.Time) {
 // SetUpdatedAt sets the value of UpdatedAt.
 func (s *BackupSnapshot) SetUpdatedAt(val time.Time) {
 	s.UpdatedAt = val
+}
+
+// SetIsIncremental sets the value of IsIncremental.
+func (s *BackupSnapshot) SetIsIncremental(val OptBool) {
+	s.IsIncremental = val
+}
+
+// SetGeneration sets the value of Generation.
+func (s *BackupSnapshot) SetGeneration(val OptInt) {
+	s.Generation = val
+}
+
+// SetChainID sets the value of ChainID.
+func (s *BackupSnapshot) SetChainID(val OptUUID) {
+	s.ChainID = val
+}
+
+// SetParentSnapshotID sets the value of ParentSnapshotID.
+func (s *BackupSnapshot) SetParentSnapshotID(val OptUUID) {
+	s.ParentSnapshotID = val
+}
+
+// SetBaseSnapshotID sets the value of BaseSnapshotID.
+func (s *BackupSnapshot) SetBaseSnapshotID(val OptUUID) {
+	s.BaseSnapshotID = val
 }
 
 func (*BackupSnapshot) createBackupRes()  {}

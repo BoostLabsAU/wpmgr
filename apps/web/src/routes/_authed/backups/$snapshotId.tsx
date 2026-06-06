@@ -14,7 +14,11 @@ import { PageHeader } from "@/components/shared/page-header";
 import { DefinitionList } from "@/components/shared/definition-list";
 import { LiveIndicator } from "@/components/shared/live-indicator";
 import { useBackup, NotFoundError } from "@/features/backups/use-backups";
-import { StatusBadge, KindBadge } from "@/features/backups/backup-badges";
+import {
+  StatusBadge,
+  KindBadge,
+  IncrementalBadge,
+} from "@/features/backups/backup-badges";
 import { RestoreDialog } from "@/features/backups/restore-dialog";
 import { SnapshotProgressCard } from "@/features/backups/snapshot-progress-card";
 import { SqlInspectionCard } from "@/features/backups/sql-inspection-card";
@@ -217,6 +221,10 @@ function SnapshotDetailView({
         badges={
           <span className="flex items-center gap-2">
             <KindBadge kind={snapshot.kind} />
+            <IncrementalBadge
+              isIncremental={snapshot.is_incremental}
+              generation={snapshot.generation}
+            />
             <StatusBadge status={snapshot.status} />
             {inFlight ? (
               <LiveIndicator state="connecting" label="In progress" />

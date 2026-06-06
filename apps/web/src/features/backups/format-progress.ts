@@ -22,6 +22,11 @@ export const PHASE_IDS = [
   "uploading",
   "encrypting_uploading",
   "submitting_manifest",
+  // Incremental backup (ADR-048)
+  "fetching_file_index",
+  "scanning_files",
+  "uploading_incremental",
+  "incremental_fallback",
   // Restore (ADR-034)
   "preflight",
   "download_artifacts",
@@ -55,6 +60,11 @@ export const PHASE_LABEL: Record<PhaseId, string> = {
   uploading: "Uploading",
   encrypting_uploading: "Encrypting & uploading",
   submitting_manifest: "Finalising",
+  // Incremental backup (ADR-048)
+  fetching_file_index: "Fetching file index",
+  scanning_files: "Scanning changes",
+  uploading_incremental: "Uploading changed files",
+  incremental_fallback: "Switching to full backup",
   // Restore (phase names match the agent's task-runner)
   preflight: "Pre-flight checks",
   download_artifacts: "Downloading chunks",
@@ -86,6 +96,30 @@ export const STEPPER_PHASES: PhaseId[] = [
   "encrypting_uploading",
   "submitting_manifest",
 ];
+
+/**
+ * Incremental-backup stepper (ADR-048). The incremental runner emits its own
+ * lead-in phases (fetching_file_index → scanning_files → uploading_incremental)
+ * that the full-backup STEPPER_PHASES does not contain, so without a dedicated
+ * variant buildStepperPhases would find activeIdx = -1 and render no active dot
+ * for an incremental run. The shared tail phase (submitting_manifest) is the
+ * final node so the transition out of uploading_incremental stays coherent.
+ */
+export const INCREMENTAL_STEPPER_PHASES: PhaseId[] = [
+  "queued",
+  "fetching_file_index",
+  "scanning_files",
+  "uploading_incremental",
+  "submitting_manifest",
+];
+
+/** Incremental-specific phases — used to pick the incremental stepper variant. */
+export const INCREMENTAL_PHASE_IDS: ReadonlySet<PhaseId> = new Set<PhaseId>([
+  "fetching_file_index",
+  "scanning_files",
+  "uploading_incremental",
+  "incremental_fallback",
+]);
 
 /**
  * Restore stepper — collapsed 6-node summary of the 13-phase runner. We hide
@@ -143,6 +177,10 @@ export const TERMINAL_PHASES: ReadonlySet<PhaseId> = new Set<PhaseId>([
 
 export function isRestorePhase(phase: PhaseId): boolean {
   return RESTORE_PHASE_IDS.has(phase);
+}
+
+export function isIncrementalPhase(phase: PhaseId): boolean {
+  return INCREMENTAL_PHASE_IDS.has(phase);
 }
 
 /**
@@ -290,19 +328,27 @@ export function buildStepperPhases(
   active: PhaseId,
   overallStatus: BackupSnapshot["status"],
 ): { id: PhaseId; label: string; status: "completed" | "active" | "pending" | "failed" }[] {
-  // Pick the stepper based on whether the active phase is a backup or restore
-  // phase. The terminal phases (completed/failed) are shared — for terminals
-  // we keep whichever stepper was most recently relevant (default to backup
-  // because a snapshot starts as a backup; restore is overlaid later).
+  // Pick the stepper based on whether the active phase is a restore,
+  // incremental-backup, or full-backup phase. The terminal phases
+  // (completed/failed) are shared — for terminals we keep whichever stepper was
+  // most recently relevant (default to backup because a snapshot starts as a
+  // backup; restore is overlaid later).
   const isRestore = isRestorePhase(active);
-  const stepper = isRestore ? RESTORE_STEPPER_PHASES : STEPPER_PHASES;
+  const isIncremental = !isRestore && isIncrementalPhase(active);
+  const stepper = isRestore
+    ? RESTORE_STEPPER_PHASES
+    : isIncremental
+      ? INCREMENTAL_STEPPER_PHASES
+      : STEPPER_PHASES;
 
-  // For RESTORE: the runner emits the literal phase, but our compact stepper
-  // collapses several phases into a single visual node. Map the active phase
-  // to the nearest stepper node so the right circle pulses.
+  // The runner emits literal phases, but the compact restore/incremental
+  // steppers collapse several phases into a single visual node. Map the active
+  // phase to the nearest stepper node so the right circle pulses.
   const collapsedActive: PhaseId = isRestore
     ? collapseToRestoreStepperNode(active)
-    : active;
+    : isIncremental
+      ? collapseToIncrementalStepperNode(active)
+      : active;
 
   const activeIdx = stepper.indexOf(collapsedActive);
   return stepper.map((id, idx) => {
@@ -348,6 +394,23 @@ function collapseToRestoreStepperNode(active: PhaseId): PhaseId {
     case "maintenance_off":
     case "cleanup":
       return "cleanup";
+    default:
+      return active;
+  }
+}
+
+/**
+ * Map an incremental-specific phase onto its incremental stepper node so the
+ * right circle pulses. Only reached for the four INCREMENTAL_PHASE_IDS — the
+ * shared tail phases (dumping_db / encrypting_uploading / submitting_manifest)
+ * are not incremental phases, so they route to the full STEPPER_PHASES where
+ * those nodes already exist. incremental_fallback collapses onto scanning_files
+ * (the scan decided to fall back to a full backup before any upload).
+ */
+function collapseToIncrementalStepperNode(active: PhaseId): PhaseId {
+  switch (active) {
+    case "incremental_fallback":
+      return "scanning_files";
     default:
       return active;
   }

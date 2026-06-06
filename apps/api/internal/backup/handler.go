@@ -666,6 +666,19 @@ func toAPISnapshot(s Snapshot) gen.BackupSnapshot {
 	if s.ProgressUpdatedAt != nil {
 		out.ProgressUpdatedAt = gen.NewOptDateTime(*s.ProgressUpdatedAt)
 	}
+	// ADR-048 incremental visibility. Scalars always carry a value (zero for
+	// pre-m44 / full-base rows); the chain pointers stay unset when nil.
+	out.IsIncremental = gen.NewOptBool(s.IsIncremental)
+	out.Generation = gen.NewOptInt(s.Generation)
+	if s.ChainID != nil {
+		out.ChainID = gen.NewOptUUID(*s.ChainID)
+	}
+	if s.ParentSnapshotID != nil {
+		out.ParentSnapshotID = gen.NewOptUUID(*s.ParentSnapshotID)
+	}
+	if s.BaseSnapshotID != nil {
+		out.BaseSnapshotID = gen.NewOptUUID(*s.BaseSnapshotID)
+	}
 	return out
 }
 

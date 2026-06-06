@@ -35,3 +35,27 @@ const kindLabel: Record<Kind, string> = {
 export function KindBadge({ kind }: { kind: Kind }) {
   return <Badge variant="outline">{kindLabel[kind]}</Badge>;
 }
+
+/**
+ * ADR-048 incremental visibility. Renders the "Incremental · gen N" badge ONLY
+ * for an incremental snapshot; a full/legacy snapshot (is_incremental false or
+ * undefined and generation 0/undefined) renders nothing, so existing full
+ * snapshots look exactly as they did before this badge existed.
+ */
+export function IncrementalBadge({
+  isIncremental,
+  generation,
+}: {
+  isIncremental?: BackupSnapshot["is_incremental"];
+  generation?: BackupSnapshot["generation"];
+}) {
+  const gen = generation ?? 0;
+  if (!isIncremental && gen === 0) {
+    return null;
+  }
+  return (
+    <Badge variant="secondary" aria-label={`Incremental snapshot, generation ${gen}`}>
+      Incremental · gen {gen}
+    </Badge>
+  );
+}

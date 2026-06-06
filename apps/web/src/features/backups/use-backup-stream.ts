@@ -40,6 +40,13 @@ export const backupEventSchema = z.object({
     "uploading",
     "encrypting_uploading",
     "submitting_manifest",
+    // Incremental backup phases (ADR-048) — same SSE channel; agent emits these
+    // for chained snapshots (scan/diff + upload-changed). submitting_manifest is
+    // reused from the full-backup set above.
+    "fetching_file_index",
+    "scanning_files",
+    "uploading_incremental",
+    "incremental_fallback",
     // Restore phases (M5.6 / ADR-034) — share the same SSE channel by
     // snapshot_id; the frontend reads `phase` to decide which stepper to render
     "preflight",
