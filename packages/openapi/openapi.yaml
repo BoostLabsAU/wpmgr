@@ -2216,16 +2216,73 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/lock:
+    patch:
+      operationId: lockBackup
+      summary: Lock a backup snapshot against retention GC
+      description: |
+        Sets `locked=true` on a completed snapshot. Locked snapshots are never
+        auto-pruned by the retention GC regardless of age or count rules.
+        The operator must explicitly DELETE the lock before the GC can reclaim it.
+        Track C (m49). Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: Snapshot is now locked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: Cannot lock a pending or running snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    delete:
+      operationId: unlockBackup
+      summary: Unlock a backup snapshot (re-enable GC eligibility)
+      description: |
+        Clears the `locked` flag, making the snapshot eligible for normal
+        retention GC again. Track C (m49). Requires operator+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: Snapshot is now unlocked
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupSnapshot"
+        "404":
+          description: Snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/backups/{snapshotId}/events:
     get:
       operationId: streamBackupSnapshotEvents
       summary: Stream live backup snapshot progress (SSE)
       description: |
         Server-Sent Events stream (text/event-stream) of progress transitions for
-        a backup snapshot, for live UI updates. Each `data:` line is a JSON
-        BackupEvent. The stream emits periodic heartbeat comment lines (":\n")
-        and ends when the snapshot reaches a terminal state (completed/failed)
-        or the client disconnects. Requires viewer+.
+        a backup snapshot, for live UI updates. Each frame is tagged
+        `event: progress` with a JSON BackupEvent payload. The stream emits
+        periodic heartbeat comment lines (":\n\n") every 15 seconds and has a
+        30-minute server-side safety timeout. The server does NOT close the
+        stream on a terminal snapshot status — a completed snapshot can still
+        receive restore phase events on the same channel. The client is
+        responsible for closing its EventSource when it observes a terminal
+        `phase` (completed/failed). Requires viewer+.
       tags: [backups]
       parameters:
         - $ref: "#/components/parameters/SnapshotId"
@@ -2241,6 +2298,40 @@ paths:
                 $ref: "#/components/schemas/BackupEvent"
         "404":
           description: Backup snapshot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/backups/{snapshotId}/environment:
+    get:
+      operationId: getBackupEnvironment
+      summary: Get the environment fingerprint recorded at backup time
+      description: |
+        Returns the raw JSON the agent shipped as the synthetic `environment.json`
+        manifest entry for a snapshot (PHP version, WordPress version, active
+        plugins, server software, etc.). Returns 404 with code `env_not_recorded`
+        for snapshots that pre-date the environment-fingerprint feature (agent
+        v0.9.10+). Returns 503 when the environment reader is not wired on this
+        control plane. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SnapshotId"
+      responses:
+        "200":
+          description: The agent-produced environment fingerprint JSON (pass-through).
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Snapshot not found, or snapshot pre-dates the environment-fingerprint feature (env_not_recorded).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Environment reader not configured on this control plane.
           content:
             application/json:
               schema:
@@ -2314,7 +2405,17 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BackupSnapshot"
+                allOf:
+                  - $ref: "#/components/schemas/BackupSnapshot"
+                  - type: object
+                    properties:
+                      restore_run_id:
+                        type: string
+                        format: uuid
+                        description: >
+                          The restore_run row ID created for this restore attempt.
+                          Use it to correlate SSE progress events. Absent when the
+                          restore-run store is not wired on this control plane.
         "422":
           description: Validation failed
           content:
@@ -2362,6 +2463,96 @@ paths:
                 $ref: "#/components/schemas/BackupSchedule"
         "422":
           description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/backup-settings/contents:
+    get:
+      operationId: getBackupSettingsContents
+      summary: Get a site's backup content scope settings (Track-A, m50)
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: The site's backup content scope settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteBackupSettingsContents"
+        "404":
+          description: No settings row exists (safe defaults apply)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: putBackupSettingsContents
+      summary: Create or update a site's backup content scope settings
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteBackupSettingsContentsUpdate"
+      responses:
+        "200":
+          description: The saved backup content scope settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteBackupSettingsContents"
+        "422":
+          description: Validation failed (invalid component, size cap, path/ext cap)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/backup-settings/notifications:
+    get:
+      operationId: getBackupSettingsNotifications
+      summary: Get a site's backup notification settings (Track-B, m50)
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: The site's backup notification settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteBackupSettingsNotifications"
+        "404":
+          description: No settings row exists (safe defaults apply — never/empty)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: putBackupSettingsNotifications
+      summary: Create or update a site's backup notification settings
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SiteBackupSettingsNotificationsUpdate"
+      responses:
+        "200":
+          description: The saved backup notification settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteBackupSettingsNotifications"
+        "422":
+          description: Validation failed (invalid enum, bad email, too many recipients)
           content:
             application/json:
               schema:
@@ -4545,15 +4736,14 @@ components:
           format: uuid
         phase:
           type: string
+          # Closed set matching TaskRunner::PHASE_* constants and CP allowedProgressPhases.
+          # The legacy phases compressing_files / encrypting / uploading were retired with
+          # the phpbu pipeline (ADR-033); encrypting_uploading is the single unified phase.
           enum:
             - queued
-            - started
             - dumping_db
             - archiving_files
             - encrypting_uploading
-            - compressing_files
-            - encrypting
-            - uploading
             - submitting_manifest
             - completed
             - failed
@@ -4664,6 +4854,12 @@ components:
           type: string
           format: uuid
           description: The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
+        locked:
+          type: boolean
+          description: |
+            Track C (m49). When true the retention GC will never auto-prune this
+            snapshot. Unlock via DELETE /backups/{snapshotId}/lock to restore
+            normal GC eligibility.
     BackupSnapshotList:
       type: object
       required: [items]
@@ -5029,6 +5225,137 @@ components:
           maximum: 365
           nullable: true
           description: "Optional override of the default incremental base window (7 days). Omit/null to use the default."
+    SiteBackupSettingsContents:
+      type: object
+      description: |
+        Track-A backup scope/exclusion settings for a site (m50). A 404 means
+        no settings row exists — safe defaults apply (all components, no exclusions).
+      required: [site_id, updated_at]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        backup_components:
+          type: array
+          items:
+            type: string
+            enum: [plugin, theme, upload, wp-content, db, core]
+          nullable: true
+          description: |
+            Subset of archive components to include. Null/absent means all components (full backup).
+            Singular vocabulary matching manifest entry_kind:
+            "plugin" (wp-content/plugins/*), "theme" (wp-content/themes/*),
+            "upload" (wp-content/uploads/*), "wp-content" (catch-all), "db" (database dump),
+            "core" (ABSPATH: wp-admin, wp-includes, root PHP files).
+          uniqueItems: true
+        include_core:
+          type: boolean
+          default: false
+          description: When true, the WordPress core source root (ABSPATH) is archived.
+        exclude_paths:
+          type: array
+          items:
+            type: string
+          maxItems: 100
+          nullable: true
+          description: Path-segment names to exclude from file archiving.
+        exclude_extensions:
+          type: array
+          items:
+            type: string
+          maxItems: 50
+          nullable: true
+          description: File extensions to skip (without leading dot, case-insensitive).
+        exclude_file_size_mb:
+          type: integer
+          format: int32
+          minimum: 1
+          maximum: 102400
+          nullable: true
+          description: Skip files strictly larger than this value (MiB). 0/null = no filter.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SiteBackupSettingsContentsUpdate:
+      type: object
+      description: Update the Track-A backup scope/exclusion settings for a site.
+      properties:
+        backup_components:
+          type: array
+          items:
+            type: string
+            enum: [plugin, theme, upload, wp-content, db, core]
+          nullable: true
+          description: Subset of archive components. Null/absent = all components (full backup).
+        include_core:
+          type: boolean
+        exclude_paths:
+          type: array
+          items:
+            type: string
+          maxItems: 100
+          nullable: true
+        exclude_extensions:
+          type: array
+          items:
+            type: string
+          maxItems: 50
+          nullable: true
+        exclude_file_size_mb:
+          type: integer
+          format: int32
+          minimum: 0
+          maximum: 102400
+          nullable: true
+          description: 0 or null clears the filter.
+    SiteBackupSettingsNotifications:
+      type: object
+      description: |
+        Track-B notification settings for a site (m50). A 404 means no settings
+        row exists — safe defaults apply (never/empty). Fires for BOTH manual
+        and scheduled backup completions/failures.
+      required: [site_id, notify_on_completion, updated_at]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        notify_on_completion:
+          type: string
+          enum: [always, on_failure, never]
+          default: never
+          description: |
+            When to send a backup-event email. Fires for both manual and
+            scheduled runs. "always" = every completion or failure;
+            "on_failure" = only on failure; "never" = no email (default).
+        notify_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          maxItems: 20
+          description: Email addresses to notify. Max 20.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    SiteBackupSettingsNotificationsUpdate:
+      type: object
+      description: Update the Track-B notification settings for a site.
+      properties:
+        notify_on_completion:
+          type: string
+          enum: [always, on_failure, never]
+        notify_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          maxItems: 20
     UptimeStatus:
       type: object
       description: Windowed uptime status for a single site (from the metrics store).

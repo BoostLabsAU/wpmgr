@@ -347,6 +347,10 @@ func defaultPreview(template string) string {
 		return "You've been invited to WPMgr."
 	case "test":
 		return "Your WPMgr SMTP configuration works."
+	case "backup_completed":
+		return "A backup of your site finished successfully."
+	case "backup_failed":
+		return "A backup of your site did not complete."
 	default:
 		return "A message from WPMgr."
 	}

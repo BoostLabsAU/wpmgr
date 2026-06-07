@@ -737,6 +737,7 @@ final class RestoreRunner
         $download = isset($subState['download']) && is_array($subState['download']) ? $subState['download'] : [];
         $paths    = isset($download['artifact_paths']) && is_array($download['artifact_paths']) ? $download['artifact_paths'] : [];
         $zips     = [];
+        $coreZips  = []; // Track A / A2 (#187): core.gNNN.partMMM.zip → extract to ABSPATH.
         $componentsPresent = [];
         $hasLegacyFileEntry = false;
         foreach ($paths as $logical => $abs) {
@@ -747,8 +748,18 @@ final class RestoreRunner
             if (substr(strtolower($logical), -4) !== '.zip') {
                 continue;
             }
+            $kind = $this->classifyArtifactKind($logical);
+            if ($kind === 'core') {
+                // Track A / A2 (#187): core parts are extracted to ABSPATH, not
+                // the wp-content staging dir. Collect them separately so they
+                // are NOT handed to FilesRestorer::stage() (which roots everything
+                // under wp-content). runStageFiles extracts them directly into a
+                // staging copy of ABSPATH in a second pass below.
+                $coreZips[] = $abs;
+                $componentsPresent['core'] = true;
+                continue;
+            }
             $zips[] = $abs;
-            $kind   = $this->classifyArtifactKind($logical);
             if ($kind === 'file') {
                 // Pre-Track-5 snapshot: a single `wp-content.partNNN.zip`
                 // sequence whose manifest entry_kind is 'file'. The swap path
@@ -759,20 +770,47 @@ final class RestoreRunner
                 $componentsPresent[$kind] = true;
             }
         }
-        if ($zips === []) {
+        // Require at least one zip when no core-only restore is happening.
+        // A core-only restore (coreZips non-empty, zips empty) is valid.
+        if ($zips === [] && $coreZips === []) {
             throw new \RuntimeException('stage_files: no .zip parts in artifact list');
         }
 
         $restoreId = $this->restoreId();
         $target    = $this->wpContentPath();
-        if ($target === '') {
+        if ($target === '' && $zips !== []) {
             throw new \RuntimeException('stage_files: wp_content_path is empty');
         }
 
         $restorer   = new FilesRestorer();
-        $stagingDir = $restorer->stage($zips, $target, $restoreId, function (string $phase, array $detail): void {
-            $this->onPhaseProgress($phase, $detail);
-        });
+        $stagingDir = '';
+        if ($zips !== []) {
+            if ($target === '') {
+                throw new \RuntimeException('stage_files: wp_content_path is empty');
+            }
+            $stagingDir = $restorer->stage($zips, $target, $restoreId, function (string $phase, array $detail): void {
+                $this->onPhaseProgress($phase, $detail);
+            });
+        }
+
+        // Track A / A2 (#187): extract core parts into a staging directory
+        // rooted at ABSPATH. The staging dir is a sibling of the ABSPATH dir
+        // named `.wpmgr-core-staging-<restoreId>/` so the extract is atomic-
+        // rename-safe. We extract by opening each zip and copying each entry
+        // (using ZipArchive) into the staging dir preserving the relative path.
+        // The swap phase will rename the staging dir over ABSPATH.
+        $coreStagingDir = '';
+        if ($coreZips !== []) {
+            $absPath = $this->wpRoot();
+            if ($absPath === '' || !is_dir($absPath)) {
+                // ABSPATH not available — skip core extraction (non-fatal: the
+                // backup still contains the core archive; the operator can
+                // manually extract it). Log and continue.
+                error_log('WPMgr RestoreRunner: ABSPATH not available for core extraction — skipping core zip extraction');
+            } else {
+                $coreStagingDir = $this->extractCorePartsToStaging($coreZips, $absPath, $restoreId);
+            }
+        }
 
         // ADR-049: tombstone delete pass — runs AFTER artifact extraction, BEFORE
         // swap. Only active when is_chain_restore=true and tombstone_paths is
@@ -785,7 +823,7 @@ final class RestoreRunner
             ? $this->params['tombstone_paths']
             : [];
 
-        if ($isChainRestore && $tombstonePaths !== []) {
+        if ($isChainRestore && $tombstonePaths !== [] && $stagingDir !== '') {
             $stagingRoot = realpath($stagingDir);
             if ($stagingRoot !== false) {
                 foreach ($tombstonePaths as $rawPath) {
@@ -834,6 +872,7 @@ final class RestoreRunner
         $subState['stage'] = [
             'done'                 => true,
             'staging_dir'          => $stagingDir,
+            'core_staging_dir'     => $coreStagingDir,  // Track A / A2 (#187): '' when no core parts.
             'components_present'   => array_keys($componentsPresent),
             'has_legacy_file_kind' => $hasLegacyFileEntry,
             // ADR-049: tombstone pass counts (zero for non-chain restores).
@@ -841,6 +880,85 @@ final class RestoreRunner
             'tombstone_errors'     => $tombstoneErrors,
         ];
         return $subState;
+    }
+
+    /**
+     * Track A / A2 (#187): extract core.gNNN.partMMM.zip archives into a
+     * staging directory under ABSPATH. Returns the absolute path of the
+     * staging directory (a `.wpmgr-core-staging-<restoreId>/` sibling of
+     * ABSPATH). Returns '' on failure (non-fatal; caller logs and skips).
+     *
+     * The staging directory is then used by runSwapFiles to overlay ABSPATH
+     * atomically. Each zip entry relative path (e.g. `wp-admin/foo.php`) is
+     * extracted directly to `<coreStagingDir>/wp-admin/foo.php`.
+     *
+     * @param list<string> $coreZips  Absolute paths of core part archives.
+     * @param string       $absPath   Absolute path of ABSPATH (the WordPress root).
+     * @param string       $restoreId Restore run ID (used for staging dir name).
+     * @return string Absolute path of the core staging dir, or '' on failure.
+     */
+    private function extractCorePartsToStaging(array $coreZips, string $absPath, string $restoreId): string
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            error_log('WPMgr RestoreRunner: ext-zip unavailable — cannot extract core parts');
+            return '';
+        }
+
+        $short = substr(preg_replace('/[^a-f0-9]/i', '', $restoreId) ?? '', 0, 8);
+        if ($short === '') {
+            $short = substr(bin2hex(random_bytes(4)), 0, 8);
+        }
+        $stagingDir = dirname(rtrim($absPath, DIRECTORY_SEPARATOR)) . DIRECTORY_SEPARATOR . '.wpmgr-core-staging-' . $short;
+
+        if (!is_dir($stagingDir) && !@mkdir($stagingDir, 0755, true) && !is_dir($stagingDir)) {
+            error_log('WPMgr RestoreRunner: cannot create core staging dir: ' . $stagingDir);
+            return '';
+        }
+
+        foreach ($coreZips as $zipPath) {
+            if (!is_file($zipPath)) {
+                continue;
+            }
+            $zip = new \ZipArchive();
+            if ($zip->open($zipPath) !== true) {
+                error_log('WPMgr RestoreRunner: cannot open core zip: ' . $zipPath);
+                continue;
+            }
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $name = (string) $zip->getNameIndex($i);
+                if ($name === '' || $name === false) {
+                    continue;
+                }
+                // Sanitize: reject absolute paths, dotdot segments, NUL bytes.
+                if (!self::isSafeLogicalPath($name)) {
+                    error_log('WPMgr RestoreRunner: unsafe core zip entry rejected: ' . substr($name, 0, 120));
+                    continue;
+                }
+                // Directories end with '/' — create them and skip file write.
+                if (substr($name, -1) === '/') {
+                    $dir = $stagingDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, rtrim($name, '/'));
+                    if (!is_dir($dir)) {
+                        @mkdir($dir, 0755, true);
+                    }
+                    continue;
+                }
+                $destPath = $stagingDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $name);
+                $destDir  = dirname($destPath);
+                if (!is_dir($destDir) && !@mkdir($destDir, 0755, true) && !is_dir($destDir)) {
+                    error_log('WPMgr RestoreRunner: cannot create core staging subdir: ' . $destDir);
+                    continue;
+                }
+                $bytes = $zip->getFromIndex($i);
+                if ($bytes === false) {
+                    error_log('WPMgr RestoreRunner: failed to read core zip entry: ' . $name);
+                    continue;
+                }
+                @file_put_contents($destPath, $bytes);
+            }
+            $zip->close();
+        }
+
+        return $stagingDir;
     }
 
     /**
@@ -866,15 +984,43 @@ final class RestoreRunner
      */
     private function runSwapFiles(array $subState): array
     {
-        $stage      = isset($subState['stage']) && is_array($subState['stage']) ? $subState['stage'] : [];
-        $stagingDir = (string) ($stage['staging_dir'] ?? '');
-        if ($stagingDir === '') {
-            throw new \RuntimeException('swap_files: staging_dir missing from sub_state');
-        }
+        $stage          = isset($subState['stage']) && is_array($subState['stage']) ? $subState['stage'] : [];
+        $stagingDir     = (string) ($stage['staging_dir'] ?? '');
+        $coreStagingDir = (string) ($stage['core_staging_dir'] ?? ''); // Track A / A2 (#187).
         $componentsPresent  = isset($stage['components_present']) && is_array($stage['components_present'])
             ? array_values(array_filter($stage['components_present'], 'is_string'))
             : [];
         $hasLegacyFileKind = !empty($stage['has_legacy_file_kind']);
+
+        // Track A / A2 (#187): apply the core overlay to ABSPATH. This copies
+        // staged core files (from extractCorePartsToStaging) into the live
+        // ABSPATH, preserving existing files that are not in the snapshot (a
+        // targeted overlay, not a full swap). wp-config.php is overlaid without
+        // prompting — the operator chose include_core=true explicitly.
+        $coreOverlayDone = false;
+        if ($coreStagingDir !== '' && is_dir($coreStagingDir)) {
+            $absPath = $this->wpRoot();
+            if ($absPath !== '' && is_dir($absPath)) {
+                $this->overlayCoreStaging($coreStagingDir, $absPath);
+                $coreOverlayDone = true;
+            }
+            // Best-effort cleanup of the core staging dir after overlay.
+            $this->rrmdir($coreStagingDir);
+        }
+
+        // When the restore is core-only (no wp-content zips at all), skip the
+        // wp-content staging/swap phases and return early.
+        if ($stagingDir === '') {
+            if ($coreOverlayDone) {
+                $subState['swap_files'] = [
+                    'done'             => true,
+                    'mode'             => 'core_only_overlay',
+                    'core_overlay_done' => true,
+                ];
+                return $subState;
+            }
+            throw new \RuntimeException('swap_files: staging_dir missing from sub_state');
+        }
 
         // Reconcile components_present (recorded by runStageFiles from artifact
         // filename prefixes) against on-disk staging. A part archive whose
@@ -884,6 +1030,8 @@ final class RestoreRunner
         // reconciliation, swapComponents() throws
         // "staging missing component subdir: …/plugins" mid-restore (the
         // 2026-05-29 v0.9.6 SSE failure).
+        // Also strip 'core' from the wp-content components_present set — core
+        // is handled above and must not confuse the wp-content swap logic.
         $stagingSubdirs = [
             'plugin' => 'plugins',
             'theme'  => 'themes',
@@ -892,6 +1040,11 @@ final class RestoreRunner
         $componentsPresent = array_values(array_filter(
             $componentsPresent,
             static function (string $c) use ($stagingDir, $stagingSubdirs): bool {
+                // 'core' is handled by the ABSPATH overlay above — never pass
+                // it to the wp-content swapper.
+                if ($c === 'core') {
+                    return false;
+                }
                 // The catch-all "wp-content" component is handled by
                 // swapComponents itself by iterating the staging root for
                 // non-managed top-level items; it does not require a
@@ -912,9 +1065,8 @@ final class RestoreRunner
 
         // Path 1: legacy snapshot (entry_kind='file') OR all 4 components
         // present (the "Everything" case). Whole-wp-content swap.
-        $allFour      = ['plugin', 'theme', 'upload', 'wp-content'];
-        $presentSet   = array_flip($componentsPresent);
-        $hasAllFour   = !array_diff($allFour, $componentsPresent);
+        $allFour    = ['plugin', 'theme', 'upload', 'wp-content'];
+        $hasAllFour = !array_diff($allFour, $componentsPresent);
         if ($hasLegacyFileKind || $hasAllFour) {
             $oldDir = $restorer->swap(
                 $stagingDir,
@@ -925,9 +1077,10 @@ final class RestoreRunner
                 }
             );
             $subState['swap_files'] = [
-                'done'          => true,
-                'old_files_dir' => $oldDir,
-                'mode'          => $hasLegacyFileKind ? 'legacy_whole' : 'whole_all_components',
+                'done'              => true,
+                'old_files_dir'     => $oldDir,
+                'mode'              => $hasLegacyFileKind ? 'legacy_whole' : 'whole_all_components',
+                'core_overlay_done' => $coreOverlayDone,
             ];
             return $subState;
         }
@@ -935,6 +1088,15 @@ final class RestoreRunner
         // Path 2: per-component swap. componentsPresent is the subset the CP
         // filtered down for us.
         if ($componentsPresent === []) {
+            if ($coreOverlayDone) {
+                // Core-only restore already handled above; no wp-content swap needed.
+                $subState['swap_files'] = [
+                    'done'              => true,
+                    'mode'              => 'core_overlay_only',
+                    'core_overlay_done' => true,
+                ];
+                return $subState;
+            }
             throw new \RuntimeException('swap_files: no components present to swap and no legacy entry detected');
         }
         $result = $restorer->swapComponents(
@@ -955,12 +1117,63 @@ final class RestoreRunner
         }
 
         $subState['swap_files'] = [
-            'done'        => true,
-            'mode'        => 'per_component',
-            'components'  => $componentsPresent,
-            'old_dirs'    => isset($result['old_dirs']) && is_array($result['old_dirs']) ? $result['old_dirs'] : [],
+            'done'              => true,
+            'mode'              => 'per_component',
+            'components'        => $componentsPresent,
+            'old_dirs'          => isset($result['old_dirs']) && is_array($result['old_dirs']) ? $result['old_dirs'] : [],
+            'core_overlay_done' => $coreOverlayDone,
         ];
         return $subState;
+    }
+
+    /**
+     * Track A / A2 (#187): overlay the staged core files onto the live ABSPATH.
+     * Copies every file from $coreStagingDir into $absPath, creating
+     * subdirectories as needed. Existing ABSPATH files not in the staging dir
+     * are left untouched (targeted overlay, not a full swap).
+     *
+     * wp-config.php is overlaid without prompting — the operator explicitly
+     * requested include_core=true.
+     *
+     * Best-effort: individual file errors are logged and skipped rather than
+     * aborting the whole restore.
+     *
+     * @param string $coreStagingDir Absolute path of the core staging dir.
+     * @param string $absPath        Absolute path of ABSPATH (the WordPress root).
+     */
+    private function overlayCoreStaging(string $coreStagingDir, string $absPath): void
+    {
+        $srcLen  = strlen(rtrim($coreStagingDir, DIRECTORY_SEPARATOR)) + 1;
+        $absPath = rtrim($absPath, DIRECTORY_SEPARATOR);
+
+        try {
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator(
+                    $coreStagingDir,
+                    \FilesystemIterator::SKIP_DOTS | \FilesystemIterator::UNIX_PATHS
+                )
+            );
+        } catch (\UnexpectedValueException $e) {
+            error_log('WPMgr RestoreRunner: cannot iterate core staging dir: ' . $e->getMessage());
+            return;
+        }
+
+        /** @var \SplFileInfo $info */
+        foreach ($iterator as $info) {
+            if (!$info->isFile() || is_link((string) $info->getPathname())) {
+                continue;
+            }
+            $rel  = substr((string) $info->getPathname(), $srcLen);
+            $dest = $absPath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
+            $dir  = dirname($dest);
+            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
+                error_log('WPMgr RestoreRunner: cannot create ABSPATH subdir during core overlay: ' . $dir);
+                continue;
+            }
+            if (!@copy((string) $info->getPathname(), $dest)) {
+                error_log('WPMgr RestoreRunner: core overlay copy failed: ' . $rel);
+            }
+        }
     }
 
     /**
@@ -968,9 +1181,14 @@ final class RestoreRunner
      * kind. Mirror of EncryptAndUpload::entryKind for the inverse direction:
      * given a logical path on the wire, return its component bucket.
      *
+     * Track A / A2 (#187): `core.gNNN.partMMM.zip` maps to 'core'. Core parts
+     * are routed to ABSPATH by runStageFiles; they must NOT fall through to the
+     * legacy 'file' bucket (which would trigger the whole-wp-content swap instead
+     * of the ABSPATH overlay).
+     *
      * @param string $logical Logical artifact path from the CP plan.
-     * @return string 'plugin' | 'theme' | 'upload' | 'wp-content' | 'file' |
-     *                'db' | 'inspection' | ''
+     * @return string 'plugin' | 'theme' | 'upload' | 'wp-content' | 'core' |
+     *                'file' | 'db' | 'inspection' | ''
      */
     private function classifyArtifactKind(string $logical): string
     {
@@ -980,6 +1198,13 @@ final class RestoreRunner
         }
         if (str_ends_with($lower, '.sql') || str_ends_with($lower, '.sql.gz') || str_contains($lower, 'database.sql')) {
             return 'db';
+        }
+        // Track A / A2 (#187): CoreFilesArchiver emits `core.gNNN.partMMM.zip`.
+        // Classify before the FilesArchiver generic check so 'core' is never
+        // misclassified as 'file' (the legacy fallback) even when componentKindFromPartName
+        // cannot match it (COMPONENT_PARTITIONS does not include 'core').
+        if (preg_match('/^core\.(g\d+\.)?part\d+\.zip$/i', $lower) === 1) {
+            return 'core';
         }
         // Track 5 per-component archives. FilesArchiver emits generation-
         // namespaced `<component>.gNNN.partMMM.zip`; classify via the shared

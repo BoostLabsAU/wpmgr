@@ -1011,6 +1011,12 @@ func run() error {
 	// reset link + change-password notification) + an in-memory rate limiter now
 	// that River has started.
 	authSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient), os.Getenv("WPMGR_PUBLIC_BASE_URL"), autologin.NewMemoryLimiter())
+	// Track B (m49) — wire the backup-event mailer now that River has started.
+	// The BackupMailer interface is satisfied by *mailer.Enqueuer. Emails are
+	// best-effort (sendBackupEmail swallows errors); nil mailer = no emails.
+	if backupSvc != nil {
+		backupSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient))
+	}
 
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout)

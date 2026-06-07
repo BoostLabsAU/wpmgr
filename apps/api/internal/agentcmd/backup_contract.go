@@ -56,6 +56,10 @@ const (
 const (
 	EntryKindFile = "file"
 	EntryKindDB   = "db"
+	// EntryKindCore is the A2 WordPress-core archive component (ABSPATH:
+	// wp-admin, wp-includes, root PHP files including wp-config.php). Emitted
+	// only when include_core=true on the backup request.
+	EntryKindCore = "core"
 	// ADR-051 archive-delta increments emit two extra kinds of per-snapshot
 	// manifest entry alongside the zip parts:
 	//
@@ -123,6 +127,36 @@ type BackupRequest struct {
 	// same way. Older agents (< 0.6.0) ignore the field harmlessly — they ship
 	// no runner — so it is non-breaking to include unconditionally.
 	ProgressEndpoint string `json:"progress_endpoint"`
+
+	// Track A (#187) — selective components + exclusions.
+	// All fields are omitempty: absent means "use the agent default" so older
+	// agents ignore them harmlessly.
+
+	// Components is the set of components to archive. nil/empty = all (default).
+	// Values: "plugin", "theme", "upload", "wp-content", "db", "core".
+	// These are singular entry_kind values — the canonical vocabulary for the
+	// CP<->agent contract and the manifest entry_kind column.
+	Components []string `json:"components,omitempty"`
+	// IncludeDB is the explicit DB-inclusion signal derived from the components
+	// allowlist. When Components is non-empty: true if "db" is in the list,
+	// false otherwise. When Components is empty (no filter), this field is
+	// omitted (the agent defaults to including the DB per the snapshot kind).
+	// This lets the agent skip runDumpDatabase when "db" is not selected,
+	// without having to scan the Components list itself.
+	IncludeDB *bool `json:"include_db,omitempty"`
+	// IncludeCore, when true, adds the WordPress core source root (ABSPATH:
+	// wp-admin, wp-includes, root PHP files incl. wp-config.php) as an
+	// additional archive source. Emits entry_kind="core" in the manifest.
+	IncludeCore bool `json:"include_core,omitempty"`
+	// ExcludePaths is the list of path-segment names passed as $excludes to
+	// FilesArchiver. Merged with the archiver's DEFAULT_EXCLUDES on the agent.
+	ExcludePaths []string `json:"exclude_paths,omitempty"`
+	// ExcludeExtensions is the list of lowercase extensions (without dot) the
+	// agent skips during the files walk (e.g. ["log","bak"]).
+	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
+	// ExcludeFileSizeMB, when > 0, instructs the agent to skip files strictly
+	// larger than this value (MiB). 0 = no filter (agent default).
+	ExcludeFileSizeMB int32 `json:"exclude_file_size_mb,omitempty"`
 }
 
 // BackupResponse is the agent's immediate ack of the `backup` command. The
@@ -376,4 +410,19 @@ type IncrementalBackupRequest struct {
 	// Empty for a gen-0 base-increment (no parent → scan everything as new).
 	// REPLACES the retired FileIndexEndpoint / NDJSON /file-index transport.
 	PrevFilesListChunks []RestoreChunk `json:"prev_files_list_chunks,omitempty"`
+
+	// Track A (#187) — selective components + exclusions (same semantics as
+	// BackupRequest; omitempty so older agents ignore absent fields harmlessly).
+	// Components uses singular entry_kind values ("plugin", "theme", "upload",
+	// "wp-content", "db", "core") — the canonical CP<->agent vocabulary.
+	Components []string `json:"components,omitempty"`
+	// IncludeDB is the explicit DB-inclusion signal derived from Components.
+	// When Components is non-empty: true if "db" is in the list, false otherwise.
+	// Absent when Components is empty (no filter); the agent then follows the
+	// snapshot kind for DB inclusion.
+	IncludeDB         *bool    `json:"include_db,omitempty"`
+	IncludeCore       bool     `json:"include_core,omitempty"`
+	ExcludePaths      []string `json:"exclude_paths,omitempty"`
+	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
+	ExcludeFileSizeMB int32    `json:"exclude_file_size_mb,omitempty"`
 }

@@ -3,7 +3,7 @@
 -- The CP's backup-progress watchdog (apps/api/internal/backup) and the
 -- /sites/:siteId/backups list handler both reference these columns. They were
 -- added directly to the dev DB during M5.6 implementation but no Atlas
--- migration was emitted, so Cloud SQL boots without them and every progress
+-- migration was emitted, so the production database boots without them and every progress
 -- watchdog tick + every backup list query 500s with
 --   ERROR: column "progress_updated_at" does not exist (SQLSTATE 42703)
 --

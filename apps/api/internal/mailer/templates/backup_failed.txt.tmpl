@@ -1,0 +1,18 @@
+Backup failed — {{.ProductName}}
+=====================================
+
+A scheduled backup of your site did not complete. Please check your
+site and agent status.
+
+{{if .SiteURL}}Site:        {{.SiteURL}}
+{{end}}Type:        {{.Kind}}
+{{if .Error}}Error:       {{.Error}}
+{{end}}Snapshot ID: {{.SnapshotID}}
+
+Log in to {{.ProductName}} to review the error and retry the backup.
+
+--
+{{.ProductName}} — fleet control for WordPress
+{{if .FooterNote}}{{.FooterNote}}
+{{end}}Need help? Contact {{.SupportEmail}}.
+(c) {{.Year}} {{.ProductName}}.

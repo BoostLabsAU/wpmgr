@@ -132,6 +132,12 @@ func (s *Service) RunRetentionGC(ctx context.Context, tenantID uuid.UUID) (snaps
 		}
 
 		for _, m := range metas {
+			// Track C (m49): a locked snapshot is permanently retained — never
+			// auto-pruned regardless of age / keep-last rules. Treat it like a
+			// retained row even if the policy would otherwise delete it.
+			if m.Locked {
+				delete(deleteSet, m.ID)
+			}
 			if deleteSet[m.ID] {
 				expiredIDs[m.ID] = true
 				continue

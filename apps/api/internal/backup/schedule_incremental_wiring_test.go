@@ -172,6 +172,15 @@ func (r *wiringRepo) CompleteIncrementalManifest(_ context.Context, _ CompleteIn
 func (r *wiringRepo) ListChainSnapshots(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]Snapshot, error) {
 	panic("unused")
 }
+func (r *wiringRepo) SetSnapshotLocked(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ bool) (Snapshot, error) {
+	panic("unused")
+}
+func (r *wiringRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteBackupSettings, error) {
+	return SiteBackupSettings{}, domain.NotFound("backup_settings_not_found", "no settings")
+}
+func (r *wiringRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
+	panic("unused")
+}
 
 // ---------------------------------------------------------------------------
 // recordingEnqueuer — records which enqueue method was called.

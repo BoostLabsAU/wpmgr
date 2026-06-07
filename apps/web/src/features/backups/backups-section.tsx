@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
+import { Lock, LockOpen, Info } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -17,9 +18,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Select } from "@/components/ui/select";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Label } from "@/components/ui/label";
 import { PageError } from "@/components/feedback";
 import { StatusChip } from "@/components/status/status-chip";
 import type { StatusTone } from "@/components/status/status-dot";
@@ -29,6 +28,9 @@ import {
   useCreateBackup,
   useDeleteBackup,
   useCancelBackup,
+  useLockBackup,
+  useUnlockBackup,
+  useBackupSettingsContents,
 } from "@/features/backups/use-backups";
 import {
   StatusBadge,
@@ -49,18 +51,12 @@ import {
 } from "@/features/backups/use-schedule-runs";
 import { BackupScheduleEditor } from "@/features/backups/backup-schedule-editor";
 import { formatBytes, relativeTime } from "@/lib/utils";
-import type { BackupCreate, BackupSnapshot } from "@wpmgr/api";
+import type { BackupSnapshot } from "@wpmgr/api";
 
 // The "Backups" section rendered on the site detail page. One card holds the
 // snapshot list; "Back up now" lives as a header control (not an inset
 // bordered box) so the surface is flat (ADR-037 Batch 2 — never card-in-card).
 // Viewers see the list only; the schedule editor (operator+) is its own card.
-
-const KINDS: { value: NonNullable<BackupCreate["kind"]>; label: string }[] = [
-  { value: "full", label: "Full (files + database)" },
-  { value: "files", label: "Files only" },
-  { value: "db", label: "Database only" },
-];
 
 export function BackupsSection({
   siteId,
@@ -116,40 +112,37 @@ export function BackupsSection({
   );
 }
 
+/**
+ * Run-backup control (operator+). Scope is always resolved server-side from
+ * site_backup_settings at worker dispatch time — no per-run override dialog.
+ */
 function BackupNowControl({ siteId }: { siteId: string }) {
-  const [kind, setKind] = useState<NonNullable<BackupCreate["kind"]>>("full");
   const create = useCreateBackup(siteId);
+  // Read saved contents settings so the note below the button reflects what
+  // the worker will use when it dispatches. We never pass these in the body —
+  // they are resolved server-side from site_backup_settings.
+  const { data: contents } = useBackupSettingsContents(siteId);
 
   function onBackup() {
-    create.mutate({ kind }, { onError: () => {} });
+    create.mutate({}, { onError: () => {} });
   }
+
+  const hasComponents =
+    contents?.backup_components !== null &&
+    (contents?.backup_components?.length ?? 0) > 0;
+  const contentsNote = hasComponents
+    ? `Uses saved contents settings (${contents!.backup_components!.join(", ")}).`
+    : "Uses your saved backup contents settings (full backup by default).";
 
   return (
     <div className="flex shrink-0 flex-col items-end gap-1.5">
-      <div className="flex items-end gap-2">
-        <div className="space-y-1">
-          <Label htmlFor="backup-kind" className="sr-only">
-            What to back up
-          </Label>
-          <Select
-            id="backup-kind"
-            value={kind}
-            onChange={(e) =>
-              setKind(e.target.value as NonNullable<BackupCreate["kind"]>)
-            }
-            className="h-8 px-2 text-xs"
-          >
-            {KINDS.map((k) => (
-              <option key={k.value} value={k.value}>
-                {k.label}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <Button size="sm" onClick={onBackup} disabled={create.isPending}>
-          {create.isPending ? "Starting…" : "Run backup"}
-        </Button>
-      </div>
+      <Button size="sm" onClick={onBackup} disabled={create.isPending}>
+        {create.isPending ? "Starting…" : "Run backup"}
+      </Button>
+      <p className="flex items-center gap-1 text-xs text-muted-foreground">
+        <Info aria-hidden className="size-3 shrink-0" />
+        {contentsNote}
+      </p>
       {create.isError ? (
         <p role="alert" className="text-xs text-destructive-subtle-fg">
           {create.error.message}
@@ -261,6 +254,9 @@ function SnapshotList({
             </TableCell>
             <TableCell className="text-right">
               <div className="flex items-center justify-end gap-2">
+                {canOperate ? (
+                  <SnapshotLockToggle snapshot={snap} siteId={siteId} />
+                ) : null}
                 <Button asChild variant="outline" size="sm">
                   <Link
                     to="/backups/$snapshotId"
@@ -278,6 +274,77 @@ function SnapshotList({
         ))}
       </TableBody>
     </Table>
+  );
+}
+
+/**
+ * Track C (m49) — lock/unlock toggle for a completed snapshot (operator+).
+ *
+ * A locked snapshot is exempt from retention GC. Only completed snapshots can
+ * be locked (the server returns 409 for pending/running; the button is hidden
+ * for non-terminal states). Pending/running rows show nothing.
+ */
+function SnapshotLockToggle({
+  snapshot,
+  siteId,
+}: {
+  snapshot: BackupSnapshot;
+  siteId: string;
+}) {
+  const isCompleted = snapshot.status === "completed";
+  const isLocked = snapshot.locked === true;
+
+  const lock = useLockBackup(snapshot.id, siteId);
+  const unlock = useUnlockBackup(snapshot.id, siteId);
+
+  if (!isCompleted) return null;
+
+  const isPending = lock.isPending || unlock.isPending;
+
+  if (isLocked) {
+    return (
+      <div className="flex flex-col items-end gap-0.5">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => unlock.mutate(undefined, { onError: () => {} })}
+          disabled={isPending}
+          aria-label="Unlock snapshot — allow GC to prune"
+          title="Locked: GC will not prune this snapshot. Click to unlock."
+          className="gap-1.5 text-xs"
+        >
+          <Lock aria-hidden className="size-3.5 shrink-0" />
+          {isPending ? "Unlocking…" : "Locked"}
+        </Button>
+        {unlock.isError ? (
+          <span role="alert" className="text-xs text-destructive-subtle-fg">
+            {unlock.error.message}
+          </span>
+        ) : null}
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col items-end gap-0.5">
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => lock.mutate(undefined, { onError: () => {} })}
+        disabled={isPending}
+        aria-label="Lock snapshot — protect from GC pruning"
+        title="Unlocked: retention GC may prune. Click to lock."
+        className="gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        <LockOpen aria-hidden className="size-3.5 shrink-0" />
+        {isPending ? "Locking…" : "Lock"}
+      </Button>
+      {lock.isError ? (
+        <span role="alert" className="text-xs text-destructive-subtle-fg">
+          {lock.error.message}
+        </span>
+      ) : null}
+    </div>
   );
 }
 

@@ -302,8 +302,13 @@ final class TaskRunner
     /**
      * Decide the next phase after `queued`.
      *
-     * For files-only full snapshots: PHASE_ARCHIVING_FILES (skip DB dump).
-     * For all other runs (db or full kind): PHASE_DUMPING_DB.
+     * The DB dump is gated by two signals (in priority order):
+     *   1. include_db (explicit CP signal derived from the components allowlist).
+     *      When the CP sends a components filter it derives include_db:
+     *        - include_db=true  → dump the DB regardless of kind.
+     *        - include_db=false → skip the DB dump regardless of kind.
+     *      When include_db is absent (null) → fall back to (2).
+     *   2. snapshot kind: 'files' skips the DB dump; 'db' and 'full' dump it.
      *
      * ADR-051: incremental runs use the SAME phases as a full; the only
      * difference is that runArchivingFiles loads the prevMap from the parent
@@ -311,22 +316,68 @@ final class TaskRunner
      */
     private function nextAfterQueued(): string
     {
-        return $this->kind() === self::KIND_FILES
-            ? self::PHASE_ARCHIVING_FILES
-            : self::PHASE_DUMPING_DB;
+        if (!$this->shouldDumpDb()) {
+            // No DB dump: go straight to file-archiving (or straight to
+            // encrypt if the kind is 'db' with include_db=false — a db-only
+            // selection would have include_db=true, so this case means the
+            // operator deselected db from an otherwise full/files run).
+            return $this->kind() === self::KIND_DB
+                ? self::PHASE_ENCRYPTING_UPLOADING
+                : self::PHASE_ARCHIVING_FILES;
+        }
+        return self::PHASE_DUMPING_DB;
     }
 
     /**
      * Decide the next phase after `dumping_db`.
      *
-     * For DB-only full snapshots: PHASE_ENCRYPTING_UPLOADING.
+     * For DB-only snapshots with no file components: PHASE_ENCRYPTING_UPLOADING.
      * For full snapshots (and incremental): PHASE_ARCHIVING_FILES.
+     *
+     * When include_db=true with a files-only kind (e.g. operator selected
+     * [db] component while kind=files), the dump ran first; now go to
+     * encrypting_uploading since there are no file components to archive.
      */
     private function nextAfterDumpingDb(): string
     {
-        return $this->kind() === self::KIND_DB
-            ? self::PHASE_ENCRYPTING_UPLOADING
-            : self::PHASE_ARCHIVING_FILES;
+        // If the kind is 'db', or if a components filter has no file-archiver
+        // components (i.e. the only selected component was 'db'), skip archiving.
+        if ($this->kind() === self::KIND_DB) {
+            return self::PHASE_ENCRYPTING_UPLOADING;
+        }
+        // Check if the components allowlist has any file-archiver kinds.
+        // If the filter is active and contains no file kinds, go straight
+        // to encrypt (db-only effect even with kind=full).
+        $components = isset($this->params['components']) && is_array($this->params['components'])
+            ? array_values(array_filter($this->params['components'], 'is_string'))
+            : [];
+        $fileKinds = ['plugin', 'theme', 'upload', 'wp-content'];
+        if ($components !== [] && array_intersect($components, $fileKinds) === []) {
+            // Components filter is active but contains only 'db' and/or 'core'.
+            // No file archiving needed.
+            return self::PHASE_ENCRYPTING_UPLOADING;
+        }
+        return self::PHASE_ARCHIVING_FILES;
+    }
+
+    /**
+     * Determine whether the DB dump phase should run, honoring the
+     * include_db signal from the CP's components allowlist.
+     *
+     * Rules (evaluated in priority order):
+     *   1. When include_db is explicitly false → skip the dump.
+     *   2. When include_db is explicitly true  → dump regardless of kind.
+     *   3. When include_db is absent (null)    → follow snapshot kind:
+     *      kind=files → no dump; kind=db|full → dump.
+     */
+    private function shouldDumpDb(): bool
+    {
+        // Explicit CP signal (present when a components allowlist is active).
+        if (array_key_exists('include_db', $this->params) && $this->params['include_db'] !== null) {
+            return (bool) $this->params['include_db'];
+        }
+        // Fall back to the legacy kind-based heuristic.
+        return $this->kind() !== self::KIND_FILES;
     }
 
     /**
@@ -425,10 +476,84 @@ final class TaskRunner
         $generation = isset($this->params['generation']) && is_numeric($this->params['generation'])
             ? (int) $this->params['generation']
             : 0;
-        $archiver = new FilesArchiver($this->wpContentPath(), [], [], $generation);
+
+        // Track A (#187): selective component backup + exclusions. All fields
+        // are optional (absent on pre-m49 CP); absent means "use agent defaults"
+        // so older CP versions continue to work unchanged.
+        //
+        // Operator-specified extra exclude path segments merged with DEFAULT_EXCLUDES.
+        $extraExcludePaths = isset($this->params['exclude_paths']) && is_array($this->params['exclude_paths'])
+            ? array_values(array_filter($this->params['exclude_paths'], 'is_string'))
+            : [];
+        // Lowercase file extensions to skip (without leading dot).
+        $excludeExtensions = isset($this->params['exclude_extensions']) && is_array($this->params['exclude_extensions'])
+            ? array_values(array_filter($this->params['exclude_extensions'], 'is_string'))
+            : [];
+        // File size ceiling in MiB (0 = no filter).
+        $excludeFileSizeMb = isset($this->params['exclude_file_size_mb']) && is_numeric($this->params['exclude_file_size_mb'])
+            ? max(0, (int) $this->params['exclude_file_size_mb'])
+            : 0;
+
+        // A1 (#187): selective component backup. 'components' from the CP is the
+        // full list of what to include, using the canonical SINGULAR entry_kind
+        // vocabulary (plugin | theme | upload | wp-content | db | core).
+        // We forward only the file-archiver relevant singular kinds to
+        // FilesArchiver::include_components; 'db' and 'core' are handled by
+        // separate code paths (DbDumper and CoreFilesArchiver respectively).
+        // FilesArchiver's constructor normalizes the singular kinds to its
+        // internal plural bucket keys via KIND_TO_BUCKET.
+        // An empty/absent list means "include all file-archiver components".
+        $requestedComponents = isset($this->params['components']) && is_array($this->params['components'])
+            ? array_values(array_filter($this->params['components'], 'is_string'))
+            : [];
+        // Canonical singular file-component kinds that FilesArchiver handles.
+        // Do NOT include 'db' or 'core' — they are separate pipeline steps.
+        $fileKinds = ['plugin', 'theme', 'upload', 'wp-content'];
+        $includeFileComponents = $requestedComponents !== []
+            ? array_values(array_intersect($requestedComponents, $fileKinds))
+            : [];
+
+        $archiverOpts = [];
+        if ($excludeExtensions !== []) {
+            $archiverOpts['exclude_extensions'] = $excludeExtensions;
+        }
+        if ($excludeFileSizeMb > 0) {
+            $archiverOpts['exclude_file_size_mb'] = $excludeFileSizeMb;
+        }
+        // A1 correctness (#187): when a components filter IS active (requestedComponents
+        // is non-empty), always forward include_components to FilesArchiver — even when
+        // the resolved file-archiver kinds list is empty (e.g. components=["core"] or
+        // components=["core","db"]).  The presence of the key is the sentinel FilesArchiver
+        // uses to distinguish "filter active, archive nothing from wp-content" from "no
+        // filter present, archive everything".  An absent key still means "full backup,
+        // include all components", preserving backward compatibility with pre-m49 callers.
+        if ($requestedComponents !== []) {
+            $archiverOpts['include_components'] = $includeFileComponents;
+        }
+
+        $archiver = new FilesArchiver($this->wpContentPath(), $extraExcludePaths, $archiverOpts, $generation);
         $result   = $archiver->archive($this->scratchDir(), $resume, function (string $phase, array $detail): void {
             $this->onPhaseProgress($phase, $detail);
         }, $prevMap);
+
+        // Track A (#187): include_core — archive the WordPress core source root
+        // (ABSPATH: wp-admin, wp-includes, root PHP files including wp-config.php)
+        // as an additional source. Emits entry_kind="core" manifest entries alongside
+        // the normal wp-content parts. Only runs when include_core=true.
+        if (!empty($this->params['include_core'])) {
+            $absPath = defined('ABSPATH') ? rtrim(ABSPATH, '/') : '';
+            if ($absPath !== '' && is_dir($absPath)) {
+                $coreArchiver = new CoreFilesArchiver($absPath, $generation);
+                $coreResult   = $coreArchiver->archive($this->scratchDir(), function (string $phase, array $detail): void {
+                    $this->onPhaseProgress($phase, $detail);
+                });
+                // Merge core result parts into the main result so they are picked
+                // up by the encrypting_uploading phase (same part-list scan).
+                if (isset($coreResult['parts']) && is_array($coreResult['parts'])) {
+                    $result['core_parts'] = $coreResult['parts'];
+                }
+            }
+        }
 
         // ADR-051 instrumentation: report the full prevMap pipeline so the next
         // live run is conclusive (prev_chunks_count / prevmap_loaded / prevmap_size
@@ -729,6 +854,22 @@ final class TaskRunner
         $files = (isset($subState['files']) && is_array($subState['files'])) ? $subState['files'] : [];
         if (!empty($files['done']) && isset($files['parts']) && is_array($files['parts'])) {
             foreach ($files['parts'] as $partName) {
+                if (!is_string($partName) || $partName === '') {
+                    continue;
+                }
+                $abs = $this->scratchDir() . DIRECTORY_SEPARATOR . $partName;
+                $artifacts[] = [
+                    'path'    => $abs,
+                    'logical' => $partName,
+                ];
+            }
+        }
+
+        // Track A / A2 (#187): core archive parts emitted by CoreFilesArchiver.
+        // Stored in files['core_parts'] as a list of basename strings and treated
+        // identically to the wp-content parts above.
+        if (!empty($files['core_parts']) && is_array($files['core_parts'])) {
+            foreach ($files['core_parts'] as $partName) {
                 if (!is_string($partName) || $partName === '') {
                     continue;
                 }
@@ -1236,7 +1377,9 @@ final class TaskRunner
                 @unlink($p);
             }
         }
-        foreach (['plugins', 'themes', 'uploads', 'wp-content'] as $comp) {
+        // Track A / A2 (#187): include 'core' in the component sweep so
+        // `core.gNNN.partMMM.zip` files emitted by CoreFilesArchiver are removed.
+        foreach (['plugins', 'themes', 'uploads', 'wp-content', 'core'] as $comp) {
             // Match BOTH the generation-namespaced `<comp>.gNNN.partMMM.zip`
             // and the legacy `<comp>.partMMM.zip` part filenames.
             $zips = @glob($scratch . DIRECTORY_SEPARATOR . $comp . '.*part*.zip');
@@ -1245,6 +1388,11 @@ final class TaskRunner
                     @unlink($f);
                 }
             }
+        }
+        // Also clean up the on-disk core-paths.cache written by CoreFilesArchiver.
+        $coreCachePath = $scratch . DIRECTORY_SEPARATOR . 'core-paths.cache';
+        if (is_file($coreCachePath)) {
+            @unlink($coreCachePath);
         }
 
         // 3. The scratch dir itself (rmdir refuses if not empty — that's fine).

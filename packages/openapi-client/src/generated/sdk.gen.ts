@@ -124,6 +124,9 @@ import type {
   GetAlertConfigData,
   GetAlertConfigResponses,
   GetBackupData,
+  GetBackupEnvironmentData,
+  GetBackupEnvironmentErrors,
+  GetBackupEnvironmentResponses,
   GetBackupErrors,
   GetBackupResponses,
   GetBackupScheduleData,
@@ -219,6 +222,9 @@ import type {
   ListTenantsResponses,
   ListUpdateRunsData,
   ListUpdateRunsResponses,
+  LockBackupData,
+  LockBackupErrors,
+  LockBackupResponses,
   LoginData,
   LoginErrors,
   LoginResponses,
@@ -305,6 +311,9 @@ import type {
   UnblockSiteIpData,
   UnblockSiteIpErrors,
   UnblockSiteIpResponses,
+  UnlockBackupData,
+  UnlockBackupErrors,
+  UnlockBackupResponses,
   UpdateSiteDestinationData,
   UpdateSiteDestinationErrors,
   UpdateSiteDestinationResponses,
@@ -1704,13 +1713,51 @@ export const cancelBackup = <ThrowOnError extends boolean = false>(
   >({ url: "/api/v1/backups/{snapshotId}/cancel", ...options });
 
 /**
+ * Unlock a backup snapshot (re-enable GC eligibility)
+ *
+ * Clears the `locked` flag, making the snapshot eligible for normal
+ * retention GC again. Track C (m49). Requires operator+.
+ *
+ */
+export const unlockBackup = <ThrowOnError extends boolean = false>(
+  options: Options<UnlockBackupData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    UnlockBackupResponses,
+    UnlockBackupErrors,
+    ThrowOnError
+  >({ url: "/api/v1/backups/{snapshotId}/lock", ...options });
+
+/**
+ * Lock a backup snapshot against retention GC
+ *
+ * Sets `locked=true` on a completed snapshot. Locked snapshots are never
+ * auto-pruned by the retention GC regardless of age or count rules.
+ * The operator must explicitly DELETE the lock before the GC can reclaim it.
+ * Track C (m49). Requires operator+.
+ *
+ */
+export const lockBackup = <ThrowOnError extends boolean = false>(
+  options: Options<LockBackupData, ThrowOnError>,
+) =>
+  (options.client ?? client).patch<
+    LockBackupResponses,
+    LockBackupErrors,
+    ThrowOnError
+  >({ url: "/api/v1/backups/{snapshotId}/lock", ...options });
+
+/**
  * Stream live backup snapshot progress (SSE)
  *
  * Server-Sent Events stream (text/event-stream) of progress transitions for
- * a backup snapshot, for live UI updates. Each `data:` line is a JSON
- * BackupEvent. The stream emits periodic heartbeat comment lines (":\n")
- * and ends when the snapshot reaches a terminal state (completed/failed)
- * or the client disconnects. Requires viewer+.
+ * a backup snapshot, for live UI updates. Each frame is tagged
+ * `event: progress` with a JSON BackupEvent payload. The stream emits
+ * periodic heartbeat comment lines (":\n\n") every 15 seconds and has a
+ * 30-minute server-side safety timeout. The server does NOT close the
+ * stream on a terminal snapshot status — a completed snapshot can still
+ * receive restore phase events on the same channel. The client is
+ * responsible for closing its EventSource when it observes a terminal
+ * `phase` (completed/failed). Requires viewer+.
  *
  */
 export const streamBackupSnapshotEvents = <
@@ -1727,6 +1774,26 @@ export const streamBackupSnapshotEvents = <
     StreamBackupSnapshotEventsErrors,
     ThrowOnError
   >({ url: "/api/v1/backups/{snapshotId}/events", ...options });
+
+/**
+ * Get the environment fingerprint recorded at backup time
+ *
+ * Returns the raw JSON the agent shipped as the synthetic `environment.json`
+ * manifest entry for a snapshot (PHP version, WordPress version, active
+ * plugins, server software, etc.). Returns 404 with code `env_not_recorded`
+ * for snapshots that pre-date the environment-fingerprint feature (agent
+ * v0.9.10+). Returns 503 when the environment reader is not wired on this
+ * control plane. Requires viewer+.
+ *
+ */
+export const getBackupEnvironment = <ThrowOnError extends boolean = false>(
+  options: Options<GetBackupEnvironmentData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetBackupEnvironmentResponses,
+    GetBackupEnvironmentErrors,
+    ThrowOnError
+  >({ url: "/api/v1/backups/{snapshotId}/environment", ...options });
 
 /**
  * Inspect the SQL dump contained in a backup snapshot

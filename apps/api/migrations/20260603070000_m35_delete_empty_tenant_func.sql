@@ -2,7 +2,7 @@
 -- delete an empty tenant whose ON DELETE CASCADE reaches the append-only
 -- audit_log.
 --
--- VERIFIED root cause (Cloud SQL Postgres log, 2026-06-03): #151(a)'s
+-- VERIFIED root cause (managed Postgres log, 2026-06-03): #151(a)'s
 -- DeleteEmptyTenant ran "DELETE FROM tenants" as wpmgr_app; the FK cascade
 -- emitted the internal RI delete
 --   DELETE FROM ONLY "public"."audit_log" WHERE $1 = "tenant_id"
@@ -25,7 +25,7 @@
 --   * app.agent='on' is set IN-BODY via set_config (which needs no special
 --     privilege — InAgentTx sets it the same way), NOT via a function SET clause:
 --     a SET clause on the custom app.agent placeholder GUC requires superuser
---     ownership or GRANT SET ON PARAMETER, which the prod Cloud SQL non-superuser
+--     ownership or GRANT SET ON PARAMETER, which a managed-Postgres non-superuser
 --     owner lacks, and would abort this CREATE FUNCTION and roll back the
 --     migration. It lets the emptiness checks see rows under FORCE RLS
 --     (memberships_agent + sites_agent);

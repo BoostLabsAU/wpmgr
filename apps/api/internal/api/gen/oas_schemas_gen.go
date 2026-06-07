@@ -2023,6 +2023,31 @@ type BackupSchedule struct {
 	LastRunAt OptDateTime `json:"last_run_at"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
+	// Track B (m49): backup-completion email notification settings.
+	// NOTE: fields added manually pending next `go generate` run.
+	NotifyOnCompletion string   `json:"notify_on_completion"`
+	NotifyRecipients   []string `json:"notify_recipients"`
+	// Track A (m49): selective component backup + exclusions.
+	BackupComponents  []string `json:"backup_components,omitempty"`
+	ExcludePaths      []string `json:"exclude_paths,omitempty"`
+	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
+	ExcludeFileSizeMB int32    `json:"exclude_file_size_mb,omitempty"`
+	IncludeCore       bool     `json:"include_core"`
+}
+
+// GetNotifyOnCompletion returns the value of NotifyOnCompletion.
+func (s *BackupSchedule) GetNotifyOnCompletion() string {
+	return s.NotifyOnCompletion
+}
+
+// GetNotifyRecipients returns the value of NotifyRecipients.
+func (s *BackupSchedule) GetNotifyRecipients() []string {
+	return s.NotifyRecipients
+}
+
+// GetIncludeCore returns the value of IncludeCore.
+func (s *BackupSchedule) GetIncludeCore() bool {
+	return s.IncludeCore
 }
 
 // GetID returns the value of ID.
@@ -2395,6 +2420,16 @@ type BackupScheduleUpdate struct {
 	IncrementalEnabled OptBool `json:"incremental_enabled"`
 	// Optional override of the default incremental base window (7 days). Omit/null to use the default.
 	BaseWindowDays OptNilInt32 `json:"base_window_days"`
+	// Track B (m49): backup-completion email notification settings.
+	// NOTE: fields added manually pending next `go generate` run.
+	NotifyOnCompletion OptString `json:"notify_on_completion"`
+	NotifyRecipients   []string  `json:"notify_recipients,omitempty"`
+	// Track A (m49): selective component backup + exclusions.
+	BackupComponents  []string `json:"backup_components,omitempty"`
+	ExcludePaths      []string `json:"exclude_paths,omitempty"`
+	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
+	ExcludeFileSizeMB OptInt32 `json:"exclude_file_size_mb"`
+	IncludeCore       OptBool  `json:"include_core"`
 }
 
 // GetCadence returns the value of Cadence.
@@ -2679,6 +2714,20 @@ type BackupSnapshot struct {
 	ParentSnapshotID OptUUID `json:"parent_snapshot_id"`
 	// The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
 	BaseSnapshotID OptUUID `json:"base_snapshot_id"`
+	// Track C (m49): operator-set retention lock. When true the GC never
+	// auto-prunes this snapshot. Toggle via PATCH/DELETE /backups/:id/lock.
+	// NOTE: field added manually pending next `go generate` run (openapi sync).
+	Locked OptBool `json:"locked"`
+}
+
+// GetLocked returns the value of Locked.
+func (s *BackupSnapshot) GetLocked() OptBool {
+	return s.Locked
+}
+
+// SetLocked sets the value of Locked.
+func (s *BackupSnapshot) SetLocked(val OptBool) {
+	s.Locked = val
 }
 
 // GetID returns the value of ID.

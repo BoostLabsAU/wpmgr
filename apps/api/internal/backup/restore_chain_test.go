@@ -151,6 +151,14 @@ func (r *chainFakeRepo) ExistingChunkHashes(_ context.Context, _ uuid.UUID, hash
 	}
 	return out, nil
 }
+func (r *chainFakeRepo) SetSnapshotLocked(_ context.Context, _, id uuid.UUID, locked bool) (Snapshot, error) {
+	if s, ok := r.fakeRepo.snapshots[id]; ok {
+		s.Locked = locked
+		r.fakeRepo.snapshots[id] = s
+		return s, nil
+	}
+	return Snapshot{}, domain.NotFound("backup_snapshot_not_found", "not found")
+}
 
 // ---------------------------------------------------------------------------
 // fakePresigner — counts presign calls and returns synthetic URLs.

@@ -1,8 +1,8 @@
 -- M6 uptime monitoring on Postgres: one row per probe in site_uptime_probes.
 -- ----------------------------------------------------------------------------
 -- Background. M5 wrote uptime check time-series to ClickHouse (ADR-028) and
--- left a no-op fallback when WPMGR_CLICKHOUSE_ADDR was empty. The GCP-managed
--- deployment does not run a ClickHouse cluster, so the disabled fallback fired
+-- left a no-op fallback when WPMGR_CLICKHOUSE_ADDR was empty. A deployment
+-- without a ClickHouse cluster runs the disabled fallback, which fired
 -- in production and the dashboard had no status, no graph, and no cert data.
 --
 -- M6 keeps ClickHouse available for high-volume deployments but adds Postgres

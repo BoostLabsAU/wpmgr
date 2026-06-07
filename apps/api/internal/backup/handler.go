@@ -68,6 +68,11 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	r.GET("/sites/:siteId/backups", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.listBackups)
 	r.GET("/sites/:siteId/backup-schedule", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.getSchedule)
 	r.PUT("/sites/:siteId/backup-schedule", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.putSchedule)
+	// m50: per-site backup settings (Track-A content scope + Track-B notifications).
+	r.GET("/sites/:siteId/backup-settings/contents", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.getBackupContents)
+	r.PUT("/sites/:siteId/backup-settings/contents", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.putBackupContents)
+	r.GET("/sites/:siteId/backup-settings/notifications", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.getBackupNotifications)
+	r.PUT("/sites/:siteId/backup-settings/notifications", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.putBackupNotifications)
 	// Routes by snapshotId (no :siteId param): site isolation is enforced by
 	// running the repo queries through pool.RunTenantTx (which activates scoped
 	// RLS for site-scoped principals). The RESTRICTIVE RLS policy on
@@ -81,6 +86,10 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// gate via canReadSite — the same belt-and-braces pattern getBackup/createRestore use.
 	r.DELETE("/backups/:snapshotId", authz.RequirePermission(authz.PermSiteWrite), h.deleteBackup)
 	r.POST("/backups/:snapshotId/cancel", authz.RequirePermission(authz.PermSiteWrite), h.cancelBackup)
+	// Track C (m49): per-snapshot lock toggle. PATCH sets locked=true; DELETE
+	// sets locked=false. Operator-level permission; site-access gate via canReadSite.
+	r.PATCH("/backups/:snapshotId/lock", authz.RequirePermission(authz.PermSiteWrite), h.lockBackup)
+	r.DELETE("/backups/:snapshotId/lock", authz.RequirePermission(authz.PermSiteWrite), h.unlockBackup)
 	// ADR-037 Sprint 1, 1D — environment fingerprint. Returns the JSON the
 	// agent shipped as the synthetic `environment.json` manifest entry, or 404
 	// when the snapshot pre-dates the env-fingerprint feature. Reads use the
@@ -781,6 +790,9 @@ func toAPISnapshot(s Snapshot) gen.BackupSnapshot {
 	if s.BaseSnapshotID != nil {
 		out.BaseSnapshotID = gen.NewOptUUID(*s.BaseSnapshotID)
 	}
+	// Track C (m49): locked flag (always set so the client can distinguish
+	// "not locked" from "field not present on old API").
+	out.Locked = gen.NewOptBool(s.Locked)
 	return out
 }
 
@@ -876,6 +888,189 @@ func scheduleNextRuns(s Schedule, n int) []time.Time {
 	return runs
 }
 
+// --- backup-settings handlers (m50) ---
+
+// backupSettingsContentsResponse is the GET/PUT response for backup contents settings.
+type backupSettingsContentsResponse struct {
+	SiteID            uuid.UUID `json:"site_id"`
+	BackupComponents  []string  `json:"backup_components"`
+	IncludeCore       bool      `json:"include_core"`
+	ExcludePaths      []string  `json:"exclude_paths"`
+	ExcludeExtensions []string  `json:"exclude_extensions"`
+	// ExcludeFileSizeMB is 0 when no size filter is configured.
+	ExcludeFileSizeMB int32     `json:"exclude_file_size_mb,omitempty"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+// backupSettingsNotificationsResponse is the GET/PUT response for notification settings.
+type backupSettingsNotificationsResponse struct {
+	SiteID             uuid.UUID `json:"site_id"`
+	NotifyOnCompletion string    `json:"notify_on_completion"`
+	NotifyRecipients   []string  `json:"notify_recipients"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// backupSettingsContentsUpdate is the PUT request body for content settings.
+type backupSettingsContentsUpdate struct {
+	BackupComponents  []string `json:"backup_components"`
+	IncludeCore       bool     `json:"include_core"`
+	ExcludePaths      []string `json:"exclude_paths"`
+	ExcludeExtensions []string `json:"exclude_extensions"`
+	ExcludeFileSizeMB int32    `json:"exclude_file_size_mb"`
+}
+
+// backupSettingsNotificationsUpdate is the PUT request body for notification settings.
+type backupSettingsNotificationsUpdate struct {
+	NotifyOnCompletion string   `json:"notify_on_completion"`
+	NotifyRecipients   []string `json:"notify_recipients"`
+}
+
+func toAPIBackupContents(s SiteBackupSettings) backupSettingsContentsResponse {
+	out := backupSettingsContentsResponse{
+		SiteID:            s.SiteID,
+		IncludeCore:       s.IncludeCore,
+		ExcludeFileSizeMB: s.ExcludeFileSizeMB,
+		CreatedAt:         s.CreatedAt,
+		UpdatedAt:         s.UpdatedAt,
+	}
+	// Normalise nil slices to empty for consistent JSON serialisation.
+	if s.BackupComponents != nil {
+		out.BackupComponents = s.BackupComponents
+	} else {
+		out.BackupComponents = []string{}
+	}
+	if s.ExcludePaths != nil {
+		out.ExcludePaths = s.ExcludePaths
+	} else {
+		out.ExcludePaths = []string{}
+	}
+	if s.ExcludeExtensions != nil {
+		out.ExcludeExtensions = s.ExcludeExtensions
+	} else {
+		out.ExcludeExtensions = []string{}
+	}
+	return out
+}
+
+func toAPIBackupNotifications(s SiteBackupSettings) backupSettingsNotificationsResponse {
+	out := backupSettingsNotificationsResponse{
+		SiteID:             s.SiteID,
+		NotifyOnCompletion: s.NotifyOnCompletion,
+		CreatedAt:          s.CreatedAt,
+		UpdatedAt:          s.UpdatedAt,
+	}
+	if s.NotifyRecipients != nil {
+		out.NotifyRecipients = s.NotifyRecipients
+	} else {
+		out.NotifyRecipients = []string{}
+	}
+	return out
+}
+
+func (h *Handler) getBackupContents(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	siteID, ok := uuidParam(c, "siteId", "invalid_site_id")
+	if !ok {
+		return
+	}
+	settings, err := h.svc.GetBackupSettings(c.Request.Context(), tenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	// Return 404 when no settings row exists (safe defaults apply; web card shows
+	// the default state without crashing).
+	if settings.CreatedAt.IsZero() {
+		httpx.Error(c, domain.NotFound("backup_settings_not_found", "no backup settings configured for this site"))
+		return
+	}
+	c.JSON(http.StatusOK, toAPIBackupContents(settings))
+}
+
+func (h *Handler) putBackupContents(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	siteID, ok := uuidParam(c, "siteId", "invalid_site_id")
+	if !ok {
+		return
+	}
+	var req backupSettingsContentsUpdate
+	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength > 0 {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
+		return
+	}
+	settings, err := h.svc.PutBackupContents(c.Request.Context(), PutBackupContentsInput{
+		TenantID:          tenantID,
+		SiteID:            siteID,
+		BackupComponents:  req.BackupComponents,
+		IncludeCore:       req.IncludeCore,
+		ExcludePaths:      req.ExcludePaths,
+		ExcludeExtensions: req.ExcludeExtensions,
+		ExcludeFileSizeMB: req.ExcludeFileSizeMB,
+	})
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toAPIBackupContents(settings))
+}
+
+func (h *Handler) getBackupNotifications(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	siteID, ok := uuidParam(c, "siteId", "invalid_site_id")
+	if !ok {
+		return
+	}
+	settings, err := h.svc.GetBackupSettings(c.Request.Context(), tenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	// Return 404 when no settings row exists.
+	if settings.CreatedAt.IsZero() {
+		httpx.Error(c, domain.NotFound("backup_settings_not_found", "no backup settings configured for this site"))
+		return
+	}
+	c.JSON(http.StatusOK, toAPIBackupNotifications(settings))
+}
+
+func (h *Handler) putBackupNotifications(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	siteID, ok := uuidParam(c, "siteId", "invalid_site_id")
+	if !ok {
+		return
+	}
+	var req backupSettingsNotificationsUpdate
+	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength > 0 {
+		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON"))
+		return
+	}
+	settings, err := h.svc.PutBackupNotifications(c.Request.Context(), PutBackupNotificationsInput{
+		TenantID:           tenantID,
+		SiteID:             siteID,
+		NotifyOnCompletion: req.NotifyOnCompletion,
+		NotifyRecipients:   req.NotifyRecipients,
+	})
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toAPIBackupNotifications(settings))
+}
+
 // --- gin helpers ---
 
 func tenantOf(c *gin.Context) (uuid.UUID, bool) {
@@ -904,6 +1099,46 @@ func actorOf(c *gin.Context) (string, string) {
 		return audit.ActorUser, p.ActorID()
 	}
 	return audit.ActorSystem, ""
+}
+
+// lockBackup sets locked=true on a terminal snapshot so the retention GC never
+// auto-prunes it (Track C, m49). A 409 is returned if the snapshot is still
+// running/pending. The response is the updated snapshot DTO.
+func (h *Handler) lockBackup(c *gin.Context) {
+	h.setLock(c, true)
+}
+
+// unlockBackup clears the locked flag, making the snapshot eligible for normal
+// retention GC again (Track C, m49). The response is the updated snapshot DTO.
+func (h *Handler) unlockBackup(c *gin.Context) {
+	h.setLock(c, false)
+}
+
+func (h *Handler) setLock(c *gin.Context, locked bool) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	snapshotID, ok := uuidParam(c, "snapshotId", "invalid_snapshot_id")
+	if !ok {
+		return
+	}
+	snap, _, err := h.svc.GetSnapshot(c.Request.Context(), tenantID, snapshotID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if !canReadSite(c, snap.SiteID) {
+		httpx.Error(c, domain.Forbidden("forbidden", "you do not have access to this site"))
+		return
+	}
+	updated, err := h.svc.SetSnapshotLocked(c.Request.Context(), tenantID, snapshotID, locked)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	out := toAPISnapshot(updated)
+	c.JSON(http.StatusOK, &out)
 }
 
 func parseInt32(s string, def int32) int32 {

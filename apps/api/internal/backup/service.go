@@ -37,6 +37,13 @@ type SiteLookup interface {
 	GetBackupSiteInfo(ctx context.Context, tenantID, siteID uuid.UUID) (SiteInfo, error)
 }
 
+// BackupMailer enqueues a durable transactional email for a backup event.
+// The concrete implementation is *mailer.Enqueuer. Optional: when nil, backup
+// notification emails are silently suppressed (deploy without SMTP configured).
+type BackupMailer interface {
+	Enqueue(ctx context.Context, tenantID uuid.UUID, recipients []string, template string, data map[string]any) error
+}
+
 // Enqueuer schedules the background backup/restore/GC jobs (River, wired in
 // main).
 type Enqueuer interface {
@@ -105,6 +112,9 @@ type Service struct {
 	// indexPutter writes the per-snapshot manifest index object (M5.7 P4).
 	// Optional: when nil the index write is skipped (best-effort by design).
 	indexPutter IndexPutter
+	// mailer sends backup-completion/failure notification emails (Track B, m49).
+	// Optional: when nil, notification emails are silently suppressed.
+	mailer BackupMailer
 }
 
 // SetRegistry wires the ADR-036 P1 storage-adapter router. Calling this AFTER
@@ -119,6 +129,11 @@ func (s *Service) SetRegistry(r PresignerForSnapshot) { s.registry = r }
 // A write failure is best-effort: it is logged but never fails the backup.
 // Call once at startup before serving traffic; safe to omit in tests.
 func (s *Service) SetIndexPutter(p IndexPutter) { s.indexPutter = p }
+
+// SetMailer wires the transactional-email enqueuer for backup-completion
+// notifications (Track B, m49). Call once at startup after River is started.
+// When not called, backup email notifications are silently suppressed.
+func (s *Service) SetMailer(m BackupMailer) { s.mailer = m }
 
 // Config tunes the service.
 type Config struct {
@@ -1119,7 +1134,7 @@ func (s *Service) planRestoreChainFileIndex(ctx context.Context, tenantID uuid.U
 // / inspection.
 func isArchivePartKind(kind string) bool {
 	switch kind {
-	case EntryKindFile, EntryKindPlugin, EntryKindTheme, EntryKindUpload, EntryKindWPContent:
+	case EntryKindFile, EntryKindPlugin, EntryKindTheme, EntryKindUpload, EntryKindWPContent, EntryKindCore:
 		return true
 	default:
 		return false
@@ -1328,6 +1343,10 @@ func (s *Service) SubmitManifest(ctx context.Context, tenantID, snapshotID uuid.
 			SetFinished: true,
 		})
 	}
+	// Track B (m49): send backup-completion notification email (best-effort).
+	if completed, gerr := s.repo.GetSnapshot(ctx, tenantID, snapshotID); gerr == nil {
+		s.sendBackupEmail(ctx, completed, "backup_completed")
+	}
 	return chunkRefs, stored, nil
 }
 
@@ -1519,6 +1538,10 @@ func (s *Service) FailSnapshot(ctx context.Context, tenantID, snapshotID uuid.UU
 			SetFinished: true,
 		})
 	}
+	// Track B (m49): send backup-failure notification email (best-effort).
+	// Operator-cancels notify too — an alert that a backup did not complete is
+	// honest, and the recipient can ignore one they triggered themselves.
+	s.sendBackupEmail(ctx, snap, "backup_failed")
 	return snap, nil
 }
 
@@ -1551,6 +1574,27 @@ func (s *Service) CancelSnapshot(ctx context.Context, tenantID, snapshotID uuid.
 			"only a running or pending backup can be cancelled")
 	}
 	return s.FailSnapshot(ctx, tenantID, snapshotID, cancelByOperatorMsg)
+}
+
+// SetSnapshotLocked sets or clears the per-snapshot lock flag (Track C, m49).
+// A locked snapshot is never auto-pruned by the retention GC regardless of
+// retention_days or keep_last. The snapshot must be terminal (completed or
+// failed); locking a running/pending backup is rejected as a 409 to prevent
+// confusion (the GC does not prune non-terminal rows anyway, so locking an
+// in-flight backup is semantically redundant and likely a UI bug).
+func (s *Service) SetSnapshotLocked(ctx context.Context, tenantID, snapshotID uuid.UUID, locked bool) (Snapshot, error) {
+	if tenantID == uuid.Nil {
+		return Snapshot{}, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	snap, err := s.repo.GetSnapshot(ctx, tenantID, snapshotID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if snap.Status == StatusRunning || snap.Status == StatusPending {
+		return Snapshot{}, domain.Conflict("snapshot_in_progress",
+			"a running or pending backup cannot be locked or unlocked; wait for it to complete")
+	}
+	return s.repo.SetSnapshotLocked(ctx, tenantID, snapshotID, locked)
 }
 
 // DeleteSnapshotForUser removes a snapshot at the operator's request and
@@ -1845,7 +1889,10 @@ func (s *Service) GetSchedule(ctx context.Context, tenantID, siteID uuid.UUID) (
 	return sched, nil
 }
 
-// PutScheduleInput is the validated schedule input.
+// PutScheduleInput is the validated schedule input. Track-A and Track-B fields
+// (backup scope + notifications) were removed in m50 — they now live in
+// site_backup_settings and are accessed via PutBackupContents /
+// PutBackupNotifications.
 type PutScheduleInput struct {
 	TenantID           uuid.UUID
 	SiteID             uuid.UUID
@@ -1864,6 +1911,25 @@ type PutScheduleInput struct {
 	// ADR-048 P5: per-schedule incremental opt-in + optional base-window override.
 	IncrementalEnabled bool
 	BaseWindowDays     *int32
+}
+
+// PutBackupContentsInput is the input for updating Track-A backup-scope settings.
+type PutBackupContentsInput struct {
+	TenantID          uuid.UUID
+	SiteID            uuid.UUID
+	BackupComponents  []string // nil = all components (full backup)
+	IncludeCore       bool
+	ExcludePaths      []string
+	ExcludeExtensions []string
+	ExcludeFileSizeMB int32 // 0 = no filter
+}
+
+// PutBackupNotificationsInput is the input for updating Track-B notification settings.
+type PutBackupNotificationsInput struct {
+	TenantID           uuid.UUID
+	SiteID             uuid.UUID
+	NotifyOnCompletion string   // "always"|"on_failure"|"never"; empty defaults to "never"
+	NotifyRecipients   []string // max 20, each a valid email
 }
 
 // PutSchedule creates/updates a site's backup schedule.
@@ -2184,6 +2250,197 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 // agent alongside the presigned URLs).
 func (s *Service) presignTTLSeconds() int { return int(s.presignTTL.Seconds()) }
 
+// GetBackupSettings returns the site's backup settings. Safe defaults
+// (never/empty/false) are returned when no settings row exists yet.
+func (s *Service) GetBackupSettings(ctx context.Context, tenantID, siteID uuid.UUID) (SiteBackupSettings, error) {
+	settings, err := s.repo.GetBackupSettings(ctx, tenantID, siteID)
+	if err != nil {
+		var de *domain.Error
+		if errors.As(err, &de) && de.Kind == domain.KindNotFound {
+			return SiteBackupSettings{
+				SiteID:             siteID,
+				NotifyOnCompletion: "never",
+			}, nil
+		}
+		return SiteBackupSettings{}, err
+	}
+	return settings, nil
+}
+
+// PutBackupContents validates and persists the Track-A backup-scope settings.
+// It merges with the existing notification settings so that only content fields
+// are overwritten.
+func (s *Service) PutBackupContents(ctx context.Context, in PutBackupContentsInput) (SiteBackupSettings, error) {
+	if in.TenantID == uuid.Nil {
+		return SiteBackupSettings{}, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	// Validate backup_components against the canonical singular enum.
+	for _, comp := range in.BackupComponents {
+		if !validBackupComponent(comp) {
+			return SiteBackupSettings{}, domain.Validation("invalid_backup_component",
+				fmt.Sprintf("backup_components contains an unknown value %q; valid values are: plugin, theme, upload, wp-content, db, core", comp))
+		}
+	}
+	// Validate exclude_file_size_mb: must be >= 0 and <= 102400 MiB (100 GiB).
+	const maxExcludeFileSizeMB = 102400
+	if in.ExcludeFileSizeMB < 0 {
+		return SiteBackupSettings{}, domain.Validation("invalid_exclude_file_size_mb",
+			"exclude_file_size_mb must be 0 or greater (0 = no filter)")
+	}
+	if in.ExcludeFileSizeMB > maxExcludeFileSizeMB {
+		return SiteBackupSettings{}, domain.Validation("invalid_exclude_file_size_mb",
+			fmt.Sprintf("exclude_file_size_mb must not exceed %d MiB (100 GiB)", maxExcludeFileSizeMB))
+	}
+	// Validate exclude_paths and exclude_extensions length caps.
+	const maxExcludePaths = 100
+	const maxExcludeExtensions = 50
+	if len(in.ExcludePaths) > maxExcludePaths {
+		return SiteBackupSettings{}, domain.Validation("too_many_exclude_paths",
+			fmt.Sprintf("exclude_paths may contain at most %d entries", maxExcludePaths))
+	}
+	if len(in.ExcludeExtensions) > maxExcludeExtensions {
+		return SiteBackupSettings{}, domain.Validation("too_many_exclude_extensions",
+			fmt.Sprintf("exclude_extensions may contain at most %d entries", maxExcludeExtensions))
+	}
+	// Load existing notification settings to preserve them during this content-only update.
+	existing, _ := s.GetBackupSettings(ctx, in.TenantID, in.SiteID)
+	merged := SiteBackupSettings{
+		SiteID:            in.SiteID,
+		BackupComponents:  in.BackupComponents,
+		IncludeCore:       in.IncludeCore,
+		ExcludePaths:      in.ExcludePaths,
+		ExcludeExtensions: in.ExcludeExtensions,
+		ExcludeFileSizeMB: in.ExcludeFileSizeMB,
+		// Preserve existing notification fields.
+		NotifyOnCompletion: existing.NotifyOnCompletion,
+		NotifyRecipients:   existing.NotifyRecipients,
+	}
+	return s.repo.UpsertBackupSettings(ctx, in.TenantID, merged)
+}
+
+// PutBackupNotifications validates and persists the Track-B notification settings.
+// It merges with the existing content settings so that only notification fields
+// are overwritten.
+func (s *Service) PutBackupNotifications(ctx context.Context, in PutBackupNotificationsInput) (SiteBackupSettings, error) {
+	if in.TenantID == uuid.Nil {
+		return SiteBackupSettings{}, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	// Validate notify_on_completion (default "never" when empty).
+	notifyOnCompletion := strings.TrimSpace(strings.ToLower(in.NotifyOnCompletion))
+	if notifyOnCompletion == "" {
+		notifyOnCompletion = "never"
+	}
+	if notifyOnCompletion != "always" && notifyOnCompletion != "on_failure" && notifyOnCompletion != "never" {
+		return SiteBackupSettings{}, domain.Validation("invalid_notify_on_completion",
+			"notify_on_completion must be 'always', 'on_failure', or 'never'")
+	}
+	// Validate notify_recipients: well-formed emails, capped at 20 addresses.
+	const maxNotifyRecipients = 20
+	if len(in.NotifyRecipients) > maxNotifyRecipients {
+		return SiteBackupSettings{}, domain.Validation("too_many_notify_recipients",
+			fmt.Sprintf("notify_recipients may contain at most %d addresses", maxNotifyRecipients))
+	}
+	for _, addr := range in.NotifyRecipients {
+		if !isValidEmail(addr) {
+			return SiteBackupSettings{}, domain.Validation("invalid_notify_recipient",
+				fmt.Sprintf("notify_recipients contains an invalid email address: %q", addr))
+		}
+	}
+	// Load existing content settings to preserve them during this notification-only update.
+	existing, _ := s.GetBackupSettings(ctx, in.TenantID, in.SiteID)
+	merged := SiteBackupSettings{
+		SiteID:            in.SiteID,
+		BackupComponents:  existing.BackupComponents,
+		IncludeCore:       existing.IncludeCore,
+		ExcludePaths:      existing.ExcludePaths,
+		ExcludeExtensions: existing.ExcludeExtensions,
+		ExcludeFileSizeMB: existing.ExcludeFileSizeMB,
+		NotifyOnCompletion: notifyOnCompletion,
+		NotifyRecipients:   in.NotifyRecipients,
+	}
+	return s.repo.UpsertBackupSettings(ctx, in.TenantID, merged)
+}
+
+// BackupScopeConfig carries the Track-A (m50) selective-component + exclusion
+// fields resolved from a site's backup settings at backup dispatch time. The
+// worker calls scheduleBackupScope to fetch these once and threads them into
+// the agent command. When no settings row exists the zero value produces "all
+// components, no exclusions" — identical to the pre-m49 behaviour.
+type BackupScopeConfig struct {
+	Components        []string
+	IncludeCore       bool
+	ExcludePaths      []string
+	ExcludeExtensions []string
+	ExcludeFileSizeMB int32
+}
+
+// scheduleBackupScope resolves the Track-A backup-scope settings from the site's
+// backup settings (site_backup_settings table, m50). Returns the zero
+// BackupScopeConfig when no settings row exists (or the lookup fails), which
+// produces "all components, no exclusions" — identical to the pre-m49 default.
+// This is the single dispatch point for BOTH manual and scheduled backup runs.
+func (s *Service) scheduleBackupScope(ctx context.Context, tenantID, siteID uuid.UUID) BackupScopeConfig {
+	settings, err := s.repo.GetBackupSettings(ctx, tenantID, siteID)
+	if err != nil {
+		return BackupScopeConfig{} // no settings row → no filter (all components)
+	}
+	return BackupScopeConfig{
+		Components:        settings.BackupComponents,
+		IncludeCore:       settings.IncludeCore,
+		ExcludePaths:      settings.ExcludePaths,
+		ExcludeExtensions: settings.ExcludeExtensions,
+		ExcludeFileSizeMB: settings.ExcludeFileSizeMB,
+	}
+}
+
+// sendBackupEmail enqueues a backup-notification email (Track B, m50) when the
+// site's backup settings have notify_on_completion configured and a mailer is
+// wired. Reads from site_backup_settings (not backup_schedules). Fires for
+// BOTH manual and scheduled backup completions/failures because SubmitManifest
+// and FailSnapshot both call this function regardless of how the run was
+// triggered. Always best-effort: any failure is logged and silently swallowed.
+//
+// template is "backup_completed" or "backup_failed".
+func (s *Service) sendBackupEmail(ctx context.Context, snap Snapshot, template string) {
+	if s.mailer == nil {
+		return
+	}
+	settings, serr := s.repo.GetBackupSettings(ctx, snap.TenantID, snap.SiteID)
+	if serr != nil {
+		// No settings row (or lookup error): no notification configured.
+		return
+	}
+	notify := settings.NotifyOnCompletion
+	if notify == "" || notify == "never" {
+		return
+	}
+	if notify == "on_failure" && template != "backup_failed" {
+		return
+	}
+	if len(settings.NotifyRecipients) == 0 {
+		return
+	}
+
+	data := map[string]any{
+		"SiteURL":    "",
+		"Kind":       snap.Kind,
+		"SnapshotID": snap.ID.String(),
+		"SizeBytes":  snap.TotalSize,
+		"FinishedAt": snap.FinishedAt,
+		"Error":      snap.Error,
+	}
+	if si, sierr := s.sites.GetBackupSiteInfo(ctx, snap.TenantID, snap.SiteID); sierr == nil {
+		data["SiteURL"] = si.URL
+	}
+
+	if err := s.mailer.Enqueue(ctx, snap.TenantID, settings.NotifyRecipients, template, data); err != nil {
+		slog.WarnContext(ctx, "backup: notification email enqueue failed (best-effort)",
+			slog.String("template", template),
+			slog.String("snapshot_id", snap.ID.String()),
+			slog.Any("error", err))
+	}
+}
+
 // selectEntries resolves a RestoreSelection against a manifest, returning the
 // matching entries. Full selects everything; Paths selects file entries by
 // exact path; DBTables selects db entries by table name. When Components is
@@ -2485,6 +2742,29 @@ func deriveWireKind(snapshotKind string, components []string) string {
 		return KindDB
 	}
 	return snapshotKind
+}
+
+// deriveIncludeDB computes the explicit DB-inclusion signal from a components
+// allowlist. Returns nil when the list is empty (no filter; the agent uses its
+// own kind-based default). When the list is non-empty, returns a pointer to
+// true if "db" is in the list, or false if it is absent.
+//
+// This is the AUTHORITATIVE rule for the #187 contract: DB inclusion is driven
+// by the components list, not the snapshot kind alone. When the CP sends a
+// non-nil IncludeDB the agent MUST respect it: skip runDumpDatabase when false,
+// include it when true — regardless of the snapshot kind field.
+func deriveIncludeDB(components []string) *bool {
+	if len(components) == 0 {
+		return nil // no filter; let the agent follow the snapshot kind
+	}
+	for _, c := range components {
+		if c == KindDB {
+			v := true
+			return &v
+		}
+	}
+	v := false
+	return &v
 }
 
 // optInt32ToInt converts a nullable int32 pointer to a nullable int pointer.

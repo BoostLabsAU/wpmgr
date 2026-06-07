@@ -18,14 +18,17 @@ var templateFS embed.FS
 
 // subjects maps a template name to its (static) subject line.
 var subjects = map[string]string{
-	"test":             "Your WPMgr SMTP test email",
-	"password_reset":   "Reset your WPMgr password",
-	"password_changed": "Your WPMgr password was changed",
-	"verify_email":     "Verify your WPMgr email address",
-	"invite":           "You have been invited to WPMgr",
-	"account_exists":   "You already have a WPMgr account",
-	"site_invite":      "You have been invited to a site on WPMgr",
-	"site_shared":      "A site was shared with you on WPMgr",
+	"test":               "Your WPMgr SMTP test email",
+	"password_reset":     "Reset your WPMgr password",
+	"password_changed":   "Your WPMgr password was changed",
+	"verify_email":       "Verify your WPMgr email address",
+	"invite":             "You have been invited to WPMgr",
+	"account_exists":     "You already have a WPMgr account",
+	"site_invite":        "You have been invited to a site on WPMgr",
+	"site_shared":        "A site was shared with you on WPMgr",
+	// Track B (m49): backup-event notification emails.
+	"backup_completed": "Backup completed",
+	"backup_failed":    "Backup failed — action required",
 }
 
 // TemplateRenderer renders the embedded HTML + plaintext templates. It parses

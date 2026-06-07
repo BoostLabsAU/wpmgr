@@ -705,6 +705,14 @@ final class EncryptAndUpload
         if (str_ends_with($lower, '.sql') || str_ends_with($lower, '.sql.gz') || str_contains($lower, 'database.sql')) {
             return 'db';
         }
+        // Track A / A2 (#187): CoreFilesArchiver emits `core.gNNN.partMMM.zip`.
+        // Classified before the FilesArchiver component check so the literal
+        // entry_kind "core" lands on the manifest entry — the CP restore planner
+        // routes core parts to the ABSPATH overlay (not wp-content).
+        if (preg_match('/^core\.(g\d+\.)?part\d+\.zip$/i', $lower) === 1) {
+            return 'core';
+        }
+
         // Track 5 per-component archives. The FilesArchiver emits
         // `<component>.gNNN.partMMM.zip` (generation-namespaced) — classify via
         // the shared component classifier so the namespaced part name maps to

@@ -1,0 +1,15 @@
+Backup completed — {{.ProductName}}
+=====================================
+
+{{if .SiteURL}}Site:        {{.SiteURL}}
+{{end}}Type:        {{.Kind}}
+{{if .SizeBytes}}Size:        {{.SizeBytes}} bytes
+{{end}}Snapshot ID: {{.SnapshotID}}
+
+Log in to {{.ProductName}} to view backup details or start a restore.
+
+--
+{{.ProductName}} — fleet control for WordPress
+{{if .FooterNote}}{{.FooterNote}}
+{{end}}Need help? Contact {{.SupportEmail}}.
+(c) {{.Year}} {{.ProductName}}.

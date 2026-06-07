@@ -20,6 +20,7 @@ package backup
 import (
 	"fmt"
 	"hash/fnv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -52,6 +53,8 @@ const (
 //	EntryKindUpload    -> uploads.partNNN.zip   (wp-content/uploads/*)
 //	EntryKindWPContent -> wp-content.partNNN.zip (everything else: mu-plugins,
 //	                                              languages, drop-ins, custom dirs)
+//	EntryKindCore      -> core.partNNN.zip      (ABSPATH: wp-admin, wp-includes,
+//	                                              root PHP files incl. wp-config.php)
 //
 // EntryKindFile is RETAINED for backward compat: pre-Track-5 snapshots have
 // every files-part tagged 'file', and the restorer routes those through the
@@ -66,6 +69,10 @@ const (
 	EntryKindTheme     = "theme"
 	EntryKindUpload    = "upload"
 	EntryKindWPContent = "wp-content" // catch-all: NOT plugin/theme/upload
+	// EntryKindCore is the A2 WordPress-core archive component: wp-admin,
+	// wp-includes, and root PHP files (wp-config.php, wp-login.php, etc.)
+	// rooted at ABSPATH, emitted only when include_core=true.
+	EntryKindCore = "core"
 	// ADR-051 archive-delta increments emit two extra manifest-entry kinds:
 	//   files-list:  ONE entry per snapshot, the relpath\tsize\tmtime list that
 	//                seeds the NEXT increment's diff (chunked like a part).
@@ -141,6 +148,10 @@ type Snapshot struct {
 	CycleFilesChanged  int64
 	CycleFilesDeleted  int64
 	CycleBytesUploaded int64
+	// Track C (m49): operator-set lock preventing the retention GC from pruning
+	// this snapshot. A locked snapshot is never auto-deleted regardless of
+	// retention_days or keep_last; it must be explicitly unlocked first.
+	Locked bool
 }
 
 // FileIndexEntry is one row of the backup_file_index table: a single file's
@@ -211,10 +222,35 @@ type Schedule struct {
 	// Optional per-schedule override of BackupBaseWindowDays. nil = use the
 	// constant.
 	BaseWindowDays *int32
-	NextRunAt      time.Time
-	LastRunAt      *time.Time
-	CreatedAt      time.Time
-	UpdatedAt      time.Time
+
+	NextRunAt time.Time
+	LastRunAt *time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// SiteBackupSettings holds the Track-A (backup scope/exclusions) and Track-B
+// (notification settings) per-site backup settings, decoupled from
+// backup_schedules in m50. A missing row means safe defaults apply:
+// all components, no exclusions, never notify.
+type SiteBackupSettings struct {
+	TenantID uuid.UUID
+	SiteID   uuid.UUID
+	// Track A: backup scope / exclusions.
+	// BackupComponents is the set of components to archive. nil = all components
+	// (full backup). Valid values: plugin|theme|upload|wp-content|db|core.
+	BackupComponents  []string
+	IncludeCore       bool
+	ExcludePaths      []string
+	ExcludeExtensions []string
+	// ExcludeFileSizeMB, when > 0, skips files strictly larger than this (MiB).
+	// 0 = no size filter (maps to DB NULL via CHECK (exclude_file_size_mb > 0)).
+	ExcludeFileSizeMB int32
+	// Track B: notification settings.
+	NotifyOnCompletion string   // "always"|"on_failure"|"never"
+	NotifyRecipients   []string // email addresses
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 // validKind reports whether kind is a known snapshot kind.
@@ -225,6 +261,45 @@ func validKind(kind string) bool {
 	default:
 		return false
 	}
+}
+
+// validBackupComponent reports whether c is a valid backup component value.
+// Uses the SINGULAR canonical vocabulary matching manifest entry_kind:
+//
+//	plugin | theme | upload | wp-content | db | core
+func validBackupComponent(c string) bool {
+	switch c {
+	case EntryKindPlugin, EntryKindTheme, EntryKindUpload, EntryKindWPContent, EntryKindDB, EntryKindCore:
+		return true
+	default:
+		return false
+	}
+}
+
+// isValidEmail performs a lightweight structural check: non-empty, exactly one
+// "@" with non-empty local and domain parts, domain contains at least one ".".
+// This is intentionally conservative — rejecting obviously malformed addresses
+// while accepting any plausible email without requiring a full RFC 5322 parse.
+func isValidEmail(addr string) bool {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return false
+	}
+	at := strings.LastIndex(addr, "@")
+	if at <= 0 || at >= len(addr)-1 {
+		return false
+	}
+	local := addr[:at]
+	domain := addr[at+1:]
+	if local == "" || domain == "" {
+		return false
+	}
+	// Domain must contain at least one dot with non-empty parts on both sides.
+	dot := strings.LastIndex(domain, ".")
+	if dot <= 0 || dot >= len(domain)-1 {
+		return false
+	}
+	return true
 }
 
 // validCadence reports whether c is a known schedule cadence.

@@ -87,6 +87,12 @@ func (r *fakeWorkerRepo) ExistingChunkHashes(_ context.Context, tenantID uuid.UU
 	}
 	return out, nil
 }
+func (r *fakeWorkerRepo) SetSnapshotLocked(_ context.Context, _, id uuid.UUID, locked bool) (Snapshot, error) {
+	s := r.fakeRepo.snapshots[id]
+	s.Locked = locked
+	r.fakeRepo.snapshots[id] = s
+	return s, nil
+}
 
 // fakeWorkerSiteLookup returns a fixed enrolled site.
 type fakeWorkerSiteLookup struct{}
@@ -300,6 +306,155 @@ func TestBackupWorker_DispatchesBaseIncrement(t *testing.T) {
 	// files-list is what signals the base scan to the agent.
 	if req.ParentSnapshotID != uuid.Nil.String() {
 		t.Errorf("expected nil-UUID parent for a base, got %q", req.ParentSnapshotID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestBackupWorker_SelectiveComponents_IncludeDB — MUST-FIX #187 LOW:
+// verifies the CP->agent path for selective-component backup.
+//
+// A schedule with BackupComponents = ["plugin","db"] must produce a
+// BackupRequest where:
+//   - Components = ["plugin","db"]  (singular vocabulary)
+//   - IncludeDB  = &true           (explicit DB-inclusion signal)
+//
+// A schedule with BackupComponents = ["plugin","theme"] (no "db") must produce:
+//   - Components = ["plugin","theme"]
+//   - IncludeDB  = &false          (explicit DB-exclusion signal)
+//
+// A schedule with no BackupComponents (nil) must produce:
+//   - Components = nil/empty
+//   - IncludeDB  = nil             (no filter; agent follows snapshot kind)
+// ---------------------------------------------------------------------------
+
+// fakeSettingsWorkerRepo wraps fakeWorkerRepo and returns preset backup settings.
+// After m50, scheduleBackupScope reads from GetBackupSettings (site_backup_settings),
+// not GetSchedule, so the fake implements GetBackupSettings instead.
+type fakeSettingsWorkerRepo struct {
+	*fakeWorkerRepo
+	settings *SiteBackupSettings
+}
+
+func (r *fakeSettingsWorkerRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteBackupSettings, error) {
+	if r.settings == nil {
+		return SiteBackupSettings{}, domain.NotFound("backup_settings_not_found", "not found")
+	}
+	return *r.settings, nil
+}
+
+func (r *fakeSettingsWorkerRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
+	r.settings = &in
+	return in, nil
+}
+
+func TestBackupWorker_SelectiveComponents_IncludeDB(t *testing.T) {
+	falsePtr := func() *bool { v := false; return &v }
+	truePtr := func() *bool { v := true; return &v }
+
+	tests := []struct {
+		name           string
+		components     []string
+		wantComponents []string
+		wantIncludeDB  *bool
+	}{
+		{
+			name:           "plugin+db => IncludeDB=true",
+			components:     []string{EntryKindPlugin, KindDB},
+			wantComponents: []string{EntryKindPlugin, KindDB},
+			wantIncludeDB:  truePtr(),
+		},
+		{
+			name:           "plugin+theme (no db) => IncludeDB=false",
+			components:     []string{EntryKindPlugin, EntryKindTheme},
+			wantComponents: []string{EntryKindPlugin, EntryKindTheme},
+			wantIncludeDB:  falsePtr(),
+		},
+		{
+			name:           "nil components => IncludeDB=nil",
+			components:     nil,
+			wantComponents: nil,
+			wantIncludeDB:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inner := &fakeWorkerRepo{fakeRepo: newFakeRepo()}
+			var settingsPtr *SiteBackupSettings
+			if tt.components != nil {
+				s := SiteBackupSettings{BackupComponents: tt.components}
+				settingsPtr = &s
+			}
+			repo := &fakeSettingsWorkerRepo{
+				fakeWorkerRepo: inner,
+				settings:       settingsPtr,
+			}
+			cmd := &fakeCommander{ok: true}
+			tenantID := uuid.New()
+			snapshotID := uuid.New()
+
+			snap := Snapshot{
+				ID:           snapshotID,
+				TenantID:     tenantID,
+				SiteID:       uuid.New(),
+				Kind:         KindFull,
+				Status:       StatusPending,
+				AgeRecipient: "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
+				IsIncremental: false,
+			}
+			inner.setSnapshot(snap)
+
+			svc := &Service{repo: repo, sites: fakeWorkerSiteLookup{}, clock: fakeClock{t: time.Now()}}
+			worker := NewBackupWorker(svc, cmd, nil, nil, "https://cp.example.com", 0)
+
+			job := &river.Job[BackupArgs]{
+				Args: BackupArgs{
+					TenantID:   tenantID,
+					SnapshotID: snapshotID,
+				},
+			}
+			if err := worker.Work(context.Background(), job); err != nil {
+				t.Fatalf("Work() error: %v", err)
+			}
+			if cmd.lastBackup == nil {
+				t.Fatal("expected Backup to be called")
+			}
+			req := cmd.lastBackup
+
+			// Assert components (nil vs non-nil handled gracefully).
+			if len(tt.wantComponents) == 0 {
+				if len(req.Components) != 0 {
+					t.Errorf("want no components, got %v", req.Components)
+				}
+			} else {
+				if len(req.Components) != len(tt.wantComponents) {
+					t.Errorf("components length mismatch: got %v, want %v", req.Components, tt.wantComponents)
+				} else {
+					got := map[string]bool{}
+					for _, c := range req.Components {
+						got[c] = true
+					}
+					for _, c := range tt.wantComponents {
+						if !got[c] {
+							t.Errorf("component %q missing from request; got %v", c, req.Components)
+						}
+					}
+				}
+			}
+
+			// Assert include_db signal.
+			if tt.wantIncludeDB == nil {
+				if req.IncludeDB != nil {
+					t.Errorf("IncludeDB: want nil, got %v", *req.IncludeDB)
+				}
+			} else {
+				if req.IncludeDB == nil {
+					t.Errorf("IncludeDB: want %v, got nil", *tt.wantIncludeDB)
+				} else if *req.IncludeDB != *tt.wantIncludeDB {
+					t.Errorf("IncludeDB: want %v, got %v", *tt.wantIncludeDB, *req.IncludeDB)
+				}
+			}
+		})
 	}
 }
 

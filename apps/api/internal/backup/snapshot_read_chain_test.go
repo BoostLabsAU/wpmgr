@@ -110,6 +110,7 @@ func TestIncrementalSnapshotReadRoundTrip(t *testing.T) {
 		int64(3),                                  // cycle_files_changed
 		int64(1),                                  // cycle_files_deleted
 		int64(2048),                               // cycle_bytes_uploaded
+		false,                                     // locked (m49 Track C)
 	}}
 
 	snap, err := scanSnapshotWithChainFields(row)
@@ -189,6 +190,7 @@ func TestFullSnapshotReadRoundTrip(t *testing.T) {
 		int64(0),             // cycle_files_changed
 		int64(0),             // cycle_files_deleted
 		int64(0),             // cycle_bytes_uploaded
+		false,                // locked (m49 Track C)
 	}}
 
 	snap, err := scanSnapshotWithChainFields(row)

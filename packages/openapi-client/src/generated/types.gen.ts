@@ -749,13 +749,9 @@ export type BackupEvent = {
   snapshot_id: string;
   phase:
     | "queued"
-    | "started"
     | "dumping_db"
     | "archiving_files"
     | "encrypting_uploading"
-    | "compressing_files"
-    | "encrypting"
-    | "uploading"
     | "submitting_manifest"
     | "completed"
     | "failed";
@@ -845,6 +841,13 @@ export type BackupSnapshot = {
    * The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
    */
   base_snapshot_id?: string;
+  /**
+   * Track C (m49). When true the retention GC will never auto-prune this
+   * snapshot. Unlock via DELETE /backups/{snapshotId}/lock to restore
+   * normal GC eligibility.
+   *
+   */
+  locked?: boolean;
 };
 
 export type BackupSnapshotList = {
@@ -856,7 +859,7 @@ export type BackupSnapshotList = {
  */
 export type BackupManifestEntry = {
   path: string;
-  entry_kind: "file" | "db";
+  entry_kind: "file" | "db" | "plugin" | "theme" | "upload" | "wp-content";
   /**
    * Set for db entries (partial restore-by-table).
    */
@@ -1059,6 +1062,60 @@ export type BackupSchedule = {
   last_run_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Track B (m49). When to send a backup-event email.
+   * "always" = every backup completion or failure;
+   * "on_failure" = only on failure;
+   * "never" = no email (default).
+   *
+   */
+  notify_on_completion?: "always" | "on_failure" | "never";
+  /**
+   * Track B (m49). Email addresses to notify. Required when
+   * notify_on_completion is not "never".
+   *
+   */
+  notify_recipients?: Array<string>;
+  /**
+   * Track A (m49). Subset of archive components to include. Absent/empty = include all.
+   * Singular component names (matching the manifest entry_kind vocabulary):
+   * "plugin"     — wp-content/plugins*
+   * "theme"      — wp-content/themes*
+   * "upload"     — wp-content/uploads*
+   * "wp-content" — everything else under wp-content (mu-plugins, languages, drop-ins, custom dirs)
+   * "db"         — the database dump
+   * "core"       — WordPress core (ABSPATH: wp-admin, wp-includes, root PHP files)
+   *
+   */
+  backup_components?: Array<
+    "plugin" | "theme" | "upload" | "wp-content" | "db" | "core"
+  >;
+  /**
+   * Track A3 (m49). Path-segment names (relative to wp-content) to
+   * exclude from file archiving. Matched against each segment of a
+   * file's relative path — not full-path prefix matching.
+   *
+   */
+  exclude_paths?: Array<string>;
+  /**
+   * Track A4 (m49). File extensions to skip (without leading dot,
+   * case-insensitive). e.g. ["log","tmp","cache"].
+   *
+   */
+  exclude_extensions?: Array<string>;
+  /**
+   * Track A5 (m49). Skip files strictly larger than this value in MiB.
+   * 0 / null = no size filter. Max 102400 MiB (100 GiB).
+   *
+   */
+  exclude_file_size_mb?: number;
+  /**
+   * Track A2 (m49). When true, the WordPress core source root (ABSPATH:
+   * wp-admin, wp-includes, root PHP files including wp-config.php) is
+   * archived as an additional component with entry_kind="core".
+   *
+   */
+  include_core?: boolean;
 };
 
 /**
@@ -1108,6 +1165,42 @@ export type BackupScheduleUpdate = {
    * Optional override of the default incremental base window (7 days). Omit/null to use the default.
    */
   base_window_days?: number;
+  /**
+   * Track B (m49). When to send backup-event email notifications.
+   * Defaults to "never".
+   *
+   */
+  notify_on_completion?: "always" | "on_failure" | "never";
+  /**
+   * Track B (m49). Email addresses to notify on backup events.
+   *
+   */
+  notify_recipients?: Array<string>;
+  /**
+   * Track A (m49). Archive-component allow-list. Absent/empty = include all.
+   * Singular component names (matching the manifest entry_kind vocabulary):
+   * "plugin", "theme", "upload", "wp-content", "db", "core".
+   *
+   */
+  backup_components?: Array<
+    "plugin" | "theme" | "upload" | "wp-content" | "db" | "core"
+  >;
+  /**
+   * Track A3 (m49). Path segments to exclude from wp-content archiving.
+   */
+  exclude_paths?: Array<string>;
+  /**
+   * Track A4 (m49). File extensions to skip (no leading dot).
+   */
+  exclude_extensions?: Array<string>;
+  /**
+   * Track A5 (m49). Skip files larger than this value (MiB). 0/null = no filter. Max 102400 MiB.
+   */
+  exclude_file_size_mb?: number;
+  /**
+   * Track A2 (m49). Also archive the WordPress core source root (ABSPATH).
+   */
+  include_core?: boolean;
 };
 
 /**
@@ -4476,6 +4569,65 @@ export type CancelBackupResponses = {
 export type CancelBackupResponse =
   CancelBackupResponses[keyof CancelBackupResponses];
 
+export type UnlockBackupData = {
+  body?: never;
+  path: {
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/backups/{snapshotId}/lock";
+};
+
+export type UnlockBackupErrors = {
+  /**
+   * Snapshot not found
+   */
+  404: Error;
+};
+
+export type UnlockBackupError = UnlockBackupErrors[keyof UnlockBackupErrors];
+
+export type UnlockBackupResponses = {
+  /**
+   * Snapshot is now unlocked
+   */
+  200: BackupSnapshot;
+};
+
+export type UnlockBackupResponse =
+  UnlockBackupResponses[keyof UnlockBackupResponses];
+
+export type LockBackupData = {
+  body?: never;
+  path: {
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/backups/{snapshotId}/lock";
+};
+
+export type LockBackupErrors = {
+  /**
+   * Snapshot not found
+   */
+  404: Error;
+  /**
+   * Cannot lock a pending or running snapshot
+   */
+  409: Error;
+};
+
+export type LockBackupError = LockBackupErrors[keyof LockBackupErrors];
+
+export type LockBackupResponses = {
+  /**
+   * Snapshot is now locked
+   */
+  200: BackupSnapshot;
+};
+
+export type LockBackupResponse = LockBackupResponses[keyof LockBackupResponses];
+
 export type StreamBackupSnapshotEventsData = {
   body?: never;
   path: {
@@ -4507,6 +4659,41 @@ export type StreamBackupSnapshotEventsResponses = {
 
 export type StreamBackupSnapshotEventsResponse =
   StreamBackupSnapshotEventsResponses[keyof StreamBackupSnapshotEventsResponses];
+
+export type GetBackupEnvironmentData = {
+  body?: never;
+  path: {
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/backups/{snapshotId}/environment";
+};
+
+export type GetBackupEnvironmentErrors = {
+  /**
+   * Snapshot not found, or snapshot pre-dates the environment-fingerprint feature (env_not_recorded).
+   */
+  404: Error;
+  /**
+   * Environment reader not configured on this control plane.
+   */
+  503: Error;
+};
+
+export type GetBackupEnvironmentError =
+  GetBackupEnvironmentErrors[keyof GetBackupEnvironmentErrors];
+
+export type GetBackupEnvironmentResponses = {
+  /**
+   * The agent-produced environment fingerprint JSON (pass-through).
+   */
+  200: {
+    [key: string]: unknown;
+  };
+};
+
+export type GetBackupEnvironmentResponse =
+  GetBackupEnvironmentResponses[keyof GetBackupEnvironmentResponses];
 
 export type GetBackupSqlInspectionData = {
   body?: never;
@@ -4566,7 +4753,13 @@ export type CreateRestoreResponses = {
   /**
    * Restore job enqueued
    */
-  202: BackupSnapshot;
+  202: BackupSnapshot & {
+    /**
+     * The restore_run row ID created for this restore attempt. Use it to correlate SSE progress events. Absent when the restore-run store is not wired on this control plane.
+     *
+     */
+    restore_run_id?: string;
+  };
 };
 
 export type CreateRestoreResponse =

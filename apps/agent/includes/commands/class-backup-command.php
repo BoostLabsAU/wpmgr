@@ -109,6 +109,45 @@ final class BackupCommand implements CommandInterface
             ? $params['prev_files_list_chunks']
             : [];
 
+        // --- Track A (#187) — selective component backup + exclusions --------
+        // All fields are optional (absent on pre-m49 CP versions); absent means
+        // "use the agent default" so older CP versions are unaffected.
+        //
+        // components: which high-level components to archive. null/[] = all.
+        // Values use the canonical singular entry_kind vocabulary:
+        // plugin | theme | upload | wp-content | db | core.
+        $components = isset($params['components']) && is_array($params['components'])
+            ? array_values(array_filter($params['components'], 'is_string'))
+            : [];
+        // include_db: explicit DB-inclusion signal derived from the components
+        // allowlist by the CP (backup_contract.go deriveIncludeDB). When
+        // components is non-empty the CP sets this to &true (db is selected)
+        // or &false (db not selected). Absent when components is empty (no
+        // filter); the agent then follows the snapshot kind for DB inclusion.
+        // We store null (absent/unset) vs true/false so TaskRunner can
+        // distinguish "no filter" from "explicitly excluded".
+        $includeDb = null;
+        if (isset($params['include_db'])) {
+            // json_decode produces bool directly for JSON true/false.
+            $includeDb = (bool) $params['include_db'];
+        }
+        // include_core: when true, archive ABSPATH (wp-admin, wp-includes, root
+        // PHP files) as an additional source emitting entry_kind="core".
+        $includeCore = !empty($params['include_core']);
+        // exclude_paths: additional path-segment names merged into FilesArchiver's
+        // DEFAULT_EXCLUDES. Silently drop non-strings.
+        $excludePaths = isset($params['exclude_paths']) && is_array($params['exclude_paths'])
+            ? array_values(array_filter($params['exclude_paths'], 'is_string'))
+            : [];
+        // exclude_extensions: lowercase extension names (without dot, e.g. 'log').
+        $excludeExtensions = isset($params['exclude_extensions']) && is_array($params['exclude_extensions'])
+            ? array_values(array_filter($params['exclude_extensions'], 'is_string'))
+            : [];
+        // exclude_file_size_mb: skip files > N MiB; 0 = no filter.
+        $excludeFileSizeMb = isset($params['exclude_file_size_mb']) && is_numeric($params['exclude_file_size_mb'])
+            ? max(0, (int) $params['exclude_file_size_mb'])
+            : 0;
+
         // --- 1. Input validation -------------------------------------------
         if ($snapshotId === '' || $presign === '' || $manifestEp === '') {
             return $this->refuse('missing snapshot or callback endpoints');
@@ -197,6 +236,16 @@ final class BackupCommand implements CommandInterface
             // PrevFilesListChunks: presigned GET URLs for the parent's files.list
             // (ADR-051 W1 wiring). Empty for a full-base run.
             'prev_files_list_chunks' => $prevFilesListChunks,
+            // Track A (#187): selective component backup + exclusions.
+            // components uses singular entry_kind vocab (plugin|theme|upload|wp-content|db|core).
+            'components'             => $components,
+            // include_db: null = follow snapshot kind (no filter active),
+            // true = dump DB, false = skip DB dump (components filter excludes db).
+            'include_db'             => $includeDb,
+            'include_core'           => $includeCore,
+            'exclude_paths'          => $excludePaths,
+            'exclude_extensions'     => $excludeExtensions,
+            'exclude_file_size_mb'   => $excludeFileSizeMb,
         ];
 
         // --- 4. Seed the task row (with params nested in sub_state) -------

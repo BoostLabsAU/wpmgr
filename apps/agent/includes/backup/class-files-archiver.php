@@ -126,6 +126,26 @@ final class FilesArchiver
         'wp-content' => ['root' => '',            'kind' => 'wp-content'],
     ];
 
+    /**
+     * Maps the canonical CP singular entry_kind vocabulary (plugin | theme |
+     * upload | wp-content) to the internal COMPONENT_PARTITIONS bucket key.
+     * This is the normalization layer for the CP->agent contract: the CP sends
+     * singular kinds everywhere (backup_contract.go Components, OpenAPI enum);
+     * the internal archiver is keyed by the plural directory prefix that each
+     * bucket archives.
+     *
+     * 'db' and 'core' are NOT file-archiver buckets and must NOT appear here;
+     * they are handled by separate code paths (DbDumper and CoreFilesArchiver).
+     *
+     * @var array<string,string>  key = CP singular kind, value = COMPONENT_PARTITIONS key.
+     */
+    private const KIND_TO_BUCKET = [
+        'plugin'     => 'plugins',
+        'theme'      => 'themes',
+        'upload'     => 'uploads',
+        'wp-content' => 'wp-content',
+    ];
+
     /** Save the resume cursor every N packed files. */
     private const CHECKPOINT_EVERY_FILES = 200;
 
@@ -171,6 +191,31 @@ final class FilesArchiver
     private int $maxPartEntries;
 
     /**
+     * File extensions to exclude (without leading dot, lower-cased). Empty = no
+     * extension filter. A3/A4 exclusion (#187).
+     *
+     * @var list<string>
+     */
+    private array $excludeExtensions;
+
+    /**
+     * Skip files whose size exceeds this value (bytes). 0 = no size filter.
+     * A5 exclusion (#187).
+     */
+    private int $excludeFileSizeBytes;
+
+    /**
+     * A1 (#187): selective component backup. Set of COMPONENT_PARTITIONS keys
+     * that are EXCLUDED from this archive run. Empty = include all components.
+     * When the operator picks e.g. ["plugins","themes"], uploads and wp-content
+     * bucket entries are skipped in buildPathCache so they never enter the
+     * paths.cache and produce zero part files.
+     *
+     * @var array<string,true>  key = component name (e.g. 'uploads'), value = true.
+     */
+    private array $excludeComponents;
+
+    /**
      * Snapshot generation this archive run belongs to. Part filenames are
      * namespaced by it (`<component>.gNNN.partMMM.zip`) so the parts of two
      * different generations in the same chain never share a name on the
@@ -190,7 +235,12 @@ final class FilesArchiver
      *                                       self::DEFAULT_EXCLUDES.
      * @param array<string,mixed> $opts      Optional overrides:
      *                                         max_part_bytes (int),
-     *                                         max_part_entries (int).
+     *                                         max_part_entries (int),
+     *                                         exclude_extensions (list<string>),
+     *                                         exclude_file_size_mb (int),
+     *                                         include_components (list<string> of
+     *                                           COMPONENT_PARTITIONS keys to INCLUDE;
+     *                                           absent/empty = include all).
      * @param int                 $generation Snapshot generation (0 = base full,
      *                                        >0 = increment). Namespaces the part
      *                                        filenames so overlay restore never
@@ -233,6 +283,70 @@ final class FilesArchiver
         $this->maxPartEntries = isset($opts['max_part_entries'])
             ? max(1, (int) $opts['max_part_entries'])
             : self::DEFAULT_MAX_PART_ENTRIES;
+
+        // A4 (#187): exclude by file extension. Normalise to lower-case, no dot.
+        $rawExts = isset($opts['exclude_extensions']) && is_array($opts['exclude_extensions'])
+            ? $opts['exclude_extensions'] : [];
+        $normExts = [];
+        foreach ($rawExts as $ext) {
+            $ext = strtolower(ltrim(trim((string) $ext), '.'));
+            if ($ext !== '') {
+                $normExts[$ext] = true;
+            }
+        }
+        $this->excludeExtensions = array_values(array_keys($normExts));
+
+        // A5 (#187): exclude by file size. 0 means disabled.
+        $excludeMb = isset($opts['exclude_file_size_mb']) && is_numeric($opts['exclude_file_size_mb'])
+            ? max(0, (int) $opts['exclude_file_size_mb']) : 0;
+        $this->excludeFileSizeBytes = $excludeMb > 0 ? $excludeMb * 1024 * 1024 : 0;
+
+        // A1 (#187): selective component backup. Compute the EXCLUDE set as
+        // (all known components) minus (requested include_components). When
+        // include_components is absent or empty we include all components
+        // (excludeComponents stays empty).
+        //
+        // Normalization: the CP sends singular entry_kind values (plugin, theme,
+        // upload, wp-content) matching the canonical manifest vocabulary. We
+        // accept BOTH the singular CP kinds AND the internal plural bucket keys
+        // so that callers at any layer (BackupCommand, TaskRunner, test fixtures)
+        // can use either form. KIND_TO_BUCKET maps singular -> bucket key; if the
+        // value is already a bucket key it passes through as-is.
+        // Whether the caller provided an explicit include_components filter.
+        // A present key (even an empty array) means "filter is active"; an absent
+        // key means "no filter — archive all components" (legacy / full-backup path).
+        $filterActive = array_key_exists('include_components', $opts) && is_array($opts['include_components']);
+        $rawInclude   = $filterActive
+            ? array_values(array_filter($opts['include_components'], 'is_string'))
+            : [];
+        $include = [];
+        foreach ($rawInclude as $entry) {
+            if (isset(self::KIND_TO_BUCKET[$entry])) {
+                // Singular CP kind (e.g. 'plugin') -> translate to bucket key ('plugins').
+                $include[] = self::KIND_TO_BUCKET[$entry];
+            } elseif (isset(self::COMPONENT_PARTITIONS[$entry])) {
+                // Already a bucket key (e.g. 'plugins') -> pass through unchanged.
+                $include[] = $entry;
+            }
+            // 'db' and 'core' are not file-archiver buckets; they are silently
+            // ignored here (handled by TaskRunner/DbDumper/CoreFilesArchiver).
+        }
+        $this->excludeComponents = [];
+        if ($filterActive) {
+            // Filter is active: exclude every bucket not in the resolved include set.
+            // When $include is empty (e.g. components=["core"] or components=["db"]
+            // — neither maps to a file-archiver bucket) ALL buckets are excluded so
+            // FilesArchiver produces zero parts from wp-content.  This is the correct
+            // behavior: core is archived by CoreFilesArchiver; db by DbDumper.
+            // Contrast with $filterActive===false (key absent): that is the full-backup
+            // / legacy-no-filter path where all components are included.
+            $includeSet = array_flip($include);
+            foreach (array_keys(self::COMPONENT_PARTITIONS) as $compName) {
+                if (!isset($includeSet[$compName])) {
+                    $this->excludeComponents[$compName] = true;
+                }
+            }
+        }
     }
 
     /**
@@ -711,6 +825,12 @@ final class FilesArchiver
             $size  = (int) $info->getSize();
             $mtime = (int) $info->getMTime();
 
+            // A5 (#187): file-size exclusion — applied after isFile() guard so
+            // we only check real file sizes, not directory stat artefacts.
+            if ($this->isExcludedBySize($size)) {
+                continue;
+            }
+
             if ($isIncremental) {
                 // Track every rel we encounter for tombstone diff.
                 $seenRels[$rel] = true;
@@ -729,6 +849,18 @@ final class FilesArchiver
             }
 
             $component = $this->classifyComponent($rel);
+
+            // A1 (#187): selective component backup. Skip components the
+            // operator did not include. Incremental runs honour this too —
+            // if a component is excluded the operator deliberately doesn't
+            // want it, so it must not appear in the files.list sidecar either
+            // (omitting it from files.list means the next increment treats
+            // those files as "not in prev snapshot" and re-archives them if
+            // the component is re-added later — correct semantics).
+            if (isset($this->excludeComponents[$component])) {
+                continue;
+            }
+
             fwrite($handle, $component . "\t" . $rel . "\n");
             if ($flHandle !== null) {
                 fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n");
@@ -808,26 +940,54 @@ final class FilesArchiver
     /**
      * Test whether a relative path should be excluded. Matches by exact
      * segment name; `cache` excludes `cache/`, `foo/cache/bar`, etc., but
-     * not `cachefile.txt`.
+     * not `cachefile.txt`. Also applies A4 extension exclusion (#187).
      *
      * @param string $relativePath Path relative to $sourceDir, `/`-separated.
      * @return bool
      */
     private function isExcluded(string $relativePath): bool
     {
-        if ($this->excludes === []) {
-            return false;
-        }
         $segments = explode('/', $relativePath);
-        foreach ($segments as $segment) {
-            if ($segment === '') {
-                continue;
-            }
-            if (in_array($segment, $this->excludes, true)) {
-                return true;
+
+        // Segment-name exclusion (paths + defaults).
+        if ($this->excludes !== []) {
+            foreach ($segments as $segment) {
+                if ($segment === '') {
+                    continue;
+                }
+                if (in_array($segment, $this->excludes, true)) {
+                    return true;
+                }
             }
         }
+
+        // A4 (#187): extension exclusion. Only applies to file entries (last
+        // segment has a dot). Dirs have no extension so they pass through and
+        // are only dropped later when !isFile() is checked.
+        if ($this->excludeExtensions !== []) {
+            $last = end($segments);
+            if ($last !== false && $last !== '') {
+                $dotPos = strrpos($last, '.');
+                if ($dotPos !== false) {
+                    $ext = strtolower(substr($last, $dotPos + 1));
+                    if (in_array($ext, $this->excludeExtensions, true)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
         return false;
+    }
+
+    /**
+     * Test whether a file should be excluded by size. A5 (#187): skip files
+     * whose byte-size exceeds the configured cap. Returns false when no cap is
+     * set or for directories (size = 0).
+     */
+    private function isExcludedBySize(int $sizeBytes): bool
+    {
+        return $this->excludeFileSizeBytes > 0 && $sizeBytes > $this->excludeFileSizeBytes;
     }
 
     /**

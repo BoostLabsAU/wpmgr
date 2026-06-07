@@ -1724,13 +1724,9 @@ export const BackupEventSchema = {
       type: "string",
       enum: [
         "queued",
-        "started",
         "dumping_db",
         "archiving_files",
         "encrypting_uploading",
-        "compressing_files",
-        "encrypting",
-        "uploading",
         "submitting_manifest",
         "completed",
         "failed",
@@ -1878,6 +1874,11 @@ export const BackupSnapshotSchema = {
       description:
         "The full-base snapshot at the root of this chain. Null for legacy/full-base rows.",
     },
+    locked: {
+      type: "boolean",
+      description:
+        "Track C (m49). When true the retention GC will never auto-prune this\nsnapshot. Unlock via DELETE /backups/{snapshotId}/lock to restore\nnormal GC eligibility.\n",
+    },
   },
 } as const;
 
@@ -1904,7 +1905,7 @@ export const BackupManifestEntrySchema = {
     },
     entry_kind: {
       type: "string",
-      enum: ["file", "db"],
+      enum: ["file", "db", "plugin", "theme", "upload", "wp-content"],
     },
     table_name: {
       type: "string",
@@ -2254,6 +2255,63 @@ export const BackupScheduleSchema = {
       type: "string",
       format: "date-time",
     },
+    notify_on_completion: {
+      type: "string",
+      enum: ["always", "on_failure", "never"],
+      description:
+        'Track B (m49). When to send a backup-event email.\n"always" = every backup completion or failure;\n"on_failure" = only on failure;\n"never" = no email (default).\n',
+    },
+    notify_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description:
+        'Track B (m49). Email addresses to notify. Required when\nnotify_on_completion is not "never".\n',
+    },
+    backup_components: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["plugin", "theme", "upload", "wp-content", "db", "core"],
+      },
+      description:
+        'Track A (m49). Subset of archive components to include. Absent/empty = include all.\nSingular component names (matching the manifest entry_kind vocabulary):\n"plugin"     — wp-content/plugins/*\n"theme"      — wp-content/themes/*\n"upload"     — wp-content/uploads/*\n"wp-content" — everything else under wp-content (mu-plugins, languages, drop-ins, custom dirs)\n"db"         — the database dump\n"core"       — WordPress core (ABSPATH: wp-admin, wp-includes, root PHP files)\n',
+      uniqueItems: true,
+    },
+    exclude_paths: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 100,
+      description:
+        "Track A3 (m49). Path-segment names (relative to wp-content) to\nexclude from file archiving. Matched against each segment of a\nfile's relative path — not full-path prefix matching.\n",
+    },
+    exclude_extensions: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 50,
+      description:
+        'Track A4 (m49). File extensions to skip (without leading dot,\ncase-insensitive). e.g. ["log","tmp","cache"].\n',
+    },
+    exclude_file_size_mb: {
+      type: "integer",
+      format: "int32",
+      minimum: 0,
+      maximum: 102400,
+      nullable: true,
+      description:
+        "Track A5 (m49). Skip files strictly larger than this value in MiB.\n0 / null = no size filter. Max 102400 MiB (100 GiB).\n",
+    },
+    include_core: {
+      type: "boolean",
+      description:
+        'Track A2 (m49). When true, the WordPress core source root (ABSPATH:\nwp-admin, wp-includes, root PHP files including wp-config.php) is\narchived as an additional component with entry_kind="core".\n',
+    },
   },
 } as const;
 
@@ -2348,6 +2406,62 @@ export const BackupScheduleUpdateSchema = {
       nullable: true,
       description:
         "Optional override of the default incremental base window (7 days). Omit/null to use the default.",
+    },
+    notify_on_completion: {
+      type: "string",
+      enum: ["always", "on_failure", "never"],
+      description:
+        'Track B (m49). When to send backup-event email notifications.\nDefaults to "never".\n',
+    },
+    notify_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description:
+        "Track B (m49). Email addresses to notify on backup events.\n",
+    },
+    backup_components: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["plugin", "theme", "upload", "wp-content", "db", "core"],
+      },
+      description:
+        'Track A (m49). Archive-component allow-list. Absent/empty = include all.\nSingular component names (matching the manifest entry_kind vocabulary):\n"plugin", "theme", "upload", "wp-content", "db", "core".\n',
+      uniqueItems: true,
+    },
+    exclude_paths: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 100,
+      description:
+        "Track A3 (m49). Path segments to exclude from wp-content archiving.",
+    },
+    exclude_extensions: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 50,
+      description: "Track A4 (m49). File extensions to skip (no leading dot).",
+    },
+    exclude_file_size_mb: {
+      type: "integer",
+      format: "int32",
+      minimum: 0,
+      maximum: 102400,
+      nullable: true,
+      description:
+        "Track A5 (m49). Skip files larger than this value (MiB). 0/null = no filter. Max 102400 MiB.",
+    },
+    include_core: {
+      type: "boolean",
+      description:
+        "Track A2 (m49). Also archive the WordPress core source root (ABSPATH).",
     },
   },
 } as const;

@@ -338,6 +338,15 @@ func (r *gcFakeRepo) UpdateSnapshotCycleStats(context.Context, uuid.UUID, uuid.U
 func (r *gcFakeRepo) CompleteIncrementalManifest(context.Context, CompleteIncrementalInput) (int64, int64, error) {
 	panic("unused")
 }
+func (r *gcFakeRepo) SetSnapshotLocked(context.Context, uuid.UUID, uuid.UUID, bool) (Snapshot, error) {
+	panic("unused")
+}
+func (r *gcFakeRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteBackupSettings, error) {
+	return SiteBackupSettings{}, domain.NotFound("backup_settings_not_found", "no settings")
+}
+func (r *gcFakeRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
+	panic("unused")
+}
 
 // ---------------------------------------------------------------------------
 // Helpers

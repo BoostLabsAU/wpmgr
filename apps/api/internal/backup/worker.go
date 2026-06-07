@@ -131,6 +131,12 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 	}
 	w.recordAudit(ctx, running, ActionBackupStarted, nil)
 
+	// Track A (m49): resolve component-scope + exclusion settings from the
+	// site's schedule. Zero value = no filter (all components, no exclusions),
+	// which is the pre-m49 default and safe to thread into older agents (all
+	// new fields are omitempty on the wire).
+	scope := w.svc.scheduleBackupScope(ctx, a.TenantID, snap.SiteID)
+
 	// ADR-048/ADR-051: when the job was enqueued as incremental, build an
 	// IncrementalBackupRequest; otherwise use the existing BackupRequest.
 	// A no-parent gen-0 base-increment also takes the incremental path: its
@@ -152,6 +158,10 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 				return fmt.Errorf("resolve parent files-list for increment: %w", err)
 			}
 		}
+		// Derive include_db from the components list (#187 CRITICAL). When
+		// components is non-empty, send the explicit include_db signal so the
+		// agent can skip runDumpDatabase when "db" is not selected without having
+		// to scan the components slice itself.
 		incReq := agentcmd.IncrementalBackupRequest{
 			SnapshotID:          snap.ID.String(),
 			Kind:                snap.Kind,
@@ -165,9 +175,17 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 			BaseSnapshotID:      a.BaseSnapshotID.String(),
 			Generation:          a.Generation,
 			PrevFilesListChunks: prevChunks,
+			// Track A (m49): component scope + exclusions (omitempty; zero = all).
+			Components:        scope.Components,
+			IncludeDB:         deriveIncludeDB(scope.Components),
+			IncludeCore:       scope.IncludeCore,
+			ExcludePaths:      scope.ExcludePaths,
+			ExcludeExtensions: scope.ExcludeExtensions,
+			ExcludeFileSizeMB: scope.ExcludeFileSizeMB,
 		}
 		resp, err = w.cmd.IncrementalBackup(ctx, snap.SiteID, si.URL, incReq)
 	} else {
+		// Derive include_db from the components list (#187 CRITICAL).
 		req := agentcmd.BackupRequest{
 			SnapshotID:       snap.ID.String(),
 			Kind:             snap.Kind,
@@ -176,6 +194,13 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 			PresignEndpoint:  w.presignEndpoint(snap.ID),
 			ManifestEndpoint: w.manifestEndpoint(snap.ID),
 			ProgressEndpoint: w.progressEndpoint(snap.ID),
+			// Track A (m49): component scope + exclusions (omitempty; zero = all).
+			Components:        scope.Components,
+			IncludeDB:         deriveIncludeDB(scope.Components),
+			IncludeCore:       scope.IncludeCore,
+			ExcludePaths:      scope.ExcludePaths,
+			ExcludeExtensions: scope.ExcludeExtensions,
+			ExcludeFileSizeMB: scope.ExcludeFileSizeMB,
 		}
 		resp, err = w.cmd.Backup(ctx, snap.SiteID, si.URL, req)
 	}

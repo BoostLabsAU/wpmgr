@@ -81,6 +81,23 @@ type Repo interface {
 	// next_run_at, tenant-scoped.
 	AdvanceScheduleRun(ctx context.Context, tenantID, scheduleID uuid.UUID, next time.Time) error
 
+	// SetSnapshotLocked sets the locked flag on a snapshot (Track C, m49). When
+	// locked=true the retention GC will never auto-prune the snapshot; the
+	// operator must explicitly unlock it first. Tenant-scoped.
+	SetSnapshotLocked(ctx context.Context, tenantID, snapshotID uuid.UUID, locked bool) (Snapshot, error)
+
+	// GetBackupSettings returns the settings row for the site. Returns
+	// domain.NotFound when no row exists (caller applies safe defaults).
+	// Tenant scoping is enforced via InTenantTx + the FK from sites which
+	// is RLS-protected.
+	GetBackupSettings(ctx context.Context, tenantID, siteID uuid.UUID) (SiteBackupSettings, error)
+
+	// UpsertBackupSettings creates or updates the settings row for the site.
+	// All seven Track-A and Track-B columns are written in one UPSERT so the
+	// caller must merge existing notification fields before calling when only
+	// updating content fields (and vice-versa).
+	UpsertBackupSettings(ctx context.Context, tenantID uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error)
+
 	// Retention GC.
 	ListExpiredSnapshots(ctx context.Context, tenantID uuid.UUID, before time.Time) ([]Snapshot, error)
 	ListCompletedSnapshotsForSite(ctx context.Context, tenantID, siteID uuid.UUID) ([]SnapshotMeta, error)
@@ -224,6 +241,7 @@ type StalledSnapshot struct {
 // ADR-050 widened it to carry the chain columns so the mark-and-sweep GC can do
 // chain-aware expansion (pin a carry-forward chunk's origin generation under a
 // live tip) and pick the highest retained generation per chain.
+// m49 adds Locked so the GC phase-0 selection can skip locked snapshots.
 type SnapshotMeta struct {
 	ID            uuid.UUID
 	CreatedAt     time.Time
@@ -231,6 +249,9 @@ type SnapshotMeta struct {
 	ChainID       *uuid.UUID
 	Generation    int
 	IsIncremental bool
+	// Locked snapshots (Track C, m49) are never auto-pruned; the GC selection
+	// treats them as permanently retained regardless of age/count rules.
+	Locked bool
 }
 
 // SweepChunk is the slim projection the sweep streams: enough to test
@@ -549,6 +570,39 @@ func (r *pgRepo) mutateSnapshot(ctx context.Context, tenantID uuid.UUID, fn func
 	return out, err
 }
 
+// SetSnapshotLocked sets or clears the per-snapshot lock flag (Track C, m49).
+// Runs inside a tenant transaction (RLS enforced). The UPDATE is issued first,
+// then the updated row is re-read with snapshotSelectColumns so all chain +
+// locked columns are returned correctly.
+func (r *pgRepo) SetSnapshotLocked(ctx context.Context, tenantID, snapshotID uuid.UUID, locked bool) (Snapshot, error) {
+	var out Snapshot
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		res, err := tx.Exec(ctx,
+			`UPDATE backup_snapshots
+			    SET locked=$3, updated_at=now()
+			  WHERE id=$1 AND tenant_id=$2`,
+			snapshotID, tenantID, locked,
+		)
+		if err != nil {
+			return domain.Internal("backup_snapshot_lock_failed", "failed to update snapshot lock").WithCause(err)
+		}
+		if res.RowsAffected() == 0 {
+			return domain.NotFound("backup_snapshot_not_found", "backup snapshot not found")
+		}
+		row := tx.QueryRow(ctx,
+			snapshotSelectColumns+` FROM backup_snapshots WHERE id=$1 AND tenant_id=$2`,
+			snapshotID, tenantID,
+		)
+		s, serr := scanSnapshotWithChainFields(row)
+		if serr != nil {
+			return domain.Internal("backup_snapshot_lock_read_failed", "failed to re-read snapshot after lock update").WithCause(serr)
+		}
+		out = s
+		return nil
+	})
+	return out, err
+}
+
 func (r *pgRepo) ListManifest(ctx context.Context, tenantID, snapshotID uuid.UUID) ([]ManifestEntry, error) {
 	var out []ManifestEntry
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -707,14 +761,18 @@ func (r *pgRepo) ExistingChunkHashes(ctx context.Context, tenantID uuid.UUID, ha
 func (r *pgRepo) GetSchedule(ctx context.Context, tenantID, siteID uuid.UUID) (Schedule, error) {
 	var out Schedule
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		row, err := sqlc.New(tx).GetBackupScheduleForSite(ctx, sqlc.GetBackupScheduleForSiteParams{TenantID: tenantID, SiteID: siteID})
-		if err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
+		row := tx.QueryRow(ctx,
+			scheduleSelectColumns+` FROM backup_schedules WHERE tenant_id=$1 AND site_id=$2`,
+			tenantID, siteID,
+		)
+		s, serr := scanScheduleRow(row)
+		if serr != nil {
+			if errors.Is(serr, pgx.ErrNoRows) {
 				return domain.NotFound("backup_schedule_not_found", "backup schedule not found")
 			}
-			return domain.Internal("backup_schedule_get_failed", "failed to load schedule").WithCause(err)
+			return domain.Internal("backup_schedule_get_failed", "failed to load schedule").WithCause(serr)
 		}
-		out = toSchedule(row)
+		out = s
 		return nil
 	})
 	return out, err
@@ -723,7 +781,7 @@ func (r *pgRepo) GetSchedule(ctx context.Context, tenantID, siteID uuid.UUID) (S
 func (r *pgRepo) UpsertSchedule(ctx context.Context, in UpsertScheduleInput) (Schedule, error) {
 	var out Schedule
 	err := r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
-		// Convert int32 pointer fields to *int16 for sqlc.
+		// Coerce *int32 timing fields to *int16 (DB column type smallint).
 		var dow *int16
 		if in.DayOfWeek != nil {
 			v := int16(*in.DayOfWeek)
@@ -739,28 +797,43 @@ func (r *pgRepo) UpsertSchedule(ctx context.Context, in UpsertScheduleInput) (Sc
 			v := int16(*in.FrequencyHours)
 			fh = &v
 		}
-		row, err := sqlc.New(tx).UpsertBackupSchedule(ctx, sqlc.UpsertBackupScheduleParams{
-			TenantID:           in.TenantID,
-			SiteID:             in.SiteID,
-			Cadence:            in.Cadence,
-			Kind:               in.Kind,
-			Enabled:            in.Enabled,
-			RetentionDays:      in.RetentionDays,
-			MonthlyArchiveKeep: in.MonthlyArchiveKeep,
-			NextRunAt:          in.NextRunAt,
-			RunHour:            int16(in.RunHour),
-			RunMinute:          int16(in.RunMinute),
-			DayOfWeek:          dow,
-			DayOfMonth:         dom,
-			FrequencyHours:     fh,
-			KeepLast:           in.KeepLast,
-			IncrementalEnabled: in.IncrementalEnabled,
-			BaseWindowDays:     in.BaseWindowDays,
-		})
-		if err != nil {
-			return domain.Internal("backup_schedule_upsert_failed", "failed to save schedule").WithCause(err)
+		row := tx.QueryRow(ctx, `
+INSERT INTO backup_schedules (
+    tenant_id, site_id, cadence, kind, enabled, retention_days,
+    monthly_archive_keep, next_run_at,
+    run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last,
+    incremental_enabled, base_window_days
+)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+ON CONFLICT (site_id)
+DO UPDATE SET
+    cadence               = EXCLUDED.cadence,
+    kind                  = EXCLUDED.kind,
+    enabled               = EXCLUDED.enabled,
+    retention_days        = EXCLUDED.retention_days,
+    monthly_archive_keep  = EXCLUDED.monthly_archive_keep,
+    run_hour              = EXCLUDED.run_hour,
+    run_minute            = EXCLUDED.run_minute,
+    day_of_week           = EXCLUDED.day_of_week,
+    day_of_month          = EXCLUDED.day_of_month,
+    frequency_hours       = EXCLUDED.frequency_hours,
+    keep_last             = EXCLUDED.keep_last,
+    incremental_enabled   = EXCLUDED.incremental_enabled,
+    base_window_days      = EXCLUDED.base_window_days,
+    updated_at            = now()
+RETURNING `+scheduleColumnList,
+			in.TenantID, in.SiteID,
+			in.Cadence, in.Kind, in.Enabled,
+			in.RetentionDays, in.MonthlyArchiveKeep, in.NextRunAt,
+			int16(in.RunHour), int16(in.RunMinute),
+			dow, dom, fh, in.KeepLast,
+			in.IncrementalEnabled, in.BaseWindowDays,
+		)
+		s, serr := scanScheduleRow(row)
+		if serr != nil {
+			return domain.Internal("backup_schedule_upsert_failed", "failed to save schedule").WithCause(serr)
 		}
-		out = toSchedule(row)
+		out = s
 		return nil
 	})
 	return out, err
@@ -769,15 +842,26 @@ func (r *pgRepo) UpsertSchedule(ctx context.Context, in UpsertScheduleInput) (Sc
 func (r *pgRepo) ListDueSchedules(ctx context.Context, now time.Time, limit int32) ([]Schedule, error) {
 	var out []Schedule
 	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
-		rows, err := sqlc.New(tx).ListDueBackupSchedules(ctx, sqlc.ListDueBackupSchedulesParams{NextRunAt: now, Limit: limit})
+		pgRows, err := tx.Query(ctx,
+			scheduleSelectColumns+` FROM backup_schedules
+			  WHERE enabled = true AND next_run_at <= $1
+			  ORDER BY next_run_at ASC
+			  LIMIT $2`,
+			now, limit,
+		)
 		if err != nil {
 			return domain.Internal("backup_schedule_due_failed", "failed to list due schedules").WithCause(err)
 		}
-		out = make([]Schedule, 0, len(rows))
-		for _, row := range rows {
-			out = append(out, toSchedule(row))
+		defer pgRows.Close()
+		out = make([]Schedule, 0)
+		for pgRows.Next() {
+			s, serr := scanScheduleRow(pgRows)
+			if serr != nil {
+				return domain.Internal("backup_schedule_due_scan_failed", "failed to scan due schedule").WithCause(serr)
+			}
+			out = append(out, s)
 		}
-		return nil
+		return pgRows.Err()
 	})
 	return out, err
 }
@@ -808,6 +892,114 @@ func (r *pgRepo) AdvanceScheduleRun(ctx context.Context, tenantID, scheduleID uu
 	})
 }
 
+func (r *pgRepo) GetBackupSettings(ctx context.Context, tenantID, siteID uuid.UUID) (SiteBackupSettings, error) {
+	var out SiteBackupSettings
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`SELECT tenant_id, site_id, backup_components, include_core,
+			        exclude_paths, exclude_extensions, exclude_file_size_mb,
+			        notify_on_completion, notify_recipients, created_at, updated_at
+			   FROM site_backup_settings
+			  WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID,
+		)
+		s, serr := scanBackupSettingsRow(row)
+		if serr != nil {
+			if errors.Is(serr, pgx.ErrNoRows) {
+				return domain.NotFound("backup_settings_not_found", "backup settings not found")
+			}
+			return domain.Internal("backup_settings_get_failed", "failed to load backup settings").WithCause(serr)
+		}
+		out = s
+		return nil
+	})
+	return out, err
+}
+
+func (r *pgRepo) UpsertBackupSettings(ctx context.Context, tenantID uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
+	var out SiteBackupSettings
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// Nullable JSONB slices: nil → NULL on write (the CHECK constraint on
+		// exclude_file_size_mb is CHECK (> 0), so 0 maps to NULL).
+		var excludeSizeMb *int32
+		if in.ExcludeFileSizeMB > 0 {
+			v := in.ExcludeFileSizeMB
+			excludeSizeMb = &v
+		}
+		// notify_recipients has a NOT NULL DEFAULT '[]' constraint so we normalise
+		// nil to empty slice.
+		notifyRecip := in.NotifyRecipients
+		if notifyRecip == nil {
+			notifyRecip = []string{}
+		}
+		row := tx.QueryRow(ctx, `
+INSERT INTO site_backup_settings
+  (tenant_id, site_id, backup_components, include_core,
+   exclude_paths, exclude_extensions, exclude_file_size_mb,
+   notify_on_completion, notify_recipients, updated_at)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,now())
+ON CONFLICT (site_id) DO UPDATE SET
+  backup_components    = EXCLUDED.backup_components,
+  include_core         = EXCLUDED.include_core,
+  exclude_paths        = EXCLUDED.exclude_paths,
+  exclude_extensions   = EXCLUDED.exclude_extensions,
+  exclude_file_size_mb = EXCLUDED.exclude_file_size_mb,
+  notify_on_completion = EXCLUDED.notify_on_completion,
+  notify_recipients    = EXCLUDED.notify_recipients,
+  updated_at           = now()
+RETURNING tenant_id, site_id, backup_components, include_core,
+          exclude_paths, exclude_extensions, exclude_file_size_mb,
+          notify_on_completion, notify_recipients, created_at, updated_at`,
+			tenantID,
+			in.SiteID,
+			in.BackupComponents,
+			in.IncludeCore,
+			in.ExcludePaths,
+			in.ExcludeExtensions,
+			excludeSizeMb,
+			in.NotifyOnCompletion,
+			notifyRecip,
+		)
+		s, serr := scanBackupSettingsRow(row)
+		if serr != nil {
+			return domain.Internal("backup_settings_upsert_failed", "failed to save backup settings").WithCause(serr)
+		}
+		out = s
+		return nil
+	})
+	return out, err
+}
+
+// scanBackupSettingsRow scans a site_backup_settings row. Nullable JSONB arrays
+// decode as []string (NULL → nil; callers normalise to []string{} as needed).
+// exclude_file_size_mb: NULL → 0 in Go (0 = no filter).
+func scanBackupSettingsRow(row rowScanner) (SiteBackupSettings, error) {
+	var (
+		out           SiteBackupSettings
+		excludeSizeMb *int32
+	)
+	err := row.Scan(
+		&out.TenantID,
+		&out.SiteID,
+		&out.BackupComponents,
+		&out.IncludeCore,
+		&out.ExcludePaths,
+		&out.ExcludeExtensions,
+		&excludeSizeMb,
+		&out.NotifyOnCompletion,
+		&out.NotifyRecipients,
+		&out.CreatedAt,
+		&out.UpdatedAt,
+	)
+	if err != nil {
+		return SiteBackupSettings{}, err
+	}
+	if excludeSizeMb != nil {
+		out.ExcludeFileSizeMB = *excludeSizeMb
+	}
+	return out, nil
+}
+
 func (r *pgRepo) ListExpiredSnapshots(ctx context.Context, tenantID uuid.UUID, before time.Time) ([]Snapshot, error) {
 	var out []Snapshot
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -831,7 +1023,7 @@ func (r *pgRepo) ListCompletedSnapshotsForSite(ctx context.Context, tenantID, si
 	// m44/m46 raw-query precedent).
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx,
-			`SELECT id, created_at, archived, chain_id, generation, is_incremental
+			`SELECT id, created_at, archived, chain_id, generation, is_incremental, locked
 			   FROM backup_snapshots
 			  WHERE tenant_id = $1 AND site_id = $2 AND status = 'completed'
 			  ORDER BY created_at DESC`,
@@ -845,7 +1037,7 @@ func (r *pgRepo) ListCompletedSnapshotsForSite(ctx context.Context, tenantID, si
 		for rows.Next() {
 			var m SnapshotMeta
 			var chainID pgtype.UUID
-			if serr := rows.Scan(&m.ID, &m.CreatedAt, &m.Archived, &chainID, &m.Generation, &m.IsIncremental); serr != nil {
+			if serr := rows.Scan(&m.ID, &m.CreatedAt, &m.Archived, &chainID, &m.Generation, &m.IsIncremental, &m.Locked); serr != nil {
 				return domain.Internal("backup_completed_scan_failed", "failed to scan completed snapshot row").WithCause(serr)
 			}
 			if chainID.Valid {
@@ -1397,6 +1589,58 @@ func toSchedule(s sqlc.BackupSchedule) Schedule {
 	return out
 }
 
+// scheduleColumnList is the ordered column list for backup_schedules after m50.
+// Track-A and Track-B columns were moved to site_backup_settings in m50; they
+// are no longer present on this table. Raw reads and RETURNING clauses use this
+// constant paired with scanScheduleRow.
+const scheduleColumnList = `id, tenant_id, site_id, cadence, kind, enabled, retention_days,
+    monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month,
+    frequency_hours, keep_last, incremental_enabled, base_window_days,
+    next_run_at, last_run_at, created_at, updated_at`
+
+const scheduleSelectColumns = `SELECT ` + scheduleColumnList
+
+// scanScheduleRow scans a row produced by scheduleSelectColumns into a
+// Schedule. After m50, Track-A and Track-B fields have moved to
+// site_backup_settings and are no longer present on backup_schedules.
+func scanScheduleRow(row rowScanner) (Schedule, error) {
+	var (
+		out       Schedule
+		dow       *int16
+		dom       *int16
+		fh        *int16
+		lastRunAt pgtype.Timestamptz
+	)
+	err := row.Scan(
+		&out.ID, &out.TenantID, &out.SiteID, &out.Cadence, &out.Kind,
+		&out.Enabled, &out.RetentionDays, &out.MonthlyArchiveKeep,
+		&out.RunHour, &out.RunMinute,
+		&dow, &dom, &fh, &out.KeepLast,
+		&out.IncrementalEnabled, &out.BaseWindowDays,
+		&out.NextRunAt, &lastRunAt, &out.CreatedAt, &out.UpdatedAt,
+	)
+	if err != nil {
+		return Schedule{}, err
+	}
+	if dow != nil {
+		v := int32(*dow)
+		out.DayOfWeek = &v
+	}
+	if dom != nil {
+		v := int32(*dom)
+		out.DayOfMonth = &v
+	}
+	if fh != nil {
+		v := int32(*fh)
+		out.FrequencyHours = &v
+	}
+	if lastRunAt.Valid {
+		t := lastRunAt.Time
+		out.LastRunAt = &t
+	}
+	return out, nil
+}
+
 // rowScanner is a minimal interface satisfied by pgx.Row and pgx.Rows.Scan.
 type rowScanner interface {
 	Scan(dest ...any) error
@@ -1413,12 +1657,14 @@ const snapshotSelectColumns = `SELECT id, tenant_id, site_id, created_by, kind, 
         total_size, chunk_count, error, archived, progress, progress_updated_at,
         started_at, finished_at, created_at, updated_at,
         is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation,
-        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded`
+        cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded,
+        locked`
 
 // scanSnapshotWithChainFields scans a row that includes the ADR-048 chain
-// columns (is_incremental … cycle_bytes_uploaded). The SELECT must project all
-// standard snapshot columns plus the four chain UUID columns and the four cycle
-// counter columns in the exact order listed here.
+// columns (is_incremental … cycle_bytes_uploaded) plus the m49 locked column.
+// The SELECT must project all standard snapshot columns plus the four chain UUID
+// columns, the four cycle counter columns, and locked — in the exact order
+// listed here.
 func scanSnapshotWithChainFields(row rowScanner) (Snapshot, error) {
 	var (
 		s               Snapshot
@@ -1437,6 +1683,7 @@ func scanSnapshotWithChainFields(row rowScanner) (Snapshot, error) {
 		&s.CreatedAt, &s.UpdatedAt,
 		&s.IsIncremental, &parentID, &baseID, &chainID, &s.Generation,
 		&s.CycleFilesScanned, &s.CycleFilesChanged, &s.CycleFilesDeleted, &s.CycleBytesUploaded,
+		&s.Locked,
 	)
 	if err != nil {
 		return Snapshot{}, err

@@ -186,10 +186,18 @@ func (r *fakeRepo) ExistingChunkHashes(_ context.Context, _ uuid.UUID, _ []strin
 	panic("fakeRepo.ExistingChunkHashes not implemented")
 }
 func (r *fakeRepo) GetSchedule(_ context.Context, _, _ uuid.UUID) (Schedule, error) {
-	panic("fakeRepo.GetSchedule not implemented")
+	return Schedule{}, domain.NotFound("backup_schedule_not_found", "no schedule")
 }
 func (r *fakeRepo) UpsertSchedule(_ context.Context, _ UpsertScheduleInput) (Schedule, error) {
 	panic("fakeRepo.UpsertSchedule not implemented")
+}
+func (r *fakeRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteBackupSettings, error) {
+	// Return NotFound so scheduleBackupScope degrades gracefully in tests that
+	// do not exercise backup-settings scope.
+	return SiteBackupSettings{}, domain.NotFound("backup_settings_not_found", "no settings")
+}
+func (r *fakeRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
+	return in, nil
 }
 func (r *fakeRepo) ListDueSchedules(_ context.Context, _ time.Time, _ int32) ([]Schedule, error) {
 	panic("fakeRepo.ListDueSchedules not implemented")
@@ -247,6 +255,14 @@ func (r *fakeRepo) CompleteIncrementalManifest(_ context.Context, in CompleteInc
 }
 func (r *fakeRepo) ListChainSnapshots(_ context.Context, _ uuid.UUID, _ uuid.UUID, _ int) ([]Snapshot, error) {
 	panic("fakeRepo.ListChainSnapshots not implemented")
+}
+func (r *fakeRepo) SetSnapshotLocked(_ context.Context, _, id uuid.UUID, locked bool) (Snapshot, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s := r.snapshots[id]
+	s.Locked = locked
+	r.snapshots[id] = s
+	return s, nil
 }
 
 // ---------------------------------------------------------------------------

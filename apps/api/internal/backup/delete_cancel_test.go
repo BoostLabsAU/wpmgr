@@ -83,6 +83,12 @@ func (r *deleteCancelFakeRepo) SweepTenantChunks(_ context.Context, _ uuid.UUID,
 	*acquired = true
 	return nil
 }
+func (r *deleteCancelFakeRepo) SetSnapshotLocked(_ context.Context, _, id uuid.UUID, locked bool) (Snapshot, error) {
+	s := r.snapshots[id]
+	s.Locked = locked
+	r.snapshots[id] = s
+	return s, nil
+}
 
 func buildDeleteCancelSvc(repo *deleteCancelFakeRepo) *Service {
 	return &Service{repo: repo, clock: fakeClock{t: time.Now()}}

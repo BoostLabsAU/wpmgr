@@ -7,11 +7,14 @@ import {
   type UseMutationResult,
 } from "@tanstack/react-query";
 import {
+  client,
   createBackup,
   listBackups,
   getBackup,
   deleteBackup,
   cancelBackup,
+  lockBackup,
+  unlockBackup,
   createRestore,
   getBackupSchedule,
   putBackupSchedule,
@@ -33,6 +36,46 @@ import { isStreamLive, subscribeLiveStreams } from "./use-backup-stream";
 // asynchronously, so the snapshot-detail hook polls (refetchInterval) while a
 // job is pending/running and stops once it reaches a terminal state.
 
+// ---------------------------------------------------------------------------
+// m50 backup-settings domain types (hand-rolled; endpoints not yet generated)
+// ---------------------------------------------------------------------------
+
+/** Track-A: backup scope/exclusions settings. GET response from /backup-settings/contents. */
+export interface SiteBackupSettingsContents {
+  site_id: string;
+  backup_components: string[] | null;
+  include_core: boolean;
+  exclude_paths: string[] | null;
+  exclude_extensions: string[] | null;
+  exclude_file_size_mb: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+/** PUT request body for /backup-settings/contents. */
+export interface SiteBackupSettingsContentsUpdate {
+  backup_components?: string[] | null;
+  include_core?: boolean;
+  exclude_paths?: string[] | null;
+  exclude_extensions?: string[] | null;
+  exclude_file_size_mb?: number | null;
+}
+
+/** Track-B: notification settings. GET response from /backup-settings/notifications. */
+export interface SiteBackupSettingsNotifications {
+  site_id: string;
+  notify_on_completion: "always" | "on_failure" | "never";
+  notify_recipients: string[];
+  created_at: string;
+  updated_at: string;
+}
+
+/** PUT request body for /backup-settings/notifications. */
+export interface SiteBackupSettingsNotificationsUpdate {
+  notify_on_completion?: "always" | "on_failure" | "never";
+  notify_recipients?: string[];
+}
+
 export const backupsKeys = {
   all: ["backups"] as const,
   listFor: (siteId: string) => [...backupsKeys.all, "list", siteId] as const,
@@ -40,6 +83,10 @@ export const backupsKeys = {
     [...backupsKeys.all, "detail", snapshotId] as const,
   scheduleFor: (siteId: string) =>
     [...backupsKeys.all, "schedule", siteId] as const,
+  backupSettingsContentsFor: (siteId: string) =>
+    ["backups", "settings", "contents", siteId] as const,
+  backupSettingsNotificationsFor: (siteId: string) =>
+    ["backups", "settings", "notifications", siteId] as const,
 };
 
 /** Terminal backup/restore states — polling stops once a snapshot reaches one. */
@@ -307,6 +354,249 @@ export function usePutBackupSchedule(
     },
     onSuccess: (schedule) => {
       queryClient.setQueryData(backupsKeys.scheduleFor(siteId), schedule);
+    },
+  });
+}
+
+/**
+ * Track C (m49) — lock a completed snapshot against retention GC (operator+).
+ * PATCH /api/v1/backups/:snapshotId/lock sets locked=true.
+ * Returns the updated snapshot with locked=true.
+ *
+ * Optimistic update: flip locked=true in the list cache immediately so the
+ * icon flips on click without waiting for the background invalidation refetch.
+ * On error the previous list data is restored.
+ */
+export function useLockBackup(
+  snapshotId: string,
+  siteId: string,
+): UseMutationResult<BackupSnapshot, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error, response } = await lockBackup({
+        path: { snapshotId },
+      });
+      if (response?.status === 409) {
+        throw toError(
+          error ?? { message: "Cannot lock a pending or running snapshot" },
+        );
+      }
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data;
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: backupsKeys.listFor(siteId) });
+      const previous = queryClient.getQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+      );
+      queryClient.setQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+        (prev) =>
+          prev?.map((s) =>
+            s.id === snapshotId ? { ...s, locked: true } : s,
+          ),
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData(
+          backupsKeys.listFor(siteId),
+          context.previous,
+        );
+      }
+    },
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData<BackupSnapshotDetail>(
+        backupsKeys.detail(snapshotId),
+        (prev) => (prev ? { ...prev, snapshot } : prev),
+      );
+      queryClient.setQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+        (prev) =>
+          prev?.map((s) => (s.id === snapshotId ? snapshot : s)),
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: backupsKeys.listFor(siteId),
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// m50 backup-settings hooks
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/sites/:siteId/backup-settings/contents
+ * Returns the Track-A scope/exclusion settings, or null when no settings row
+ * exists yet (404 = safe defaults apply; the card renders its default state).
+ */
+export function useBackupSettingsContents(
+  siteId: string,
+): UseQueryResult<SiteBackupSettingsContents | null, Error> {
+  return useQuery({
+    queryKey: backupsKeys.backupSettingsContentsFor(siteId),
+    queryFn: async () => {
+      const result = await client.get<SiteBackupSettingsContents, unknown, false>({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/backup-settings/contents`,
+      });
+      if (result.response?.status === 404) return null;
+      if (result.error !== undefined) throw toError(result.error);
+      return result.data ?? null;
+    },
+    enabled: Boolean(siteId),
+  });
+}
+
+/**
+ * PUT /api/v1/sites/:siteId/backup-settings/contents
+ * Persists Track-A scope/exclusion settings. On success seeds the query cache
+ * so the ContentsCard reflects the persisted state immediately.
+ */
+export function usePutBackupSettingsContents(
+  siteId: string,
+): UseMutationResult<SiteBackupSettingsContents, Error, SiteBackupSettingsContentsUpdate> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: SiteBackupSettingsContentsUpdate) => {
+      const result = await client.put<SiteBackupSettingsContents, unknown, false>({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/backup-settings/contents`,
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+      if (result.response?.status === 422) {
+        throw toError(result.error ?? { message: "Validation failed" });
+      }
+      if (result.error !== undefined) throw toError(result.error);
+      if (!result.data) throw new Error("Empty response");
+      return result.data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        backupsKeys.backupSettingsContentsFor(siteId),
+        data,
+      );
+    },
+  });
+}
+
+/**
+ * GET /api/v1/sites/:siteId/backup-settings/notifications
+ * Returns the Track-B notification settings, or null on 404 (no row yet).
+ */
+export function useBackupSettingsNotifications(
+  siteId: string,
+): UseQueryResult<SiteBackupSettingsNotifications | null, Error> {
+  return useQuery({
+    queryKey: backupsKeys.backupSettingsNotificationsFor(siteId),
+    queryFn: async () => {
+      const result = await client.get<SiteBackupSettingsNotifications, unknown, false>({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/backup-settings/notifications`,
+      });
+      if (result.response?.status === 404) return null;
+      if (result.error !== undefined) throw toError(result.error);
+      return result.data ?? null;
+    },
+    enabled: Boolean(siteId),
+  });
+}
+
+/**
+ * PUT /api/v1/sites/:siteId/backup-settings/notifications
+ * Persists Track-B notification settings. On success seeds the query cache.
+ */
+export function usePutBackupSettingsNotifications(
+  siteId: string,
+): UseMutationResult<SiteBackupSettingsNotifications, Error, SiteBackupSettingsNotificationsUpdate> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body: SiteBackupSettingsNotificationsUpdate) => {
+      const result = await client.put<SiteBackupSettingsNotifications, unknown, false>({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/backup-settings/notifications`,
+        body,
+        headers: { "Content-Type": "application/json" },
+      });
+      if (result.response?.status === 422) {
+        throw toError(result.error ?? { message: "Validation failed" });
+      }
+      if (result.error !== undefined) throw toError(result.error);
+      if (!result.data) throw new Error("Empty response");
+      return result.data;
+    },
+    onSuccess: (data) => {
+      queryClient.setQueryData(
+        backupsKeys.backupSettingsNotificationsFor(siteId),
+        data,
+      );
+    },
+  });
+}
+
+/**
+ * Track C (m49) — unlock a snapshot so it becomes GC-eligible again (operator+).
+ * DELETE /api/v1/backups/:snapshotId/lock sets locked=false.
+ * Returns the updated snapshot with locked=false.
+ *
+ * Optimistic update: flip locked=false in the list cache immediately so the
+ * icon flips on click without waiting for the background invalidation refetch.
+ * On error the previous list data is restored.
+ */
+export function useUnlockBackup(
+  snapshotId: string,
+  siteId: string,
+): UseMutationResult<BackupSnapshot, Error, void> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await unlockBackup({
+        path: { snapshotId },
+      });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data;
+    },
+    onMutate: async () => {
+      await queryClient.cancelQueries({ queryKey: backupsKeys.listFor(siteId) });
+      const previous = queryClient.getQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+      );
+      queryClient.setQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+        (prev) =>
+          prev?.map((s) =>
+            s.id === snapshotId ? { ...s, locked: false } : s,
+          ),
+      );
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous !== undefined) {
+        queryClient.setQueryData(
+          backupsKeys.listFor(siteId),
+          context.previous,
+        );
+      }
+    },
+    onSuccess: (snapshot) => {
+      queryClient.setQueryData<BackupSnapshotDetail>(
+        backupsKeys.detail(snapshotId),
+        (prev) => (prev ? { ...prev, snapshot } : prev),
+      );
+      queryClient.setQueryData<BackupSnapshot[]>(
+        backupsKeys.listFor(siteId),
+        (prev) =>
+          prev?.map((s) => (s.id === snapshotId ? snapshot : s)),
+      );
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({
+        queryKey: backupsKeys.listFor(siteId),
+      });
     },
   });
 }
