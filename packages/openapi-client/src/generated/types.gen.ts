@@ -1062,60 +1062,6 @@ export type BackupSchedule = {
   last_run_at?: string;
   created_at: string;
   updated_at: string;
-  /**
-   * Track B (m49). When to send a backup-event email.
-   * "always" = every backup completion or failure;
-   * "on_failure" = only on failure;
-   * "never" = no email (default).
-   *
-   */
-  notify_on_completion?: "always" | "on_failure" | "never";
-  /**
-   * Track B (m49). Email addresses to notify. Required when
-   * notify_on_completion is not "never".
-   *
-   */
-  notify_recipients?: Array<string>;
-  /**
-   * Track A (m49). Subset of archive components to include. Absent/empty = include all.
-   * Singular component names (matching the manifest entry_kind vocabulary):
-   * "plugin"     — wp-content/plugins*
-   * "theme"      — wp-content/themes*
-   * "upload"     — wp-content/uploads*
-   * "wp-content" — everything else under wp-content (mu-plugins, languages, drop-ins, custom dirs)
-   * "db"         — the database dump
-   * "core"       — WordPress core (ABSPATH: wp-admin, wp-includes, root PHP files)
-   *
-   */
-  backup_components?: Array<
-    "plugin" | "theme" | "upload" | "wp-content" | "db" | "core"
-  >;
-  /**
-   * Track A3 (m49). Path-segment names (relative to wp-content) to
-   * exclude from file archiving. Matched against each segment of a
-   * file's relative path — not full-path prefix matching.
-   *
-   */
-  exclude_paths?: Array<string>;
-  /**
-   * Track A4 (m49). File extensions to skip (without leading dot,
-   * case-insensitive). e.g. ["log","tmp","cache"].
-   *
-   */
-  exclude_extensions?: Array<string>;
-  /**
-   * Track A5 (m49). Skip files strictly larger than this value in MiB.
-   * 0 / null = no size filter. Max 102400 MiB (100 GiB).
-   *
-   */
-  exclude_file_size_mb?: number;
-  /**
-   * Track A2 (m49). When true, the WordPress core source root (ABSPATH:
-   * wp-admin, wp-includes, root PHP files including wp-config.php) is
-   * archived as an additional component with entry_kind="core".
-   *
-   */
-  include_core?: boolean;
 };
 
 /**
@@ -1165,42 +1111,94 @@ export type BackupScheduleUpdate = {
    * Optional override of the default incremental base window (7 days). Omit/null to use the default.
    */
   base_window_days?: number;
+};
+
+/**
+ * Track-A backup scope/exclusion settings for a site (m50). A 404 means
+ * no settings row exists — safe defaults apply (all components, no exclusions).
+ *
+ */
+export type SiteBackupSettingsContents = {
+  site_id: string;
   /**
-   * Track B (m49). When to send backup-event email notifications.
-   * Defaults to "never".
-   *
-   */
-  notify_on_completion?: "always" | "on_failure" | "never";
-  /**
-   * Track B (m49). Email addresses to notify on backup events.
-   *
-   */
-  notify_recipients?: Array<string>;
-  /**
-   * Track A (m49). Archive-component allow-list. Absent/empty = include all.
-   * Singular component names (matching the manifest entry_kind vocabulary):
-   * "plugin", "theme", "upload", "wp-content", "db", "core".
+   * Subset of archive components to include. Null/absent means all components (full backup).
+   * Singular vocabulary matching manifest entry_kind:
+   * "plugin" (wp-content/plugins*), "theme" (wp-content/themes*),
+   * "upload" (wp-content/uploads*), "wp-content" (catch-all), "db" (database dump),
+   * "core" (ABSPATH: wp-admin, wp-includes, root PHP files).
    *
    */
   backup_components?: Array<
     "plugin" | "theme" | "upload" | "wp-content" | "db" | "core"
   >;
   /**
-   * Track A3 (m49). Path segments to exclude from wp-content archiving.
+   * When true, the WordPress core source root (ABSPATH) is archived.
+   */
+  include_core?: boolean;
+  /**
+   * Path-segment names to exclude from file archiving.
    */
   exclude_paths?: Array<string>;
   /**
-   * Track A4 (m49). File extensions to skip (no leading dot).
+   * File extensions to skip (without leading dot, case-insensitive).
    */
   exclude_extensions?: Array<string>;
   /**
-   * Track A5 (m49). Skip files larger than this value (MiB). 0/null = no filter. Max 102400 MiB.
+   * Skip files strictly larger than this value (MiB). 0/null = no filter.
    */
   exclude_file_size_mb?: number;
+  created_at?: string;
+  updated_at: string;
+};
+
+/**
+ * Update the Track-A backup scope/exclusion settings for a site.
+ */
+export type SiteBackupSettingsContentsUpdate = {
   /**
-   * Track A2 (m49). Also archive the WordPress core source root (ABSPATH).
+   * Subset of archive components. Null/absent = all components (full backup).
    */
+  backup_components?: Array<
+    "plugin" | "theme" | "upload" | "wp-content" | "db" | "core"
+  >;
   include_core?: boolean;
+  exclude_paths?: Array<string>;
+  exclude_extensions?: Array<string>;
+  /**
+   * 0 or null clears the filter.
+   */
+  exclude_file_size_mb?: number;
+};
+
+/**
+ * Track-B notification settings for a site (m50). A 404 means no settings
+ * row exists — safe defaults apply (never/empty). Fires for BOTH manual
+ * and scheduled backup completions/failures.
+ *
+ */
+export type SiteBackupSettingsNotifications = {
+  site_id: string;
+  /**
+   * When to send a backup-event email. Fires for both manual and
+   * scheduled runs. "always" = every completion or failure;
+   * "on_failure" = only on failure; "never" = no email (default).
+   *
+   */
+  notify_on_completion: "always" | "on_failure" | "never";
+  /**
+   * Email addresses to notify. Max 20.
+   */
+  notify_recipients?: Array<string>;
+  created_at?: string;
+  updated_at: string;
+};
+
+/**
+ * Update the Track-B notification settings for a site.
+ */
+export type SiteBackupSettingsNotificationsUpdate = {
+  notify_on_completion?: "always" | "on_failure" | "never";
+  notify_recipients?: Array<string>;
 };
 
 /**
@@ -2232,6 +2230,75 @@ export type DbScanResult = {
    * Unix timestamp (seconds) when the control plane persisted this result.
    */
   created_at: number;
+};
+
+/**
+ * Request body for the serialization-safe database search-replace command.
+ * Call with `dry_run: true` first to preview affected rows before applying.
+ *
+ */
+export type SearchReplaceRequest = {
+  /**
+   * Exact string to find in the database. Minimum 3 bytes. Treated as a
+   * literal (no regex, no wildcards).
+   *
+   */
+  search: string;
+  /**
+   * Replacement string. May be empty to remove occurrences.
+   */
+  replace: string;
+  /**
+   * When `true` (required for the preview step) the agent scans and
+   * counts matching rows but writes nothing. `rows_changed` will be 0.
+   *
+   */
+  dry_run: boolean;
+  /**
+   * Optional allowlist of full table names to scan (including the wp_
+   * prefix, e.g. `wp_options`). When absent every eligible table is
+   * scanned.
+   *
+   */
+  tables?: Array<string>;
+};
+
+/**
+ * Result of a serialization-safe search-replace run or dry-run preview.
+ *
+ */
+export type SearchReplaceResult = {
+  ok: boolean;
+  job_id?: string;
+  /**
+   * Echoes the `dry_run` flag from the request.
+   */
+  dry_run: boolean;
+  /**
+   * Number of tables the agent walked (after denylist filtering).
+   */
+  tables_scanned: number;
+  /**
+   * Rows where at least one column value would change (or did change on
+   * a live run). This is the preview count shown before applying.
+   *
+   */
+  rows_matched: number;
+  /**
+   * Rows actually written. Always 0 when `dry_run` was true.
+   *
+   */
+  rows_changed: number;
+  /**
+   * Non-empty when no recent backup was found and `dry_run` was false.
+   * Advisory only — the replace still ran.
+   *
+   */
+  backup_warning?: string;
+  /**
+   * Human-readable reason on failure (ok=false).
+   */
+  detail?: string;
 };
 
 /**
@@ -4823,6 +4890,122 @@ export type PutBackupScheduleResponses = {
 export type PutBackupScheduleResponse =
   PutBackupScheduleResponses[keyof PutBackupScheduleResponses];
 
+export type GetBackupSettingsContentsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/backup-settings/contents";
+};
+
+export type GetBackupSettingsContentsErrors = {
+  /**
+   * No settings row exists (safe defaults apply)
+   */
+  404: Error;
+};
+
+export type GetBackupSettingsContentsError =
+  GetBackupSettingsContentsErrors[keyof GetBackupSettingsContentsErrors];
+
+export type GetBackupSettingsContentsResponses = {
+  /**
+   * The site's backup content scope settings
+   */
+  200: SiteBackupSettingsContents;
+};
+
+export type GetBackupSettingsContentsResponse =
+  GetBackupSettingsContentsResponses[keyof GetBackupSettingsContentsResponses];
+
+export type PutBackupSettingsContentsData = {
+  body: SiteBackupSettingsContentsUpdate;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/backup-settings/contents";
+};
+
+export type PutBackupSettingsContentsErrors = {
+  /**
+   * Validation failed (invalid component, size cap, path/ext cap)
+   */
+  422: Error;
+};
+
+export type PutBackupSettingsContentsError =
+  PutBackupSettingsContentsErrors[keyof PutBackupSettingsContentsErrors];
+
+export type PutBackupSettingsContentsResponses = {
+  /**
+   * The saved backup content scope settings
+   */
+  200: SiteBackupSettingsContents;
+};
+
+export type PutBackupSettingsContentsResponse =
+  PutBackupSettingsContentsResponses[keyof PutBackupSettingsContentsResponses];
+
+export type GetBackupSettingsNotificationsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/backup-settings/notifications";
+};
+
+export type GetBackupSettingsNotificationsErrors = {
+  /**
+   * No settings row exists (safe defaults apply — never/empty)
+   */
+  404: Error;
+};
+
+export type GetBackupSettingsNotificationsError =
+  GetBackupSettingsNotificationsErrors[keyof GetBackupSettingsNotificationsErrors];
+
+export type GetBackupSettingsNotificationsResponses = {
+  /**
+   * The site's backup notification settings
+   */
+  200: SiteBackupSettingsNotifications;
+};
+
+export type GetBackupSettingsNotificationsResponse =
+  GetBackupSettingsNotificationsResponses[keyof GetBackupSettingsNotificationsResponses];
+
+export type PutBackupSettingsNotificationsData = {
+  body: SiteBackupSettingsNotificationsUpdate;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/backup-settings/notifications";
+};
+
+export type PutBackupSettingsNotificationsErrors = {
+  /**
+   * Validation failed (invalid enum, bad email, too many recipients)
+   */
+  422: Error;
+};
+
+export type PutBackupSettingsNotificationsError =
+  PutBackupSettingsNotificationsErrors[keyof PutBackupSettingsNotificationsErrors];
+
+export type PutBackupSettingsNotificationsResponses = {
+  /**
+   * The saved backup notification settings
+   */
+  200: SiteBackupSettingsNotifications;
+};
+
+export type PutBackupSettingsNotificationsResponse =
+  PutBackupSettingsNotificationsResponses[keyof PutBackupSettingsNotificationsResponses];
+
 export type RefreshSiteUpdatesData = {
   body?: never;
   path: {
@@ -5575,6 +5758,25 @@ export type TriggerDbScanResponses = {
 
 export type TriggerDbScanResponse =
   TriggerDbScanResponses[keyof TriggerDbScanResponses];
+
+export type RunSearchReplaceData = {
+  body: SearchReplaceRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/search-replace";
+};
+
+export type RunSearchReplaceResponses = {
+  /**
+   * Search-replace result (or dry-run preview)
+   */
+  200: SearchReplaceResult;
+};
+
+export type RunSearchReplaceResponse =
+  RunSearchReplaceResponses[keyof RunSearchReplaceResponses];
 
 export type CleanDatabaseData = {
   body?: never;

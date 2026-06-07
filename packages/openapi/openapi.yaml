@@ -3381,6 +3381,46 @@ paths:
                   result:
                     nullable: true
                     $ref: "#/components/schemas/DbScanResult"
+  /api/v1/sites/{siteId}/perf/db/search-replace:
+    post:
+      operationId: runSearchReplace
+      summary: Run a serialization-safe database search-replace for a site
+      description: |
+        Dispatches a serialization-safe search-replace command to the site's
+        agent. The command handles PHP-serialized blobs correctly by
+        unserializing, walking the data structure, replacing only string leaves,
+        and re-serializing (so `s:NN:` length prefixes are always recomputed).
+
+        **Always call with `dry_run: true` first** to get a preview of how many
+        rows would change before committing. The UI enforces this flow.
+
+        When `dry_run: false` and no recent backup is found, the response
+        includes an `X-Backup-Warning` header.
+
+        Requires the `site:write` permission (operator+).
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchReplaceRequest"
+      responses:
+        "200":
+          description: Search-replace result (or dry-run preview)
+          headers:
+            X-Backup-Warning:
+              description: >
+                Present on a live run (`dry_run: false`) when no recent backup
+                was found. Non-blocking advisory only.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SearchReplaceResult"
   /api/v1/sites/{siteId}/perf/db/clean:
     post:
       operationId: cleanDatabase
@@ -6545,6 +6585,65 @@ components:
           type: integer
           format: int64
           description: Unix timestamp (seconds) when the control plane persisted this result.
+    SearchReplaceRequest:
+      type: object
+      description: |
+        Request body for the serialization-safe database search-replace command.
+        Call with `dry_run: true` first to preview affected rows before applying.
+      required: [search, replace, dry_run]
+      properties:
+        search:
+          type: string
+          minLength: 3
+          description: |
+            Exact string to find in the database. Minimum 3 bytes. Treated as a
+            literal (no regex, no wildcards).
+        replace:
+          type: string
+          description: Replacement string. May be empty to remove occurrences.
+        dry_run:
+          type: boolean
+          description: |
+            When `true` (required for the preview step) the agent scans and
+            counts matching rows but writes nothing. `rows_changed` will be 0.
+        tables:
+          type: array
+          items: { type: string }
+          description: |
+            Optional allowlist of full table names to scan (including the wp_
+            prefix, e.g. `wp_options`). When absent every eligible table is
+            scanned.
+    SearchReplaceResult:
+      type: object
+      description: |
+        Result of a serialization-safe search-replace run or dry-run preview.
+      required: [ok, tables_scanned, rows_matched, rows_changed, dry_run]
+      properties:
+        ok: { type: boolean }
+        job_id: { type: string }
+        dry_run:
+          type: boolean
+          description: Echoes the `dry_run` flag from the request.
+        tables_scanned:
+          type: integer
+          description: Number of tables the agent walked (after denylist filtering).
+        rows_matched:
+          type: integer
+          description: |
+            Rows where at least one column value would change (or did change on
+            a live run). This is the preview count shown before applying.
+        rows_changed:
+          type: integer
+          description: |
+            Rows actually written. Always 0 when `dry_run` was true.
+        backup_warning:
+          type: string
+          description: |
+            Non-empty when no recent backup was found and `dry_run` was false.
+            Advisory only — the replace still ran.
+        detail:
+          type: string
+          description: Human-readable reason on failure (ok=false).
     DbCleanResult:
       type: object
       description: The acknowledgement returned by the database-cleanup endpoint.

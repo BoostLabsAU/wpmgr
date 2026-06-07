@@ -41,6 +41,7 @@ import { Route as AuthedRestoresRestoreIdRouteImport } from './routes/_authed/re
 import { Route as AuthedBackupsSnapshotIdRouteImport } from './routes/_authed/backups/$snapshotId'
 import { Route as AuthedSitesSiteIdIndexRouteImport } from './routes/_authed/sites/$siteId.index'
 import { Route as AuthedSitesSiteIdUpdatesRouteImport } from './routes/_authed/sites/$siteId.updates'
+import { Route as AuthedSitesSiteIdToolsRouteImport } from './routes/_authed/sites/$siteId.tools'
 import { Route as AuthedSitesSiteIdSettingsRouteImport } from './routes/_authed/sites/$siteId.settings'
 import { Route as AuthedSitesSiteIdSecurityRouteImport } from './routes/_authed/sites/$siteId.security'
 import { Route as AuthedSitesSiteIdOptimizeRouteImport } from './routes/_authed/sites/$siteId.optimize'
@@ -213,6 +214,11 @@ const AuthedSitesSiteIdUpdatesRoute =
     path: '/updates',
     getParentRoute: () => AuthedSitesSiteIdRoute,
   } as any)
+const AuthedSitesSiteIdToolsRoute = AuthedSitesSiteIdToolsRouteImport.update({
+  id: '/tools',
+  path: '/tools',
+  getParentRoute: () => AuthedSitesSiteIdRoute,
+} as any)
 const AuthedSitesSiteIdSettingsRoute =
   AuthedSitesSiteIdSettingsRouteImport.update({
     id: '/settings',
@@ -303,6 +309,7 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
+  '/sites/$siteId/tools': typeof AuthedSitesSiteIdToolsRoute
   '/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
   '/sites/$siteId/': typeof AuthedSitesSiteIdIndexRoute
 }
@@ -344,6 +351,7 @@ export interface FileRoutesByTo {
   '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
+  '/sites/$siteId/tools': typeof AuthedSitesSiteIdToolsRoute
   '/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
   '/sites/$siteId': typeof AuthedSitesSiteIdIndexRoute
 }
@@ -388,6 +396,7 @@ export interface FileRoutesById {
   '/_authed/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
   '/_authed/sites/$siteId/security': typeof AuthedSitesSiteIdSecurityRoute
   '/_authed/sites/$siteId/settings': typeof AuthedSitesSiteIdSettingsRoute
+  '/_authed/sites/$siteId/tools': typeof AuthedSitesSiteIdToolsRoute
   '/_authed/sites/$siteId/updates': typeof AuthedSitesSiteIdUpdatesRoute
   '/_authed/sites/$siteId/': typeof AuthedSitesSiteIdIndexRoute
 }
@@ -432,6 +441,7 @@ export interface FileRouteTypes {
     | '/sites/$siteId/optimize'
     | '/sites/$siteId/security'
     | '/sites/$siteId/settings'
+    | '/sites/$siteId/tools'
     | '/sites/$siteId/updates'
     | '/sites/$siteId/'
   fileRoutesByTo: FileRoutesByTo
@@ -473,6 +483,7 @@ export interface FileRouteTypes {
     | '/sites/$siteId/optimize'
     | '/sites/$siteId/security'
     | '/sites/$siteId/settings'
+    | '/sites/$siteId/tools'
     | '/sites/$siteId/updates'
     | '/sites/$siteId'
   id:
@@ -516,6 +527,7 @@ export interface FileRouteTypes {
     | '/_authed/sites/$siteId/optimize'
     | '/_authed/sites/$siteId/security'
     | '/_authed/sites/$siteId/settings'
+    | '/_authed/sites/$siteId/tools'
     | '/_authed/sites/$siteId/updates'
     | '/_authed/sites/$siteId/'
   fileRoutesById: FileRoutesById
@@ -757,6 +769,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSitesSiteIdUpdatesRouteImport
       parentRoute: typeof AuthedSitesSiteIdRoute
     }
+    '/_authed/sites/$siteId/tools': {
+      id: '/_authed/sites/$siteId/tools'
+      path: '/tools'
+      fullPath: '/sites/$siteId/tools'
+      preLoaderRoute: typeof AuthedSitesSiteIdToolsRouteImport
+      parentRoute: typeof AuthedSitesSiteIdRoute
+    }
     '/_authed/sites/$siteId/settings': {
       id: '/_authed/sites/$siteId/settings'
       path: '/settings'
@@ -833,6 +852,7 @@ interface AuthedSitesSiteIdRouteChildren {
   AuthedSitesSiteIdOptimizeRoute: typeof AuthedSitesSiteIdOptimizeRoute
   AuthedSitesSiteIdSecurityRoute: typeof AuthedSitesSiteIdSecurityRoute
   AuthedSitesSiteIdSettingsRoute: typeof AuthedSitesSiteIdSettingsRoute
+  AuthedSitesSiteIdToolsRoute: typeof AuthedSitesSiteIdToolsRoute
   AuthedSitesSiteIdUpdatesRoute: typeof AuthedSitesSiteIdUpdatesRoute
   AuthedSitesSiteIdIndexRoute: typeof AuthedSitesSiteIdIndexRoute
 }
@@ -847,6 +867,7 @@ const AuthedSitesSiteIdRouteChildren: AuthedSitesSiteIdRouteChildren = {
   AuthedSitesSiteIdOptimizeRoute: AuthedSitesSiteIdOptimizeRoute,
   AuthedSitesSiteIdSecurityRoute: AuthedSitesSiteIdSecurityRoute,
   AuthedSitesSiteIdSettingsRoute: AuthedSitesSiteIdSettingsRoute,
+  AuthedSitesSiteIdToolsRoute: AuthedSitesSiteIdToolsRoute,
   AuthedSitesSiteIdUpdatesRoute: AuthedSitesSiteIdUpdatesRoute,
   AuthedSitesSiteIdIndexRoute: AuthedSitesSiteIdIndexRoute,
 }

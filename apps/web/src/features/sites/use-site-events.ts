@@ -95,6 +95,9 @@ const SITE_EVENT_TYPES = [
   "db.orphan.delete.progress",
   "db.orphan.delete.completed",
   "db.orphan.delete.failed",
+  // Search-replace tool (#188). Synchronous command — two events only.
+  "db.search.replace.completed",
+  "db.search.replace.failed",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

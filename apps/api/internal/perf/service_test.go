@@ -214,6 +214,14 @@ func (a *fakeAgent) DBTableAction(_ context.Context, _ uuid.UUID, _ string, req 
 func (a *fakeAgent) DBOrphanDelete(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error) {
 	return agentcmd.DBOrphanDeleteResult{OK: true, JobID: req.JobID}, nil
 }
+func (a *fakeAgent) SearchReplace(_ context.Context, _ uuid.UUID, _ string, req agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error) {
+	matched := 5
+	changed := matched
+	if req.DryRun {
+		changed = 0
+	}
+	return agentcmd.SearchReplaceResult{OK: true, JobID: req.JobID, TablesScanned: 10, RowsMatched: matched, RowsChanged: changed}, nil
+}
 
 type fakeSites struct{ url string }
 
@@ -1712,5 +1720,326 @@ func TestDBTableActionDropConfirmTokenUnchanged(t *testing.T) {
 	}
 	if out.JobID == "" {
 		t.Fatal("expected non-empty job_id on bulk drop")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #188 — search-replace unit tests
+// ---------------------------------------------------------------------------
+
+// newSearchReplaceSvc builds a minimal *Service wired for SearchReplace tests.
+// backupChecker may be nil.
+func newSearchReplaceSvc(backupChecker BackupChecker) (*Service, *fakeEvents) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	if backupChecker != nil {
+		svc.SetBackupChecker(backupChecker)
+	}
+	return svc, events
+}
+
+// TestSearchReplaceDryRunDoesNotWrite verifies that dry_run=true passes
+// dry_run=true to the agent and returns rows_changed=0 regardless of
+// rows_matched.
+func TestSearchReplaceDryRunDoesNotWrite(t *testing.T) {
+	svc, events := newSearchReplaceSvc(nil)
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  true,
+	})
+	if err != nil {
+		t.Fatalf("SearchReplace dry_run=true: %v", err)
+	}
+	if out.RowsChanged != 0 {
+		t.Fatalf("dry_run=true must return rows_changed=0, got %d", out.RowsChanged)
+	}
+	if out.RowsMatched == 0 {
+		t.Fatal("expected rows_matched > 0 from fakeAgent for a dry run")
+	}
+	if out.JobID == "" {
+		t.Fatal("expected non-empty job_id")
+	}
+
+	// SSE: completed event should be emitted.
+	types := events.types()
+	found := false
+	for _, ty := range types {
+		if ty == site.EventDbSearchReplaceCompleted {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s SSE event, got %v", site.EventDbSearchReplaceCompleted, types)
+	}
+}
+
+// TestSearchReplaceLiveApplyWritesRows verifies that dry_run=false passes
+// dry_run=false to the agent and returns rows_changed == rows_matched.
+func TestSearchReplaceLiveApplyWritesRows(t *testing.T) {
+	svc, events := newSearchReplaceSvc(&fakeBackupChecker{hasRecent: true})
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("SearchReplace dry_run=false: %v", err)
+	}
+	if out.RowsChanged == 0 {
+		t.Fatal("expected rows_changed > 0 for live apply")
+	}
+	if out.RowsChanged != out.RowsMatched {
+		t.Fatalf("rows_changed=%d must equal rows_matched=%d for live apply (fakeAgent)", out.RowsChanged, out.RowsMatched)
+	}
+
+	// SSE: completed event should be emitted.
+	types := events.types()
+	found := false
+	for _, ty := range types {
+		if ty == site.EventDbSearchReplaceCompleted {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s SSE event, got %v", site.EventDbSearchReplaceCompleted, types)
+	}
+}
+
+// TestSearchReplaceSearchTooShortReturnsDomainError verifies that a search
+// string shorter than minSearchReplaceLength (3 bytes) is rejected with a
+// domain validation error before the agent is called.
+func TestSearchReplaceSearchTooShortReturnsDomainError(t *testing.T) {
+	svc, _ := newSearchReplaceSvc(nil)
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	cases := []struct {
+		name   string
+		search string
+	}{
+		{"empty string", ""},
+		{"one byte", "x"},
+		{"two bytes", "ab"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+				Search:  tc.search,
+				Replace: "y",
+				DryRun:  true,
+			})
+			if err == nil {
+				t.Fatal("expected error for short search, got nil")
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("expected domain error, got %T: %v", err, err)
+			}
+			if de.Code != "search_too_short" {
+				t.Fatalf("expected code search_too_short, got %q", de.Code)
+			}
+		})
+	}
+}
+
+// TestSearchReplaceAgentOkFalseReturnsError verifies that when the agent
+// returns ok=false the service surfaces it as a non-domain error (so the
+// handler can map it to 200 ok=false, matching the dbTableAction pattern).
+func TestSearchReplaceAgentOkFalseReturnsError(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	sites := &fakeSites{url: "https://example.com"}
+
+	// Build a custom fakeAgent that always returns ok=false.
+	type okFalseAgent struct{ fakeAgent }
+	// We need a struct that satisfies AgentPerfClient but returns ok=false for
+	// SearchReplace. We do this inline with an anonymous adapter.
+	ag := &fakeAgent{} // base; we'll override via a wrapper Service.agent
+	_ = ag             // keep linter happy
+
+	// Use a service-level fake that wraps fakeAgent but overrides SearchReplace.
+	svc := NewService(repo, nil, events, nil)
+
+	// Wire a minimal inline client that returns ok=false.
+	type agentStub struct {
+		AgentPerfClient
+	}
+
+	// Build the service with the standard fakeAgent (which returns ok=true),
+	// then verify the ok=false path via a dedicated sub-service with a
+	// purpose-built fake.
+	innerRepo := &fakeRepo{configFound: true}
+	innerEvents := &fakeEvents{}
+	innerSvc := NewService(innerRepo, nil, innerEvents, nil)
+	innerSvc.agent = &rejectionAgent{}
+	innerSvc.sites = sites
+
+	tenantID, siteID := uuid.New(), uuid.New()
+	_, err := innerSvc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatal("expected error when agent returns ok=false, got nil")
+	}
+	// Must NOT be a domain error — it is surfaced by the handler as 200 ok=false.
+	if _, isDomain := domain.AsDomain(err); isDomain {
+		t.Fatalf("agent ok=false must produce a non-domain error, got domain error: %v", err)
+	}
+
+	// SSE: failed event should be emitted.
+	types := innerEvents.types()
+	found := false
+	for _, ty := range types {
+		if ty == site.EventDbSearchReplaceFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s SSE event, got %v", site.EventDbSearchReplaceFailed, types)
+	}
+
+	// Prevent svc from being a "declared and not used" issue.
+	_ = svc
+}
+
+// rejectionAgent is a fakeAgent override that returns ok=false for SearchReplace.
+type rejectionAgent struct{ fakeAgent }
+
+func (a *rejectionAgent) SearchReplace(_ context.Context, _ uuid.UUID, _ string, req agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error) {
+	return agentcmd.SearchReplaceResult{OK: false, JobID: req.JobID, Detail: "search must be at least 3 bytes"}, nil
+}
+
+// TestSearchReplaceBackupWarningWhenNoRecentBackup verifies that the advisory
+// X-Backup-Warning is surfaced in BackupWarning when dry_run=false and no
+// recent backup is found. The call must NOT fail.
+func TestSearchReplaceBackupWarningWhenNoRecentBackup(t *testing.T) {
+	svc, _ := newSearchReplaceSvc(&fakeBackupChecker{hasRecent: false})
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("SearchReplace with no recent backup: %v", err)
+	}
+	if out.BackupWarning == "" {
+		t.Fatal("expected non-empty BackupWarning when no recent backup found")
+	}
+}
+
+// TestSearchReplaceNoBackupWarningForDryRun verifies that dry_run=true never
+// emits a backup advisory, even when no recent backup exists. Dry runs are
+// read-only so no advisory is needed.
+func TestSearchReplaceNoBackupWarningForDryRun(t *testing.T) {
+	svc, _ := newSearchReplaceSvc(&fakeBackupChecker{hasRecent: false})
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  true,
+	})
+	if err != nil {
+		t.Fatalf("SearchReplace dry_run=true with no backup: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("dry_run=true must not emit backup advisory, got %q", out.BackupWarning)
+	}
+}
+
+// TestSearchReplaceNoBackupWarningWhenRecentExists verifies that the advisory
+// is NOT set when a recent backup exists.
+func TestSearchReplaceNoBackupWarningWhenRecentExists(t *testing.T) {
+	svc, _ := newSearchReplaceSvc(&fakeBackupChecker{hasRecent: true})
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  false,
+	})
+	if err != nil {
+		t.Fatalf("SearchReplace with recent backup: %v", err)
+	}
+	if out.BackupWarning != "" {
+		t.Fatalf("expected empty BackupWarning when recent backup exists, got %q", out.BackupWarning)
+	}
+}
+
+// TestSearchReplaceSSEFailedOnTransportError verifies that a transport error
+// from the agent (not ok=false, but an actual error) emits the failed SSE
+// event and returns an error.
+func TestSearchReplaceSSEFailedOnTransportError(t *testing.T) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	sites := &fakeSites{url: "https://example.com"}
+
+	svc := NewService(repo, nil, events, nil)
+	svc.agent = &transportErrorAgent{}
+	svc.sites = sites
+
+	tenantID, siteID := uuid.New(), uuid.New()
+	_, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search:  "https://old.example.com",
+		Replace: "https://new.example.com",
+		DryRun:  true,
+	})
+	if err == nil {
+		t.Fatal("expected error on transport failure, got nil")
+	}
+
+	types := events.types()
+	found := false
+	for _, ty := range types {
+		if ty == site.EventDbSearchReplaceFailed {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected %s SSE event on transport error, got %v", site.EventDbSearchReplaceFailed, types)
+	}
+}
+
+// transportErrorAgent is a fakeAgent override that returns a transport error
+// for SearchReplace.
+type transportErrorAgent struct{ fakeAgent }
+
+func (a *transportErrorAgent) SearchReplace(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error) {
+	return agentcmd.SearchReplaceResult{}, errors.New("connection refused")
+}
+
+// TestSearchReplaceMinLengthBoundary verifies that a 3-byte search string is
+// accepted (the minimum), and a 2-byte string is rejected.
+func TestSearchReplaceMinLengthBoundary(t *testing.T) {
+	svc, _ := newSearchReplaceSvc(nil)
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	// 2 bytes: rejected.
+	_, err := svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search: "ab", Replace: "", DryRun: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for 2-byte search, got nil")
+	}
+
+	// 3 bytes: accepted.
+	_, err = svc.SearchReplace(context.Background(), tenantID, siteID, SearchReplaceInput{
+		Search: "abc", Replace: "", DryRun: true,
+	})
+	if err != nil {
+		t.Fatalf("3-byte search must be accepted, got: %v", err)
 	}
 }

@@ -81,6 +81,8 @@ const TABS = [
   // ADR-037 Sprint 2 — PHP-error monitor tab. Route file:
   // apps/web/src/routes/_authed/sites/$siteId.errors.tsx
   { to: "/sites/$siteId/errors", label: "Errors" },
+  // #188 — site-level tools tab (search-replace, etc.).
+  { to: "/sites/$siteId/tools", label: "Tools" },
   { to: "/sites/$siteId/settings", label: "Settings" },
 ] as const;
 

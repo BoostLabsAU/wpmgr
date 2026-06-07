@@ -89,6 +89,12 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// Non-destructive actions (analyze/convert_innodb) require only PermSiteCacheManage.
 	g.POST("/perf/db/table-action", authz.RequirePermission(authz.PermSiteCacheManage), h.dbTableAction)
 
+	// #188 — serialization-safe search-replace tool. PermSiteWrite (operator+)
+	// is the right gate: this is a data-mutation tool on par with a site edit,
+	// not a cache-management action. The handler enforces a dry_run preview step
+	// (UI) and emits an advisory backup warning header when dry_run=false.
+	g.POST("/perf/db/search-replace", authz.RequirePermission(authz.PermSiteWrite), h.dbSearchReplace)
+
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
 	g.POST("/perf/rucss/compute", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssCompute)
@@ -873,6 +879,81 @@ func pageParams(c *gin.Context) (limit, offset int32) {
 		}
 	}
 	return limit, offset
+}
+
+// ---------------------------------------------------------------------------
+// #188 — search-replace tool (dry-run + live)
+// ---------------------------------------------------------------------------
+
+// dbSearchReplaceBody is the JSON body for POST /perf/db/search-replace.
+type dbSearchReplaceBody struct {
+	// Search is the exact string to find. Minimum 3 bytes (server enforces).
+	Search string `json:"search"`
+	// Replace is the replacement string. May be empty (removes occurrences).
+	Replace string `json:"replace"`
+	// DryRun when true scans and counts without writing. The UI MUST call with
+	// dry_run=true first so the operator sees the preview before confirming.
+	DryRun bool `json:"dry_run"`
+	// Tables is an optional allowlist of full table names (including prefix,
+	// e.g. "wp_options"). When absent all eligible tables are scanned.
+	Tables []string `json:"tables,omitempty"`
+}
+
+// dbSearchReplace dispatches the serialization-safe search_replace command.
+// dry_run=true returns counts without writing; dry_run=false applies and
+// returns the actual rows_changed. An advisory X-Backup-Warning header is
+// emitted when no recent backup is found and dry_run=false.
+func (h *Handler) dbSearchReplace(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body dbSearchReplaceBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	out, err := h.svc.SearchReplace(c.Request.Context(), p.TenantID, siteID, SearchReplaceInput{
+		Search:  body.Search,
+		Replace: body.Replace,
+		DryRun:  body.DryRun,
+		Tables:  body.Tables,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		// Agent rejection: surface as 200 ok=false (mirrors dbTableAction pattern).
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	if out.BackupWarning != "" {
+		c.Header("X-Backup-Warning", out.BackupWarning)
+	}
+
+	h.record(c, p, audit.ActionDbSearchReplace, siteID, map[string]any{
+		"job_id":          out.JobID,
+		"search_len":      len(body.Search), // length only — do not log the actual value
+		"dry_run":         body.DryRun,
+		"tables_scanned":  out.TablesScanned,
+		"rows_matched":    out.RowsMatched,
+		"rows_changed":    out.RowsChanged,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"job_id":         out.JobID,
+		"dry_run":        body.DryRun,
+		"tables_scanned": out.TablesScanned,
+		"rows_matched":   out.RowsMatched,
+		"rows_changed":   out.RowsChanged,
+		"backup_warning": out.BackupWarning,
+	})
 }
 
 func (h *Handler) allows(c *gin.Context, perm authz.Permission) bool {

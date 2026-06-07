@@ -433,6 +433,21 @@ func (c *Client) DBTableAction(ctx context.Context, siteID uuid.UUID, siteURL st
 	return out, nil
 }
 
+// SearchReplace sends the signed `search_replace` command to the site's agent.
+// The command is SYNCHRONOUS: the full per-table result is returned in the ACK
+// body. dry_run=true returns the matched-row count without mutating any data.
+//
+// SearchReplace does NOT wrap ok=false in an error — the caller
+// (perf.Service.SearchReplace) must inspect the result. A transport error or
+// non-2xx HTTP status IS returned as err.
+func (c *Client) SearchReplace(ctx context.Context, siteID uuid.UUID, siteURL string, req SearchReplaceRequest) (SearchReplaceResult, error) {
+	var out SearchReplaceResult
+	if err := c.post(ctx, siteID, siteURL, "search_replace", req, &out); err != nil {
+		return SearchReplaceResult{}, err
+	}
+	return out, nil
+}
+
 // DBOrphanDelete sends the signed `db_orphan_delete` command to the site's
 // agent. The command is ASYNC: the agent ACKs immediately with {ok, job_id}
 // then processes the allowlist in the background, posting batched progress

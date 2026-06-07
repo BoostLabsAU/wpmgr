@@ -132,6 +132,12 @@ import type {
   GetBackupScheduleData,
   GetBackupScheduleErrors,
   GetBackupScheduleResponses,
+  GetBackupSettingsContentsData,
+  GetBackupSettingsContentsErrors,
+  GetBackupSettingsContentsResponses,
+  GetBackupSettingsNotificationsData,
+  GetBackupSettingsNotificationsErrors,
+  GetBackupSettingsNotificationsResponses,
   GetBackupSqlInspectionData,
   GetBackupSqlInspectionErrors,
   GetBackupSqlInspectionResponses,
@@ -255,6 +261,12 @@ import type {
   PutBackupScheduleData,
   PutBackupScheduleErrors,
   PutBackupScheduleResponses,
+  PutBackupSettingsContentsData,
+  PutBackupSettingsContentsErrors,
+  PutBackupSettingsContentsResponses,
+  PutBackupSettingsNotificationsData,
+  PutBackupSettingsNotificationsErrors,
+  PutBackupSettingsNotificationsResponses,
   PutPerfConfigData,
   PutPerfConfigErrors,
   PutPerfConfigResponses,
@@ -284,6 +296,8 @@ import type {
   RevokeSiteData,
   RevokeSiteErrors,
   RevokeSiteResponses,
+  RunSearchReplaceData,
+  RunSearchReplaceResponses,
   SetSiteTagsData,
   SetSiteTagsErrors,
   SetSiteTagsResponses,
@@ -1880,6 +1894,75 @@ export const putBackupSchedule = <ThrowOnError extends boolean = false>(
   });
 
 /**
+ * Get a site's backup content scope settings (Track-A, m50)
+ */
+export const getBackupSettingsContents = <ThrowOnError extends boolean = false>(
+  options: Options<GetBackupSettingsContentsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetBackupSettingsContentsResponses,
+    GetBackupSettingsContentsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/backup-settings/contents", ...options });
+
+/**
+ * Create or update a site's backup content scope settings
+ */
+export const putBackupSettingsContents = <ThrowOnError extends boolean = false>(
+  options: Options<PutBackupSettingsContentsData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutBackupSettingsContentsResponses,
+    PutBackupSettingsContentsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/backup-settings/contents",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get a site's backup notification settings (Track-B, m50)
+ */
+export const getBackupSettingsNotifications = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<GetBackupSettingsNotificationsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetBackupSettingsNotificationsResponses,
+    GetBackupSettingsNotificationsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/backup-settings/notifications",
+    ...options,
+  });
+
+/**
+ * Create or update a site's backup notification settings
+ */
+export const putBackupSettingsNotifications = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<PutBackupSettingsNotificationsData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutBackupSettingsNotificationsResponses,
+    PutBackupSettingsNotificationsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/backup-settings/notifications",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
  * Trigger an immediate inventory + available-updates refresh
  *
  * Enqueues a CP->agent refresh-inventory command for the site. The agent
@@ -2477,6 +2560,39 @@ export const triggerDbScan = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/api/v1/sites/{siteId}/perf/db/scan",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Run a serialization-safe database search-replace for a site
+ *
+ * Dispatches a serialization-safe search-replace command to the site's
+ * agent. The command handles PHP-serialized blobs correctly by
+ * unserializing, walking the data structure, replacing only string leaves,
+ * and re-serializing (so `s:NN:` length prefixes are always recomputed).
+ *
+ * **Always call with `dry_run: true` first** to get a preview of how many
+ * rows would change before committing. The UI enforces this flow.
+ *
+ * When `dry_run: false` and no recent backup is found, the response
+ * includes an `X-Backup-Warning` header.
+ *
+ * Requires the `site:write` permission (operator+).
+ *
+ */
+export const runSearchReplace = <ThrowOnError extends boolean = false>(
+  options: Options<RunSearchReplaceData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RunSearchReplaceResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/db/search-replace",
     ...options,
     headers: {
       "Content-Type": "application/json",

@@ -34,6 +34,8 @@ type AgentPerfClient interface {
 	DBTableAction(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBTableActionRequest) (agentcmd.DBTableActionResult, error)
 	// Phase 3.8 — async destructive orphan deletion.
 	DBOrphanDelete(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error)
+	// #188 — synchronous serialization-safe search-replace (dry-run capable).
+	SearchReplace(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error)
 }
 
 // BackupChecker reports whether a site has a successful backup within a given
@@ -1678,4 +1680,108 @@ func toPerfConfigRequest(c Config) agentcmd.PerfConfigRequest {
 		BloatHeartbeatControl:    c.BloatHeartbeatControl,
 		BloatPostRevisionControl: c.BloatPostRevisionControl,
 	}
+}
+
+// ---------------------------------------------------------------------------
+// #188 — search-replace tool (synchronous, dry-run capable)
+// ---------------------------------------------------------------------------
+
+// minSearchReplaceLength is the minimum byte length for the search string.
+// Mirrors the agent's MIN_SEARCH_LENGTH constant. Enforced on the CP before
+// the agent call so the error surfaces in a clean domain error, not a raw
+// agent refusal.
+const minSearchReplaceLength = 3
+
+// SearchReplaceInput is the validated operator input for SearchReplace.
+type SearchReplaceInput struct {
+	Search  string   // exact search string (min 3 bytes)
+	Replace string   // replacement string (may be empty)
+	DryRun  bool     // true => preview only, no writes
+	Tables  []string // optional table allowlist
+}
+
+// SearchReplaceOutput is returned by Service.SearchReplace.
+type SearchReplaceOutput struct {
+	JobID         string
+	TablesScanned int
+	RowsMatched   int
+	RowsChanged   int // always 0 when DryRun=true
+	BackupWarning string
+}
+
+// SearchReplace dispatches the serialization-safe search_replace command to
+// the site's agent. The command is SYNCHRONOUS: the full result (or preview
+// when dry_run=true) is returned in the ACK body.
+//
+// Safety layers enforced on the CP side before dispatch:
+//  1. search length >= 3 bytes (prevents excessively broad replacements).
+//  2. BackupChecker advisory (non-blocking): emits BackupWarning when no
+//     recent backup is found and dry_run=false.
+//  3. RequireSiteAccess + PermSiteWrite enforced at the handler layer.
+func (s *Service) SearchReplace(ctx context.Context, tenantID, siteID uuid.UUID, in SearchReplaceInput) (SearchReplaceOutput, error) {
+	// --- input validation ---
+	if len(in.Search) < minSearchReplaceLength {
+		return SearchReplaceOutput{}, domain.Validation("search_too_short",
+			fmt.Sprintf("search must be at least %d bytes", minSearchReplaceLength))
+	}
+
+	// --- advisory backup nudge (non-blocking, live-run only) ---
+	backupWarning := ""
+	if !in.DryRun && s.backupChecker != nil {
+		hasRecent, checkErr := s.backupChecker.HasRecentBackup(ctx, tenantID, siteID, 24*time.Hour)
+		if checkErr != nil {
+			s.logger.Warn("search-replace: backup recency check failed (continuing)",
+				slog.String("site_id", siteID.String()), slog.Any("error", checkErr))
+		} else if !hasRecent {
+			backupWarning = "No recent backup found. Consider backing up before running a search-replace."
+		}
+	}
+
+	// --- agent dispatch ---
+	if s.agent == nil || s.sites == nil {
+		return SearchReplaceOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return SearchReplaceOutput{}, err
+	}
+
+	jobID := uuid.New().String()
+	res, agentErr := s.agent.SearchReplace(ctx, siteID, siteURL, agentcmd.SearchReplaceRequest{
+		JobID:   jobID,
+		Search:  in.Search,
+		Replace: in.Replace,
+		DryRun:  in.DryRun,
+		Tables:  in.Tables,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventDbSearchReplaceFailed, map[string]any{
+			"job_id": jobID,
+			"detail": agentErr.Error(),
+		})
+		return SearchReplaceOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventDbSearchReplaceFailed, map[string]any{
+			"job_id": jobID,
+			"detail": res.Detail,
+		})
+		return SearchReplaceOutput{}, fmt.Errorf("search_replace refused by agent: %s", res.Detail)
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventDbSearchReplaceCompleted, map[string]any{
+		"job_id":          jobID,
+		"dry_run":         in.DryRun,
+		"tables_scanned":  res.TablesScanned,
+		"rows_matched":    res.RowsMatched,
+		"rows_changed":    res.RowsChanged,
+	})
+
+	return SearchReplaceOutput{
+		JobID:         jobID,
+		TablesScanned: res.TablesScanned,
+		RowsMatched:   res.RowsMatched,
+		RowsChanged:   res.RowsChanged,
+		BackupWarning: backupWarning,
+	}, nil
 }

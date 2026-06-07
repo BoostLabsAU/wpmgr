@@ -2255,63 +2255,6 @@ export const BackupScheduleSchema = {
       type: "string",
       format: "date-time",
     },
-    notify_on_completion: {
-      type: "string",
-      enum: ["always", "on_failure", "never"],
-      description:
-        'Track B (m49). When to send a backup-event email.\n"always" = every backup completion or failure;\n"on_failure" = only on failure;\n"never" = no email (default).\n',
-    },
-    notify_recipients: {
-      type: "array",
-      items: {
-        type: "string",
-        format: "email",
-      },
-      description:
-        'Track B (m49). Email addresses to notify. Required when\nnotify_on_completion is not "never".\n',
-    },
-    backup_components: {
-      type: "array",
-      items: {
-        type: "string",
-        enum: ["plugin", "theme", "upload", "wp-content", "db", "core"],
-      },
-      description:
-        'Track A (m49). Subset of archive components to include. Absent/empty = include all.\nSingular component names (matching the manifest entry_kind vocabulary):\n"plugin"     — wp-content/plugins/*\n"theme"      — wp-content/themes/*\n"upload"     — wp-content/uploads/*\n"wp-content" — everything else under wp-content (mu-plugins, languages, drop-ins, custom dirs)\n"db"         — the database dump\n"core"       — WordPress core (ABSPATH: wp-admin, wp-includes, root PHP files)\n',
-      uniqueItems: true,
-    },
-    exclude_paths: {
-      type: "array",
-      items: {
-        type: "string",
-      },
-      maxItems: 100,
-      description:
-        "Track A3 (m49). Path-segment names (relative to wp-content) to\nexclude from file archiving. Matched against each segment of a\nfile's relative path — not full-path prefix matching.\n",
-    },
-    exclude_extensions: {
-      type: "array",
-      items: {
-        type: "string",
-      },
-      maxItems: 50,
-      description:
-        'Track A4 (m49). File extensions to skip (without leading dot,\ncase-insensitive). e.g. ["log","tmp","cache"].\n',
-    },
-    exclude_file_size_mb: {
-      type: "integer",
-      format: "int32",
-      minimum: 0,
-      maximum: 102400,
-      nullable: true,
-      description:
-        "Track A5 (m49). Skip files strictly larger than this value in MiB.\n0 / null = no size filter. Max 102400 MiB (100 GiB).\n",
-    },
-    include_core: {
-      type: "boolean",
-      description:
-        'Track A2 (m49). When true, the WordPress core source root (ABSPATH:\nwp-admin, wp-includes, root PHP files including wp-config.php) is\narchived as an additional component with entry_kind="core".\n',
-    },
   },
 } as const;
 
@@ -2407,20 +2350,18 @@ export const BackupScheduleUpdateSchema = {
       description:
         "Optional override of the default incremental base window (7 days). Omit/null to use the default.",
     },
-    notify_on_completion: {
+  },
+} as const;
+
+export const SiteBackupSettingsContentsSchema = {
+  type: "object",
+  description:
+    "Track-A backup scope/exclusion settings for a site (m50). A 404 means\nno settings row exists — safe defaults apply (all components, no exclusions).\n",
+  required: ["site_id", "updated_at"],
+  properties: {
+    site_id: {
       type: "string",
-      enum: ["always", "on_failure", "never"],
-      description:
-        'Track B (m49). When to send backup-event email notifications.\nDefaults to "never".\n',
-    },
-    notify_recipients: {
-      type: "array",
-      items: {
-        type: "string",
-        format: "email",
-      },
-      description:
-        "Track B (m49). Email addresses to notify on backup events.\n",
+      format: "uuid",
     },
     backup_components: {
       type: "array",
@@ -2428,9 +2369,16 @@ export const BackupScheduleUpdateSchema = {
         type: "string",
         enum: ["plugin", "theme", "upload", "wp-content", "db", "core"],
       },
+      nullable: true,
       description:
-        'Track A (m49). Archive-component allow-list. Absent/empty = include all.\nSingular component names (matching the manifest entry_kind vocabulary):\n"plugin", "theme", "upload", "wp-content", "db", "core".\n',
+        'Subset of archive components to include. Null/absent means all components (full backup).\nSingular vocabulary matching manifest entry_kind:\n"plugin" (wp-content/plugins/*), "theme" (wp-content/themes/*),\n"upload" (wp-content/uploads/*), "wp-content" (catch-all), "db" (database dump),\n"core" (ABSPATH: wp-admin, wp-includes, root PHP files).\n',
       uniqueItems: true,
+    },
+    include_core: {
+      type: "boolean",
+      default: false,
+      description:
+        "When true, the WordPress core source root (ABSPATH) is archived.",
     },
     exclude_paths: {
       type: "array",
@@ -2438,8 +2386,8 @@ export const BackupScheduleUpdateSchema = {
         type: "string",
       },
       maxItems: 100,
-      description:
-        "Track A3 (m49). Path segments to exclude from wp-content archiving.",
+      nullable: true,
+      description: "Path-segment names to exclude from file archiving.",
     },
     exclude_extensions: {
       type: "array",
@@ -2447,7 +2395,62 @@ export const BackupScheduleUpdateSchema = {
         type: "string",
       },
       maxItems: 50,
-      description: "Track A4 (m49). File extensions to skip (no leading dot).",
+      nullable: true,
+      description:
+        "File extensions to skip (without leading dot, case-insensitive).",
+    },
+    exclude_file_size_mb: {
+      type: "integer",
+      format: "int32",
+      minimum: 1,
+      maximum: 102400,
+      nullable: true,
+      description:
+        "Skip files strictly larger than this value (MiB). 0/null = no filter.",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const SiteBackupSettingsContentsUpdateSchema = {
+  type: "object",
+  description: "Update the Track-A backup scope/exclusion settings for a site.",
+  properties: {
+    backup_components: {
+      type: "array",
+      items: {
+        type: "string",
+        enum: ["plugin", "theme", "upload", "wp-content", "db", "core"],
+      },
+      nullable: true,
+      description:
+        "Subset of archive components. Null/absent = all components (full backup).",
+    },
+    include_core: {
+      type: "boolean",
+    },
+    exclude_paths: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 100,
+      nullable: true,
+    },
+    exclude_extensions: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      maxItems: 50,
+      nullable: true,
     },
     exclude_file_size_mb: {
       type: "integer",
@@ -2455,13 +2458,63 @@ export const BackupScheduleUpdateSchema = {
       minimum: 0,
       maximum: 102400,
       nullable: true,
-      description:
-        "Track A5 (m49). Skip files larger than this value (MiB). 0/null = no filter. Max 102400 MiB.",
+      description: "0 or null clears the filter.",
     },
-    include_core: {
-      type: "boolean",
+  },
+} as const;
+
+export const SiteBackupSettingsNotificationsSchema = {
+  type: "object",
+  description:
+    "Track-B notification settings for a site (m50). A 404 means no settings\nrow exists — safe defaults apply (never/empty). Fires for BOTH manual\nand scheduled backup completions/failures.\n",
+  required: ["site_id", "notify_on_completion", "updated_at"],
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    notify_on_completion: {
+      type: "string",
+      enum: ["always", "on_failure", "never"],
+      default: "never",
       description:
-        "Track A2 (m49). Also archive the WordPress core source root (ABSPATH).",
+        'When to send a backup-event email. Fires for both manual and\nscheduled runs. "always" = every completion or failure;\n"on_failure" = only on failure; "never" = no email (default).\n',
+    },
+    notify_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      maxItems: 20,
+      description: "Email addresses to notify. Max 20.",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const SiteBackupSettingsNotificationsUpdateSchema = {
+  type: "object",
+  description: "Update the Track-B notification settings for a site.",
+  properties: {
+    notify_on_completion: {
+      type: "string",
+      enum: ["always", "on_failure", "never"],
+    },
+    notify_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      maxItems: 20,
     },
   },
 } as const;
@@ -4313,6 +4366,80 @@ export const DbScanResultSchema = {
       format: "int64",
       description:
         "Unix timestamp (seconds) when the control plane persisted this result.",
+    },
+  },
+} as const;
+
+export const SearchReplaceRequestSchema = {
+  type: "object",
+  description:
+    "Request body for the serialization-safe database search-replace command.\nCall with `dry_run: true` first to preview affected rows before applying.\n",
+  required: ["search", "replace", "dry_run"],
+  properties: {
+    search: {
+      type: "string",
+      minLength: 3,
+      description:
+        "Exact string to find in the database. Minimum 3 bytes. Treated as a\nliteral (no regex, no wildcards).\n",
+    },
+    replace: {
+      type: "string",
+      description: "Replacement string. May be empty to remove occurrences.",
+    },
+    dry_run: {
+      type: "boolean",
+      description:
+        "When `true` (required for the preview step) the agent scans and\ncounts matching rows but writes nothing. `rows_changed` will be 0.\n",
+    },
+    tables: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description:
+        "Optional allowlist of full table names to scan (including the wp_\nprefix, e.g. `wp_options`). When absent every eligible table is\nscanned.\n",
+    },
+  },
+} as const;
+
+export const SearchReplaceResultSchema = {
+  type: "object",
+  description:
+    "Result of a serialization-safe search-replace run or dry-run preview.\n",
+  required: ["ok", "tables_scanned", "rows_matched", "rows_changed", "dry_run"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    job_id: {
+      type: "string",
+    },
+    dry_run: {
+      type: "boolean",
+      description: "Echoes the `dry_run` flag from the request.",
+    },
+    tables_scanned: {
+      type: "integer",
+      description:
+        "Number of tables the agent walked (after denylist filtering).",
+    },
+    rows_matched: {
+      type: "integer",
+      description:
+        "Rows where at least one column value would change (or did change on\na live run). This is the preview count shown before applying.\n",
+    },
+    rows_changed: {
+      type: "integer",
+      description: "Rows actually written. Always 0 when `dry_run` was true.\n",
+    },
+    backup_warning: {
+      type: "string",
+      description:
+        "Non-empty when no recent backup was found and `dry_run` was false.\nAdvisory only — the replace still ran.\n",
+    },
+    detail: {
+      type: "string",
+      description: "Human-readable reason on failure (ok=false).",
     },
   },
 } as const;

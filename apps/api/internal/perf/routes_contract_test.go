@@ -47,6 +47,8 @@ var canonicalOperatorRoutes = []string{
 	"GET    /api/v1/sites/:siteId/perf/db/orphans",
 	// P3.8 — destructive orphan deletion (options/cron/tables, UNINSTALLED plugins only).
 	"POST   /api/v1/sites/:siteId/perf/db/orphan-delete",
+	// #188 — serialization-safe search-replace tool (dry-run + live).
+	"POST   /api/v1/sites/:siteId/perf/db/search-replace",
 	"GET    /api/v1/sites/:siteId/perf/rucss/results",
 	"POST   /api/v1/sites/:siteId/perf/rucss/clear",
 	"POST   /api/v1/sites/:siteId/perf/rucss/compute",

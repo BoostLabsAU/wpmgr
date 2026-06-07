@@ -49,6 +49,7 @@ use WPMgr\Agent\Commands\DbCleanCommand;
 use WPMgr\Agent\Commands\DbOrphanDeleteCommand;
 use WPMgr\Agent\Commands\DbScanCommand;
 use WPMgr\Agent\Commands\DbTableActionCommand;
+use WPMgr\Agent\Commands\SearchReplaceCommand;
 use WPMgr\Agent\Cache\AdminBarPurge;
 use WPMgr\Agent\Cache\CacheManager;
 use WPMgr\Agent\Cache\PreloadQueue;
@@ -1047,6 +1048,10 @@ final class Plugin
             // item against the LIVE installed-plugin set before acting. Async
             // (shutdown function), progress POSTs to progress_endpoint.
             new DbOrphanDeleteCommand(null, $this->keystore, $this->settings),
+            // #188 — standalone serialization-safe search-replace tool.
+            // Reuses the UrlRewriter engine from the restore pipeline.
+            // Synchronous: full result returned in the ACK body.
+            new SearchReplaceCommand(),
             new RucssComputeCommand($this->cacheManager),
             // Task #171 — signed preload-queue status + maintenance commands for
             // the React viewer. These go through the SIGNED wpmgr/v1/command/{cmd}

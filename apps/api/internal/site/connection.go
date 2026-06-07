@@ -153,6 +153,12 @@ const (
 	EventDbOrphanDeleteProgress  = "db.orphan.delete.progress"
 	EventDbOrphanDeleteCompleted = "db.orphan.delete.completed"
 	EventDbOrphanDeleteFailed    = "db.orphan.delete.failed"
+
+	// Search-replace tool events (#188). Synchronous command — only two events:
+	// db.search.replace.completed is emitted when ok=true (with counts).
+	// db.search.replace.failed    is emitted on transport error or ok=false.
+	EventDbSearchReplaceCompleted = "db.search.replace.completed"
+	EventDbSearchReplaceFailed    = "db.search.replace.failed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

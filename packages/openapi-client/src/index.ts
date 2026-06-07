@@ -105,6 +105,8 @@ export {
   computeRucss,
   bulkPurgeCache,
   bulkConfigCache,
+  // search-replace (#188)
+  runSearchReplace,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -329,4 +331,10 @@ export type {
   BulkConfigCacheResponse,
   ComputeRucssData,
   ComputeRucssResponse,
+  // search-replace (#188)
+  SearchReplaceRequest,
+  SearchReplaceResult,
+  RunSearchReplaceData,
+  RunSearchReplaceResponse,
+  RunSearchReplaceResponses,
 } from "./generated/types.gen";

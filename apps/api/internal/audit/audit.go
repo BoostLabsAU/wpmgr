@@ -122,6 +122,11 @@ const (
 	// (admin+) and a type-to-confirm token. Metadata carries job_id,
 	// accepted_count, dropped_count, and a per-kind breakdown.
 	ActionDbOrphanDelete = "site.db.orphan.delete"
+
+	// #188 — serialization-safe search-replace tool. Requires PermSiteWrite
+	// (operator+). Metadata carries job_id, search (redacted to len only for
+	// privacy), dry_run, tables_scanned, rows_matched, rows_changed.
+	ActionDbSearchReplace = "site.db.search.replace"
 )
 
 // Entry is one audit record.
