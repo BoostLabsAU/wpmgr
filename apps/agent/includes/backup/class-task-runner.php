@@ -39,8 +39,8 @@
  * resulting archive + a fresh files.list are submitted through the standard
  * SubmitManifest endpoint. Deleted files become per-path tombstone manifest
  * entries (entry_kind=tombstones, mode=Delete, empty chunk list). The per-file
- * chunk scanner (IncrementalScanner), the NDJSON file-index endpoint, and the
- * three 0-files bandages are all retired.
+ * chunk scanner, the NDJSON file-index endpoint, and the three 0-files bandages
+ * are all retired.
  *
  * On any uncaught exception from a phase handler we mark the task `failed`,
  * post one `failed` progress event, and return — TaskRunner::run() NEVER
