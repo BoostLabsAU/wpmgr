@@ -48,6 +48,7 @@ use WPMgr\Agent\Cache\PerfReporter;
 use WPMgr\Agent\Commands\DbCleanCommand;
 use WPMgr\Agent\Commands\DbOrphanDeleteCommand;
 use WPMgr\Agent\Commands\DbScanCommand;
+use WPMgr\Agent\Commands\DbSnapshotCommand;
 use WPMgr\Agent\Commands\DbTableActionCommand;
 use WPMgr\Agent\Commands\SearchReplaceCommand;
 use WPMgr\Agent\Cache\AdminBarPurge;
@@ -1052,6 +1053,12 @@ final class Plugin
             // Reuses the UrlRewriter engine from the restore pipeline.
             // Synchronous: full result returned in the ACK body.
             new SearchReplaceCommand(),
+            // #189 — local database snapshot tool: create/list/revert/delete.
+            // Snapshots are stored on the WP server filesystem (not encrypted/
+            // uploaded), designed for "capture before a risky change, revert
+            // in one click". Reuses DbDumper (same engine as full backups) for
+            // the SQL dump; uses DbRestorer tmp-prefix+swap for the import.
+            new DbSnapshotCommand(),
             new RucssComputeCommand($this->cacheManager),
             // Task #171 — signed preload-queue status + maintenance commands for
             // the React viewer. These go through the SIGNED wpmgr/v1/command/{cmd}

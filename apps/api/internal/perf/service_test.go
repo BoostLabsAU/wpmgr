@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -161,10 +162,12 @@ func (e *fakeEvents) types() []string {
 }
 
 type fakeAgent struct {
-	mu          sync.Mutex
-	purgeCalls  []agentcmd.CachePurgeRequest
-	purgeResult agentcmd.CachePurgeResult
-	purgeErr    error
+	mu              sync.Mutex
+	purgeCalls      []agentcmd.CachePurgeRequest
+	purgeResult     agentcmd.CachePurgeResult
+	purgeErr        error
+	lastSnapshotReq agentcmd.DbSnapshotRequest
+	snapshotErr     error
 }
 
 func (a *fakeAgent) SyncPerfConfig(context.Context, uuid.UUID, string, agentcmd.PerfConfigRequest) (agentcmd.PerfConfigResult, error) {
@@ -221,6 +224,28 @@ func (a *fakeAgent) SearchReplace(_ context.Context, _ uuid.UUID, _ string, req 
 		changed = 0
 	}
 	return agentcmd.SearchReplaceResult{OK: true, JobID: req.JobID, TablesScanned: 10, RowsMatched: matched, RowsChanged: changed}, nil
+}
+
+func (a *fakeAgent) DbSnapshot(_ context.Context, _ uuid.UUID, _ string, req agentcmd.DbSnapshotRequest) (agentcmd.DbSnapshotResult, error) {
+	a.mu.Lock()
+	a.lastSnapshotReq = req
+	snapshotErr := a.snapshotErr
+	a.mu.Unlock()
+	if snapshotErr != nil {
+		return agentcmd.DbSnapshotResult{}, snapshotErr
+	}
+	switch req.Action {
+	case "list":
+		return agentcmd.DbSnapshotResult{OK: true, Snapshots: []agentcmd.DbSnapshotEntry{}}, nil
+	case "create":
+		return agentcmd.DbSnapshotResult{OK: true, Snapshot: &agentcmd.DbSnapshotEntry{ID: "snap_aabbccddeeff001122334455", Label: req.Label}}, nil
+	case "revert":
+		return agentcmd.DbSnapshotResult{OK: true, Detail: "reverted", SafetyID: "snap_112233445566778899aabbcc"}, nil
+	case "delete":
+		return agentcmd.DbSnapshotResult{OK: true, Detail: "deleted"}, nil
+	default:
+		return agentcmd.DbSnapshotResult{OK: false, Detail: "unknown action"}, nil
+	}
 }
 
 type fakeSites struct{ url string }
@@ -2019,6 +2044,165 @@ type transportErrorAgent struct{ fakeAgent }
 
 func (a *transportErrorAgent) SearchReplace(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error) {
 	return agentcmd.SearchReplaceResult{}, errors.New("connection refused")
+}
+
+// ---------------------------------------------------------------------------
+// #189 — Database Snapshots service tests
+// ---------------------------------------------------------------------------
+
+// newDbSnapshotSvc builds a minimal *Service wired for DbSnapshot tests.
+func newDbSnapshotSvc() (*Service, *fakeAgent) {
+	repo := &fakeRepo{configFound: true}
+	events := &fakeEvents{}
+	ag := &fakeAgent{}
+	sites := &fakeSites{url: "https://example.com"}
+	svc := NewService(repo, nil, events, nil)
+	svc.SetAgentClient(ag, sites)
+	return svc, ag
+}
+
+// TestDbSnapshotListReturnsNonNilSlice verifies that action=list always
+// returns a non-nil Snapshots slice (never nil — JSON marshals as [] not null).
+func TestDbSnapshotListReturnsNonNilSlice(t *testing.T) {
+	svc, _ := newDbSnapshotSvc()
+	out, err := svc.DbSnapshot(context.Background(), uuid.New(), uuid.New(), DbSnapshotInput{
+		Action: "list",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.OK {
+		t.Fatalf("expected ok=true, got ok=false (detail=%q)", out.Detail)
+	}
+	if out.Snapshots == nil {
+		t.Fatal("Snapshots must never be nil (would JSON-marshal as null)")
+	}
+}
+
+// TestDbSnapshotCreatePropagatesLabelAndRetention verifies that the label and
+// retention fields are forwarded to the agent verbatim.
+func TestDbSnapshotCreatePropagatesLabelAndRetention(t *testing.T) {
+	svc, ag := newDbSnapshotSvc()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	out, err := svc.DbSnapshot(context.Background(), tenantID, siteID, DbSnapshotInput{
+		Action:    "create",
+		Label:     "Before plugin upgrade",
+		Retention: 7,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.OK {
+		t.Fatalf("expected ok=true, got ok=false")
+	}
+	ag.mu.Lock()
+	req := ag.lastSnapshotReq
+	ag.mu.Unlock()
+
+	if req.Label != "Before plugin upgrade" {
+		t.Errorf("label: got %q, want %q", req.Label, "Before plugin upgrade")
+	}
+	if req.Retention != 7 {
+		t.Errorf("retention: got %d, want 7", req.Retention)
+	}
+	if out.Snapshot == nil {
+		t.Fatal("expected Snapshot entry on create, got nil")
+	}
+	if out.SnapshotID == "" {
+		t.Fatal("expected non-empty SnapshotID convenience accessor on create")
+	}
+}
+
+// TestDbSnapshotCreateDefaultRetention verifies that retention=0 (unset) is
+// normalised to 5 before forwarding to the agent.
+func TestDbSnapshotCreateDefaultRetention(t *testing.T) {
+	svc, ag := newDbSnapshotSvc()
+	_, err := svc.DbSnapshot(context.Background(), uuid.New(), uuid.New(), DbSnapshotInput{
+		Action: "create",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	ag.mu.Lock()
+	req := ag.lastSnapshotReq
+	ag.mu.Unlock()
+	if req.Retention != 5 {
+		t.Errorf("default retention: got %d, want 5", req.Retention)
+	}
+}
+
+// TestDbSnapshotRevertPassesConfirmAndSnapshotID verifies that the confirm
+// token and snapshotID are forwarded verbatim to the agent (the agent enforces
+// hash_equals independently; CP must not strip or normalise the token).
+func TestDbSnapshotRevertPassesConfirmAndSnapshotID(t *testing.T) {
+	svc, ag := newDbSnapshotSvc()
+	const snapID = "snap_aabbccddeeff001122334455"
+
+	out, err := svc.DbSnapshot(context.Background(), uuid.New(), uuid.New(), DbSnapshotInput{
+		Action:     "revert",
+		SnapshotID: snapID,
+		Confirm:    "REVERT",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.OK {
+		t.Fatalf("expected ok=true, got ok=false (detail=%q)", out.Detail)
+	}
+	if out.SafetyID == "" {
+		t.Fatal("expected non-empty SafetyID on revert, got empty string")
+	}
+	ag.mu.Lock()
+	req := ag.lastSnapshotReq
+	ag.mu.Unlock()
+	if req.SnapshotID != snapID {
+		t.Errorf("snapshot_id: got %q, want %q", req.SnapshotID, snapID)
+	}
+	if req.Confirm != "REVERT" {
+		t.Errorf("confirm: got %q, want %q", req.Confirm, "REVERT")
+	}
+}
+
+// TestDbSnapshotDeletePassesSnapshotID verifies that the snapshotID is
+// forwarded correctly for the delete action.
+func TestDbSnapshotDeletePassesSnapshotID(t *testing.T) {
+	svc, ag := newDbSnapshotSvc()
+	const snapID = "snap_112233445566778899aabbcc"
+
+	out, err := svc.DbSnapshot(context.Background(), uuid.New(), uuid.New(), DbSnapshotInput{
+		Action:     "delete",
+		SnapshotID: snapID,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !out.OK {
+		t.Fatalf("expected ok=true, got ok=false (detail=%q)", out.Detail)
+	}
+	ag.mu.Lock()
+	req := ag.lastSnapshotReq
+	ag.mu.Unlock()
+	if req.SnapshotID != snapID {
+		t.Errorf("snapshot_id: got %q, want %q", req.SnapshotID, snapID)
+	}
+}
+
+// TestDbSnapshotTransportErrorSurfacesAsErr verifies that a transport-level
+// error (network failure, non-2xx) is returned as err, NOT wrapped as ok=false.
+// This follows the same contract as DBScan and DBTableAction.
+func TestDbSnapshotTransportErrorSurfacesAsErr(t *testing.T) {
+	svc, ag := newDbSnapshotSvc()
+	ag.mu.Lock()
+	ag.snapshotErr = fmt.Errorf("connection refused")
+	ag.mu.Unlock()
+
+	_, err := svc.DbSnapshot(context.Background(), uuid.New(), uuid.New(), DbSnapshotInput{
+		Action: "list",
+	})
+	if err == nil {
+		t.Fatal("expected transport error to surface as err, got nil")
+	}
 }
 
 // TestSearchReplaceMinLengthBoundary verifies that a 3-byte search string is

@@ -49,6 +49,11 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/db/orphan-delete",
 	// #188 — serialization-safe search-replace tool (dry-run + live).
 	"POST   /api/v1/sites/:siteId/perf/db/search-replace",
+	// #189 — local database snapshot tool (create/list/revert/delete).
+	"GET    /api/v1/sites/:siteId/perf/db/snapshots",
+	"POST   /api/v1/sites/:siteId/perf/db/snapshots",
+	"POST   /api/v1/sites/:siteId/perf/db/snapshots/:snapshotId/revert",
+	"DELETE /api/v1/sites/:siteId/perf/db/snapshots/:snapshotId",
 	"GET    /api/v1/sites/:siteId/perf/rucss/results",
 	"POST   /api/v1/sites/:siteId/perf/rucss/clear",
 	"POST   /api/v1/sites/:siteId/perf/rucss/compute",

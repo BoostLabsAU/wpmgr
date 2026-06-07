@@ -127,6 +127,11 @@ const (
 	// (operator+). Metadata carries job_id, search (redacted to len only for
 	// privacy), dry_run, tables_scanned, rows_matched, rows_changed.
 	ActionDbSearchReplace = "site.db.search.replace"
+
+	// #189 — local database snapshot. Requires PermSiteWrite (operator+) for
+	// create/revert/delete; PermSiteRead for list. Metadata carries action,
+	// snapshot_id (on revert/delete), safety_id (on revert).
+	ActionDbSnapshot = "site.db.snapshot"
 )
 
 // Entry is one audit record.

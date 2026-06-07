@@ -36,6 +36,8 @@ type AgentPerfClient interface {
 	DBOrphanDelete(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DBOrphanDeleteRequest) (agentcmd.DBOrphanDeleteResult, error)
 	// #188 — synchronous serialization-safe search-replace (dry-run capable).
 	SearchReplace(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error)
+	// #189 — local database snapshot (create/list/revert/delete).
+	DbSnapshot(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DbSnapshotRequest) (agentcmd.DbSnapshotResult, error)
 }
 
 // BackupChecker reports whether a site has a successful backup within a given
@@ -1783,5 +1785,94 @@ func (s *Service) SearchReplace(ctx context.Context, tenantID, siteID uuid.UUID,
 		RowsMatched:   res.RowsMatched,
 		RowsChanged:   res.RowsChanged,
 		BackupWarning: backupWarning,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// #189 — Database Snapshots
+// ---------------------------------------------------------------------------
+
+// DbSnapshotInput is the validated operator input for DbSnapshot.
+type DbSnapshotInput struct {
+	// Action is one of "create", "list", "revert", "delete".
+	Action string
+	// Label is an optional human-readable tag attached to a new snapshot.
+	Label string
+	// Retention is the maximum number of snapshots to keep (1–20, default 5).
+	Retention int
+	// SnapshotID identifies an existing snapshot (required for revert/delete).
+	SnapshotID string
+	// Confirm must equal "REVERT" for the revert action.
+	Confirm string
+	// SkipSafetySnapshot suppresses the auto-safety snapshot before a revert.
+	SkipSafetySnapshot bool
+}
+
+// DbSnapshotOutput is returned by Service.DbSnapshot for all four actions.
+type DbSnapshotOutput struct {
+	// OK mirrors the agent's ok field.
+	OK bool
+	// Snapshot is the newly created entry (action=create).
+	Snapshot *agentcmd.DbSnapshotEntry
+	// SnapshotID is the ID of the new snapshot (action=create, convenience accessor).
+	SnapshotID string
+	// Snapshots is the manifest list (action=list).
+	Snapshots []agentcmd.DbSnapshotEntry
+	// Detail is a human-readable description of the outcome.
+	Detail string
+	// SafetyID is the auto-safety snapshot taken before a revert, may be "".
+	SafetyID string
+}
+
+// DbSnapshot dispatches the db_snapshot command to the site's agent.
+// The command is synchronous for all four actions.
+func (s *Service) DbSnapshot(ctx context.Context, tenantID, siteID uuid.UUID, in DbSnapshotInput) (DbSnapshotOutput, error) {
+	if s.agent == nil {
+		return DbSnapshotOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return DbSnapshotOutput{}, err
+	}
+
+	retention := in.Retention
+	if retention < 1 {
+		retention = 5
+	}
+
+	res, agentErr := s.agent.DbSnapshot(ctx, siteID, siteURL, agentcmd.DbSnapshotRequest{
+		Action:             in.Action,
+		Label:              in.Label,
+		Retention:          retention,
+		SnapshotID:         in.SnapshotID,
+		Confirm:            in.Confirm,
+		SkipSafetySnapshot: in.SkipSafetySnapshot,
+	})
+	if agentErr != nil {
+		return DbSnapshotOutput{}, agentErr
+	}
+
+	// Agent ok=false is NOT wrapped in an error — the caller (handler) must
+	// inspect DbSnapshotOutput.OK and surface the detail. This mirrors the
+	// DBScan / DBTableAction pattern: transport errors (non-2xx, network) are
+	// returned as err; logical refusals are returned as ok=false in the result.
+	snapshots := res.Snapshots
+	if snapshots == nil {
+		snapshots = []agentcmd.DbSnapshotEntry{}
+	}
+
+	snapshotID := ""
+	if res.Snapshot != nil {
+		snapshotID = res.Snapshot.ID
+	}
+
+	return DbSnapshotOutput{
+		OK:         res.OK,
+		Snapshot:   res.Snapshot,
+		SnapshotID: snapshotID,
+		Snapshots:  snapshots,
+		Detail:     res.Detail,
+		SafetyID:   res.SafetyID,
 	}, nil
 }

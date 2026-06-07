@@ -448,6 +448,20 @@ func (c *Client) SearchReplace(ctx context.Context, siteID uuid.UUID, siteURL st
 	return out, nil
 }
 
+// DbSnapshot sends the signed `db_snapshot` command to the site's agent.
+// The command is SYNCHRONOUS for all four actions (create/list/revert/delete):
+// the full result is returned in the ACK body.
+//
+// DbSnapshot does NOT wrap ok=false in an error — the caller must inspect the
+// result. A transport error or non-2xx HTTP status IS returned as err.
+func (c *Client) DbSnapshot(ctx context.Context, siteID uuid.UUID, siteURL string, req DbSnapshotRequest) (DbSnapshotResult, error) {
+	var out DbSnapshotResult
+	if err := c.post(ctx, siteID, siteURL, "db_snapshot", req, &out); err != nil {
+		return DbSnapshotResult{}, err
+	}
+	return out, nil
+}
+
 // DBOrphanDelete sends the signed `db_orphan_delete` command to the site's
 // agent. The command is ASYNC: the agent ACKs immediately with {ok, job_id}
 // then processes the allowlist in the background, posting batched progress

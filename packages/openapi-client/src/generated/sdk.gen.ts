@@ -73,6 +73,8 @@ import type {
   CreateBackupData,
   CreateBackupErrors,
   CreateBackupResponses,
+  CreateDbSnapshotData,
+  CreateDbSnapshotResponses,
   CreateOrgData,
   CreateOrgErrors,
   CreateOrgResponses,
@@ -100,6 +102,8 @@ import type {
   DeleteBackupData,
   DeleteBackupErrors,
   DeleteBackupResponses,
+  DeleteDbSnapshotData,
+  DeleteDbSnapshotResponses,
   DeleteMediaOriginalsData,
   DeleteMediaOriginalsResponses,
   DeleteMemberData,
@@ -198,6 +202,8 @@ import type {
   ListAuditResponses,
   ListBackupsData,
   ListBackupsResponses,
+  ListDbSnapshotsData,
+  ListDbSnapshotsResponses,
   ListMediaAssetsData,
   ListMediaAssetsResponses,
   ListMediaJobsData,
@@ -290,6 +296,8 @@ import type {
   RestoreSiteData,
   RestoreSiteErrors,
   RestoreSiteResponses,
+  RevertDbSnapshotData,
+  RevertDbSnapshotResponses,
   RevokeApiKeyData,
   RevokeApiKeyErrors,
   RevokeApiKeyResponses,
@@ -2598,6 +2606,103 @@ export const runSearchReplace = <ThrowOnError extends boolean = false>(
       "Content-Type": "application/json",
       ...options.headers,
     },
+  });
+
+/**
+ * List local database snapshots for a site
+ *
+ * Returns the manifest of local database snapshots stored on the WP server.
+ * Snapshots are a fast local safety-net (not encrypted off-site backups).
+ * Requires the `site:read` permission.
+ *
+ */
+export const listDbSnapshots = <ThrowOnError extends boolean = false>(
+  options: Options<ListDbSnapshotsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListDbSnapshotsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/db/snapshots", ...options });
+
+/**
+ * Take a local database snapshot
+ *
+ * Dumps the site's database to a local `.sql.gz` file on the WP server
+ * filesystem and records it in the snapshot manifest. This is a fast
+ * local safety-net — not an encrypted off-site backup.
+ *
+ * After the operation the oldest snapshots are pruned so the total count
+ * does not exceed the configured retention (default 5, max 20).
+ *
+ * Requires the `site:write` permission (operator+).
+ *
+ */
+export const createDbSnapshot = <ThrowOnError extends boolean = false>(
+  options: Options<CreateDbSnapshotData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CreateDbSnapshotResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/db/snapshots",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Revert the database to a local snapshot (DESTRUCTIVE)
+ *
+ * Replaces the entire live database with the SQL captured in a local
+ * snapshot. **This is irreversible without another backup.**
+ *
+ * An automatic safety snapshot is taken immediately before the import
+ * so the pre-revert state is preserved locally (returned as `safety_id`).
+ *
+ * The `confirm` field in the request body MUST equal `"REVERT"` exactly.
+ * The agent enforces this independently — a request without the token is
+ * rejected.
+ *
+ * Requires the `site:write` permission (operator+).
+ *
+ */
+export const revertDbSnapshot = <ThrowOnError extends boolean = false>(
+  options: Options<RevertDbSnapshotData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RevertDbSnapshotResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete a local database snapshot
+ *
+ * Removes a snapshot from the WP server's local store. This is
+ * irreversible. Requires the `site:write` permission (operator+).
+ *
+ */
+export const deleteDbSnapshot = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteDbSnapshotData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteDbSnapshotResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}",
+    ...options,
   });
 
 /**

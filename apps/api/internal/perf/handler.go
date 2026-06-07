@@ -95,6 +95,15 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// (UI) and emits an advisory backup warning header when dry_run=false.
 	g.POST("/perf/db/search-replace", authz.RequirePermission(authz.PermSiteWrite), h.dbSearchReplace)
 
+	// #189 — local database snapshot tool.
+	// GET list: PermSiteRead (viewer+) — no side effects.
+	// POST create/revert/delete: PermSiteWrite (operator+) — data-mutation operations;
+	//   revert additionally requires the "REVERT" confirm token (enforced on the agent).
+	g.GET("/perf/db/snapshots", authz.RequirePermission(authz.PermSiteRead), h.dbSnapshotList)
+	g.POST("/perf/db/snapshots", authz.RequirePermission(authz.PermSiteWrite), h.dbSnapshotCreate)
+	g.POST("/perf/db/snapshots/:snapshotId/revert", authz.RequirePermission(authz.PermSiteWrite), h.dbSnapshotRevert)
+	g.DELETE("/perf/db/snapshots/:snapshotId", authz.RequirePermission(authz.PermSiteWrite), h.dbSnapshotDelete)
+
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
 	g.POST("/perf/rucss/compute", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssCompute)
@@ -953,6 +962,168 @@ func (h *Handler) dbSearchReplace(c *gin.Context) {
 		"rows_matched":   out.RowsMatched,
 		"rows_changed":   out.RowsChanged,
 		"backup_warning": out.BackupWarning,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// #189 — db snapshot handlers (create / list / revert / delete)
+// ---------------------------------------------------------------------------
+
+// dbSnapshotCreateBody is the JSON body for POST /perf/db/snapshots.
+type dbSnapshotCreateBody struct {
+	// Label is an optional human-readable label for the snapshot (max 120 chars).
+	Label string `json:"label,omitempty"`
+	// Retention is the max number of snapshots to keep after this one (1-20, default 5).
+	Retention int `json:"retention,omitempty"`
+}
+
+// dbSnapshotRevertBody is the JSON body for POST /perf/db/snapshots/:snapshotId/revert.
+type dbSnapshotRevertBody struct {
+	// Confirm MUST be the exact string "REVERT". This is the destructive-action gate:
+	// the agent enforces it independently via hash_equals.
+	Confirm string `json:"confirm"`
+	// SkipSafetySnapshot when true suppresses the automatic pre-revert safety snapshot.
+	SkipSafetySnapshot bool `json:"skip_safety_snapshot,omitempty"`
+}
+
+// dbSnapshotList handles GET /sites/:siteId/perf/db/snapshots.
+// Returns the list of local snapshots for the site (read-only; PermSiteRead).
+func (h *Handler) dbSnapshotList(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	out, err := h.svc.DbSnapshot(c.Request.Context(), p.TenantID, siteID, DbSnapshotInput{
+		Action: "list",
+	})
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"ok":        out.OK,
+		"snapshots": out.Snapshots,
+		"detail":    out.Detail,
+	})
+}
+
+// dbSnapshotCreate handles POST /sites/:siteId/perf/db/snapshots.
+// Takes a new local database snapshot (PermSiteWrite).
+func (h *Handler) dbSnapshotCreate(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	var body dbSnapshotCreateBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	out, err := h.svc.DbSnapshot(c.Request.Context(), p.TenantID, siteID, DbSnapshotInput{
+		Action:    "create",
+		Label:     body.Label,
+		Retention: body.Retention,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+	h.record(c, p, audit.ActionDbSnapshot, siteID, map[string]any{
+		"action":      "create",
+		"snapshot_id": out.SnapshotID,
+		"label":       body.Label,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       out.OK,
+		"snapshot": out.Snapshot,
+		"detail":   out.Detail,
+	})
+}
+
+// dbSnapshotRevert handles POST /sites/:siteId/perf/db/snapshots/:snapshotId/revert.
+// Imports a snapshot SQL back into the live database (DESTRUCTIVE, PermSiteWrite).
+// The operator MUST pass confirm="REVERT" in the body; the agent enforces this
+// independently via hash_equals so a forged or mutated body cannot bypass the gate.
+func (h *Handler) dbSnapshotRevert(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	snapshotID := c.Param("snapshotId")
+	if snapshotID == "" {
+		httpx.Error(c, domain.Validation("missing_snapshot_id", "snapshotId is required"))
+		return
+	}
+	var body dbSnapshotRevertBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	out, err := h.svc.DbSnapshot(c.Request.Context(), p.TenantID, siteID, DbSnapshotInput{
+		Action:             "revert",
+		SnapshotID:         snapshotID,
+		Confirm:            body.Confirm,
+		SkipSafetySnapshot: body.SkipSafetySnapshot,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+	h.record(c, p, audit.ActionDbSnapshot, siteID, map[string]any{
+		"action":      "revert",
+		"snapshot_id": snapshotID,
+		"safety_id":   out.SafetyID,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"ok":        out.OK,
+		"detail":    out.Detail,
+		"safety_id": out.SafetyID,
+	})
+}
+
+// dbSnapshotDelete handles DELETE /sites/:siteId/perf/db/snapshots/:snapshotId.
+// Removes a local snapshot from the WP server (PermSiteWrite).
+func (h *Handler) dbSnapshotDelete(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	snapshotID := c.Param("snapshotId")
+	if snapshotID == "" {
+		httpx.Error(c, domain.Validation("missing_snapshot_id", "snapshotId is required"))
+		return
+	}
+	out, err := h.svc.DbSnapshot(c.Request.Context(), p.TenantID, siteID, DbSnapshotInput{
+		Action:     "delete",
+		SnapshotID: snapshotID,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+	h.record(c, p, audit.ActionDbSnapshot, siteID, map[string]any{
+		"action":      "delete",
+		"snapshot_id": snapshotID,
+	})
+	c.JSON(http.StatusOK, gin.H{
+		"ok":     out.OK,
+		"detail": out.Detail,
 	})
 }
 

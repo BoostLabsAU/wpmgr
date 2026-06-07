@@ -107,6 +107,11 @@ export {
   bulkConfigCache,
   // search-replace (#188)
   runSearchReplace,
+  // db snapshots (#189)
+  listDbSnapshots,
+  createDbSnapshot,
+  revertDbSnapshot,
+  deleteDbSnapshot,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -337,4 +342,19 @@ export type {
   RunSearchReplaceData,
   RunSearchReplaceResponse,
   RunSearchReplaceResponses,
+  // db snapshots (#189)
+  DbSnapshotEntry,
+  DbSnapshotList,
+  DbSnapshotCreate,
+  DbSnapshotCreateResult,
+  DbSnapshotRevert,
+  DbSnapshotRevertResult,
+  ListDbSnapshotsData,
+  ListDbSnapshotsResponse,
+  CreateDbSnapshotData,
+  CreateDbSnapshotResponse,
+  RevertDbSnapshotData,
+  RevertDbSnapshotResponse,
+  DeleteDbSnapshotData,
+  DeleteDbSnapshotResponse,
 } from "./generated/types.gen";

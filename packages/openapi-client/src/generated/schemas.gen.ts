@@ -4444,6 +4444,127 @@ export const SearchReplaceResultSchema = {
   },
 } as const;
 
+export const DbSnapshotEntrySchema = {
+  type: "object",
+  description: "One local database snapshot entry.",
+  required: ["id", "label", "created_at", "size", "table_count"],
+  properties: {
+    id: {
+      type: "string",
+      description: "Unique snapshot identifier (snap_<hex>).",
+    },
+    label: {
+      type: "string",
+      description: "Operator-supplied label; may be empty.",
+    },
+    created_at: {
+      type: "integer",
+      format: "int64",
+      description: "Unix timestamp (seconds) when the snapshot was created.",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Compressed SQL file size in bytes.",
+    },
+    table_count: {
+      type: "integer",
+      description: "Number of database tables captured.",
+    },
+  },
+} as const;
+
+export const DbSnapshotListSchema = {
+  type: "object",
+  required: ["ok", "snapshots"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    snapshots: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/DbSnapshotEntry",
+      },
+    },
+    detail: {
+      type: "string",
+      description: "Present on error (ok=false).",
+    },
+  },
+} as const;
+
+export const DbSnapshotCreateSchema = {
+  type: "object",
+  description: "Request body for creating a local database snapshot.",
+  properties: {
+    label: {
+      type: "string",
+      maxLength: 120,
+      description: "Optional human-readable label for the snapshot.",
+    },
+    retention: {
+      type: "integer",
+      minimum: 1,
+      maximum: 20,
+      description: "Maximum snapshots to retain after this one (default 5).",
+    },
+  },
+} as const;
+
+export const DbSnapshotCreateResultSchema = {
+  type: "object",
+  required: ["ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    snapshot: {
+      $ref: "#/components/schemas/DbSnapshotEntry",
+    },
+    detail: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const DbSnapshotRevertSchema = {
+  type: "object",
+  required: ["confirm"],
+  description:
+    'Request body for the DESTRUCTIVE revert operation.\n`confirm` MUST equal `"REVERT"` exactly.\n',
+  properties: {
+    confirm: {
+      type: "string",
+      description: 'Must be the exact string "REVERT".',
+    },
+    skip_safety_snapshot: {
+      type: "boolean",
+      description:
+        "When true, suppresses the automatic safety snapshot taken before\nthe import. Defaults to false (safety snapshot is taken).\n",
+    },
+  },
+} as const;
+
+export const DbSnapshotRevertResultSchema = {
+  type: "object",
+  required: ["ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+      description: "Human-readable outcome.",
+    },
+    safety_id: {
+      type: "string",
+      description:
+        "ID of the auto-safety snapshot taken before the import.\nEmpty string when the safety snapshot was skipped or failed.\n",
+    },
+  },
+} as const;
+
 export const DbCleanResultSchema = {
   type: "object",
   description: "The acknowledgement returned by the database-cleanup endpoint.",

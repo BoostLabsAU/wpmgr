@@ -2302,6 +2302,93 @@ export type SearchReplaceResult = {
 };
 
 /**
+ * One local database snapshot entry.
+ */
+export type DbSnapshotEntry = {
+  /**
+   * Unique snapshot identifier (snap_<hex>).
+   */
+  id: string;
+  /**
+   * Operator-supplied label; may be empty.
+   */
+  label: string;
+  /**
+   * Unix timestamp (seconds) when the snapshot was created.
+   */
+  created_at: number;
+  /**
+   * Compressed SQL file size in bytes.
+   */
+  size: number;
+  /**
+   * Number of database tables captured.
+   */
+  table_count: number;
+};
+
+export type DbSnapshotList = {
+  ok: boolean;
+  snapshots: Array<DbSnapshotEntry>;
+  /**
+   * Present on error (ok=false).
+   */
+  detail?: string;
+};
+
+/**
+ * Request body for creating a local database snapshot.
+ */
+export type DbSnapshotCreate = {
+  /**
+   * Optional human-readable label for the snapshot.
+   */
+  label?: string;
+  /**
+   * Maximum snapshots to retain after this one (default 5).
+   */
+  retention?: number;
+};
+
+export type DbSnapshotCreateResult = {
+  ok: boolean;
+  snapshot?: DbSnapshotEntry;
+  detail?: string;
+};
+
+/**
+ * Request body for the DESTRUCTIVE revert operation.
+ * `confirm` MUST equal `"REVERT"` exactly.
+ *
+ */
+export type DbSnapshotRevert = {
+  /**
+   * Must be the exact string "REVERT".
+   */
+  confirm: string;
+  /**
+   * When true, suppresses the automatic safety snapshot taken before
+   * the import. Defaults to false (safety snapshot is taken).
+   *
+   */
+  skip_safety_snapshot?: boolean;
+};
+
+export type DbSnapshotRevertResult = {
+  ok: boolean;
+  /**
+   * Human-readable outcome.
+   */
+  detail?: string;
+  /**
+   * ID of the auto-safety snapshot taken before the import.
+   * Empty string when the safety snapshot was skipped or failed.
+   *
+   */
+  safety_id?: string;
+};
+
+/**
  * The acknowledgement returned by the database-cleanup endpoint.
  */
 export type DbCleanResult = {
@@ -5777,6 +5864,87 @@ export type RunSearchReplaceResponses = {
 
 export type RunSearchReplaceResponse =
   RunSearchReplaceResponses[keyof RunSearchReplaceResponses];
+
+export type ListDbSnapshotsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/snapshots";
+};
+
+export type ListDbSnapshotsResponses = {
+  /**
+   * Snapshot manifest
+   */
+  200: DbSnapshotList;
+};
+
+export type ListDbSnapshotsResponse =
+  ListDbSnapshotsResponses[keyof ListDbSnapshotsResponses];
+
+export type CreateDbSnapshotData = {
+  body?: DbSnapshotCreate;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/snapshots";
+};
+
+export type CreateDbSnapshotResponses = {
+  /**
+   * Snapshot created
+   */
+  200: DbSnapshotCreateResult;
+};
+
+export type CreateDbSnapshotResponse =
+  CreateDbSnapshotResponses[keyof CreateDbSnapshotResponses];
+
+export type RevertDbSnapshotData = {
+  body: DbSnapshotRevert;
+  path: {
+    siteId: string;
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert";
+};
+
+export type RevertDbSnapshotResponses = {
+  /**
+   * Database reverted
+   */
+  200: DbSnapshotRevertResult;
+};
+
+export type RevertDbSnapshotResponse =
+  RevertDbSnapshotResponses[keyof RevertDbSnapshotResponses];
+
+export type DeleteDbSnapshotData = {
+  body?: never;
+  path: {
+    siteId: string;
+    snapshotId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}";
+};
+
+export type DeleteDbSnapshotResponses = {
+  /**
+   * Snapshot deleted
+   */
+  200: {
+    ok?: boolean;
+    detail?: string;
+  };
+};
+
+export type DeleteDbSnapshotResponse =
+  DeleteDbSnapshotResponses[keyof DeleteDbSnapshotResponses];
 
 export type CleanDatabaseData = {
   body?: never;
