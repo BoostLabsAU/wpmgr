@@ -85,7 +85,7 @@ export const FEATURES = {
       icon: "DatabaseBackup",
       title: "Backups and restore",
       desc:
-        "Schedule backups of your database and files, then restore the whole site, just the database, just files, or a single plugin, theme, or upload. Only changed files re-upload, the site stays live during a restore, and a failed restore never leaves it half-broken.",
+        "Schedule full or incremental backups of your database and files. Increments pack only files that changed since the last backup, so each one is small and fast. Restore the whole site, just the database, just files, or a single plugin, theme, or upload to any point in the chain, with the site staying online throughout.",
     },
     {
       icon: "RefreshCw",
@@ -443,7 +443,7 @@ export const FAQ = {
     },
     {
       q: "How do backups work?",
-      a: "You set a schedule (hourly, daily, weekly, or monthly), and each backup streams a database dump and file archive, chunks and deduplicates them so only changed data re-uploads, and stores them in your chosen destination. Restore the whole site or a single plugin, theme, upload, or table, atomically, while the site stays online.",
+      a: "You set a schedule (hourly, daily, weekly, or monthly) and choose full or incremental. A full backup streams a database dump and file archive, encrypts each chunk client-side, and uploads only what is not already stored. An incremental backup compares the live file tree against the previous snapshot by size and modified time, packs only the files that changed, and records deletions as tombstones. The database is dumped in full on every run. Restore the whole site or a single plugin, theme, upload, or table to any point in the incremental chain, while the site stays online.",
     },
   ],
 };
