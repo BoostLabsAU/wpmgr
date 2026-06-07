@@ -101,6 +101,49 @@ final class TaskRunner
     private const PROGRESS_DB_THROTTLE_SECONDS = 5;
 
     /**
+     * Max encoded sub_state size we will write INLINE into the
+     * wpmgr_backup_tasks.sub_state column. Above this, the bulky cursor is
+     * spilled to a scratch sidecar file and the DB column carries only a small
+     * pointer (+ params, which the watchdog needs to rehydrate the runner).
+     *
+     * Why this exists (the 0-files-base bug): on a real site with thousands of
+     * changed files, the incremental scan cursor (scan.changed[] + carry_forward[]
+     * + incr_upload.uploaded_hashes[]) serializes to hundreds of KB — often >1 MB.
+     * MySQL/MariaDB reject any single statement larger than @@max_allowed_packet
+     * (default 1 MiB on many hosts, smaller on shared hosting). `$wpdb->update()`
+     * then returns FALSE and the row keeps its PRIOR value — silently. The next
+     * watchdog/cron re-entry reloads that stale row, scan.changed[] is gone, and
+     * the incremental manifest is submitted with ZERO files_entries (a useless
+     * DB-only snapshot). 48 KiB is comfortably below the smallest realistic
+     * packet limit, so the inline pointer write always fits.
+     */
+    private const SUBSTATE_INLINE_MAX_BYTES = 48 * 1024;
+
+    /**
+     * Sub_state keys that must stay INLINE in the DB column even when the rest
+     * is spilled to the sidecar. `params` is required by the watchdog to
+     * rehydrate the runner on re-entry; the `_*` control flags are tiny and
+     * drive phase routing. Everything else (scan, incr_upload, encrypt, db,
+     * upload, files) can live in the sidecar.
+     *
+     * @var list<string>
+     */
+    private const SUBSTATE_INLINE_KEYS = [
+        'params',
+        '_is_incremental',
+        '_auto_base',
+        '_prev_index_path',
+        '_fallback_reason',
+        'incr_manifest_done',
+        'last_error',
+        'failed_in',
+        'reason_code',
+    ];
+
+    /** Basename of the per-run sub_state sidecar inside the scratch dir. */
+    private const SUBSTATE_SIDECAR_BASENAME = 'task_substate.json';
+
+    /**
      * @var array{snapshot_id:string,kind:string,age_recipient:string,presign_endpoint:string,
      *            manifest_endpoint:string,progress_endpoint:string,chunk_bytes:int,
      *            scratch_dir:string,wp_content_path:string,db:array<string,string>,
@@ -1018,7 +1061,10 @@ final class TaskRunner
         if (isset($row['sub_state']) && is_string($row['sub_state']) && $row['sub_state'] !== '') {
             $decoded = json_decode($row['sub_state'], true);
             if (is_array($decoded)) {
-                $sub = $decoded;
+                // If the column holds a sidecar pointer (large cursor spilled to
+                // scratch to stay under @@max_allowed_packet), rehydrate the full
+                // sub_state from the sidecar file.
+                $sub = $this->rehydrateSubState($decoded);
             }
         }
 
@@ -1105,20 +1151,145 @@ final class TaskRunner
             error_log('WPMgr TaskRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
             return;
         }
+
+        // SIDECAR SPILL (0-files-base fix): a real incremental base over thousands
+        // of changed files serializes the scan cursor to hundreds of KB — past
+        // @@max_allowed_packet on many hosts. An over-packet UPDATE fails silently
+        // (returns false) and the row keeps its PRIOR value, so a watchdog re-entry
+        // reloads a cursor-less row and submits a 0-files manifest. To keep the DB
+        // write always within the packet limit, when the encoded state is large we
+        // write the FULL cursor to a scratch sidecar file and store only a tiny
+        // pointer (+ the small inline keys the watchdog needs) in the column.
+        $columnValue = $encoded;
+        if (strlen($encoded) > self::SUBSTATE_INLINE_MAX_BYTES) {
+            $pointer = $this->spillSubStateToSidecar($subState, $encoded);
+            if ($pointer !== null) {
+                $columnValue = $pointer;
+            }
+            // If the sidecar write failed, $columnValue stays = $encoded and we
+            // fall through to the update-return check below, which now FAILS
+            // LOUDLY instead of silently dropping the cursor.
+        }
+
         $this->lastDbUpdate = $now;
 
         /** @phpstan-ignore-next-line */
-        $wpdb->update(
+        $result = $wpdb->update(
             $table,
             [
                 'phase'            => $phase,
-                'sub_state'        => $encoded,
+                'sub_state'        => $columnValue,
                 'last_progress_at' => $now,
             ],
             ['snapshot_id' => $this->snapshotId()],
             ['%s', '%s', '%d'],
             ['%s']
         );
+
+        // HONOR THE RETURN VALUE. $wpdb->update() returns false on a DB error —
+        // most importantly an over-@@max_allowed_packet statement, which leaves
+        // the row holding its PRIOR (cursor-less) value. Silently ignoring this
+        // was the root cause of the 0-files base: the in-memory run continued,
+        // but the persisted row a watchdog later reloaded had no scan.changed[].
+        // After the sidecar spill the column value is tiny, so a false here is a
+        // genuine DB fault — surface it so the run is retried rather than
+        // completing with a stale/empty cursor.
+        if ($result === false) {
+            throw new \RuntimeException(
+                'TaskRunner: sub_state persist failed (wpdb->update returned false) for phase '
+                . $phase . ' — refusing to continue with an unpersisted cursor'
+            );
+        }
+    }
+
+    /**
+     * Spill the full sub_state to a per-run scratch sidecar file and return a
+     * small DB-column pointer that references it. The pointer keeps the inline
+     * keys (params + control flags) the watchdog needs to rehydrate WITHOUT
+     * reading the sidecar, plus `_substate_sidecar` (path) and a length guard.
+     *
+     * @param array<string,mixed> $subState Full sub_state.
+     * @param string              $encoded  Already-encoded full sub_state (reused as the file body).
+     * @return string|null JSON pointer to store in the column, or null if the
+     *                     sidecar could not be written (caller keeps the inline
+     *                     encoding and lets the update-return guard catch a
+     *                     too-large write).
+     */
+    private function spillSubStateToSidecar(array $subState, string $encoded): ?string
+    {
+        $path = $this->subStateSidecarPath();
+        if ($path === '') {
+            return null;
+        }
+        // Atomic-ish write: write to a temp file then rename so a crash mid-write
+        // never leaves a truncated sidecar that would reload as a lost cursor.
+        $tmp = $path . '.' . getmypid() . '.tmp';
+        $written = @file_put_contents($tmp, $encoded, LOCK_EX);
+        if ($written === false || $written !== strlen($encoded)) {
+            @unlink($tmp);
+            return null;
+        }
+        if (!@rename($tmp, $path)) {
+            @unlink($tmp);
+            return null;
+        }
+
+        $pointer = ['_substate_sidecar' => $path, '_sidecar_len' => strlen($encoded)];
+        foreach (self::SUBSTATE_INLINE_KEYS as $k) {
+            if (array_key_exists($k, $subState)) {
+                $pointer[$k] = $subState[$k];
+            }
+        }
+        $encodedPointer = json_encode($pointer, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        if ($encodedPointer === false || $encodedPointer === '') {
+            return null;
+        }
+        return $encodedPointer;
+    }
+
+    /**
+     * Rehydrate a sub_state that may be a sidecar pointer. If the decoded column
+     * value carries `_substate_sidecar`, read the full cursor from that scratch
+     * file; otherwise return the decoded value unchanged.
+     *
+     * @param array<string,mixed> $decoded Decoded column value.
+     * @return array<string,mixed> Full sub_state.
+     */
+    private function rehydrateSubState(array $decoded): array
+    {
+        if (empty($decoded['_substate_sidecar']) || !is_string($decoded['_substate_sidecar'])) {
+            return $decoded;
+        }
+        $path = $decoded['_substate_sidecar'];
+        if (!is_file($path)) {
+            // Sidecar missing (scratch wiped). Fall back to the inline pointer
+            // keys — the watchdog can still rehydrate params and re-derive the
+            // scan from source on the next pass rather than submitting 0 files.
+            error_log('WPMgr TaskRunner: sub_state sidecar missing at ' . $path . ' — falling back to inline keys');
+            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
+            return $decoded;
+        }
+        $body = @file_get_contents($path);
+        if ($body === false || $body === '') {
+            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
+            return $decoded;
+        }
+        $full = json_decode($body, true);
+        if (!is_array($full)) {
+            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
+            return $decoded;
+        }
+        return $full;
+    }
+
+    /** Absolute path of the per-run sub_state sidecar, or '' if scratch unknown. */
+    private function subStateSidecarPath(): string
+    {
+        $dir = $this->scratchDir();
+        if ($dir === '') {
+            return '';
+        }
+        return $dir . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_BASENAME;
     }
 
     /**
@@ -1217,6 +1388,11 @@ final class TaskRunner
         $prevIndex = $scratch . DIRECTORY_SEPARATOR . 'prev_index.ndjson';
         if (is_file($prevIndex)) {
             @unlink($prevIndex);
+        }
+        // Remove the sub_state sidecar (large-cursor spill) on completion.
+        $sidecar = $scratch . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_BASENAME;
+        if (is_file($sidecar)) {
+            @unlink($sidecar);
         }
 
         // 2. Artifact files (DB dump + zip parts).
