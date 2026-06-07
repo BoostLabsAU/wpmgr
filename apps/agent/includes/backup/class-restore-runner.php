@@ -981,17 +981,13 @@ final class RestoreRunner
         if (str_ends_with($lower, '.sql') || str_ends_with($lower, '.sql.gz') || str_contains($lower, 'database.sql')) {
             return 'db';
         }
-        if (str_starts_with($lower, 'plugins.part') && str_ends_with($lower, '.zip')) {
-            return 'plugin';
-        }
-        if (str_starts_with($lower, 'themes.part') && str_ends_with($lower, '.zip')) {
-            return 'theme';
-        }
-        if (str_starts_with($lower, 'uploads.part') && str_ends_with($lower, '.zip')) {
-            return 'upload';
-        }
-        if (str_starts_with($lower, 'wp-content.part') && str_ends_with($lower, '.zip')) {
-            return 'wp-content';
+        // Track 5 per-component archives. FilesArchiver emits generation-
+        // namespaced `<component>.gNNN.partMMM.zip`; classify via the shared
+        // classifier (tolerant of both the namespaced and legacy part names)
+        // so the namespaced part maps to its component on the restore overlay.
+        $component = FilesArchiver::componentKindFromPartName($logical);
+        if ($component !== '') {
+            return $component;
         }
         // Anything else (legacy or unrecognized) — treat as the legacy 'file'
         // entry_kind so the whole-wp-content swap path covers it.

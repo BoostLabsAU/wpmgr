@@ -5,10 +5,6 @@ package backup
 
 import (
 	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -50,6 +46,7 @@ func (f *fakeCommander) Restore(_ context.Context, _ uuid.UUID, _ string, _ agen
 type fakeWorkerRepo struct {
 	*fakeRepo
 	markRunningCalled bool
+	workerManifests   map[uuid.UUID][]ManifestEntry
 }
 
 func (r *fakeWorkerRepo) MarkSnapshotRunning(_ context.Context, _, snapshotID uuid.UUID) (Snapshot, error) {
@@ -73,6 +70,22 @@ func (r *fakeWorkerRepo) FailSnapshot(_ context.Context, _, snapshotID uuid.UUID
 	s.Error = msg
 	r.snapshots[snapshotID] = s
 	return s, nil
+}
+
+// manifests lets a worker test register a parent snapshot's manifest entries so
+// the ADR-051 dispatch can resolve + presign its files-list chunks.
+func (r *fakeWorkerRepo) ListManifest(_ context.Context, _, snapshotID uuid.UUID) ([]ManifestEntry, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.workerManifests[snapshotID], nil
+}
+
+func (r *fakeWorkerRepo) ExistingChunkHashes(_ context.Context, tenantID uuid.UUID, hashes []string) (map[string]Chunk, error) {
+	out := map[string]Chunk{}
+	for _, h := range hashes {
+		out[h] = Chunk{Blake3: h, S3Key: chunkS3Key(tenantID, h), Size: 64}
+	}
+	return out, nil
 }
 
 // fakeWorkerSiteLookup returns a fixed enrolled site.
@@ -140,7 +153,7 @@ func TestBackupWorker_DispatchesFullRequest(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBackupWorker_DispatchesIncrementalRequest(t *testing.T) {
-	repo := &fakeWorkerRepo{fakeRepo: newFakeRepo()}
+	repo := &fakeWorkerRepo{fakeRepo: newFakeRepo(), workerManifests: map[uuid.UUID][]ManifestEntry{}}
 	cmd := &fakeCommander{ok: true}
 	tenantID := uuid.New()
 	snapshotID := uuid.New()
@@ -162,8 +175,21 @@ func TestBackupWorker_DispatchesIncrementalRequest(t *testing.T) {
 		Generation:       1,
 	}
 	repo.setSnapshot(snap)
+	// ADR-051: the parent must carry a files-list manifest entry so the dispatch
+	// can presign its chunks for the agent's prev-map.
+	flHash := "abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+	repo.workerManifests[parentID] = []ManifestEntry{
+		{Path: "files.list", EntryKind: EntryKindFilesList, ChunkHashes: []string{flHash}, Size: 200},
+	}
 
-	svc := &Service{repo: repo, sites: fakeWorkerSiteLookup{}, clock: fakeClock{t: time.Now()}}
+	fp := &fakePresigner{}
+	svc := &Service{
+		repo:       repo,
+		sites:      fakeWorkerSiteLookup{},
+		store:      &tenantPresigner{tenantID: tenantID, inner: fp},
+		clock:      fakeClock{t: time.Now()},
+		presignTTL: time.Hour,
+	}
 
 	worker := NewBackupWorker(svc, cmd, nil, nil, "https://cp.example.com", 0)
 	job := &river.Job[BackupArgs]{
@@ -197,13 +223,17 @@ func TestBackupWorker_DispatchesIncrementalRequest(t *testing.T) {
 	if req.Generation != 1 {
 		t.Errorf("Generation must be 1, got %d", req.Generation)
 	}
-	if req.FileIndexEndpoint == "" {
-		t.Error("FileIndexEndpoint must be non-empty for an incremental dispatch")
+	// ADR-051: the dispatch carries the parent's presigned files-list chunks
+	// (replacing the retired file_index_endpoint) so the agent can rebuild the
+	// prev[rel]=>{size,mtime} map.
+	if len(req.PrevFilesListChunks) != 1 {
+		t.Fatalf("expected 1 prev files-list chunk, got %d", len(req.PrevFilesListChunks))
 	}
-	// The endpoint must reference the parent snapshot ID.
-	expectedSuffix := "/agent/v1/backups/" + parentID.String() + "/file-index"
-	if len(req.FileIndexEndpoint) < len(expectedSuffix) || req.FileIndexEndpoint[len(req.FileIndexEndpoint)-len(expectedSuffix):] != expectedSuffix {
-		t.Errorf("FileIndexEndpoint %q does not end with %q", req.FileIndexEndpoint, expectedSuffix)
+	if req.PrevFilesListChunks[0].Hash != flHash {
+		t.Errorf("prev files-list chunk hash mismatch: got %q", req.PrevFilesListChunks[0].Hash)
+	}
+	if req.PrevFilesListChunks[0].URL == "" {
+		t.Error("prev files-list chunk must carry a presigned URL")
 	}
 }
 
@@ -261,117 +291,18 @@ func TestBackupWorker_DispatchesBaseIncrement(t *testing.T) {
 	if req.Generation != 0 {
 		t.Errorf("Generation must be 0 for a base, got %d", req.Generation)
 	}
-	if req.FileIndexEndpoint != "" {
-		t.Errorf("FileIndexEndpoint must be EMPTY for a no-parent base (the base signal), got %q", req.FileIndexEndpoint)
+	// ADR-051: a no-parent base-increment carries NO prev files-list chunks (the
+	// empty list is the base signal — scan everything as new).
+	if len(req.PrevFilesListChunks) != 0 {
+		t.Errorf("PrevFilesListChunks must be EMPTY for a no-parent base, got %d", len(req.PrevFilesListChunks))
 	}
-	// ParentSnapshotID is the zero UUID stringified for a base; the empty
-	// file-index endpoint is what actually signals the base scan to the agent.
+	// ParentSnapshotID is the zero UUID stringified for a base; the empty prev
+	// files-list is what signals the base scan to the agent.
 	if req.ParentSnapshotID != uuid.Nil.String() {
 		t.Errorf("expected nil-UUID parent for a base, got %q", req.ParentSnapshotID)
 	}
 }
 
-// ---------------------------------------------------------------------------
-// TestFileIndexEndpoint_StreamsNDJSON — functional test of the fileIndex
-// handler using an httptest server with a stubbed AgentHandler.
-// ---------------------------------------------------------------------------
-
-func TestFileIndexEndpoint_StreamsNDJSON(t *testing.T) {
-	// Build an http handler that simulates the file-index endpoint by
-	// calling repo.StreamFileIndex and serialising as NDJSON.
-	// This is a white-box test that calls the fileIndex method indirectly.
-	repo := newFakeRepo()
-	tenantID := uuid.New()
-	snapshotID := uuid.New()
-
-	// Pre-populate file index rows.
-	entries := []FileIndexEntry{
-		{TenantID: tenantID, SnapshotID: snapshotID, FilePath: "wp-content/a.php", FileSize: 100, ChunkHashes: []string{"aaa"}, IsTombstone: false},
-		{TenantID: tenantID, SnapshotID: snapshotID, FilePath: "wp-content/b.php", FileSize: 200, ChunkHashes: []string{"bbb"}, IsTombstone: false},
-		{TenantID: tenantID, SnapshotID: snapshotID, FilePath: "wp-content/deleted.php", IsTombstone: true},
-	}
-	for _, e := range entries {
-		repo.fileIndexRows[snapshotID] = append(repo.fileIndexRows[snapshotID], e)
-	}
-	repo.fileIndexCounts[snapshotID] = int64(len(entries))
-
-	// Construct a minimal HTTP handler.
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.WriteHeader(http.StatusOK)
-		enc := json.NewEncoder(w)
-		_ = repo.StreamFileIndex(r.Context(), tenantID, snapshotID, func(e FileIndexEntry) error {
-			row := map[string]any{
-				"file_path":    e.FilePath,
-				"file_size":    e.FileSize,
-				"file_mtime":   e.FileMtime,
-				"file_blake3":  e.FileBlake3,
-				"chunk_hashes": e.ChunkHashes,
-				"is_tombstone": e.IsTombstone,
-			}
-			return enc.Encode(row)
-		})
-	}))
-	defer ts.Close()
-
-	resp, err := http.Get(ts.URL)
-	if err != nil {
-		t.Fatalf("GET error: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200, got %d", resp.StatusCode)
-	}
-	if ct := resp.Header.Get("Content-Type"); ct != "application/x-ndjson" {
-		t.Errorf("expected Content-Type application/x-ndjson, got %q", ct)
-	}
-
-	body, _ := io.ReadAll(resp.Body)
-	lines := splitNDJSON(body)
-	if len(lines) != len(entries) {
-		t.Fatalf("expected %d NDJSON lines, got %d (body=%q)", len(entries), len(lines), body)
-	}
-
-	// Verify tombstone flag on last line.
-	var last map[string]any
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
-		t.Fatalf("unmarshal last line: %v", err)
-	}
-	if isTomb, _ := last["is_tombstone"].(bool); !isTomb {
-		t.Error("expected last entry to have is_tombstone=true")
-	}
-}
-
-// TestFileIndexEndpoint_SoftCap204 verifies that when CountFileIndex > 2M
-// the streaming endpoint would return 204. We test the cap logic directly.
-func TestFileIndexEndpoint_SoftCap204(t *testing.T) {
-	if fileIndexSoftCap != 2_000_000 {
-		t.Fatalf("expected fileIndexSoftCap=2000000, got %d", fileIndexSoftCap)
-	}
-	// Confirm the constant is correct — the actual 204 branch is covered by
-	// the AgentHandler which needs a real HTTP stack + auth middleware.
-	// The constant-value check is the minimal meaningful assertion here.
-}
-
-// splitNDJSON splits NDJSON bytes into non-empty lines.
-func splitNDJSON(data []byte) []string {
-	var out []string
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			line := string(data[start:i])
-			if len(line) > 0 {
-				out = append(out, line)
-			}
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		line := string(data[start:])
-		if len(line) > 0 {
-			out = append(out, line)
-		}
-	}
-	return out
-}
+// ADR-051: the agent-facing GET /file-index NDJSON endpoint + its soft-cap are
+// RETIRED (change detection now rides on the parent's presigned files-list
+// chunks). The endpoint streaming tests that exercised them have been removed.

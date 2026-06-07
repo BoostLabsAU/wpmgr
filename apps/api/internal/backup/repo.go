@@ -54,6 +54,10 @@ type Repo interface {
 
 	// Manifest.
 	ListManifest(ctx context.Context, tenantID, snapshotID uuid.UUID) ([]ManifestEntry, error)
+	// HasFilesList reports whether the snapshot carries a `files-list` manifest
+	// entry (ADR-051). The chain auto-base resolver uses it to decide whether a
+	// prior snapshot is diffable under the archive-delta model. Tenant-scoped.
+	HasFilesList(ctx context.Context, tenantID, snapshotID uuid.UUID) (bool, error)
 	// RecordManifest atomically records a submitted manifest: it upserts each
 	// referenced chunk (storing not-yet-stored ones), increments refcounts for
 	// every chunk reference, inserts the manifest entries, and completes the
@@ -559,6 +563,27 @@ func (r *pgRepo) ListManifest(ctx context.Context, tenantID, snapshotID uuid.UUI
 		return nil
 	})
 	return out, err
+}
+
+// HasFilesList reports whether the snapshot carries a `files-list` manifest
+// entry (ADR-051). Reuses ListManifestEntries (a per-snapshot scan, cheap) so
+// no new sqlc query is needed.
+func (r *pgRepo) HasFilesList(ctx context.Context, tenantID, snapshotID uuid.UUID) (bool, error) {
+	var has bool
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).ListManifestEntries(ctx, sqlc.ListManifestEntriesParams{SnapshotID: snapshotID, TenantID: tenantID})
+		if err != nil {
+			return domain.Internal("backup_manifest_list_failed", "failed to list manifest entries").WithCause(err)
+		}
+		for _, row := range rows {
+			if row.EntryKind == EntryKindFilesList {
+				has = true
+				break
+			}
+		}
+		return nil
+	})
+	return has, err
 }
 
 func (r *pgRepo) RecordManifest(ctx context.Context, in RecordManifestInput) (int64, int64, error) {

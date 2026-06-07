@@ -131,26 +131,40 @@ func (w *BackupWorker) Work(ctx context.Context, job *river.Job[BackupArgs]) err
 	}
 	w.recordAudit(ctx, running, ActionBackupStarted, nil)
 
-	// ADR-048: when the job was enqueued as incremental, build an
+	// ADR-048/ADR-051: when the job was enqueued as incremental, build an
 	// IncrementalBackupRequest; otherwise use the existing BackupRequest.
 	// A no-parent gen-0 base-increment also takes the incremental path: its
-	// empty FileIndexEndpoint is the documented base signal, which the agent
-	// treats as "scan everything as new" and uploads a full file index.
+	// empty PrevFilesListChunks is the documented base signal, which the agent
+	// treats as "scan everything as new" and emits a full files-list.
 	var resp agentcmd.BackupResponse
 	if a.IsIncremental && (a.ParentSnapshotID != uuid.Nil || a.Generation == 0) {
+		// ADR-051: resolve the PARENT snapshot's files-list manifest entry and
+		// presign its chunks so the agent can rebuild the prev[rel]=>{size,mtime}
+		// map (the same transport as chunk fetch). A gen-0 base-increment has no
+		// parent → empty PrevFilesListChunks signals "scan everything as new".
+		var prevChunks []agentcmd.RestoreChunk
+		if a.ParentSnapshotID != uuid.Nil {
+			prevChunks, err = w.svc.PresignParentFilesList(ctx, a.TenantID, a.ParentSnapshotID)
+			if err != nil {
+				// A missing/un-presignable parent files-list is a retryable infra
+				// error: the agent can't diff without it, so don't silently fall
+				// back to a full re-pack (which would be the 24-min QA bug).
+				return fmt.Errorf("resolve parent files-list for increment: %w", err)
+			}
+		}
 		incReq := agentcmd.IncrementalBackupRequest{
-			SnapshotID:        snap.ID.String(),
-			Kind:              snap.Kind,
-			AgeRecipient:      snap.AgeRecipient,
-			ChunkBytes:        agentcmd.ChunkBytes,
-			PresignEndpoint:   w.presignEndpoint(snap.ID),
-			ManifestEndpoint:  w.manifestEndpoint(snap.ID),
-			ProgressEndpoint:  w.progressEndpoint(snap.ID),
-			IsIncremental:     true,
-			ParentSnapshotID:  a.ParentSnapshotID.String(),
-			BaseSnapshotID:    a.BaseSnapshotID.String(),
-			Generation:        a.Generation,
-			FileIndexEndpoint: w.fileIndexEndpoint(a.ParentSnapshotID),
+			SnapshotID:          snap.ID.String(),
+			Kind:                snap.Kind,
+			AgeRecipient:        snap.AgeRecipient,
+			ChunkBytes:          agentcmd.ChunkBytes,
+			PresignEndpoint:     w.presignEndpoint(snap.ID),
+			ManifestEndpoint:    w.manifestEndpoint(snap.ID),
+			ProgressEndpoint:    w.progressEndpoint(snap.ID),
+			IsIncremental:       true,
+			ParentSnapshotID:    a.ParentSnapshotID.String(),
+			BaseSnapshotID:      a.BaseSnapshotID.String(),
+			Generation:          a.Generation,
+			PrevFilesListChunks: prevChunks,
 		}
 		resp, err = w.cmd.IncrementalBackup(ctx, snap.SiteID, si.URL, incReq)
 	} else {
@@ -205,16 +219,6 @@ func (w *BackupWorker) progressEndpoint(snapshotID uuid.UUID) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/agent/v1/backups/%s/progress", w.cpBaseURL, snapshotID)
-}
-
-func (w *BackupWorker) fileIndexEndpoint(parentSnapshotID uuid.UUID) string {
-	if w.cpBaseURL == "" {
-		return ""
-	}
-	if parentSnapshotID == uuid.Nil {
-		return ""
-	}
-	return fmt.Sprintf("%s/agent/v1/backups/%s/file-index", w.cpBaseURL, parentSnapshotID)
 }
 
 func (w *BackupWorker) recordAudit(ctx context.Context, snap Snapshot, action string, extra map[string]any) {

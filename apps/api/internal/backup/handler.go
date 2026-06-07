@@ -237,6 +237,12 @@ func (h *Handler) getBackup(c *gin.Context) {
 		Entries:  make([]gen.BackupManifestEntry, 0, len(entries)),
 	}
 	for _, e := range entries {
+		// ADR-051: files-list and tombstones are internal bookkeeping entries
+		// (change-detection seed + delete deltas), not user-selectable artifacts.
+		// Hide them from the snapshot detail the operator sees.
+		if e.EntryKind == EntryKindFilesList || e.EntryKind == EntryKindTombstones {
+			continue
+		}
 		out.Entries = append(out.Entries, toAPIManifestEntry(e))
 	}
 	c.JSON(http.StatusOK, &out)

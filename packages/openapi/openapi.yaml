@@ -4681,7 +4681,11 @@ components:
           type: string
         entry_kind:
           type: string
-          enum: [file, db]
+          # file = legacy lumped wp-content part; plugin/theme/upload/wp-content
+          # are the Track-5 per-component archive parts; db = the SQL dump. The
+          # ADR-051 archive-delta bookkeeping kinds (files-list, tombstones) are
+          # internal and never surfaced in this operator-facing detail.
+          enum: [file, db, plugin, theme, upload, wp-content]
         table_name:
           type: string
           description: Set for db entries (partial restore-by-table).

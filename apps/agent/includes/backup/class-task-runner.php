@@ -31,6 +31,17 @@
  *
  *   completed | failed: terminal (re-entry is a no-op)
  *
+ * ADR-051 incremental mode: an incremental backup runs through the SAME
+ * phase pipeline as a full backup. The only branch is in runArchivingFiles:
+ * when is_incremental=true, FilesArchiver receives the prev map built from the
+ * parent snapshot's files.list (fetched via PrevFilesListChunks presigned GET
+ * URLs the CP sent in the request). Only CHANGED/NEW files are packed; the
+ * resulting archive + a fresh files.list are submitted through the standard
+ * SubmitManifest endpoint. Deleted files become per-path tombstone manifest
+ * entries (entry_kind=tombstones, mode=Delete, empty chunk list). The per-file
+ * chunk scanner (IncrementalScanner), the NDJSON file-index endpoint, and the
+ * three 0-files bandages are all retired.
+ *
  * On any uncaught exception from a phase handler we mark the task `failed`,
  * post one `failed` progress event, and return — TaskRunner::run() NEVER
  * throws. The CP watchdog notices the snapshot stalled in {dumping_db,
@@ -86,69 +97,32 @@ final class TaskRunner
     public const PHASE_COMPLETED            = 'completed';
     public const PHASE_FAILED               = 'failed';
 
-    // ADR-048 incremental phases (agent → CP SSE events).
-    public const PHASE_FETCH_INDEX         = 'fetching_file_index';
-    public const PHASE_SCAN_FILES          = 'scanning_files';
-    public const PHASE_UPLOAD_INCREMENTAL  = 'uploading_incremental';
-    public const PHASE_INCREMENTAL_FALLBACK = 'incremental_fallback';
-
     /** Valid snapshot kinds (mirror of the CP backup_contract.go Kind enum). */
     public const KIND_FILES = 'files';
     public const KIND_DB    = 'db';
     public const KIND_FULL  = 'full';
 
+    /**
+     * ADR-051 archive-delta tombstone contract (mirror of the CP
+     * agentcmd/backup_contract.go EntryKindTombstones + TombstoneMode* enum).
+     * A tombstone is a per-path manifest entry with EMPTY chunk_hashes; the
+     * `mode` field carries the delete/re-add delta. The agent only ever emits
+     * Delete (a re-added file is simply re-packed into a part, not a Readd
+     * tombstone), but the constant set mirrors the CP for clarity.
+     */
+    public const ENTRY_KIND_TOMBSTONES = 'tombstones';
+    public const TOMBSTONE_MODE_DELETE = 0;
+    public const TOMBSTONE_MODE_READD  = 1;
+
     /** Minimum seconds between in-phase DB writes to last_progress_at. */
     private const PROGRESS_DB_THROTTLE_SECONDS = 5;
-
-    /**
-     * Max encoded sub_state size we will write INLINE into the
-     * wpmgr_backup_tasks.sub_state column. Above this, the bulky cursor is
-     * spilled to a scratch sidecar file and the DB column carries only a small
-     * pointer (+ params, which the watchdog needs to rehydrate the runner).
-     *
-     * Why this exists (the 0-files-base bug): on a real site with thousands of
-     * changed files, the incremental scan cursor (scan.changed[] + carry_forward[]
-     * + incr_upload.uploaded_hashes[]) serializes to hundreds of KB — often >1 MB.
-     * MySQL/MariaDB reject any single statement larger than @@max_allowed_packet
-     * (default 1 MiB on many hosts, smaller on shared hosting). `$wpdb->update()`
-     * then returns FALSE and the row keeps its PRIOR value — silently. The next
-     * watchdog/cron re-entry reloads that stale row, scan.changed[] is gone, and
-     * the incremental manifest is submitted with ZERO files_entries (a useless
-     * DB-only snapshot). 48 KiB is comfortably below the smallest realistic
-     * packet limit, so the inline pointer write always fits.
-     */
-    private const SUBSTATE_INLINE_MAX_BYTES = 48 * 1024;
-
-    /**
-     * Sub_state keys that must stay INLINE in the DB column even when the rest
-     * is spilled to the sidecar. `params` is required by the watchdog to
-     * rehydrate the runner on re-entry; the `_*` control flags are tiny and
-     * drive phase routing. Everything else (scan, incr_upload, encrypt, db,
-     * upload, files) can live in the sidecar.
-     *
-     * @var list<string>
-     */
-    private const SUBSTATE_INLINE_KEYS = [
-        'params',
-        '_is_incremental',
-        '_auto_base',
-        '_prev_index_path',
-        '_fallback_reason',
-        'incr_manifest_done',
-        'last_error',
-        'failed_in',
-        'reason_code',
-    ];
-
-    /** Basename of the per-run sub_state sidecar inside the scratch dir. */
-    private const SUBSTATE_SIDECAR_BASENAME = 'task_substate.json';
 
     /**
      * @var array{snapshot_id:string,kind:string,age_recipient:string,presign_endpoint:string,
      *            manifest_endpoint:string,progress_endpoint:string,chunk_bytes:int,
      *            scratch_dir:string,wp_content_path:string,db:array<string,string>,
      *            is_incremental?:bool,parent_snapshot_id?:string,base_snapshot_id?:string,
-     *            generation?:int,file_index_endpoint?:string}
+     *            generation?:int,prev_files_list_chunks?:list<array<string,string>>}
      */
     private array $params;
 
@@ -156,29 +130,6 @@ final class TaskRunner
     private int $lastDbUpdate = 0;
 
     private ?ProgressClient $progressClient = null;
-
-    /**
-     * Per-run incremental backup timing + counter accumulator (FIX 3).
-     *
-     * Populated by runScanFiles() and runUploadIncremental(). Keys:
-     *   scan_s           float  — wall-clock seconds in the scan phase.
-     *   upload_s         float  — wall-clock seconds in the upload phase.
-     *   files_scanned    int    — total files walked.
-     *   files_changed    int    — files with new/changed content.
-     *   chunks_created   int    — total unique chunks across changed files.
-     *   bytes_read       int    — bytes of changed files (bytes_to_upload).
-     *   scratch_chunk_writes int — chunks written to scratch (not inline).
-     *   inline_uploads   int    — single-chunk files PUT inline from RAM.
-     *   presign_calls    int    — presign round-trips (upload phase).
-     *   put_count        int    — chunks actually PUT over the wire.
-     *   bytes_uploaded   int    — bytes uploaded to object store.
-     *
-     * Emitted at end of PHASE_UPLOAD_INCREMENTAL via error_log() + a
-     * non-breaking 'timings' field in the final progress payload.
-     *
-     * @var array<string,int|float>
-     */
-    private array $incrTimings = [];
 
     /**
      * @param array{snapshot_id:string,kind:string,age_recipient:string,
@@ -267,51 +218,9 @@ final class TaskRunner
                         $currentPhase = $next;
                         break;
 
-                    // ---- ADR-048 incremental phases ----
-
-                    case self::PHASE_FETCH_INDEX:
-                        $subState = $this->runFetchIndex($subState);
-                        $next = $subState['_auto_base'] ?? false
-                            ? self::PHASE_INCREMENTAL_FALLBACK
-                            : self::PHASE_SCAN_FILES;
-                        $this->saveTaskState($next, $subState);
-                        $currentPhase = $next;
-                        break;
-
-                    case self::PHASE_SCAN_FILES:
-                        $subState = $this->runScanFiles($subState);
-                        $this->saveTaskState(self::PHASE_DUMPING_DB, $subState);
-                        $currentPhase = self::PHASE_DUMPING_DB;
-                        break;
-
-                    case self::PHASE_INCREMENTAL_FALLBACK:
-                        // AUTO-BASE: emit progress and convert to a full-backup run.
-                        $this->postProgress(self::PHASE_INCREMENTAL_FALLBACK, [
-                            'reason' => (string) ($subState['_fallback_reason'] ?? 'no usable base index'),
-                        ]);
-                        // Clear incremental flag so the subsequent phases use
-                        // the full-backup pipeline unchanged.
-                        $subState['_is_incremental'] = false;
-                        $this->saveTaskState(self::PHASE_DUMPING_DB, $subState);
-                        $currentPhase = self::PHASE_DUMPING_DB;
-                        break;
-
-                    case self::PHASE_UPLOAD_INCREMENTAL:
-                        // runUploadIncremental both uploads chunks AND submits
-                        // the IncrementalSubmitManifestRequest in one phase, so
-                        // we transition directly to COMPLETED (skipping the full-
-                        // backup PHASE_SUBMITTING_MANIFEST which uses a different
-                        // manifest shape and would throw on missing encrypt.entries).
-                        $subState = $this->runUploadIncremental($subState);
-                        $this->saveTaskState(self::PHASE_COMPLETED, $subState);
-                        $currentPhase = self::PHASE_COMPLETED;
-                        break;
-
-                    // ---- standard full-backup phases ----
-
                     case self::PHASE_DUMPING_DB:
                         $subState = $this->runDumpingDb($subState);
-                        $next     = $this->nextAfterDumpingDb($subState);
+                        $next     = $this->nextAfterDumpingDb();
                         $this->saveTaskState($next, $subState);
                         $currentPhase = $next;
                         break;
@@ -393,15 +302,15 @@ final class TaskRunner
     /**
      * Decide the next phase after `queued`.
      *
-     * For incremental runs (is_incremental=true in params): PHASE_FETCH_INDEX.
      * For files-only full snapshots: PHASE_ARCHIVING_FILES (skip DB dump).
-     * For all other full runs (db or full kind): PHASE_DUMPING_DB.
+     * For all other runs (db or full kind): PHASE_DUMPING_DB.
+     *
+     * ADR-051: incremental runs use the SAME phases as a full; the only
+     * difference is that runArchivingFiles loads the prevMap from the parent
+     * files.list (assembled from PrevFilesListChunks in params).
      */
     private function nextAfterQueued(): string
     {
-        if ($this->isIncremental()) {
-            return self::PHASE_FETCH_INDEX;
-        }
         return $this->kind() === self::KIND_FILES
             ? self::PHASE_ARCHIVING_FILES
             : self::PHASE_DUMPING_DB;
@@ -410,20 +319,11 @@ final class TaskRunner
     /**
      * Decide the next phase after `dumping_db`.
      *
-     * For incremental runs that haven't fallen back to AUTO-BASE:
-     *   → PHASE_UPLOAD_INCREMENTAL (skip the zip-archiver).
      * For DB-only full snapshots: PHASE_ENCRYPTING_UPLOADING.
-     * For full snapshots: PHASE_ARCHIVING_FILES.
-     *
-     * @param array<string,mixed> $subState Current sub_state (used to detect AUTO-BASE).
+     * For full snapshots (and incremental): PHASE_ARCHIVING_FILES.
      */
-    private function nextAfterDumpingDb(array $subState = []): string
+    private function nextAfterDumpingDb(): string
     {
-        // If we are in an incremental run that has NOT fallen back to AUTO-BASE,
-        // skip the files archiver and go straight to per-file chunk upload.
-        if ($this->isIncremental() && !empty($subState['_is_incremental'])) {
-            return self::PHASE_UPLOAD_INCREMENTAL;
-        }
         return $this->kind() === self::KIND_DB
             ? self::PHASE_ENCRYPTING_UPLOADING
             : self::PHASE_ARCHIVING_FILES;
@@ -458,8 +358,15 @@ final class TaskRunner
 
     /**
      * Run the files-archive phase to completion. Writes
-     * `<scratch>/wp-content.partNNN.zip` files and returns sub_state with
+     * `<scratch>/<component>.partNNN.zip` files and returns sub_state with
      * `files.done=true`.
+     *
+     * ADR-051 incremental mode: when is_incremental=true in params, the
+     * parent's files.list is assembled from PrevFilesListChunks (presigned
+     * GET URLs sent by the CP) into a scratch file, then loaded into a
+     * prevMap. FilesArchiver receives the prevMap so only CHANGED/NEW files
+     * are packed into the archive parts. Tombstones (deleted files) are
+     * returned in the result and persisted in sub_state.files.tombstones.
      *
      * @param array<string,mixed> $subState Current sub_state.
      * @return array<string,mixed> Updated sub_state.
@@ -471,13 +378,211 @@ final class TaskRunner
         $this->ensureScratchDir();
         $this->saveTaskState(self::PHASE_ARCHIVING_FILES, $subState);
 
-        $archiver = new FilesArchiver($this->wpContentPath());
+        // ADR-051: build the prevMap for incremental change detection.
+        // $prevMap===null => full mode (archive everything). $prevMap===[] =>
+        // documented base signal (no parent files.list, all files are "new").
+        // A non-empty map filters changed/new only.
+        $prevMap        = null;
+        $prevChunkCount = 0;
+        $prevMapLoaded  = false;
+        $prevMapSize    = 0;
+        if ($this->isIncremental()) {
+            $chunks = isset($this->params['prev_files_list_chunks']) && is_array($this->params['prev_files_list_chunks'])
+                ? $this->params['prev_files_list_chunks']
+                : [];
+            $prevChunkCount = count($chunks);
+
+            $prevMap = $this->loadPrevFilesListMap($subState);
+            // ADR-051 prevMap pipeline integrity guard. The empty-vs-null
+            // distinction is the difference between "carry forward correctly"
+            // and "silently re-archive the whole site":
+            //   - null  => fetch/decode FAILED -> full mode (safe but not delta).
+            //   - []  with chunks sent => the parent's files.list parsed to ZERO
+            //            entries even though chunks WERE presigned. That is a
+            //            corrupt/format-mismatched prev list, NOT a legit base.
+            //            Treating it as a base would re-archive everything and
+            //            look like success. Force full mode (null) so it is at
+            //            least correct, and surface it loudly.
+            $prevMapLoaded = ($prevMap !== null);
+            $prevMapSize   = is_array($prevMap) ? count($prevMap) : 0;
+            if ($prevMap === [] && $prevChunkCount > 0) {
+                error_log(sprintf(
+                    'WPMgr TaskRunner: ADR-051 prevMap EMPTY despite %d prev_files_list_chunks ' .
+                    '(snapshot=%s gen=%s) — parent files.list parsed to zero entries; ' .
+                    'falling back to FULL re-archive. Investigate the prev files.list wire format.',
+                    $prevChunkCount,
+                    $this->snapshotId(),
+                    isset($this->params['generation']) ? (string) $this->params['generation'] : '?'
+                ));
+                $prevMap       = null;
+                $prevMapLoaded = false;
+            }
+        }
+
+        // ADR-051: namespace the archive part filenames by generation so the
+        // restore overlay never collides part names across generations (gen-0
+        // and gen-1 both used to emit `plugins.part001.zip`).
+        $generation = isset($this->params['generation']) && is_numeric($this->params['generation'])
+            ? (int) $this->params['generation']
+            : 0;
+        $archiver = new FilesArchiver($this->wpContentPath(), [], [], $generation);
         $result   = $archiver->archive($this->scratchDir(), $resume, function (string $phase, array $detail): void {
             $this->onPhaseProgress($phase, $detail);
-        });
+        }, $prevMap);
+
+        // ADR-051 instrumentation: report the full prevMap pipeline so the next
+        // live run is conclusive (prev_chunks_count / prevmap_loaded / prevmap_size
+        // / files_total / files_changed / files_carried / tombstones), to BOTH
+        // the CP progress payload and error_log.
+        if ($this->isIncremental()) {
+            $filesChanged  = isset($result['files_changed']) ? (int) $result['files_changed'] : (int) ($result['files_total'] ?? 0);
+            $filesCarried  = isset($result['files_carried']) ? (int) $result['files_carried'] : 0;
+            $filesTotalAll = $filesChanged + $filesCarried;
+            $tombstones    = isset($result['tombstones_count']) ? (int) $result['tombstones_count'] : 0;
+            $instr = [
+                'prev_chunks_count' => $prevChunkCount,
+                'prevmap_loaded'    => $prevMapLoaded,
+                'prevmap_size'      => $prevMapSize,
+                'files_total'       => $filesTotalAll,
+                'files_changed'     => $filesChanged,
+                'files_carried'     => $filesCarried,
+                'tombstones'        => $tombstones,
+            ];
+            $this->postProgress('archiving_files', $instr);
+            error_log(sprintf(
+                'WPMgr TaskRunner: ADR-051 increment instrumentation snapshot=%s gen=%d ' .
+                'prev_chunks_count=%d prevmap_loaded=%s prevmap_size=%d ' .
+                'files_total=%d files_changed=%d files_carried=%d tombstones=%d',
+                $this->snapshotId(),
+                $generation,
+                $prevChunkCount,
+                $prevMapLoaded ? 'true' : 'false',
+                $prevMapSize,
+                $filesTotalAll,
+                $filesChanged,
+                $filesCarried,
+                $tombstones
+            ));
+        }
 
         $subState['files'] = $result;
         return $subState;
+    }
+
+    /**
+     * ADR-051: Fetch the parent snapshot's files.list via PrevFilesListChunks
+     * (presigned GET URLs sent by the CP in the request) and build the prevMap.
+     *
+     * Each chunk URL is fetched in order and the bodies concatenated into a
+     * local scratch file `prev_files.list`. The file is then parsed by
+     * FilesArchiver::loadPrevMap() into an in-memory map never persisted to
+     * sub_state.
+     *
+     * Return contract (the caller interprets the empty-vs-null distinction —
+     * see runArchivingFiles):
+     *   - []   : no prev chunks were sent (legit gen-0 base) -> archive everything
+     *            as "new" but still emit a files.list. Also the literal parse of
+     *            a prev list that genuinely had zero entries.
+     *   - null : a fetch FAILED (auth/URL/transport) -> caller treats as full mode.
+     *   - non-empty map : the parent's prev[rel]=>{size,mtime} for change detection.
+     *
+     * @param array<string,mixed> $subState Current sub_state (unused; future resume hook).
+     * @return array<string,array{size:int,mtime:int}>|null prevMap, [] for base, or null on fetch failure.
+     */
+    private function loadPrevFilesListMap(array $subState): ?array
+    {
+        $chunks = isset($this->params['prev_files_list_chunks']) && is_array($this->params['prev_files_list_chunks'])
+            ? $this->params['prev_files_list_chunks']
+            : [];
+
+        if ($chunks === []) {
+            // No parent files.list chunks — treat the first incremental as a
+            // base (all files are "new"). Return an empty map (not null) so the
+            // archiver still emits files.list but doesn't filter anything.
+            return [];
+        }
+
+        $localPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'prev_files.list';
+
+        // Fetch and concatenate each chunk. Each entry in $chunks is a RestoreChunk:
+        // at minimum: ['url' => '<presigned-get-url>', 'hash' => '<blake3>'].
+        $outHandle = @fopen($localPath, 'wb');
+        if ($outHandle === false) {
+            error_log('WPMgr TaskRunner: cannot create prev_files.list scratch file');
+            return null;
+        }
+
+        try {
+            foreach ($chunks as $chunk) {
+                if (!is_array($chunk) || empty($chunk['url']) || !is_string($chunk['url'])) {
+                    continue;
+                }
+                $url  = (string) $chunk['url'];
+                $body = $this->fetchUrl($url);
+                if ($body === null) {
+                    // A failed presigned GET means we cannot diff — return null
+                    // (full mode), NOT [] (which the caller reads as a legit base).
+                    // The finally below closes the handle exactly once. (Closing
+                    // here too would double-close: in PHP 8 fclose() on a closed
+                    // resource throws a TypeError that `@` does NOT suppress, which
+                    // would crash the whole archive phase instead of falling back.)
+                    error_log('WPMgr TaskRunner: failed to fetch prev_files.list chunk from ' . $url);
+                    return null;
+                }
+                fwrite($outHandle, $body);
+            }
+        } finally {
+            if (is_resource($outHandle)) {
+                fclose($outHandle);
+            }
+        }
+
+        return FilesArchiver::loadPrevMap($localPath);
+    }
+
+    /**
+     * Perform a simple GET request and return the body, or null on failure.
+     * Used exclusively for fetching PrevFilesListChunks (presigned GET URLs).
+     * Prefers ext-curl for streaming; falls back to file_get_contents.
+     *
+     * @param string $url Presigned GET URL.
+     * @return string|null Response body or null on error.
+     *
+     * `protected` is a deliberate test seam: the ADR-051 prevMap-pipeline e2e
+     * drives this fetch with `file://` URLs (the same prev-list bytes the base
+     * wrote) so the rest of loadPrevFilesListMap -> loadPrevMap -> archive runs
+     * as production does, end to end.
+     */
+    protected function fetchUrl(string $url): ?string
+    {
+        // ext-curl is configured for the HTTP(S) presigned URLs the CP sends.
+        // Any non-HTTP scheme (e.g. a local file:// the e2e uses) goes straight
+        // to the stream fallback — some curl builds disable file:// entirely.
+        $scheme    = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $isHttpish = ($scheme === 'http' || $scheme === 'https');
+
+        if ($isHttpish && function_exists('curl_init')) {
+            $ch = curl_init($url);
+            if ($ch === false) {
+                return null;
+            }
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
+            $body = curl_exec($ch);
+            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            curl_close($ch);
+            if ($body === false || $code < 200 || $code >= 300) {
+                return null;
+            }
+            return (string) $body;
+        }
+
+        // Fallback: file_get_contents with a short timeout.
+        $ctx  = stream_context_create(['http' => ['timeout' => 60]]);
+        $body = @file_get_contents($url, false, $ctx);
+        return $body === false ? null : $body;
     }
 
     /**
@@ -516,6 +621,16 @@ final class TaskRunner
             function (string $phase, array $detail): void {
                 $this->onPhaseProgress($phase, $detail);
             }
+        );
+        // ADR-051: append per-path tombstone manifest entries (entry_kind=
+        // tombstones, mode=Delete, empty chunk list). The CP restore overlay
+        // reads them via ListManifest with no chunk fetch to resolve the
+        // deleted set (newest-wins). Done AFTER encrypt so the entries list the
+        // manifest submit reads (sub_state.encrypt.entries) carries them, and
+        // it survives a watchdog re-entry (persisted in sub_state.encrypt).
+        $encCursor['entries'] = $this->appendTombstoneEntries(
+            (isset($encCursor['entries']) && is_array($encCursor['entries'])) ? $encCursor['entries'] : [],
+            $subState
         );
         $subState['encrypt'] = $encCursor;
         // Checkpoint between passes so an upload-pass crash doesn't redo
@@ -572,393 +687,6 @@ final class TaskRunner
     }
 
     // ==================================================================
-    // ADR-048 Incremental phase handlers
-    // ==================================================================
-
-    /**
-     * PHASE_FETCH_INDEX — stream the previous NDJSON file-index from the CP
-     * to a scratch file. On any failure (non-200, I/O error, empty endpoint)
-     * set _auto_base=true so the caller falls back to the full-backup pipeline.
-     *
-     * @param array<string,mixed> $subState
-     * @return array<string,mixed> Updated sub_state.
-     */
-    private function runFetchIndex(array $subState): array
-    {
-        $this->ensureScratchDir();
-        $this->saveTaskState(self::PHASE_FETCH_INDEX, $subState);
-
-        $endpoint = $this->fileIndexEndpoint();
-
-        if ($endpoint === '') {
-            // ADR-048 BASE bootstrap: an empty file_index_endpoint is the CP's
-            // signal that this is a gen-0 base increment with no parent index to
-            // diff against. Stay incremental with an EMPTY previous index so the
-            // scan phase classifies every on-disk file as new and the upload
-            // phase writes a full backup_file_index (instead of falling back to a
-            // full zip, which would write manifest entries and no file index).
-            // buildPrevIndexMap() returns an empty map for a missing path, so an
-            // empty _prev_index_path yields a clean base baseline.
-            $subState['_auto_base']        = false;
-            $subState['_is_incremental']   = true;
-            $subState['_prev_index_path']  = '';
-            return $subState;
-        }
-
-        $scanner = $this->makeScanner();
-
-        $indexPath = $scanner->fetchPreviousIndex(
-            $endpoint,
-            $this->scratchDir(),
-            function (string $phase, array $detail): void {
-                $this->onPhaseProgress($phase, $detail);
-            }
-        );
-
-        if ($indexPath === null) {
-            $subState['_auto_base']       = true;
-            $subState['_is_incremental']  = false;
-            $subState['_fallback_reason'] = 'file_index fetch failed or returned 204';
-            return $subState;
-        }
-
-        $subState['_auto_base']          = false;
-        $subState['_is_incremental']     = true;
-        $subState['_prev_index_path']    = $indexPath;
-        return $subState;
-    }
-
-    /**
-     * PHASE_SCAN_FILES — walk WP_CONTENT_DIR, classify files against the
-     * previous index, write plaintext chunks for changed/new files.
-     *
-     * @param array<string,mixed> $subState
-     * @return array<string,mixed> Updated sub_state with scan result.
-     */
-    private function runScanFiles(array $subState): array
-    {
-        $this->ensureScratchDir();
-        $this->saveTaskState(self::PHASE_SCAN_FILES, $subState);
-
-        $indexPath = (string) ($subState['_prev_index_path'] ?? '');
-        $scanner   = $this->makeScanner();
-
-        // FIX B: enable inline small-file upload during the scan pass. Single-
-        // chunk files are presigned + PUT straight from the read buffer (no
-        // scratch round-trip); the hashes uploaded this way come back in the
-        // scan result under 'uploaded_hashes' and the upload phase skips them.
-        $scanner->enableInlineUpload(
-            (string) $this->params['presign_endpoint'],
-            $this->snapshotId()
-        );
-
-        // Build prev-index map line-by-line.
-        $prevIndex = $scanner->buildPrevIndexMap($indexPath);
-        if ($prevIndex === null) {
-            // Soft cap triggered — AUTO-BASE.
-            $this->postProgress(self::PHASE_INCREMENTAL_FALLBACK, [
-                'reason' => 'prev index exceeds 2,000,000 lines (soft cap)',
-            ]);
-            $subState['_auto_base']       = true;
-            $subState['_is_incremental']  = false;
-            $subState['_fallback_reason'] = 'prev index soft cap exceeded';
-            // Fast-path to dumping_db as a full base.
-            return $subState;
-        }
-
-        $scanResume = isset($subState['scan']) && is_array($subState['scan']) ? $subState['scan'] : [];
-
-        // FIX 3 (instrumentation): measure wall-clock time for the scan pass.
-        $scanStart  = microtime(true);
-
-        $scanResult = $scanner->scanFiles(
-            $prevIndex,
-            $this->scratchDir(),
-            $scanResume,
-            function (string $phase, array $detail): void {
-                $this->onPhaseProgress($phase, $detail);
-            }
-        );
-
-        $scanElapsed = microtime(true) - $scanStart;
-
-        // Accumulate scan-phase counters in $incrTimings (FIX 3).
-        $inlineUploaded = isset($scanResult['uploaded_hashes']) && is_array($scanResult['uploaded_hashes'])
-            ? count($scanResult['uploaded_hashes'])
-            : 0;
-        $this->incrTimings['scan_s']           = ($this->incrTimings['scan_s'] ?? 0.0) + $scanElapsed;
-        $this->incrTimings['files_scanned']    = (int) ($scanResult['files_scanned'] ?? 0);
-        $this->incrTimings['files_changed']    = (int) ($scanResult['files_changed'] ?? 0);
-        $this->incrTimings['bytes_read']       = (int) ($scanResult['bytes_to_upload'] ?? 0);
-        $this->incrTimings['inline_uploads']   = $inlineUploaded;
-
-        $subState['scan']            = $scanResult;
-        $subState['_is_incremental'] = true;  // Confirm incremental path is live.
-        return $subState;
-    }
-
-    /**
-     * PHASE_UPLOAD_INCREMENTAL — upload per-file plaintext chunks for
-     * changed/new files, then submit the IncrementalSubmitManifestRequest.
-     *
-     * DB dump entries are assembled from sub_state.db (same as the full-backup
-     * pipeline) and included in the manifest submission.
-     *
-     * @param array<string,mixed> $subState
-     * @return array<string,mixed> Updated sub_state.
-     */
-    private function runUploadIncremental(array $subState): array
-    {
-        $this->ensureScratchDir();
-        $this->saveTaskState(self::PHASE_UPLOAD_INCREMENTAL, $subState);
-
-        $scanResult  = isset($subState['scan']) && is_array($subState['scan']) ? $subState['scan'] : [];
-        $changedFiles = isset($scanResult['changed']) && is_array($scanResult['changed']) ? array_values($scanResult['changed']) : [];
-        $tombstones   = isset($scanResult['tombstones']) && is_array($scanResult['tombstones']) ? array_values($scanResult['tombstones']) : [];
-        $filesScanned = (int) ($scanResult['files_scanned'] ?? 0);
-        $filesChanged = (int) ($scanResult['files_changed'] ?? 0);
-        $filesDeleted = (int) ($scanResult['files_deleted'] ?? 0);
-
-        $pipeline = new IncrementalEncryptAndUpload(
-            new \WPMgr\Agent\Support\BackupTransport(new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore())),
-            $this->snapshotId(),
-            (string) $this->params['age_recipient'],
-            (string) $this->params['presign_endpoint'],
-            (string) $this->params['manifest_endpoint'],
-            (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024)
-        );
-
-        // Upload changed-file chunks. Seed the resume cursor with the hashes the
-        // scanner already PUT inline (FIX B) so the upload phase neither re-PUTs
-        // them nor expects them on scratch.
-        $uploadResume = isset($subState['incr_upload']) && is_array($subState['incr_upload']) ? $subState['incr_upload'] : [];
-        $scanUploaded = isset($scanResult['uploaded_hashes']) && is_array($scanResult['uploaded_hashes'])
-            ? array_values(array_filter($scanResult['uploaded_hashes'], 'is_string'))
-            : [];
-        if ($scanUploaded !== []) {
-            $existing = isset($uploadResume['uploaded_hashes']) && is_array($uploadResume['uploaded_hashes'])
-                ? $uploadResume['uploaded_hashes']
-                : [];
-            $uploadResume['uploaded_hashes'] = array_values(array_unique(array_merge($existing, $scanUploaded)));
-        }
-
-        // FIX 3 (instrumentation): measure wall-clock time for the upload pass.
-        $uploadStart = microtime(true);
-
-        $uploadCursor = $pipeline->uploadChunks(
-            $changedFiles,
-            $this->scratchDir(),
-            $uploadResume,
-            function (string $phase, array $detail): void {
-                $this->onPhaseProgress($phase, $detail);
-            }
-        );
-
-        $uploadElapsed = microtime(true) - $uploadStart;
-
-        $subState['incr_upload'] = $uploadCursor;
-        $this->saveTaskState(self::PHASE_UPLOAD_INCREMENTAL, $subState);
-
-        $bytesUploaded = (int) ($uploadCursor['bytes_uploaded'] ?? 0);
-
-        // Build DB entries from the DB dump (same as assembleArtifacts but only
-        // the DB component).
-        $dbEntries = $this->assembleIncrementalDbEntries($subState);
-
-        // Submit the incremental manifest.
-        $pipeline->submitIncrementalManifest(
-            $changedFiles,
-            $tombstones,
-            $dbEntries,
-            $filesScanned,
-            $filesChanged,
-            $filesDeleted,
-            $bytesUploaded,
-            function (string $phase, array $detail): void {
-                $this->onPhaseProgress($phase, $detail);
-            }
-        );
-
-        // FIX 3 (instrumentation): accumulate upload-phase counters and emit the
-        // end-of-run timing summary two ways — (1) a single error_log line for
-        // server-side grep, and (2) a 'timings' object in the final progress
-        // payload (non-breaking optional field; the Go CP ignores unknown keys).
-        $chunksTotal    = (int) ($uploadCursor['chunks_total'] ?? 0);
-        $putCount       = (int) ($uploadCursor['chunks_put'] ?? 0);
-        $inlineUploads  = (int) ($this->incrTimings['inline_uploads'] ?? 0);
-        // Chunks written to scratch = total chunks for changed files minus those
-        // PUT inline during the scan pass (inline path never touches scratch).
-        $scratchWrites  = max(0, $chunksTotal - $inlineUploads);
-
-        $this->incrTimings['upload_s']           = ($this->incrTimings['upload_s'] ?? 0.0) + $uploadElapsed;
-        $this->incrTimings['chunks_created']     = $chunksTotal;
-        $this->incrTimings['scratch_chunk_writes'] = $scratchWrites;
-        $this->incrTimings['presign_calls']      = 1; // One presign round-trip in the upload phase.
-        $this->incrTimings['put_count']          = $putCount;
-        $this->incrTimings['bytes_uploaded']     = $bytesUploaded;
-
-        $t = $this->incrTimings;
-        error_log(sprintf(
-            '[wpmgr-agent] incr timings: scan=%.2fs upload=%.2fs files=%d changed=%d chunks=%d scratch_writes=%d inline=%d puts=%d bytes_up=%d',
-            (float) ($t['scan_s'] ?? 0.0),
-            (float) ($t['upload_s'] ?? 0.0),
-            (int)   ($t['files_scanned'] ?? 0),
-            (int)   ($t['files_changed'] ?? 0),
-            (int)   ($t['chunks_created'] ?? 0),
-            (int)   ($t['scratch_chunk_writes'] ?? 0),
-            (int)   ($t['inline_uploads'] ?? 0),
-            (int)   ($t['put_count'] ?? 0),
-            (int)   ($t['bytes_uploaded'] ?? 0)
-        ));
-
-        // Emit the timings object in a progress payload so it lands in the CP
-        // event log. 'timings' is an optional unknown field; the Go side ignores
-        // it without a schema change.
-        $this->postProgress('uploading_incremental', [
-            'done'    => true,
-            'timings' => [
-                'scan_s'               => round((float) ($t['scan_s'] ?? 0.0), 3),
-                'upload_s'             => round((float) ($t['upload_s'] ?? 0.0), 3),
-                'files_scanned'        => (int) ($t['files_scanned'] ?? 0),
-                'files_changed'        => (int) ($t['files_changed'] ?? 0),
-                'chunks_created'       => (int) ($t['chunks_created'] ?? 0),
-                'bytes_read'           => (int) ($t['bytes_read'] ?? 0),
-                'scratch_chunk_writes' => (int) ($t['scratch_chunk_writes'] ?? 0),
-                'inline_uploads'       => (int) ($t['inline_uploads'] ?? 0),
-                'presign_calls'        => (int) ($t['presign_calls'] ?? 0),
-                'put_count'            => (int) ($t['put_count'] ?? 0),
-                'bytes_uploaded'       => (int) ($t['bytes_uploaded'] ?? 0),
-            ],
-        ]);
-
-        $subState['incr_manifest_done'] = true;
-        return $subState;
-    }
-
-    /**
-     * Build the DB manifest entries for an incremental manifest submission.
-     * These use the existing ManifestEntry shape (entry_kind='db') and are
-     * assembled from sub_state.db + the encrypted DB chunk files on disk.
-     *
-     * In the incremental pipeline, the DB dump is still fully encrypted and
-     * uploaded via the standard EncryptAndUpload pass (in PHASE_DUMPING_DB +
-     * PHASE_UPLOAD_INCREMENTAL). We re-run the encrypt pass over the DB
-     * artifact here to get the chunk list.
-     *
-     * @param array<string,mixed> $subState
-     * @return list<array<string,mixed>>
-     */
-    private function assembleIncrementalDbEntries(array $subState): array
-    {
-        // If a prior pass already prepared db_entries in subState, reuse them.
-        if (!empty($subState['incr_db_entries']) && is_array($subState['incr_db_entries'])) {
-            return array_values($subState['incr_db_entries']);
-        }
-
-        $db      = (isset($subState['db']) && is_array($subState['db'])) ? $subState['db'] : [];
-        $dbPath  = isset($db['output_path']) && is_string($db['output_path']) ? $db['output_path'] : '';
-
-        if ($dbPath === '' || !is_file($dbPath)) {
-            return [];
-        }
-
-        // Chunk the DB dump into plaintext BLAKE3-addressed entries.
-        $chunkBytes = (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024);
-        $chunkList  = [];
-        $handle     = @fopen($dbPath, 'rb');
-        if ($handle === false) {
-            return [];
-        }
-        try {
-            while (!feof($handle)) {
-                $plain = fread($handle, $chunkBytes);
-                if ($plain === false || $plain === '') {
-                    break;
-                }
-                $hash      = \WPMgr\Agent\Support\Blake3::hashHex($plain);
-                $size      = strlen($plain);
-                $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-                if (!is_file($chunkPath)) {
-                    @file_put_contents($chunkPath, $plain, LOCK_EX);
-                }
-                $plain       = '';
-                $chunkList[] = ['blake3' => $hash, 'size' => $size];
-            }
-        } finally {
-            fclose($handle);
-        }
-
-        // Upload DB chunks via presign dedup.
-        $allHashes = array_column($chunkList, 'blake3');
-        if (!empty($allHashes)) {
-            try {
-                $transport = new \WPMgr\Agent\Support\BackupTransport(
-                    new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore())
-                );
-                $uploads = $transport->presignChunks(
-                    (string) $this->params['presign_endpoint'],
-                    $this->snapshotId(),
-                    $allHashes
-                );
-
-                // FIX D: PUT the missing DB chunks concurrently (serial fallback
-                // on hosts without ext-curl). Non-fatal: a failed PUT just leaves
-                // the scratch file in place; the manifest still carries the chunk
-                // list, preserving the prior DB-restore behavior.
-                $toPut = [];
-                foreach ($uploads as $hash => $url) {
-                    if (!is_string($hash) || !is_string($url) || $url === '') {
-                        continue;
-                    }
-                    $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-                    if (is_file($chunkPath)) {
-                        $toPut[$hash] = $url;
-                    }
-                }
-                if ($toPut !== []) {
-                    $scratch = $this->scratchDir();
-                    $results = $transport->putChunksMulti(
-                        $toPut,
-                        static function (string $hash) use ($scratch) {
-                            $path  = $scratch . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-                            $bytes = @file_get_contents($path);
-                            return $bytes === false ? false : $bytes;
-                        }
-                    );
-                    foreach ($toPut as $hash => $_url) {
-                        if (!empty($results[$hash])) {
-                            @unlink($scratch . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin');
-                        }
-                    }
-                }
-                // Unlink dedup hits.
-                foreach ($allHashes as $hash) {
-                    if (!isset($uploads[$hash])) {
-                        $chunkPath = $this->scratchDir() . DIRECTORY_SEPARATOR . 'chunks-' . $hash . '.bin';
-                        if (is_file($chunkPath)) {
-                            @unlink($chunkPath);
-                        }
-                    }
-                }
-            } catch (\Throwable $e) {
-                // Non-fatal — the manifest submit will still carry the chunk list.
-                error_log('WPMgr TaskRunner: incremental DB chunk upload error: ' . $e->getMessage());
-            }
-        }
-
-        $dbSize = array_sum(array_column($chunkList, 'size'));
-
-        return [[
-            'path'       => 'database.sql.gz',
-            'entry_kind' => 'db',
-            'table_name' => '',
-            'mode'       => 0,
-            'size'       => $dbSize,
-            'chunks'     => $chunkList,
-        ]];
-    }
-
-    // ==================================================================
     // Incremental helpers
     // ==================================================================
 
@@ -968,28 +696,16 @@ final class TaskRunner
         return !empty($this->params['is_incremental']);
     }
 
-    /** file_index_endpoint from params (empty string if not incremental). */
-    private function fileIndexEndpoint(): string
-    {
-        return isset($this->params['file_index_endpoint']) && is_string($this->params['file_index_endpoint'])
-            ? $this->params['file_index_endpoint']
-            : '';
-    }
-
-    /** Build an IncrementalScanner using current params. */
-    private function makeScanner(): IncrementalScanner
-    {
-        return new IncrementalScanner(
-            $this->wpContentPath(),
-            (int) ($this->params['chunk_bytes'] ?? 4 * 1024 * 1024),
-            new \WPMgr\Agent\Support\BackupTransport(new \WPMgr\Agent\Signer(new \WPMgr\Agent\Keystore()))
-        );
-    }
-
     /**
-     * Build the ordered artifact list (DB dump + files parts) from completed
-     * sub_state. Order matters: the manifest entries reflect this order, and
-     * the CP-side reconstructor expects DB before files.
+     * Build the ordered artifact list (DB dump + files parts + files.list +
+     * optional tombstones.list) from completed sub_state. Order matters: the
+     * manifest entries reflect this order. DB is listed before zip parts by
+     * convention; files.list and tombstones.list trail the zip parts so the
+     * restore overlay processes them after the archive content.
+     *
+     * ADR-051: every backup (full and incremental alike) emits a files.list
+     * artifact. An incremental additionally emits a tombstones.list when
+     * any files were deleted from the parent snapshot.
      *
      * @param array<string,mixed> $subState Current sub_state.
      * @return list<array{path:string,logical:string}>
@@ -1024,7 +740,153 @@ final class TaskRunner
             }
         }
 
+        // ADR-051: files.list sidecar — emitted by FilesArchiver alongside
+        // every archive run (full and incremental). Uploaded as a normal
+        // manifest entry (entry_kind=files-list) so the CP can presign it
+        // for the next increment's PrevFilesListChunks.
+        $filesListPath = $this->scratchDir() . DIRECTORY_SEPARATOR . FilesArchiver::FILES_LIST_NAME;
+        if (is_file($filesListPath)) {
+            $artifacts[] = [
+                'path'    => $filesListPath,
+                'logical' => FilesArchiver::FILES_LIST_NAME,
+            ];
+        }
+
+        // ADR-051: tombstones are NOT shipped as a chunked `tombstones.list`
+        // artifact. They are emitted as per-path manifest entries
+        // (entry_kind=tombstones, mode=Delete, empty chunk list) appended to
+        // the manifest after the encrypt pass — see tombstoneManifestEntries().
+        // The CP restore overlay reads them via ListManifest with no chunk
+        // fetch, so the bytes-on-the-wire `tombstones.list` is obsolete.
+
         return $artifacts;
+    }
+
+    /**
+     * ADR-051: append per-path tombstone manifest entries to the encrypt-pass
+     * entries list. A tombstone is the EXACT shape the CP restore overlay
+     * reads via ListManifest:
+     *   - entry_kind = 'tombstones' (self::ENTRY_KIND_TOMBSTONES)
+     *   - path       = the deleted relpath
+     *   - mode       = TOMBSTONE_MODE_DELETE (the agent never emits Readd; a
+     *                  re-added file is simply re-packed into a part)
+     *   - chunks     = [] (empty — no chunk fetch on restore)
+     *
+     * Deleted relpaths are read from the on-disk tombstones.list file whose
+     * path is stored in sub_state.files.tombstones_file. This keeps sub_state
+     * small even when thousands of files are deleted (a deletion-heavy
+     * increment adds only two scalar fields to sub_state rather than a
+     * multi-KB array). Backward-compat: if tombstones_file is absent but an
+     * inline tombstones array is present (unit-test or carry-forward scenario),
+     * the inline array is used instead.
+     *
+     * A path that fails basic sanitization (absolute, '..'/'.' segment, NUL
+     * byte) is dropped here as defense-in-depth — the CP re-sanitizes and the
+     * agent restore re-checks.
+     *
+     * Idempotent on watchdog re-entry: any tombstone entries already present in
+     * $entries (matched by path) are not duplicated.
+     *
+     * @param list<array<string,mixed>> $entries  Encrypt-pass manifest entries.
+     * @param array<string,mixed>       $subState Current sub_state.
+     * @return list<array<string,mixed>> Entries with tombstone entries appended.
+     */
+    private function appendTombstoneEntries(array $entries, array $subState): array
+    {
+        $files = (isset($subState['files']) && is_array($subState['files'])) ? $subState['files'] : [];
+
+        // Existing tombstone paths (idempotent re-entry guard).
+        $already = [];
+        foreach ($entries as $e) {
+            if (is_array($e) && ($e['entry_kind'] ?? '') === self::ENTRY_KIND_TOMBSTONES) {
+                $already[(string) ($e['path'] ?? '')] = true;
+            }
+        }
+
+        // Primary: read from the on-disk tombstones.list file (flat, one per line).
+        // Written incrementally by FilesArchiver — never loaded into a PHP array
+        // at archiving time, so deletion of a large plugin tree costs only a
+        // constant amount of RAM during the archiving phase.
+        $tombstonesFile = isset($files['tombstones_file']) && is_string($files['tombstones_file'])
+            ? $files['tombstones_file']
+            : '';
+
+        if ($tombstonesFile !== '' && is_file($tombstonesFile)) {
+            $fh = @fopen($tombstonesFile, 'rb');
+            if ($fh !== false) {
+                while (($line = fgets($fh)) !== false) {
+                    $rel = rtrim($line, "\r\n");
+                    if ($rel === '' || isset($already[$rel])) {
+                        continue;
+                    }
+                    if (!self::isSafeTombstonePath($rel)) {
+                        continue;
+                    }
+                    $entries[] = [
+                        'path'       => $rel,
+                        'entry_kind' => self::ENTRY_KIND_TOMBSTONES,
+                        'table_name' => '',
+                        'mode'       => self::TOMBSTONE_MODE_DELETE,
+                        'size'       => 0,
+                        'chunks'     => [],
+                    ];
+                    $already[$rel] = true;
+                }
+                fclose($fh);
+            }
+            return $entries;
+        }
+
+        // Backward-compat fallback: inline tombstones array (unit tests / carry-forward
+        // from a sub_state written before the on-disk-only model was introduced).
+        $tombstones = (isset($files['tombstones']) && is_array($files['tombstones'])) ? $files['tombstones'] : [];
+        foreach ($tombstones as $rel) {
+            if (!is_string($rel) || $rel === '') {
+                continue;
+            }
+            if (isset($already[$rel])) {
+                continue;
+            }
+            if (!self::isSafeTombstonePath($rel)) {
+                continue;
+            }
+            $entries[] = [
+                'path'       => $rel,
+                'entry_kind' => self::ENTRY_KIND_TOMBSTONES,
+                'table_name' => '',
+                'mode'       => self::TOMBSTONE_MODE_DELETE,
+                'size'       => 0,
+                'chunks'     => [],
+            ];
+            $already[$rel] = true;
+        }
+
+        return $entries;
+    }
+
+    /**
+     * Basic tombstone-path sanitization (defense-in-depth; the CP and the
+     * agent restore engine re-check). Rejects empty, absolute, NUL-bearing, and
+     * any path with a '..'/'.' segment.
+     */
+    private static function isSafeTombstonePath(string $p): bool
+    {
+        if ($p === '' || strpos($p, "\0") !== false) {
+            return false;
+        }
+        if ($p[0] === '/' || $p[0] === '\\') {
+            return false;
+        }
+        $parts = preg_split('#[/\\\\]+#', $p);
+        if ($parts === false) {
+            return false;
+        }
+        foreach ($parts as $part) {
+            if ($part === '..' || $part === '.') {
+                return false;
+            }
+        }
+        return true;
     }
 
     // ==================================================================
@@ -1061,10 +923,22 @@ final class TaskRunner
         if (isset($row['sub_state']) && is_string($row['sub_state']) && $row['sub_state'] !== '') {
             $decoded = json_decode($row['sub_state'], true);
             if (is_array($decoded)) {
-                // If the column holds a sidecar pointer (large cursor spilled to
-                // scratch to stay under @@max_allowed_packet), rehydrate the full
-                // sub_state from the sidecar file.
-                $sub = $this->rehydrateSubState($decoded);
+                // Sidecar rehydration: when the DB column holds a pointer
+                // (written by saveTaskState when sub_state exceeded the
+                // SUBSTATE_SIDECAR_THRESHOLD), read the full cursor from disk.
+                if (!empty($decoded[self::SUBSTATE_SIDECAR_KEY]) && isset($decoded['file']) && is_string($decoded['file'])) {
+                    $sidecarPath = (string) $decoded['file'];
+                    if (is_file($sidecarPath)) {
+                        $raw = @file_get_contents($sidecarPath);
+                        if ($raw !== false && $raw !== '') {
+                            $full = json_decode($raw, true);
+                            if (is_array($full)) {
+                                $decoded = $full;
+                            }
+                        }
+                    }
+                }
+                $sub = $decoded;
             }
         }
 
@@ -1116,15 +990,64 @@ final class TaskRunner
     }
 
     /**
+     * Threshold (bytes): encoded sub_state larger than this is spilled to a
+     * scratch sidecar file instead of being stored inline in the DB column.
+     * Chosen to be well under MySQL's default @@max_allowed_packet of 1 MiB
+     * while allowing many thousands of tombstone entries stored inline even
+     * before the sidecar triggers. 48 KiB is the proven value from the
+     * 0.21.2 safety net.
+     */
+    private const SUBSTATE_SIDECAR_THRESHOLD = 48 * 1024; // 48 KiB
+
+    /**
+     * Filename used for the sub_state sidecar inside the scratch dir.
+     * Written as `<scratch_dir>/task_substate.json` using atomic
+     * tempfile + rename so a crash mid-write never leaves a half-written
+     * cursor on disk.
+     */
+    private const SUBSTATE_SIDECAR_NAME = 'task_substate.json';
+
+    /**
+     * Marker key stored in the DB sub_state column when the full cursor has
+     * been spilled to the sidecar file. loadTask() reads this key and
+     * rehydrates from disk.
+     */
+    private const SUBSTATE_SIDECAR_KEY = '_sidecar';
+
+    /**
      * Persist phase + sub_state + bump last_progress_at. Called on every
      * phase boundary AND immediately before each long-running subprocess
      * (DbDumper / FilesArchiver / EncryptAndUpload) so the watchdog has a
      * recent timestamp even mid-phase.
      *
+     * Sidecar-spill: when the JSON-encoded sub_state exceeds
+     * SUBSTATE_SIDECAR_THRESHOLD bytes, the FULL cursor is written to
+     * `<scratch_dir>/task_substate.json` (atomic temp+rename) and the DB
+     * column holds only a small pointer
+     * `{"_sidecar":true,"file":"<absolute-path>"}` plus the phase and
+     * last_progress_at. loadTask() detects the pointer and rehydrates.
+     * cleanupOnCompleted() unlinks the sidecar.
+     *
+     * This ensures $wpdb->update() can never fail silently due to
+     * @@max_allowed_packet overflow regardless of how many tombstones or
+     * scan-cursor entries sub_state carries.
+     *
+     * Throw-on-false: when $wpdb->update() returns false (not false-because-
+     * no-change, which returns 0) the caller is alerted so the watchdog
+     * retries instead of silently completing with a stale cursor. The check
+     * is done AFTER the sidecar write to avoid a false-positive on the
+     * pointer row (the pointer is tiny and should never fail).
+     *
      * @param string              $phase    New phase.
      * @param array<string,mixed> $subState New sub_state to persist.
+     * @throws \RuntimeException When the DB write fails AND we cannot fall
+     *                           back to the sidecar.
+     *
+     * `protected` is a deliberate test seam: the ADR-051 prevMap-pipeline e2e
+     * overrides this to a no-op so runArchivingFiles can be driven without a
+     * live $wpdb.
      */
-    private function saveTaskState(string $phase, array $subState): void
+    protected function saveTaskState(string $phase, array $subState): void
     {
         global $wpdb;
         if (!is_object($wpdb)) {
@@ -1135,50 +1058,48 @@ final class TaskRunner
             return;
         }
 
-        $now            = time();
-        // JSON_INVALID_UTF8_SUBSTITUTE: a real WP site can hold file paths with
-        // invalid UTF-8 bytes (e.g. latin1 filenames). Plain json_encode() returns
-        // false on those, and the old `?: '{}'` fallback silently WIPED the entire
-        // sub_state — including the just-computed scan.changed[] cursor — so a
-        // watchdog re-entry would reload '{}' and submit an incremental manifest
-        // with ZERO files_entries (a useless DB-only snapshot). Substituting the
-        // bad bytes keeps the cursor intact across re-entries.
-        $encoded        = json_encode($subState, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
+        $now     = time();
+        $encoded = json_encode($subState);
         if ($encoded === false || $encoded === '') {
-            // Last-resort: never persist '{}' OVER a non-empty sub_state (that
-            // would drop the resume cursor). Skip the write so the watchdog re-enters
-            // from the last good state instead of a wiped one.
+            // Last-resort: skip the write so the watchdog re-enters from the
+            // last good state. json_encode should never fail for the small
+            // part-cursor state we persist; if it does, logging is better
+            // than wiping the prior cursor with '{}'.
             error_log('WPMgr TaskRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
             return;
         }
 
-        // SIDECAR SPILL (0-files-base fix): a real incremental base over thousands
-        // of changed files serializes the scan cursor to hundreds of KB — past
-        // @@max_allowed_packet on many hosts. An over-packet UPDATE fails silently
-        // (returns false) and the row keeps its PRIOR value, so a watchdog re-entry
-        // reloads a cursor-less row and submits a 0-files manifest. To keep the DB
-        // write always within the packet limit, when the encoded state is large we
-        // write the FULL cursor to a scratch sidecar file and store only a tiny
-        // pointer (+ the small inline keys the watchdog needs) in the column.
-        $columnValue = $encoded;
-        if (strlen($encoded) > self::SUBSTATE_INLINE_MAX_BYTES) {
-            $pointer = $this->spillSubStateToSidecar($subState, $encoded);
-            if ($pointer !== null) {
-                $columnValue = $pointer;
-            }
-            // If the sidecar write failed, $columnValue stays = $encoded and we
-            // fall through to the update-return check below, which now FAILS
-            // LOUDLY instead of silently dropping the cursor.
-        }
-
         $this->lastDbUpdate = $now;
+
+        // ---- Sidecar-spill: keep the DB column small. ----
+        // If the encoded cursor exceeds the threshold, write it to the scratch
+        // sidecar and store only a pointer in the DB. This prevents
+        // @@max_allowed_packet silent-write failures on any sub_state size.
+        $rowEncoded = $encoded;
+        $scratch    = $this->scratchDir();
+        if (strlen($encoded) > self::SUBSTATE_SIDECAR_THRESHOLD && $scratch !== '') {
+            $sidecarPath = $scratch . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_NAME;
+            $tmpPath     = $sidecarPath . '.tmp.' . getmypid();
+            $written     = @file_put_contents($tmpPath, $encoded);
+            if ($written !== false && $written === strlen($encoded)) {
+                @rename($tmpPath, $sidecarPath);
+                // DB column holds only the pointer; the full cursor is on disk.
+                $pointer    = json_encode([self::SUBSTATE_SIDECAR_KEY => true, 'file' => $sidecarPath]);
+                $rowEncoded = $pointer !== false ? $pointer : $encoded;
+            } else {
+                @unlink($tmpPath);
+                // Sidecar write failed — fall through to inline write (may
+                // hit the packet limit, but that will be caught by the
+                // throw-on-false below).
+            }
+        }
 
         /** @phpstan-ignore-next-line */
         $result = $wpdb->update(
             $table,
             [
                 'phase'            => $phase,
-                'sub_state'        => $columnValue,
+                'sub_state'        => $rowEncoded,
                 'last_progress_at' => $now,
             ],
             ['snapshot_id' => $this->snapshotId()],
@@ -1186,110 +1107,16 @@ final class TaskRunner
             ['%s']
         );
 
-        // HONOR THE RETURN VALUE. $wpdb->update() returns false on a DB error —
-        // most importantly an over-@@max_allowed_packet statement, which leaves
-        // the row holding its PRIOR (cursor-less) value. Silently ignoring this
-        // was the root cause of the 0-files base: the in-memory run continued,
-        // but the persisted row a watchdog later reloaded had no scan.changed[].
-        // After the sidecar spill the column value is tiny, so a false here is a
-        // genuine DB fault — surface it so the run is retried rather than
-        // completing with a stale/empty cursor.
+        // $wpdb->update() returns int rows-affected on success, false on
+        // genuine failure (e.g. packet overflow, DB gone away). A 0 return
+        // means the row existed but the values were unchanged — that is NOT
+        // a failure. Throw on false so the watchdog retries rather than
+        // silently completing with a stale cursor.
         if ($result === false) {
             throw new \RuntimeException(
-                'TaskRunner: sub_state persist failed (wpdb->update returned false) for phase '
-                . $phase . ' — refusing to continue with an unpersisted cursor'
+                'TaskRunner: DB update failed for phase ' . $phase . ' (possible @@max_allowed_packet overflow or connection loss)'
             );
         }
-    }
-
-    /**
-     * Spill the full sub_state to a per-run scratch sidecar file and return a
-     * small DB-column pointer that references it. The pointer keeps the inline
-     * keys (params + control flags) the watchdog needs to rehydrate WITHOUT
-     * reading the sidecar, plus `_substate_sidecar` (path) and a length guard.
-     *
-     * @param array<string,mixed> $subState Full sub_state.
-     * @param string              $encoded  Already-encoded full sub_state (reused as the file body).
-     * @return string|null JSON pointer to store in the column, or null if the
-     *                     sidecar could not be written (caller keeps the inline
-     *                     encoding and lets the update-return guard catch a
-     *                     too-large write).
-     */
-    private function spillSubStateToSidecar(array $subState, string $encoded): ?string
-    {
-        $path = $this->subStateSidecarPath();
-        if ($path === '') {
-            return null;
-        }
-        // Atomic-ish write: write to a temp file then rename so a crash mid-write
-        // never leaves a truncated sidecar that would reload as a lost cursor.
-        $tmp = $path . '.' . getmypid() . '.tmp';
-        $written = @file_put_contents($tmp, $encoded, LOCK_EX);
-        if ($written === false || $written !== strlen($encoded)) {
-            @unlink($tmp);
-            return null;
-        }
-        if (!@rename($tmp, $path)) {
-            @unlink($tmp);
-            return null;
-        }
-
-        $pointer = ['_substate_sidecar' => $path, '_sidecar_len' => strlen($encoded)];
-        foreach (self::SUBSTATE_INLINE_KEYS as $k) {
-            if (array_key_exists($k, $subState)) {
-                $pointer[$k] = $subState[$k];
-            }
-        }
-        $encodedPointer = json_encode($pointer, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
-        if ($encodedPointer === false || $encodedPointer === '') {
-            return null;
-        }
-        return $encodedPointer;
-    }
-
-    /**
-     * Rehydrate a sub_state that may be a sidecar pointer. If the decoded column
-     * value carries `_substate_sidecar`, read the full cursor from that scratch
-     * file; otherwise return the decoded value unchanged.
-     *
-     * @param array<string,mixed> $decoded Decoded column value.
-     * @return array<string,mixed> Full sub_state.
-     */
-    private function rehydrateSubState(array $decoded): array
-    {
-        if (empty($decoded['_substate_sidecar']) || !is_string($decoded['_substate_sidecar'])) {
-            return $decoded;
-        }
-        $path = $decoded['_substate_sidecar'];
-        if (!is_file($path)) {
-            // Sidecar missing (scratch wiped). Fall back to the inline pointer
-            // keys — the watchdog can still rehydrate params and re-derive the
-            // scan from source on the next pass rather than submitting 0 files.
-            error_log('WPMgr TaskRunner: sub_state sidecar missing at ' . $path . ' — falling back to inline keys');
-            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
-            return $decoded;
-        }
-        $body = @file_get_contents($path);
-        if ($body === false || $body === '') {
-            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
-            return $decoded;
-        }
-        $full = json_decode($body, true);
-        if (!is_array($full)) {
-            unset($decoded['_substate_sidecar'], $decoded['_sidecar_len']);
-            return $decoded;
-        }
-        return $full;
-    }
-
-    /** Absolute path of the per-run sub_state sidecar, or '' if scratch unknown. */
-    private function subStateSidecarPath(): string
-    {
-        $dir = $this->scratchDir();
-        if ($dir === '') {
-            return '';
-        }
-        return $dir . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_BASENAME;
     }
 
     /**
@@ -1377,38 +1204,46 @@ final class TaskRunner
                 @unlink($f);
             }
         }
-        // ADR-048: also clean up plaintext incremental chunks (.bin).
         $plainChunks = @glob($scratch . DIRECTORY_SEPARATOR . 'chunks-*.bin');
         if (is_array($plainChunks)) {
             foreach ($plainChunks as $f) {
                 @unlink($f);
             }
         }
-        // ADR-048: remove the previous-index NDJSON scratch file.
-        $prevIndex = $scratch . DIRECTORY_SEPARATOR . 'prev_index.ndjson';
-        if (is_file($prevIndex)) {
-            @unlink($prevIndex);
+        // ADR-051: remove the prev_files.list scratch file assembled from
+        // PrevFilesListChunks during the archiving phase.
+        $prevList = $scratch . DIRECTORY_SEPARATOR . 'prev_files.list';
+        if (is_file($prevList)) {
+            @unlink($prevList);
         }
-        // Remove the sub_state sidecar (large-cursor spill) on completion.
-        $sidecar = $scratch . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_BASENAME;
+        // Sidecar sub_state file (written when sub_state exceeded the
+        // SUBSTATE_SIDECAR_THRESHOLD in saveTaskState). Must be unlinked
+        // after completion so no stale cursor survives to a future run.
+        $sidecar = $scratch . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_NAME;
         if (is_file($sidecar)) {
             @unlink($sidecar);
         }
 
-        // 2. Artifact files (DB dump + zip parts).
+        // 2. Artifact files (DB dump + zip parts + files.list + tombstones.list).
         $patterns = [
             $scratch . DIRECTORY_SEPARATOR . 'database.sql.gz',
             $scratch . DIRECTORY_SEPARATOR . 'paths.cache',
+            $scratch . DIRECTORY_SEPARATOR . FilesArchiver::FILES_LIST_NAME,
+            $scratch . DIRECTORY_SEPARATOR . FilesArchiver::TOMBSTONES_LIST_NAME,
         ];
         foreach ($patterns as $p) {
             if (is_file($p)) {
                 @unlink($p);
             }
         }
-        $zips = @glob($scratch . DIRECTORY_SEPARATOR . 'wp-content.part*.zip');
-        if (is_array($zips)) {
-            foreach ($zips as $f) {
-                @unlink($f);
+        foreach (['plugins', 'themes', 'uploads', 'wp-content'] as $comp) {
+            // Match BOTH the generation-namespaced `<comp>.gNNN.partMMM.zip`
+            // and the legacy `<comp>.partMMM.zip` part filenames.
+            $zips = @glob($scratch . DIRECTORY_SEPARATOR . $comp . '.*part*.zip');
+            if (is_array($zips)) {
+                foreach ($zips as $f) {
+                    @unlink($f);
+                }
             }
         }
 

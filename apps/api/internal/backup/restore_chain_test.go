@@ -130,6 +130,17 @@ func (r *chainFakeRepo) ListManifest(_ context.Context, _, snapshotID uuid.UUID)
 	return r.manifests[snapshotID], nil
 }
 
+// HasFilesList reports whether the snapshot has a files-list manifest entry
+// (ADR-051 archive-delta model detection).
+func (r *chainFakeRepo) HasFilesList(_ context.Context, _, snapshotID uuid.UUID) (bool, error) {
+	for _, e := range r.manifests[snapshotID] {
+		if e.EntryKind == EntryKindFilesList {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // ExistingChunkHashes returns the subset of hashes that are registered.
 func (r *chainFakeRepo) ExistingChunkHashes(_ context.Context, _ uuid.UUID, hashes []string) (map[string]Chunk, error) {
 	out := make(map[string]Chunk)

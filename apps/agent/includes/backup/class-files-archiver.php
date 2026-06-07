@@ -135,6 +135,24 @@ final class FilesArchiver
     /** Name of the on-disk path-discovery cache (created in $outDir). */
     private const PATHS_CACHE_NAME = 'paths.cache';
 
+    /**
+     * Name of the per-snapshot packed-files manifest emitted alongside every
+     * archive run (full and incremental alike). Format: one line per packed
+     * file — `<relpath>\t<size>\t<mtime>\n`.
+     *
+     * This is the ADR-051 "files.list" artifact: the agent emits it for free
+     * during buildPathCache (SplFileInfo already has size/mtime), then uploads
+     * it as a normal manifest entry so the next increment can diff against it.
+     */
+    public const FILES_LIST_NAME = 'files.list';
+
+    /**
+     * Name of the tombstones list emitted by an incremental run when files
+     * that existed in the parent snapshot have been deleted from disk.
+     * Format: one `<relpath>\n` per deleted path.
+     */
+    public const TOMBSTONES_LIST_NAME = 'tombstones.list';
+
     /** Absolute path of the source root (typically WP_CONTENT_DIR). */
     private string $sourceDir;
 
@@ -153,6 +171,17 @@ final class FilesArchiver
     private int $maxPartEntries;
 
     /**
+     * Snapshot generation this archive run belongs to. Part filenames are
+     * namespaced by it (`<component>.gNNN.partMMM.zip`) so the parts of two
+     * different generations in the same chain never share a name on the
+     * restore overlay (the agent restore stages every part into a flat
+     * `<scratch>/<logical_path>` keyed by logical name, so a collision would
+     * silently overwrite an earlier generation's carry-forward part). 0 for a
+     * base (gen-0) full backup; >0 for each increment.
+     */
+    private int $generation;
+
+    /**
      * @param string              $sourceDir Absolute path of the root to back up
      *                                       (typically WP_CONTENT_DIR).
      * @param list<string>        $excludes  Path-segment names to skip; matched
@@ -162,11 +191,16 @@ final class FilesArchiver
      * @param array<string,mixed> $opts      Optional overrides:
      *                                         max_part_bytes (int),
      *                                         max_part_entries (int).
+     * @param int                 $generation Snapshot generation (0 = base full,
+     *                                        >0 = increment). Namespaces the part
+     *                                        filenames so overlay restore never
+     *                                        collides part names across generations.
      * @throws \RuntimeException If ext-zip is unavailable or $sourceDir is
      *                           not a readable directory.
      */
-    public function __construct(string $sourceDir, array $excludes = [], array $opts = [])
+    public function __construct(string $sourceDir, array $excludes = [], array $opts = [], int $generation = 0)
     {
+        $this->generation = max(0, $generation);
         if (!class_exists(\ZipArchive::class)) {
             // V0 ships no PclZip fallback. Most managed WP hosts ship ext-zip;
             // we'll add a fallback if surveys show hosts without it. Failing
@@ -202,6 +236,50 @@ final class FilesArchiver
     }
 
     /**
+     * Parse a files.list flat file into a prev-map suitable for incremental
+     * change detection. The files.list format is `<relpath>\t<size>\t<mtime>\n`
+     * (one line per file, as emitted by buildPathCache). Lines that don't
+     * parse (e.g. truncated) are silently skipped.
+     *
+     * This is the ADR-051 "load prev once into PHP map" step. The caller
+     * supplies the path to the parent snapshot's files.list (fetched via
+     * PrevFilesListChunks presigned chunks and assembled to a local scratch
+     * file by TaskRunner before calling archive()). Memory cost ≈ a few MB
+     * for 100 k files; never persisted to sub_state.
+     *
+     * @param string $filesListPath Absolute path to the files.list scratch file.
+     * @return array<string,array{size:int,mtime:int}> Map keyed by relpath.
+     */
+    public static function loadPrevMap(string $filesListPath): array
+    {
+        $map = [];
+        if (!is_file($filesListPath)) {
+            return $map;
+        }
+        $handle = @fopen($filesListPath, 'rb');
+        if ($handle === false) {
+            return $map;
+        }
+        while (($line = fgets($handle)) !== false) {
+            $line = rtrim($line, "\r\n");
+            if ($line === '') {
+                continue;
+            }
+            $parts = explode("\t", $line, 3);
+            if (count($parts) !== 3) {
+                continue;
+            }
+            [$rel, $size, $mtime] = $parts;
+            if ($rel === '') {
+                continue;
+            }
+            $map[$rel] = ['size' => (int) $size, 'mtime' => (int) $mtime];
+        }
+        fclose($handle);
+        return $map;
+    }
+
+    /**
      * Walk the source dir and pack into per-component rotated part files
      * inside $outDir. Resumable: if $resume carries cursors from a prior
      * call, picks up where it left off.
@@ -210,24 +288,32 @@ final class FilesArchiver
      * component) AND a parallel list of per-part component kinds so the
      * caller can tag the manifest entries.
      *
-     * @param string              $outDir   Absolute scratch dir for the part
-     *                                      archives (created if missing).
-     * @param array<string,mixed> $resume   Empty for a fresh run; else the
-     *                                      cursor returned by a prior call.
-     * @param callable            $progress function(string $phase, array $detail): void.
-     *                                      $phase is always 'archiving_files'.
-     *                                      Per-tick $detail keys: files_done,
-     *                                      files_total, parts_done,
-     *                                      bytes_written, current_file. On
-     *                                      completion: done=true, parts,
-     *                                      part_kinds, files_total,
-     *                                      bytes_written.
+     * ADR-051 incremental mode: when $prevMap is non-null, only files that
+     * are NEW or CHANGED (by mtime/size) relative to the previous snapshot
+     * are packed. The files.list sidecar is always written (full picture of
+     * all packed files). Tombstones are returned in result['tombstones'].
+     *
+     * @param string                                          $outDir   Absolute scratch dir for the part
+     *                                                                  archives (created if missing).
+     * @param array<string,mixed>                             $resume   Empty for a fresh run; else the
+     *                                                                  cursor returned by a prior call.
+     * @param callable                                        $progress function(string $phase, array $detail): void.
+     *                                                                  $phase is always 'archiving_files'.
+     *                                                                  Per-tick $detail keys: files_done,
+     *                                                                  files_total, parts_done,
+     *                                                                  bytes_written, current_file. On
+     *                                                                  completion: done=true, parts,
+     *                                                                  part_kinds, files_total,
+     *                                                                  bytes_written.
+     * @param array<string,array{size:int,mtime:int}>|null   $prevMap  Previous-snapshot file map for
+     *                                                                  incremental change detection (ADR-051).
+     *                                                                  null = full-backup mode.
      * @return array<string,mixed> On completion: `done: true` + parts list +
-     *                              parallel `part_kinds` list.
+     *                              parallel `part_kinds` list + optional `tombstones` list.
      *                              Otherwise the cursor for the next call.
      * @throws \RuntimeException On unrecoverable error.
      */
-    public function archive(string $outDir, array $resume, callable $progress): array
+    public function archive(string $outDir, array $resume, callable $progress, ?array $prevMap = null): array
     {
         // Lift caller-imposed time/abort guards. Watchdog handles
         // stall recovery; we want this loop to run as long as the SAPI
@@ -251,9 +337,25 @@ final class FilesArchiver
             : $outDir . DIRECTORY_SEPARATOR . self::PATHS_CACHE_NAME;
 
         $totalFiles = isset($resume['total_files']) ? (int) $resume['total_files'] : 0;
+        // ADR-051 instrumentation: carry-forward count (unchanged files skipped from
+        // the archive). Survives a watchdog re-entry via the resume cursor so the
+        // final progress payload reports it even after a mid-walk crash recovery.
+        $filesCarried = isset($resume['files_carried']) ? (int) $resume['files_carried'] : 0;
+        // ADR-051 instrumentation: prevMap size (entries parsed from the parent's
+        // files.list). prevMap===null => full mode; [] => base/empty signal.
+        $prevMapSize  = is_array($prevMap) ? count($prevMap) : 0;
+        // Tombstone tracking: on-disk path + count (never an in-memory array).
+        $tombstonesFile  = isset($resume['tombstones_file']) && is_string($resume['tombstones_file'])
+            ? $resume['tombstones_file']
+            : '';
+        $tombstonesCount = isset($resume['tombstones_count']) ? (int) $resume['tombstones_count'] : 0;
         if (!is_file($cachePath) || $totalFiles === 0) {
             // Fresh discovery walk. Truncate any stale cache.
-            $totalFiles = $this->buildPathCache($cachePath);
+            $cacheResult     = $this->buildPathCache($cachePath, $prevMap);
+            $totalFiles      = $cacheResult['count'];
+            $filesCarried    = isset($cacheResult['carried']) ? (int) $cacheResult['carried'] : 0;
+            $tombstonesFile  = $cacheResult['tombstones_file'];
+            $tombstonesCount = $cacheResult['tombstones_count'];
         }
 
         // ----- Phase 1: pack. -----
@@ -308,7 +410,7 @@ final class FilesArchiver
                 // Cache shorter than the recorded cursor — should never
                 // happen, but recover by treating as already-done.
                 fclose($cacheHandle);
-                return $this->buildDoneResult($partsCompleted, $partKinds, $totalFiles, $bytesWritten, $progress);
+                return $this->buildDoneResult($partsCompleted, $partKinds, $totalFiles, $bytesWritten, $progress, null, $tombstonesFile, $tombstonesCount, $filesCarried, $prevMapSize, ($prevMap !== null));
             }
         }
 
@@ -425,7 +527,7 @@ final class FilesArchiver
         }
         unset($state);
 
-        return $this->buildDoneResult($partsCompleted, $partKinds, $totalFiles, $bytesWritten, $progress, $cachePath);
+        return $this->buildDoneResult($partsCompleted, $partKinds, $totalFiles, $bytesWritten, $progress, $cachePath, $tombstonesFile, $tombstonesCount, $filesCarried, $prevMapSize, ($prevMap !== null));
     }
 
     /**
@@ -509,19 +611,63 @@ final class FilesArchiver
      * Memory stays flat: we never accumulate the list in a PHP array; each
      * discovered path is fwrite'd line-by-line.
      *
-     * @param string $cachePath Absolute path of the cache file to create.
-     * @return int Total files discovered.
+     * ADR-051: Also emits a sibling `files.list` file (relpath TAB size TAB
+     * mtime, one line per packed file) so the next increment can diff against
+     * this snapshot without a CP file-index round-trip. The files.list is
+     * written to the SAME directory as $cachePath.
+     *
+     * When $prevMap is non-null (incremental mode) only CHANGED or NEW files
+     * are written to paths.cache. A file is CHANGED iff:
+     *   !isset($prevMap[$rel]) || (int)$size !== $prevMap[$rel]['size']
+     *                          || (int)$mtime > $prevMap[$rel]['mtime']
+     * Additionally, every $prevMap key NOT seen during the full-tree walk is
+     * written to an on-disk tombstones.list sidecar (one relpath per line) and
+     * returned as `tombstones_file` + `tombstones_count`. The tombstone list is
+     * NEVER accumulated in a PHP array — only the line count and the file path
+     * are returned so sub_state stays small regardless of deletion count.
+     *
+     * @param string                                     $cachePath Absolute path of the cache file to create.
+     * @param array<string,array{size:int,mtime:int}>|null $prevMap   Previous snapshot file map (incremental mode);
+     *                                                                null for a full-backup walk (include everything).
+     * @param string|null                                $filesListPath  Absolute path of the files.list file; defaults
+     *                                                                   to same dir as $cachePath.
+     * @param string|null                                $tombstonesPath Absolute path of tombstones.list; defaults to
+     *                                                                   same dir as $cachePath.
+     * @return array{count:int,tombstones_file:string,tombstones_count:int} Count of cache lines written + tombstone on-disk info.
      * @throws \RuntimeException On unwritable cache file or unreadable source.
      */
-    private function buildPathCache(string $cachePath): int
-    {
+    private function buildPathCache(
+        string $cachePath,
+        ?array $prevMap = null,
+        ?string $filesListPath = null,
+        ?string $tombstonesPath = null
+    ): array {
         $handle = @fopen($cachePath, 'wb');
         if ($handle === false) {
             throw new \RuntimeException('FilesArchiver: cannot create path cache: ' . $cachePath);
         }
 
+        // files.list sidecar — free to emit since SplFileInfo already has size+mtime.
+        $outDir        = dirname($cachePath);
+        $flPath        = $filesListPath ?? $outDir . DIRECTORY_SEPARATOR . self::FILES_LIST_NAME;
+        $flHandle      = @fopen($flPath, 'wb');
+        // Non-fatal if we can't open; the backup itself is unaffected.
+        if ($flHandle === false) {
+            $flHandle = null;
+        }
+
         $count   = 0;
+        $carried = 0; // ADR-051 instrumentation: unchanged files skipped (carry-forward).
         $srcLen  = strlen($this->sourceDir) + 1; // +1 for the separator
+        $seenRels = []; // Used for tombstone computation in incremental mode.
+
+        $isIncremental = ($prevMap !== null);
+
+        // Tombstones sidecar: written incrementally, never accumulated in RAM.
+        $tbPath   = $tombstonesPath ?? $outDir . DIRECTORY_SEPARATOR . self::TOMBSTONES_LIST_NAME;
+        $tbHandle = null; // Opened lazily on first deletion found.
+        $tombstonesCount = 0;
+        $tombstonesFile  = '';
 
         try {
             $iterator = new \RecursiveIteratorIterator(
@@ -533,6 +679,9 @@ final class FilesArchiver
             );
         } catch (\UnexpectedValueException $e) {
             fclose($handle);
+            if ($flHandle !== null) {
+                fclose($flHandle);
+            }
             throw new \RuntimeException('FilesArchiver: cannot iterate sourceDir: ' . $e->getMessage(), 0, $e);
         }
 
@@ -559,13 +708,75 @@ final class FilesArchiver
                 continue;
             }
 
+            $size  = (int) $info->getSize();
+            $mtime = (int) $info->getMTime();
+
+            if ($isIncremental) {
+                // Track every rel we encounter for tombstone diff.
+                $seenRels[$rel] = true;
+
+                // Gate: only include in the paths.cache if the file is new or changed.
+                $prev = $prevMap[$rel] ?? null;
+                if ($prev !== null && $prev['size'] === $size && $prev['mtime'] >= $mtime) {
+                    // Unchanged — skip from paths.cache, but still emit to files.list
+                    // so the new snapshot's files.list is a complete picture.
+                    if ($flHandle !== null) {
+                        fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n");
+                    }
+                    $carried++;
+                    continue;
+                }
+            }
+
             $component = $this->classifyComponent($rel);
             fwrite($handle, $component . "\t" . $rel . "\n");
+            if ($flHandle !== null) {
+                fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n");
+            }
             $count++;
         }
 
         fclose($handle);
-        return $count;
+        if ($flHandle !== null) {
+            fclose($flHandle);
+        }
+
+        // Compute tombstones: prev keys absent from the fresh full-tree walk.
+        // Written incrementally to tombstones.list on disk — never accumulated
+        // in a PHP array — so deletion of a plugin with thousands of files
+        // costs only a constant amount of RAM.
+        if ($isIncremental && $prevMap !== null) {
+            foreach ($prevMap as $prevRel => $_) {
+                if (isset($seenRels[$prevRel])) {
+                    continue;
+                }
+                // Lazy-open the tombstones file on first deletion found.
+                if ($tbHandle === null) {
+                    $tbHandle = @fopen($tbPath, 'wb');
+                    if ($tbHandle === false) {
+                        $tbHandle = null;
+                        // Non-fatal: tombstones.list write failure leaves
+                        // tombstones_count = 0; the sidecar-spill in
+                        // saveTaskState is still a correct fallback.
+                        continue;
+                    }
+                    $tombstonesFile = $tbPath;
+                }
+                fwrite($tbHandle, $prevRel . "\n");
+                $tombstonesCount++;
+            }
+
+            if ($tbHandle !== null) {
+                fclose($tbHandle);
+            }
+        }
+
+        return [
+            'count'            => $count,
+            'carried'          => $carried,
+            'tombstones_file'  => $tombstonesFile,
+            'tombstones_count' => $tombstonesCount,
+        ];
     }
 
     /**
@@ -621,8 +832,14 @@ final class FilesArchiver
 
     /**
      * Build the absolute path of part N for the given component (1-indexed,
-     * 3-digit zero-padded). Each component has its own filename prefix:
-     * `plugins.partNNN.zip`, `themes.partNNN.zip`, etc.
+     * 3-digit zero-padded). Each component has its own filename prefix and the
+     * part name is namespaced by the snapshot generation:
+     * `plugins.gNNN.partMMM.zip`, `themes.gNNN.partMMM.zip`, etc.
+     *
+     * The generation infix (`.gNNN.`) is what keeps gen-0 and gen-1 parts from
+     * colliding by name on the restore overlay — both used to emit
+     * `plugins.part001.zip`, so the later generation silently clobbered the
+     * earlier one's carry-forward part in the agent's flat staging map.
      *
      * @param string $outDir   Absolute scratch dir.
      * @param string $compName Component key (used as the filename prefix).
@@ -631,7 +848,61 @@ final class FilesArchiver
      */
     private function partPath(string $outDir, string $compName, int $n): string
     {
-        return $outDir . DIRECTORY_SEPARATOR . $compName . '.part' . str_pad((string) $n, 3, '0', STR_PAD_LEFT) . '.zip';
+        return $outDir . DIRECTORY_SEPARATOR . self::partName($compName, $this->generation, $n);
+    }
+
+    /**
+     * Build the generation-namespaced part filename for a component.
+     * Format: `<component>.gNNN.partMMM.zip` (both NNN and MMM 3-digit padded).
+     *
+     * @param string $compName Component key (filename prefix).
+     * @param int    $generation Snapshot generation (0 = base).
+     * @param int    $n        Part number (1-indexed).
+     * @return string
+     */
+    public static function partName(string $compName, int $generation, int $n): string
+    {
+        return $compName
+            . '.g' . str_pad((string) max(0, $generation), 3, '0', STR_PAD_LEFT)
+            . '.part' . str_pad((string) $n, 3, '0', STR_PAD_LEFT)
+            . '.zip';
+    }
+
+    /**
+     * Classify a part filename to its component kind, tolerant of the
+     * generation namespace infix. Matches `<component>.[gNNN.]partMMM.zip`
+     * for the four known components and returns the manifest entry_kind:
+     * 'plugin' | 'theme' | 'upload' | 'wp-content'. Returns '' when the name
+     * is not a recognised component part (caller falls back to the legacy
+     * 'file' kind for pre-namespace / pre-Track-5 part names).
+     *
+     * Both the backup-side manifest classifier (EncryptAndUpload::entryKind)
+     * and the restore-side artifact classifier (RestoreRunner) share this so
+     * the namespaced part name round-trips through one rule.
+     *
+     * @param string $logical Part filename (any case).
+     * @return string Component entry_kind, or '' if not a component part.
+     */
+    public static function componentKindFromPartName(string $logical): string
+    {
+        $lower = strtolower($logical);
+        if (substr($lower, -4) !== '.zip') {
+            return '';
+        }
+        // <component>.  (optionally  gNNN.)  partMMM.zip
+        foreach (self::COMPONENT_PARTITIONS as $compName => $cfg) {
+            $prefix = $compName . '.';
+            if (strncmp($lower, $prefix, strlen($prefix)) !== 0) {
+                continue;
+            }
+            $rest = substr($lower, strlen($prefix));
+            // Accept both the namespaced `gNNN.partMMM.zip` and the legacy
+            // `partMMM.zip` (so a mid-upgrade chain still classifies).
+            if (preg_match('/^(g\d+\.)?part\d+\.zip$/', $rest) === 1) {
+                return (string) $cfg['kind'];
+            }
+        }
+        return '';
     }
 
     /**
@@ -655,36 +926,70 @@ final class FilesArchiver
     /**
      * Build the terminal "done" sub-state and fire the final progress tick.
      *
-     * @param list<string> $parts          Closed part filenames.
-     * @param list<string> $partKinds      Parallel list of per-part entry_kinds.
-     * @param int          $totalFiles     Total file count from the cache.
-     * @param int          $bytesWritten   Sum of part sizes on disk.
-     * @param callable     $progress       Progress callback (see archive()).
-     * @param string|null  $cachePath      Cache file to clean up, if any.
+     * Tombstones are carried as an on-disk file path + count, NOT as an in-memory
+     * array. This keeps sub_state small regardless of deletion count (a deletion-
+     * heavy increment removing thousands of files adds only two scalar fields to
+     * sub_state instead of a multi-KB array).
+     *
+     * @param list<string> $parts              Closed part filenames.
+     * @param list<string> $partKinds          Parallel list of per-part entry_kinds.
+     * @param int          $totalFiles         Total file count from the cache.
+     * @param int          $bytesWritten       Sum of part sizes on disk.
+     * @param callable     $progress           Progress callback (see archive()).
+     * @param string|null  $cachePath          Cache file to clean up, if any.
+     * @param string       $tombstonesFile     Absolute path to the on-disk tombstones.list
+     *                                         ('' when no deletions).
+     * @param int          $tombstonesCount    Number of deleted paths written to $tombstonesFile.
      * @return array<string,mixed>
      */
-    private function buildDoneResult(array $parts, array $partKinds, int $totalFiles, int $bytesWritten, callable $progress, ?string $cachePath = null): array
-    {
+    private function buildDoneResult(
+        array $parts,
+        array $partKinds,
+        int $totalFiles,
+        int $bytesWritten,
+        callable $progress,
+        ?string $cachePath = null,
+        string $tombstonesFile = '',
+        int $tombstonesCount = 0,
+        int $filesCarried = 0,
+        int $prevMapSize = 0,
+        bool $incremental = false
+    ): array {
         // Cache file is no longer needed once we're done; leaving it under
         // the per-run scratch dir means it gets cleaned with the scratch.
         // We don't unlink so a post-mortem can inspect.
         unset($cachePath);
 
         $this->emitProgress($progress, [
-            'done'          => true,
-            'parts'         => $parts,
-            'part_kinds'    => $partKinds,
-            'files_total'   => $totalFiles,
-            'bytes_written' => $bytesWritten,
+            'done'              => true,
+            'parts'             => $parts,
+            'part_kinds'        => $partKinds,
+            'files_total'       => $totalFiles,
+            'bytes_written'     => $bytesWritten,
+            'tombstones_file'   => $tombstonesFile,
+            'tombstones_count'  => $tombstonesCount,
+            // ADR-051 instrumentation: changed/new packed (files_total) vs
+            // unchanged carried-forward (files_carried) vs prevMap entry count.
+            'files_changed'     => $totalFiles,
+            'files_carried'     => $filesCarried,
+            'prevmap_size'      => $prevMapSize,
+            'incremental'       => $incremental,
         ]);
 
         return [
-            'done'          => true,
-            'parts'         => $parts,
-            'part_kinds'    => $partKinds,
-            'parts_total'   => count($parts),
-            'files_total'   => $totalFiles,
-            'bytes_written' => $bytesWritten,
+            'done'              => true,
+            'parts'             => $parts,
+            'part_kinds'        => $partKinds,
+            'parts_total'       => count($parts),
+            'files_total'       => $totalFiles,
+            'bytes_written'     => $bytesWritten,
+            'tombstones_file'   => $tombstonesFile,
+            'tombstones_count'  => $tombstonesCount,
+            // ADR-051 instrumentation surfaced to TaskRunner -> CP progress.
+            'files_changed'     => $totalFiles,
+            'files_carried'     => $filesCarried,
+            'prevmap_size'      => $prevMapSize,
+            'incremental'       => $incremental,
         ];
     }
 }

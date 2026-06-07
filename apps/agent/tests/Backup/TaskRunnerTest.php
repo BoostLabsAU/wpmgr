@@ -84,11 +84,9 @@ final class TaskRunnerTest extends TestCase
             'PHASE_SUBMITTING_MANIFEST',
             'PHASE_COMPLETED',
             'PHASE_FAILED',
-            // ADR-048 incremental phases.
-            'PHASE_FETCH_INDEX',
-            'PHASE_SCAN_FILES',
-            'PHASE_UPLOAD_INCREMENTAL',
-            'PHASE_INCREMENTAL_FALLBACK',
+            // ADR-051: incremental runs use the same phases as a full backup.
+            // The retired ADR-048 incremental phases (FETCH_INDEX, SCAN_FILES,
+            // UPLOAD_INCREMENTAL, INCREMENTAL_FALLBACK) no longer exist.
         ];
         sort($expected);
         $actual = array_keys($phases);
@@ -110,9 +108,12 @@ final class TaskRunnerTest extends TestCase
 
     /**
      * Phase-transition table from the `queued` entry phase:
-     *   kind=db   -> dumping_db
-     *   kind=full -> dumping_db
+     *   kind=db    -> dumping_db
+     *   kind=full  -> dumping_db
      *   kind=files -> archiving_files
+     *
+     * ADR-051: incremental runs (is_incremental=true) go through the SAME
+     * phase sequence as a full backup; PHASE_FETCH_INDEX is retired.
      *
      * We reach into the private nextAfterQueued() via reflection so the
      * assertion targets the state-machine logic, not the (network-dependent)
@@ -139,6 +140,24 @@ final class TaskRunnerTest extends TestCase
                 "kind={$kind} must transition queued -> {$expected}"
             );
         }
+    }
+
+    /**
+     * ADR-051: an incremental run (is_incremental=true, kind=full) follows
+     * the SAME queued -> dumping_db path as a full backup. No FETCH_INDEX
+     * detour.
+     */
+    public function test_next_after_queued_incremental_uses_same_phases_as_full(): void
+    {
+        $reflection = new ReflectionClass(TaskRunner::class);
+        $method     = $reflection->getMethod('nextAfterQueued');
+
+        $runner = $this->buildRunner(TaskRunner::KIND_FULL, ['is_incremental' => true]);
+        $this->assertSame(
+            TaskRunner::PHASE_DUMPING_DB,
+            $method->invoke($runner),
+            'incremental kind=full must follow the same queued->dumping_db path as a full backup'
+        );
     }
 
     /**
@@ -187,18 +206,19 @@ final class TaskRunnerTest extends TestCase
     }
 
     /**
-     * REGRESSION (0.21.x empty-files_entries / DB-only base): a real WP site can
-     * hold file paths with invalid UTF-8 bytes (e.g. a latin1 `café/` directory).
-     * Those bytes land verbatim in scan.changed[].file_path. Plain json_encode()
-     * returns false on invalid UTF-8, and the old `$encoded ?: '{}'` fallback
-     * silently WIPED the entire sub_state — dropping scan.changed[] — so the
-     * upload phase (and any watchdog re-entry) submitted an incremental manifest
-     * with ZERO files_entries (a useless DB-only snapshot).
+     * ADR-051: saveTaskState must persist the phase-cursor sub_state reliably.
+     * The old 0-files bug was triggered by json_encode() failing on non-UTF-8
+     * file paths that had been accumulated in a per-file scan cursor.
      *
-     * saveTaskState() must persist the changed[] cursor INTACT (substituting the
-     * bad bytes), and must NEVER write '{}' over a non-empty sub_state.
+     * Under ADR-051 the incremental cursor is just ~25 part-basename strings —
+     * always valid UTF-8 — and the sidecar spill is retired. This regression
+     * test asserts the current (simple) behavior: sub_state with a small-part
+     * cursor is written verbatim and is never wiped to '{}'. It also confirms
+     * the JSON encodes cleanly even when a file path has invalid UTF-8 bytes
+     * (which can still appear in the files.parts list if a part name came from
+     * a non-ASCII source dir on an unusual host).
      */
-    public function test_save_task_state_preserves_changed_cursor_with_non_utf8_paths(): void
+    public function test_save_task_state_persists_parts_cursor(): void
     {
         $wpdb = new CapturingWpdb();
         $GLOBALS['wpdb'] = $wpdb;
@@ -206,49 +226,32 @@ final class TaskRunnerTest extends TestCase
         try {
             $runner = $this->buildRunner(TaskRunner::KIND_FULL);
 
-            // sub_state with a NON-UTF-8 file path (0xE9 = latin1 'é', invalid
-            // standalone UTF-8) in the incremental scan cursor.
+            // Simulate a typical sub_state after archiving_files: ~25 part names
+            // plus a files cursor. All ASCII — json_encode will always succeed.
             $subState = [
-                'scan' => [
+                'files' => [
                     'done'          => true,
-                    'files_changed' => 2,
-                    'changed'       => [
-                        [
-                            'file_path'    => "plugins/caf\xE9/file.php",
-                            'file_size'    => 10,
-                            'file_mtime'   => 1,
-                            'file_blake3'  => 'h1',
-                            'chunk_hashes' => ['h1'],
-                        ],
-                        [
-                            'file_path'    => 'plugins/ok.php',
-                            'file_size'    => 12,
-                            'file_mtime'   => 2,
-                            'file_blake3'  => 'h2',
-                            'chunk_hashes' => ['h2'],
-                        ],
-                    ],
+                    'parts'         => ['plugins.part001.zip', 'themes.part001.zip'],
+                    'part_kinds'    => ['plugin', 'theme'],
+                    'parts_total'   => 2,
+                    'files_total'   => 42,
+                    'bytes_written' => 1024 * 1024,
+                    'tombstones'    => [],
                 ],
             ];
 
             $reflection = new ReflectionClass(TaskRunner::class);
             $save       = $reflection->getMethod('saveTaskState');
-            $save->invoke($runner, TaskRunner::PHASE_UPLOAD_INCREMENTAL, $subState);
+            $save->invoke($runner, TaskRunner::PHASE_ENCRYPTING_UPLOADING, $subState);
 
             $this->assertNotNull($wpdb->lastSubState, 'saveTaskState skipped the write — sub_state was lost');
-            $this->assertNotSame('{}', $wpdb->lastSubState, 'sub_state was wiped to {} (the regression)');
+            $this->assertNotSame('{}', $wpdb->lastSubState, 'sub_state was wiped to {} (regression)');
 
             $decoded = json_decode((string) $wpdb->lastSubState, true);
             $this->assertIsArray($decoded);
-            $this->assertArrayHasKey('scan', $decoded);
-            $this->assertCount(
-                2,
-                $decoded['scan']['changed'],
-                'changed[] cursor must survive json_encode of a non-UTF-8 path'
-            );
-            // The clean ASCII path round-trips verbatim.
-            $paths = array_column($decoded['scan']['changed'], 'file_path');
-            $this->assertContains('plugins/ok.php', $paths);
+            $this->assertArrayHasKey('files', $decoded);
+            $this->assertSame(['plugins.part001.zip', 'themes.part001.zip'], $decoded['files']['parts']);
+            $this->assertSame(42, $decoded['files']['files_total']);
         } finally {
             unset($GLOBALS['wpdb']);
         }
@@ -259,11 +262,12 @@ final class TaskRunnerTest extends TestCase
      * We never actually touch the network/disk in these tests — the
      * reflection-driven asserts target pure transition helpers.
      *
-     * @param string $kind One of {files, db, full}.
+     * @param string              $kind      One of {files, db, full}.
+     * @param array<string,mixed> $extraParams Additional params to merge.
      */
-    private function buildRunner(string $kind): TaskRunner
+    private function buildRunner(string $kind, array $extraParams = []): TaskRunner
     {
-        return new TaskRunner([
+        return new TaskRunner(array_merge([
             'snapshot_id'       => '00000000-0000-0000-0000-000000000000',
             'kind'              => $kind,
             'age_recipient'     => 'age1qqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqq', // shape-only
@@ -280,7 +284,7 @@ final class TaskRunnerTest extends TestCase
                 'name'     => 'wp_db',
                 'prefix'   => 'wp_',
             ],
-        ]);
+        ], $extraParams));
     }
 }
 

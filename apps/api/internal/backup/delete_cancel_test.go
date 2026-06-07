@@ -224,16 +224,6 @@ func TestSubmitManifest_RejectsCanceledSnapshot(t *testing.T) {
 	}
 }
 
-func TestSubmitIncrementalManifest_RejectsCanceledSnapshot(t *testing.T) {
-	repo := newDeleteCancelFakeRepo()
-	svc := buildDeleteCancelSvc(repo)
-	tenantID := uuid.New()
-	snap := Snapshot{ID: uuid.New(), TenantID: tenantID, SiteID: uuid.New(), Status: StatusFailed, Error: cancelByOperatorMsg}
-	repo.setSnapshot(snap)
-
-	_, _, err := svc.SubmitIncrementalManifest(context.Background(), tenantID, snap.ID, agentcmd.IncrementalSubmitManifestRequest{})
-	de, ok := domain.AsDomain(err)
-	if !ok || de.Kind != domain.KindConflict || de.Code != "snapshot_canceled" {
-		t.Fatalf("SubmitIncrementalManifest err = %v, want Conflict snapshot_canceled", err)
-	}
-}
+// ADR-051: an archive-delta increment submits through SubmitManifest, so the
+// post-cancel late-submit rejection is covered by TestSubmitManifest_RejectsCanceledSnapshot
+// above — there is no separate SubmitIncrementalManifest path to test.

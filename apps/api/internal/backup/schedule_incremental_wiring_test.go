@@ -56,6 +56,13 @@ func (r *wiringRepo) CountFileIndex(_ context.Context, _, _ uuid.UUID) (int64, e
 	return r.fileIndexCount, nil
 }
 
+// HasFilesList: these wiring tests exercise the LEGACY file-index diffability
+// path, so report false → the resolver falls through to the CountFileIndex gate
+// (preserving the original fileIndexCount-driven assertions).
+func (r *wiringRepo) HasFilesList(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
+
 func (r *wiringRepo) CreateSnapshot(_ context.Context, in CreateSnapshotInput) (Snapshot, error) {
 	r.createInputs = append(r.createInputs, in)
 	// Mirror repo.CreateSnapshot's return shape: chain fields populated on the

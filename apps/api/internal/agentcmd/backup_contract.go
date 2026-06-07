@@ -56,6 +56,36 @@ const (
 const (
 	EntryKindFile = "file"
 	EntryKindDB   = "db"
+	// ADR-051 archive-delta increments emit two extra kinds of per-snapshot
+	// manifest entry alongside the zip parts:
+	//
+	//   files-list:  ONE entry per snapshot (base full AND each increment),
+	//                path="files.list", chunk_hashes = the chunks of a stream of
+	//                `<relpath>\t<size>\t<mtime>\n` lines (one per PACKED file). It
+	//                seeds the NEXT increment's diff and is fetched + presigned for
+	//                the agent like any chunk. It is chunked + uploaded exactly
+	//                like a zip part, so it dedups + GCs as a normal artifact.
+	//
+	//   tombstones:  ONE entry PER PATH whose deleted/re-added STATE CHANGED since
+	//                the parent, path=<relpath>, chunk_hashes EMPTY. The `mode`
+	//                field carries the state: mode=0 (TombstoneModeDelete) means the
+	//                path was DELETED in this generation; mode=1 (TombstoneModeReadd)
+	//                means a previously-deleted path was RE-ADDED (repacked) in this
+	//                generation and its earlier tombstone must be CLEARED. This
+	//                per-path delta — read by the restore planner via ListManifest in
+	//                O(1) with NO CP-side chunk fetch — lets the overlay resolve the
+	//                final deleted set with newest-wins un-delete: latest mention per
+	//                path wins, a Readd cancels an earlier Delete.
+	EntryKindFilesList  = "files-list"
+	EntryKindTombstones = "tombstones"
+)
+
+// Tombstone state carried in a `tombstones` ManifestEntry's `mode` field
+// (ADR-051). A tombstones entry is a per-path DELTA: the agent emits one only
+// when a path's deleted state flips relative to the parent generation.
+const (
+	TombstoneModeDelete = 0 // path was deleted in this generation
+	TombstoneModeReadd  = 1 // a previously-deleted path was repacked (un-delete)
 )
 
 // ChunkBytes is the target plaintext chunk size (~4 MiB) the agent splits files
@@ -164,6 +194,15 @@ type SubmitManifestRequest struct {
 	SnapshotID   string          `json:"snapshot_id"`
 	AgeRecipient string          `json:"age_recipient"`
 	Entries      []ManifestEntry `json:"entries"`
+
+	// ADR-051 archive-delta increment telemetry. All optional; default 0 for a
+	// full backup. An increment reuses THIS request shape (no separate
+	// IncrementalSubmitManifestRequest) and carries its per-cycle counters as
+	// top-level fields the CP stamps onto the snapshot row.
+	CycleFilesScanned  int64 `json:"cycle_files_scanned,omitempty"`
+	CycleFilesChanged  int64 `json:"cycle_files_changed,omitempty"`
+	CycleFilesDeleted  int64 `json:"cycle_files_deleted,omitempty"`
+	CycleBytesUploaded int64 `json:"cycle_bytes_uploaded,omitempty"`
 }
 
 // SubmitManifestResponse is the CP's ack of a submitted manifest.
@@ -324,36 +363,17 @@ type IncrementalBackupRequest struct {
 	ManifestEndpoint string `json:"manifest_endpoint"`
 	ProgressEndpoint string `json:"progress_endpoint"`
 	// Incremental-specific fields.
-	IsIncremental     bool   `json:"is_incremental"`
-	ParentSnapshotID  string `json:"parent_snapshot_id"`
-	BaseSnapshotID    string `json:"base_snapshot_id"`
-	Generation        int    `json:"generation"`
-	FileIndexEndpoint string `json:"file_index_endpoint"`
-}
+	IsIncremental    bool   `json:"is_incremental"`
+	ParentSnapshotID string `json:"parent_snapshot_id"`
+	BaseSnapshotID   string `json:"base_snapshot_id"`
+	Generation       int    `json:"generation"`
 
-// IncrementalManifestEntry is one entry in the incremental SubmitManifestRequest.
-// The agent submits these INSTEAD OF the regular ManifestEntry for the files component.
-// DB entries still use the existing ManifestEntry shape (entry_kind="db").
-type IncrementalManifestEntry struct {
-	FilePath    string   `json:"file_path"`
-	FileSize    int64    `json:"file_size"`
-	FileMtime   int64    `json:"file_mtime"`
-	FileBlake3  string   `json:"file_blake3"`
-	ChunkHashes []string `json:"chunk_hashes"`
-	IsTombstone bool     `json:"is_tombstone"`
-}
-
-// IncrementalSubmitManifestRequest is the agent->CP submission for an
-// incremental snapshot. Posted to the same ManifestEndpoint as the full backup.
-// The CP distinguishes by snapshot.is_incremental (already recorded on the row).
-type IncrementalSubmitManifestRequest struct {
-	SnapshotID          string                     `json:"snapshot_id"`
-	AgeRecipient        string                     `json:"age_recipient"`
-	IsIncremental       bool                       `json:"is_incremental"`
-	FilesEntries        []IncrementalManifestEntry `json:"files_entries"`
-	DBEntries           []ManifestEntry            `json:"db_entries"`
-	CycleFilesScanned   int64                      `json:"cycle_files_scanned"`
-	CycleFilesChanged   int64                      `json:"cycle_files_changed"`
-	CycleFilesDeleted   int64                      `json:"cycle_files_deleted"`
-	CycleBytesUploaded  int64                      `json:"cycle_bytes_uploaded"`
+	// ADR-051 archive-delta change detection: presigned GET URLs to the PARENT
+	// snapshot's `files.list` chunks (the per-snapshot relpath\tsize\tmtime
+	// snapshot the parent emitted). The agent concatenates these chunks in order
+	// to rebuild the prev[rel]=>{size,mtime} map, then gates its archiving_files
+	// walk inline (CHANGED iff !isset || size!=prev.size || mtime>prev.mtime).
+	// Empty for a gen-0 base-increment (no parent → scan everything as new).
+	// REPLACES the retired FileIndexEndpoint / NDJSON /file-index transport.
+	PrevFilesListChunks []RestoreChunk `json:"prev_files_list_chunks,omitempty"`
 }

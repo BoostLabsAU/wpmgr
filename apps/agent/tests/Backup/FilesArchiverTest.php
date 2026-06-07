@@ -2,7 +2,7 @@
 /**
  * Smoke tests for FilesArchiver: fresh archive run on a tiny temp tree,
  * verifying rotation, exclude honouring, and readability of the produced
- * `.partNNN.zip` files.
+ * `<component>.gNNN.partMMM.zip` files (generation-namespaced).
  *
  * @package WPMgr\Agent\Tests\Backup
  */
@@ -90,7 +90,8 @@ final class FilesArchiverTest extends TestCase
         foreach ($result['parts'] as $partName) {
             $partPath = $this->outDir . DIRECTORY_SEPARATOR . $partName;
             self::assertFileExists($partPath, 'part archive missing: ' . $partName);
-            self::assertMatchesRegularExpression('/^wp-content\.part\d{3}\.zip$/', $partName);
+            // ADR-051: part names are generation-namespaced (gen 0 here).
+            self::assertMatchesRegularExpression('/^wp-content\.g000\.part\d{3}\.zip$/', $partName);
 
             $zip = new \ZipArchive();
             self::assertTrue($zip->open($partPath) === true, 'part not a valid zip: ' . $partName);

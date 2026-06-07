@@ -176,6 +176,12 @@ func (r *fakeRepo) ListStalledRunningSnapshots(_ context.Context, _ time.Duratio
 func (r *fakeRepo) ListManifest(_ context.Context, _, _ uuid.UUID) ([]ManifestEntry, error) {
 	panic("fakeRepo.ListManifest not implemented")
 }
+
+// HasFilesList: the base fake tracks no manifest entries, so it reports false
+// (legacy / file-index model). chainFakeRepo overrides it to scan its manifests.
+func (r *fakeRepo) HasFilesList(_ context.Context, _, _ uuid.UUID) (bool, error) {
+	return false, nil
+}
 func (r *fakeRepo) ExistingChunkHashes(_ context.Context, _ uuid.UUID, _ []string) (map[string]Chunk, error) {
 	panic("fakeRepo.ExistingChunkHashes not implemented")
 }
@@ -554,68 +560,63 @@ func TestResolveChainForSite_NoFileIndex_AutoBase(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestSubmitIncrementalManifest — service-layer tests.
+// ADR-051 archive-delta increment recording — SubmitManifest service tests.
+// An increment now submits the SAME SubmitManifestRequest as a full backup
+// (zip parts + DB dump + files-list + tombstones manifest entries) with its
+// per-cycle telemetry as optional top-level fields. The retired
+// SubmitIncrementalManifest / backup_file_index path is gone.
 // ---------------------------------------------------------------------------
 
-func TestSubmitIncrementalManifest_InsertsFileIndex(t *testing.T) {
+func TestSubmitManifest_StampsCycleStats(t *testing.T) {
 	repo := newFakeRepo()
 	svc := buildIncrementalSvc(repo, time.Now())
 
 	tenantID := uuid.New()
 	snapshotID := uuid.New()
-	snap := Snapshot{
-		ID:       snapshotID,
-		TenantID: tenantID,
-		Status:   StatusRunning,
-	}
-	repo.setSnapshot(snap)
+	repo.setSnapshot(Snapshot{ID: snapshotID, TenantID: tenantID, Status: StatusRunning})
 
-	req := agentcmd.IncrementalSubmitManifestRequest{
-		SnapshotID:    snapshotID.String(),
-		IsIncremental: true,
-		FilesEntries: []agentcmd.IncrementalManifestEntry{
-			{
-				FilePath:    "wp-content/plugins/akismet/akismet.php",
-				FileSize:    1234,
-				FileMtime:   1717000000,
-				FileBlake3:  "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-				ChunkHashes: []string{"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"},
-				IsTombstone: false,
-			},
+	// An increment that packed one changed file (one zip part) + a files-list +
+	// one tombstone, carrying cycle telemetry top-level.
+	chunkHash := "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	req := agentcmd.SubmitManifestRequest{
+		SnapshotID:   snapshotID.String(),
+		AgeRecipient: "age1test",
+		Entries: []agentcmd.ManifestEntry{
+			{Path: "plugins.part001.zip", EntryKind: EntryKindPlugin, Chunks: []agentcmd.ChunkRef{{Blake3: chunkHash, Size: 100}}},
+			{Path: "files.list", EntryKind: EntryKindFilesList, Chunks: []agentcmd.ChunkRef{{Blake3: chunkHash, Size: 50}}},
+			{Path: "wp-content/plugins/deleted/main.php", EntryKind: EntryKindTombstones},
 		},
-		DBEntries:          nil,
 		CycleFilesScanned:  100,
 		CycleFilesChanged:  1,
-		CycleFilesDeleted:  0,
-		CycleBytesUploaded: 1234,
+		CycleFilesDeleted:  1,
+		CycleBytesUploaded: 100,
 	}
 
-	_, _, err := svc.SubmitIncrementalManifest(context.Background(), tenantID, snapshotID, req)
-	if err != nil {
-		t.Fatalf("SubmitIncrementalManifest error: %v", err)
+	if _, _, err := svc.SubmitManifest(context.Background(), tenantID, snapshotID, req); err != nil {
+		t.Fatalf("SubmitManifest error: %v", err)
 	}
 
-	rows := repo.fileIndexRows[snapshotID]
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 file index row, got %d", len(rows))
-	}
-	if rows[0].FilePath != "wp-content/plugins/akismet/akismet.php" {
-		t.Errorf("unexpected file_path: %q", rows[0].FilePath)
-	}
-	if rows[0].IsTombstone {
-		t.Error("expected is_tombstone=false")
-	}
-
+	// Cycle telemetry must be stamped on the snapshot.
 	stats := repo.cycleStats[snapshotID]
 	if stats.CycleFilesScanned != 100 {
 		t.Errorf("expected cycle_files_scanned=100, got %d", stats.CycleFilesScanned)
 	}
-	if stats.CycleBytesUploaded != 1234 {
-		t.Errorf("expected cycle_bytes_uploaded=1234, got %d", stats.CycleBytesUploaded)
+	if stats.CycleFilesDeleted != 1 {
+		t.Errorf("expected cycle_files_deleted=1, got %d", stats.CycleFilesDeleted)
+	}
+	if stats.CycleBytesUploaded != 100 {
+		t.Errorf("expected cycle_bytes_uploaded=100, got %d", stats.CycleBytesUploaded)
+	}
+
+	// The archive-delta increment must NOT write backup_file_index rows (the
+	// per-file index is retired as the diff oracle).
+	if rows := repo.fileIndexRows[snapshotID]; len(rows) != 0 {
+		t.Errorf("archive-delta increment must not write backup_file_index rows; got %d", len(rows))
 	}
 }
 
-func TestSubmitIncrementalManifest_TombstonesRecorded(t *testing.T) {
+func TestSubmitManifest_FullBackupNoCycleStats(t *testing.T) {
+	// A full backup sends zero cycle counters → the snapshot row is left untouched.
 	repo := newFakeRepo()
 	svc := buildIncrementalSvc(repo, time.Now())
 
@@ -623,64 +624,24 @@ func TestSubmitIncrementalManifest_TombstonesRecorded(t *testing.T) {
 	snapshotID := uuid.New()
 	repo.setSnapshot(Snapshot{ID: snapshotID, TenantID: tenantID, Status: StatusRunning})
 
-	req := agentcmd.IncrementalSubmitManifestRequest{
-		SnapshotID:    snapshotID.String(),
-		IsIncremental: true,
-		FilesEntries: []agentcmd.IncrementalManifestEntry{
-			{
-				FilePath:    "wp-content/plugins/deleted/main.php",
-				IsTombstone: true,
-			},
-		},
-		CycleFilesDeleted: 1,
-	}
-
-	_, _, err := svc.SubmitIncrementalManifest(context.Background(), tenantID, snapshotID, req)
-	if err != nil {
-		t.Fatalf("SubmitIncrementalManifest error: %v", err)
-	}
-
-	rows := repo.fileIndexRows[snapshotID]
-	if len(rows) != 1 {
-		t.Fatalf("expected 1 row, got %d", len(rows))
-	}
-	if !rows[0].IsTombstone {
-		t.Error("expected is_tombstone=true for deleted file")
-	}
-}
-
-func TestSubmitIncrementalManifest_FullBackupPathUnchanged(t *testing.T) {
-	// When is_incremental=false the SubmitManifest path is used; backup_file_index
-	// should have NO rows for that snapshot.
-	//
-	// This test confirms SubmitIncrementalManifest is NOT called for full backups
-	// by checking that the router in the handler routes correctly — here we test
-	// the service directly: calling SubmitManifest should not write to fileIndexRows.
-	repo := newFakeRepo()
-	svc := buildIncrementalSvc(repo, time.Now())
-
-	tenantID := uuid.New()
-	snapshotID := uuid.New()
-	repo.setSnapshot(Snapshot{ID: snapshotID, TenantID: tenantID, Status: StatusRunning})
-
-	// Call the full-backup path directly.
 	req := agentcmd.SubmitManifestRequest{
 		SnapshotID:   snapshotID.String(),
 		AgeRecipient: "age1test",
 		Entries:      []agentcmd.ManifestEntry{},
 	}
-	_, _, err := svc.SubmitManifest(context.Background(), tenantID, snapshotID, req)
-	if err != nil {
+	if _, _, err := svc.SubmitManifest(context.Background(), tenantID, snapshotID, req); err != nil {
 		t.Fatalf("SubmitManifest error: %v", err)
 	}
 
-	rows := repo.fileIndexRows[snapshotID]
-	if len(rows) != 0 {
+	if _, ok := repo.cycleStats[snapshotID]; ok {
+		t.Error("full backup (zero cycle counters) must not stamp cycle stats")
+	}
+	if rows := repo.fileIndexRows[snapshotID]; len(rows) != 0 {
 		t.Errorf("full-backup path should not write backup_file_index rows; got %d rows", len(rows))
 	}
 }
 
-func TestSubmitIncrementalManifest_Idempotent(t *testing.T) {
+func TestSubmitManifest_RejectsAlreadyCompleted(t *testing.T) {
 	repo := newFakeRepo()
 	svc := buildIncrementalSvc(repo, time.Now())
 
@@ -688,18 +649,13 @@ func TestSubmitIncrementalManifest_Idempotent(t *testing.T) {
 	snapshotID := uuid.New()
 	repo.setSnapshot(Snapshot{ID: snapshotID, TenantID: tenantID, Status: StatusRunning})
 
-	req := agentcmd.IncrementalSubmitManifestRequest{
-		SnapshotID:    snapshotID.String(),
-		IsIncremental: true,
-	}
+	req := agentcmd.SubmitManifestRequest{SnapshotID: snapshotID.String()}
 
-	_, _, err := svc.SubmitIncrementalManifest(context.Background(), tenantID, snapshotID, req)
-	if err != nil {
+	if _, _, err := svc.SubmitManifest(context.Background(), tenantID, snapshotID, req); err != nil {
 		t.Fatalf("first call error: %v", err)
 	}
-
-	// Second call: snapshot is now completed → should return conflict.
-	_, _, err = svc.SubmitIncrementalManifest(context.Background(), tenantID, snapshotID, req)
+	// Second call: snapshot is now completed → conflict.
+	_, _, err := svc.SubmitManifest(context.Background(), tenantID, snapshotID, req)
 	if err == nil {
 		t.Fatal("expected conflict error on second call, got nil")
 	}

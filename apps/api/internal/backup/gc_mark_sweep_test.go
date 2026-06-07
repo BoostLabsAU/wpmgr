@@ -192,6 +192,15 @@ func (r *gcFakeRepo) ListManifest(_ context.Context, _, snapshotID uuid.UUID) ([
 	return r.manifest[snapshotID], nil
 }
 
+func (r *gcFakeRepo) HasFilesList(_ context.Context, _, snapshotID uuid.UUID) (bool, error) {
+	for _, e := range r.manifest[snapshotID] {
+		if e.EntryKind == EntryKindFilesList {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *gcFakeRepo) StreamFileIndex(_ context.Context, _, snapshotID uuid.UUID, fn func(FileIndexEntry) error) error {
 	if snapshotID == r.failReachOf {
 		return domain.Internal("forced_reach_failure", "simulated reachability failure")

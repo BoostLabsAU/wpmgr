@@ -677,6 +677,15 @@ final class EncryptAndUpload
     private function entryKind(string $logical): string
     {
         $lower = strtolower($logical);
+        // ADR-051 archive-delta: the per-snapshot files.list artifact MUST be
+        // tagged 'files-list' (NOT the default 'file'). This is the exact
+        // entry_kind the CP restore planner detects an archive-delta chain by
+        // (EntryKindFilesList) AND the entry it presigns as the next
+        // increment's PrevFilesListChunks. Without this branch the CP never
+        // sees the chain as archive-delta and the overlay restore never runs.
+        if ($lower === strtolower(FilesArchiver::FILES_LIST_NAME)) {
+            return 'files-list';
+        }
         // Inspection report — recognised by the literal manifest path.
         // entry_kind is a free-form string on the CP side (no DB-level
         // enum), so we can ship 'inspection' without a migration.
@@ -697,21 +706,13 @@ final class EncryptAndUpload
             return 'db';
         }
         // Track 5 per-component archives. The FilesArchiver emits
-        // `<component>.partNNN.zip`; classify by filename prefix.
-        // Order matters: 'wp-content' MUST come last because the others are
-        // strict prefixes that also contain a dot (unambiguous against the
-        // catch-all 'wp-content.partNNN.zip').
-        if (str_starts_with($lower, 'plugins.part') && str_ends_with($lower, '.zip')) {
-            return 'plugin';
-        }
-        if (str_starts_with($lower, 'themes.part') && str_ends_with($lower, '.zip')) {
-            return 'theme';
-        }
-        if (str_starts_with($lower, 'uploads.part') && str_ends_with($lower, '.zip')) {
-            return 'upload';
-        }
-        if (str_starts_with($lower, 'wp-content.part') && str_ends_with($lower, '.zip')) {
-            return 'wp-content';
+        // `<component>.gNNN.partMMM.zip` (generation-namespaced) — classify via
+        // the shared component classifier so the namespaced part name maps to
+        // its component kind. The classifier tolerates both the namespaced and
+        // the legacy `<component>.partMMM.zip` forms.
+        $component = FilesArchiver::componentKindFromPartName($logical);
+        if ($component !== '') {
+            return $component;
         }
         // Defensive default. Pre-Track-5 callers that hand a non-typed zip
         // here (and any future artifact whose filename we haven't taught

@@ -551,7 +551,61 @@ func (s *Service) reachableChunks(ctx context.Context, tenantID uuid.UUID, snap 
 		}
 	}
 
-	// Build the winning-entry map (latest-version-wins over the file index).
+	// MODEL SELECT (parity with planRestoreChain): an ADR-051 archive-delta chain's
+	// gen-0 base carries a `files-list` manifest entry; a legacy per-file-index
+	// chain does not. The reachability unit differs — archive PARTS vs per-file
+	// chunk_hashes — but the same oracle feeds GC + restore so they never disagree.
+	if base, ok := byGen[0]; ok {
+		baseEntries, berr := s.repo.ListManifest(ctx, tenantID, base.ID)
+		if berr != nil {
+			return nil, berr
+		}
+		if manifestHasKind(baseEntries, EntryKindFilesList) {
+			// Archive-delta: reachable = union over retained gens of every zip-PART
+			// entry's chunk_hashes + each gen's files-list + tombstones chunk_hashes
+			// + the highest-gen DB dump's chunk_hashes. No winMap dedup is needed —
+			// a chunk referenced by ANY retained generation's part is reachable, and
+			// carry-forward is automatic (an unchanged file's part lives in the older
+			// generation that is still retained).
+			dbSnapID := uuid.Nil
+			for gen := 0; gen <= maxGen; gen++ {
+				cs, ok := byGen[gen]
+				if !ok {
+					continue
+				}
+				entries, derr := s.repo.ListManifest(ctx, tenantID, cs.ID)
+				if derr != nil {
+					return nil, derr
+				}
+				for _, e := range entries {
+					switch {
+					case isArchivePartKind(e.EntryKind), e.EntryKind == EntryKindFilesList, e.EntryKind == EntryKindTombstones:
+						for _, h := range e.ChunkHashes {
+							out[h] = struct{}{}
+						}
+					case e.EntryKind == EntryKindDB:
+						dbSnapID = cs.ID
+					}
+				}
+			}
+			if dbSnapID != uuid.Nil {
+				dbEntries, derr := s.repo.ListManifest(ctx, tenantID, dbSnapID)
+				if derr != nil {
+					return nil, derr
+				}
+				for _, e := range dbEntries {
+					if e.EntryKind == EntryKindDB {
+						for _, h := range e.ChunkHashes {
+							out[h] = struct{}{}
+						}
+					}
+				}
+			}
+			return out, nil
+		}
+	}
+
+	// LEGACY: build the winning-entry map (latest-version-wins over the file index).
 	winMap := map[string]*FileIndexEntry{}
 	for gen := 0; gen <= maxGen; gen++ {
 		cs, ok := byGen[gen]
@@ -657,10 +711,231 @@ func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap
 		}
 	}
 
-	// STEP 4 — build the winning-entry map (latest-version-wins over file-index).
-	type winEntry struct {
-		entry *FileIndexEntry
+	// STEP 4 — MODEL SELECT. ADR-051 archive-delta chains overlay whole zip PARTS
+	// in generation order (newest-wins by ZipArchive extract order); LEGACY
+	// per-file-index chains reconstruct a winMap of individual files. The gen-0
+	// base of an archive-delta chain carries a `files-list` manifest entry; a
+	// legacy chain does not. Detecting on the base keeps both paths correct during
+	// the migration window — a legacy chain ages out via retention.
+	baseEntries, err := s.repo.ListManifest(ctx, tenantID, chainSnaps[0].ID)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
 	}
+	if manifestHasKind(baseEntries, EntryKindFilesList) {
+		return s.planRestoreChainOverlay(ctx, tenantID, snap, si, sel, restoreID, progressEndpoint, chainSnaps)
+	}
+	return s.planRestoreChainFileIndex(ctx, tenantID, snap, si, sel, restoreID, progressEndpoint, chainSnaps)
+}
+
+// planRestoreChainOverlay is the ADR-051 archive-delta restore: base parts +
+// each increment's parts overlaid in generation order (the agent extracts in
+// Manifest.Entries order; ZipArchive extractTo overwrites, so a later
+// generation's file wins) + a tombstone-delete pass (newest-wins un-delete).
+// No per-file winMap — a chunk referenced by ANY retained generation's part is
+// reachable, and carry-forward is automatic because an unchanged file's part
+// stays in the older retained generation.
+func (s *Service) planRestoreChainOverlay(ctx context.Context, tenantID uuid.UUID, snap Snapshot, si SiteInfo, sel RestoreSelection, restoreID, progressEndpoint string, chainSnaps []Snapshot) (agentcmd.RestoreRequest, Snapshot, SiteInfo, error) {
+	chainID := *snap.ChainID
+	targetGen := snap.Generation
+
+	// STEP 4a — walk generations 0..targetGen ONCE, collecting each generation's
+	// zip PARTS (in stored order), the highest-gen DB dump, and resolving the
+	// final deleted set with NEWEST-WINS un-delete. A `tombstones` entry is a
+	// per-path delta carrying its state in Mode: Delete marks the path deleted,
+	// Readd cancels an earlier delete (the file was repacked). Latest mention per
+	// path wins, so a deleted-then-re-added path ends up live.
+	byGenParts := make([][]ManifestEntry, targetGen+1)
+	dbSnapGen := -1
+	var dbSelected []ManifestEntry
+	deletedPaths := map[string]bool{} // file_path -> currently tombstoned at this point in the walk
+
+	for gen := 0; gen <= targetGen; gen++ {
+		entries, derr := s.repo.ListManifest(ctx, tenantID, chainSnaps[gen].ID)
+		if derr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, derr
+		}
+		var hasDB bool
+		var dbForGen []ManifestEntry
+		for _, e := range entries {
+			switch {
+			case isArchivePartKind(e.EntryKind):
+				byGenParts[gen] = append(byGenParts[gen], e)
+			case e.EntryKind == EntryKindTombstones:
+				// Mode is the delta state: Delete sets deleted, Readd clears it.
+				if int(e.Mode) == agentcmd.TombstoneModeReadd {
+					delete(deletedPaths, e.Path)
+				} else {
+					deletedPaths[e.Path] = true
+				}
+			case e.EntryKind == EntryKindDB:
+				hasDB = true
+				dbForGen = append(dbForGen, e)
+			default:
+				// files-list / inspection / unknown: not part of the restore overlay.
+			}
+		}
+		if hasDB {
+			dbSnapGen = gen
+			dbSelected = dbForGen
+		}
+	}
+
+	// STEP 4b — DB dump default: if no generation carried a DB dump, fall back to
+	// gen-0 (a chain base is a full backup and always has one).
+	if dbSnapGen < 0 {
+		dbSnapGen = 0
+		entries, derr := s.repo.ListManifest(ctx, tenantID, chainSnaps[0].ID)
+		if derr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, derr
+		}
+		for _, e := range entries {
+			if e.EntryKind == EntryKindDB {
+				dbSelected = append(dbSelected, e)
+			}
+		}
+	}
+
+	// STEP 5 — reachable chunks via the SHARED oracle (GC + restore parity).
+	allHashes, err := s.reachableChunks(ctx, tenantID, snap, targetGen)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
+	}
+	hashSlice := make([]string, 0, len(allHashes))
+	for h := range allHashes {
+		hashSlice = append(hashSlice, h)
+	}
+	chunks, err := s.repo.ExistingChunkHashes(ctx, tenantID, hashSlice)
+	if err != nil {
+		return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, err
+	}
+
+	// CHECK 3 — chunk resolvability over every part we will send + the DB dump.
+	for gen := 0; gen <= targetGen; gen++ {
+		for _, e := range byGenParts[gen] {
+			for _, h := range e.ChunkHashes {
+				if _, ok := chunks[h]; !ok {
+					return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal(
+						"chain_chunk_missing",
+						fmt.Sprintf("archive part %q (gen %d) references chunk %s which is no longer in object storage: chain restore aborted (possible GC before restore)",
+							e.Path, gen, h[:min16(h)]),
+					)
+				}
+			}
+		}
+	}
+	for _, e := range dbSelected {
+		for _, h := range e.ChunkHashes {
+			if _, ok := chunks[h]; !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal(
+					"chain_chunk_missing",
+					fmt.Sprintf("db dump entry %q references chunk %s which is no longer in object storage: chain restore aborted (possible GC before restore)",
+						e.Path, h[:min16(h)]),
+				)
+			}
+		}
+	}
+
+	// STEP 6 — presign chunk GET URLs.
+	getURLs := make(map[string]agentcmd.RestoreChunk, len(chunks))
+	for h, c := range chunks {
+		expected := chunkS3Key(tenantID, h)
+		if c.S3Key != expected {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_key_mismatch", "stored chunk key is outside the tenant prefix")
+		}
+		url, perr := s.store.PresignGet(ctx, c.S3Key, s.presignTTL)
+		if perr != nil {
+			return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_presign_get_failed", "failed to presign chunk").WithCause(perr)
+		}
+		getURLs[h] = agentcmd.RestoreChunk{Hash: h, URL: url, Size: c.Size}
+	}
+
+	// CP-side tombstone path sanitization (defense-in-depth; agent re-sanitizes).
+	tombstonePaths := make([]string, 0, len(deletedPaths))
+	for p := range deletedPaths {
+		if sanitizeTombstonePathCP(p) {
+			tombstonePaths = append(tombstonePaths, p)
+		} else {
+			slog.WarnContext(ctx, "backup: chain restore: tombstone path failed CP sanitization, excluded",
+				slog.String("path", p),
+				slog.String("chain_id", chainID.String()))
+		}
+	}
+	sort.Strings(tombstonePaths) // stable order for tests + log readability
+
+	wireKind := deriveWireKind(snap.Kind, sel.Components)
+	targetSiteURL := strings.TrimRight(si.URL, "/")
+	targetHomeURL := targetSiteURL
+
+	// EstimatedBytes: sum of distinct chunk sizes (advisory disk-check hint).
+	var estimatedBytes int64
+	for _, c := range chunks {
+		estimatedBytes += c.Size
+	}
+
+	out := agentcmd.RestoreRequest{
+		SnapshotID:       snap.ID.String(),
+		RestoreID:        restoreID,
+		Kind:             wireKind,
+		ProgressEndpoint: progressEndpoint,
+		ChunkBytes:       agentcmd.ChunkBytes,
+		KeepOldFiles:     sel.KeepOldFiles,
+		TargetSiteURL:    targetSiteURL,
+		TargetHomeURL:    targetHomeURL,
+		SourceSiteURL:    snap.SourceSiteURL,
+		SourceHomeURL:    snap.SourceHomeURL,
+		SourceContentURL: snap.SourceContentURL,
+		SourceUploadURL:  snap.SourceUploadURL,
+		IsChainRestore:   true,
+		TargetGeneration: targetGen,
+		EstimatedBytes:   estimatedBytes,
+		TombstonePaths:   tombstonePaths,
+	}
+
+	// OVERLAY ORDER — append each generation's parts ASCENDING by generation so a
+	// later generation's file wins on extract (ZipArchive extractTo overwrites).
+	// THIS ORDER IS LOAD-BEARING: a wrong order yields a silently-stale restore.
+	for gen := 0; gen <= targetGen; gen++ {
+		for _, e := range byGenParts[gen] {
+			re := agentcmd.RestoreEntry{LogicalPath: e.Path}
+			for _, h := range e.ChunkHashes {
+				rc, ok := getURLs[h]
+				if !ok {
+					return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_missing", "archive part references a chunk that is no longer stored")
+				}
+				re.Chunks = append(re.Chunks, rc)
+			}
+			out.Manifest.Entries = append(out.Manifest.Entries, re)
+		}
+	}
+
+	// DB entries from the highest-gen DB dump snapshot, appended last.
+	for _, e := range dbSelected {
+		re := agentcmd.RestoreEntry{LogicalPath: e.Path}
+		for _, h := range e.ChunkHashes {
+			rc, ok := getURLs[h]
+			if !ok {
+				return agentcmd.RestoreRequest{}, Snapshot{}, SiteInfo{}, domain.Internal("backup_chunk_missing", "db manifest references a chunk that is no longer stored")
+			}
+			re.Chunks = append(re.Chunks, rc)
+		}
+		out.Manifest.Entries = append(out.Manifest.Entries, re)
+	}
+
+	// Stash dbSnapGen for the worker's SSE phase_detail (read-only convention; see
+	// the file-index path for the same trick).
+	snap.CycleFilesScanned = int64(dbSnapGen)
+	return out, snap, si, nil
+}
+
+// planRestoreChainFileIndex is the LEGACY (pre-ADR-051) per-file-index chain
+// restore. Retained verbatim so chains created under the chunk engine still
+// restore correctly until they age out via retention. New chains use the
+// archive-delta overlay (planRestoreChainOverlay).
+func (s *Service) planRestoreChainFileIndex(ctx context.Context, tenantID uuid.UUID, snap Snapshot, si SiteInfo, sel RestoreSelection, restoreID, progressEndpoint string, chainSnaps []Snapshot) (agentcmd.RestoreRequest, Snapshot, SiteInfo, error) {
+	chainID := *snap.ChainID
+	targetGen := snap.Generation
+
+	// STEP 4 — build the winning-entry map (latest-version-wins over file-index).
 	winMap := map[string]*FileIndexEntry{} // file_path -> winning entry
 	deletedPaths := map[string]bool{}      // file_path -> true if tombstoned at targetGen
 
@@ -834,34 +1109,42 @@ func (s *Service) planRestoreChain(ctx context.Context, tenantID uuid.UUID, snap
 		out.Manifest.Entries = append(out.Manifest.Entries, re)
 	}
 
-	// Surface the db_snap_generation for the worker to include in the SSE event.
-	// We store it as an unexported field via the snapshot's Progress bytes — instead
-	// we return it embedded in the snap for the worker to read. For simplicity the
-	// worker reads plan.IsChainRestore and derives chain details from plan fields.
-	// We stash dbSnapGen in a custom field we can pass to the worker by encoding
-	// it in the returned Snapshot's Generation field (which is already targetGen).
-	// The worker accesses it via plan.TargetGeneration and len(chainSnaps) — we
-	// need to surface dbSnapGen. We use a sentinel approach: attach it as a custom
-	// field to the base snapshot we return so the caller (RestoreWorker.Work) can
-	// read plan.Manifest.Entries and infer chain_length from the generation.
-	// The simplest approach: the worker just uses snap.Generation as targetGen
-	// and computes chain_length = targetGen+1. For db_snap_generation the worker
-	// does not need it for correctness — it is informational in the SSE event.
-	// We embed it in the base snap's Generation field as a local convention:
-	// Snapshot returned is the target snap; dbSnapGen lives in the RestoreRequest
-	// indirectly. The worker reads dbSnapGen by scanning plan.Manifest.Entries
-	// for DB entries. For the SSE event we pass 0 when it cannot be inferred —
-	// acceptable per spec ("informational").
-	//
-	// Actually, per spec the worker simply includes it in the phase_detail map.
-	// We pass dbSnapGen via the Snapshot.CycleFilesScanned field temporarily
-	// (that field is read-only metadata on completed snaps, not acted upon by the
-	// restore path). This avoids any API surface change.
+	// Stash dbSnapGen for the worker's SSE phase_detail (read-only convention).
 	snap.CycleFilesScanned = int64(dbSnapGen)
-
-	_ = dbSnapGen // suppress unused-variable warning — used via snap.CycleFilesScanned above
-
 	return out, snap, si, nil
+}
+
+// isArchivePartKind reports whether a manifest entry kind is a zip PART that the
+// archive-delta restore overlay extracts. Excludes db / files-list / tombstones
+// / inspection.
+func isArchivePartKind(kind string) bool {
+	switch kind {
+	case EntryKindFile, EntryKindPlugin, EntryKindTheme, EntryKindUpload, EntryKindWPContent:
+		return true
+	default:
+		return false
+	}
+}
+
+// manifestHasKind reports whether any entry has the given kind.
+func manifestHasKind(entries []ManifestEntry, kind string) bool {
+	for _, e := range entries {
+		if e.EntryKind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// hasNonRestorableKind reports whether any entry is an ADR-051 bookkeeping kind
+// (files-list / tombstones) that must be excluded from a non-chain restore.
+func hasNonRestorableKind(entries []ManifestEntry) bool {
+	for _, e := range entries {
+		if e.EntryKind == EntryKindFilesList || e.EntryKind == EntryKindTombstones {
+			return true
+		}
+	}
+	return false
 }
 
 // sanitizeTombstonePathCP validates a tombstone path on the CP side before
@@ -1003,6 +1286,21 @@ func (s *Service) SubmitManifest(ctx context.Context, tenantID, snapshotID uuid.
 	if err != nil {
 		return chunkRefs, stored, err
 	}
+	// ADR-051: an archive-delta increment reuses THIS path and carries its cycle
+	// telemetry as optional top-level fields. Stamp them best-effort (the snapshot
+	// is already completed). A full backup sends zeros, leaving the row untouched.
+	if req.CycleFilesScanned != 0 || req.CycleFilesChanged != 0 || req.CycleFilesDeleted != 0 || req.CycleBytesUploaded != 0 {
+		if serr := s.repo.UpdateSnapshotCycleStats(ctx, tenantID, snapshotID, CycleStatsInput{
+			CycleFilesScanned:  req.CycleFilesScanned,
+			CycleFilesChanged:  req.CycleFilesChanged,
+			CycleFilesDeleted:  req.CycleFilesDeleted,
+			CycleBytesUploaded: req.CycleBytesUploaded,
+		}); serr != nil {
+			slog.WarnContext(ctx, "backup: cycle stats update failed (best-effort)",
+				slog.String("snapshot_id", snapshotID.String()),
+				slog.Any("error", serr))
+		}
+	}
 	// Publish a terminal completed event so live SSE subscribers see the
 	// final state without waiting for a poll. Best-effort: a fetch error
 	// here only loses live smoothness (the handler re-reads from DB).
@@ -1031,6 +1329,53 @@ func (s *Service) SubmitManifest(ctx context.Context, tenantID, snapshotID uuid.
 		})
 	}
 	return chunkRefs, stored, nil
+}
+
+// PresignParentFilesList resolves the PARENT snapshot's files-list manifest
+// entry (ADR-051) and mints a presigned GET per chunk so the dispatching worker
+// can hand the agent the prev[rel]=>{size,mtime} map source for change detection.
+// It reuses the same presigned-GET transport as chunk fetch — no agent-facing
+// route. Returns an error when the parent carries no files-list (a chain that
+// can't be diffed) or a chunk is no longer stored, so the worker can surface a
+// retryable infra failure rather than silently re-pack the whole tree.
+func (s *Service) PresignParentFilesList(ctx context.Context, tenantID, parentSnapshotID uuid.UUID) ([]agentcmd.RestoreChunk, error) {
+	entries, err := s.repo.ListManifest(ctx, tenantID, parentSnapshotID)
+	if err != nil {
+		return nil, err
+	}
+	var hashes []string
+	for _, e := range entries {
+		if e.EntryKind == EntryKindFilesList {
+			hashes = append(hashes, e.ChunkHashes...)
+		}
+	}
+	if len(hashes) == 0 {
+		return nil, domain.Validation("parent_files_list_missing",
+			"the parent snapshot has no files-list manifest entry to diff against")
+	}
+	chunks, err := s.repo.ExistingChunkHashes(ctx, tenantID, hashes)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]agentcmd.RestoreChunk, 0, len(hashes))
+	// Preserve chunk order (a files.list is a stream; concat order matters).
+	for _, h := range hashes {
+		c, ok := chunks[h]
+		if !ok {
+			return nil, domain.Internal("parent_files_list_chunk_missing",
+				"a files-list chunk for the parent snapshot is no longer stored")
+		}
+		expected := chunkS3Key(tenantID, h)
+		if c.S3Key != expected {
+			return nil, domain.Internal("backup_chunk_key_mismatch", "stored chunk key is outside the tenant prefix")
+		}
+		url, perr := s.store.PresignGet(ctx, c.S3Key, s.presignTTL)
+		if perr != nil {
+			return nil, domain.Internal("backup_presign_get_failed", "failed to presign files-list chunk").WithCause(perr)
+		}
+		out = append(out, agentcmd.RestoreChunk{Hash: h, URL: url, Size: c.Size})
+	}
+	return out, nil
 }
 
 // manifestIndexKey returns the per-snapshot index object key:
@@ -1847,6 +2192,22 @@ func (s *Service) presignTTLSeconds() int { return int(s.presignTTL.Seconds()) }
 // component has no corresponding entries in the snapshot, and a 422 if the
 // resolved selection matches nothing.
 func selectEntries(entries []ManifestEntry, sel RestoreSelection) ([]ManifestEntry, error) {
+	// ADR-051: files-list and tombstones are internal change-detection bookkeeping
+	// (the relpath\tsize\tmtime seed + delete deltas), NOT restorable artifacts.
+	// Drop them up-front so a base-alone (non-chain) restore never extracts a
+	// stray files.list or an empty tombstone-path file. The chain overlay path
+	// handles them separately (tombstones drive the delete pass).
+	if hasNonRestorableKind(entries) {
+		filtered := make([]ManifestEntry, 0, len(entries))
+		for _, e := range entries {
+			if e.EntryKind == EntryKindFilesList || e.EntryKind == EntryKindTombstones {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		entries = filtered
+	}
+
 	// Component pre-validation: if the caller asked for a component that the
 	// snapshot doesn't actually carry, fail fast with an operator-readable
 	// message rather than silently dropping back to whatever the manifest
@@ -2283,18 +2644,22 @@ func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, s
 		return baseIncrement, nil
 	}
 
-	// The prior snapshot has no usable per-file index — we can't diff against it,
-	// so start a fresh gen-0 base-increment (which writes its own full file index).
-	// This MUST run regardless of prev.IsIncremental: a base taken on an old agent
-	// (0.20.1's empty-endpoint AUTO-BASE → full-zip fallback) records itself as a
-	// gen-0 snapshot with is_incremental=true yet writes ZERO backup_file_index
-	// rows. Gating this check on !prev.IsIncremental let such a base through, and
-	// the next increment diffed against an empty index → CASE A never matched →
-	// the agent re-read+re-hashed the whole tree (the 24-min live-QA bug). Always
-	// re-base when the parent carries no file index.
-	count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
-	if cerr != nil || count == 0 {
+	// The prior snapshot must be DIFFABLE or we re-base. ADR-051: an archive-delta
+	// snapshot is diffable iff it carries a `files-list` manifest entry (the
+	// per-snapshot relpath\tsize\tmtime list the next increment diffs against).
+	// A LEGACY chunk-engine snapshot is diffable iff it has backup_file_index rows.
+	// Accept EITHER during the migration window. Re-base when the parent carries
+	// neither — this guards the 24-min full-re-hash bug an empty/undiffable base
+	// would cause (the next increment would scan the whole tree as new).
+	diffable, derr := s.repo.HasFilesList(ctx, tenantID, prev.ID)
+	if derr != nil {
 		return baseIncrement, nil
+	}
+	if !diffable {
+		count, cerr := s.repo.CountFileIndex(ctx, tenantID, prev.ID)
+		if cerr != nil || count == 0 {
+			return baseIncrement, nil
+		}
 	}
 
 	// We have a usable prior snapshot. Build the chain fields.
@@ -2331,154 +2696,8 @@ func (s *Service) resolveChainForSiteWithWindow(ctx context.Context, tenantID, s
 	}, nil
 }
 
-// SubmitIncrementalManifest handles the agent's manifest submission for an
-// incremental snapshot. It:
-//  1. Validates the snapshot is owned by the tenant and is running.
-//  2. Upserts chunk rows for changed-file chunks.
-//  3. Inserts backup_file_index rows for files_entries (including tombstones).
-//  4. Inserts backup_manifest_entries for db_entries (same as full-backup path).
-//  5. Completes the snapshot with cycle telemetry counters.
-//  6. Publishes a "completed" SSE event.
-//  7. Reconciles the linked schedule run (best-effort).
-//
-// Returns (chunkRefs, storedChunks, error).
-func (s *Service) SubmitIncrementalManifest(ctx context.Context, tenantID, snapshotID uuid.UUID, req agentcmd.IncrementalSubmitManifestRequest) (int64, int64, error) {
-	snap, err := s.repo.GetSnapshot(ctx, tenantID, snapshotID)
-	if err != nil {
-		return 0, 0, err
-	}
-	if snap.Status == StatusCompleted {
-		return 0, 0, domain.Conflict("snapshot_already_completed", "the snapshot manifest was already recorded")
-	}
-	// A cancelled (status==failed) snapshot must not be resurrected by a late
-	// incremental agent submit that finished after the operator cancelled it.
-	if snap.Status == StatusFailed {
-		return 0, 0, domain.Conflict("snapshot_canceled", "the snapshot was cancelled and no longer accepts a manifest")
-	}
-
-	// 1. Build the DB-dump manifest input (if any DB entries were submitted).
-	//    ADR-050 STEP 2 (MF-a): the file-index insert AND the snapshot completion
-	//    must land in ONE transaction so a concurrent retention sweep can never
-	//    observe status='completed' before the file_index rows it must walk are
-	//    visible (which would let the mark omit a re-referenced OLD chunk and
-	//    sweep it, making the snapshot unrestorable). We therefore collect both
-	//    payloads here and hand them to CompleteIncrementalManifest, which does
-	//    the file-index insert + DB-manifest record + completion atomically.
-	var dbManifest *RecordManifestInput
-	if len(req.DBEntries) > 0 {
-		in := RecordManifestInput{
-			TenantID:   tenantID,
-			SnapshotID: snapshotID,
-			Chunks:     map[string]ChunkUpload{},
-		}
-		for _, e := range req.DBEntries {
-			if e.Path == "" {
-				return 0, 0, domain.Validation("invalid_manifest_entry", "db manifest entry has empty path")
-			}
-			entryKind := e.EntryKind
-			if entryKind == "" {
-				entryKind = EntryKindDB
-			}
-			hashes := make([]string, 0, len(e.Chunks))
-			for _, c := range e.Chunks {
-				if !isHexHash(c.Blake3) {
-					return 0, 0, domain.Validation("invalid_chunk_hash", "manifest chunk hash is not a valid blake3 hex digest")
-				}
-				hashes = append(hashes, c.Blake3)
-				in.Chunks[c.Blake3] = ChunkUpload{Blake3: c.Blake3, Size: c.Size, S3Key: chunkS3Key(tenantID, c.Blake3)}
-			}
-			in.Entries = append(in.Entries, ManifestEntryInput{
-				Path:        e.Path,
-				EntryKind:   entryKind,
-				TableName:   e.TableName,
-				ChunkHashes: hashes,
-				Size:        e.Size,
-				Mode:        int32(e.Mode),
-			})
-		}
-		dbManifest = &in
-	}
-
-	// 2. Build the backup_file_index batch for files_entries.
-	batch := make([]FileIndexEntry, 0, len(req.FilesEntries))
-	for _, fe := range req.FilesEntries {
-		hashes := fe.ChunkHashes
-		if hashes == nil {
-			hashes = []string{}
-		}
-		// Validate chunk hashes for non-tombstone entries.
-		if !fe.IsTombstone {
-			for _, h := range hashes {
-				if !isHexHash(h) {
-					return 0, 0, domain.Validation("invalid_chunk_hash", "file index chunk hash is not a valid blake3 hex digest")
-				}
-			}
-		}
-		batch = append(batch, FileIndexEntry{
-			TenantID:    tenantID,
-			SnapshotID:  snapshotID,
-			FilePath:    fe.FilePath,
-			FileSize:    fe.FileSize,
-			FileMtime:   fe.FileMtime,
-			FileBlake3:  fe.FileBlake3,
-			ChunkHashes: hashes,
-			IsTombstone: fe.IsTombstone,
-		})
-	}
-
-	// 3. ATOMIC completion (ADR-050 STEP 2): file-index insert + optional
-	//    DB-manifest record + snapshot completion in ONE transaction. Covers both
-	//    the files-only path (dbManifest == nil) and the DB-inline path.
-	chunkRefs, storedCount, cierr := s.repo.CompleteIncrementalManifest(ctx, CompleteIncrementalInput{
-		TenantID:    tenantID,
-		SnapshotID:  snapshotID,
-		FileEntries: batch,
-		DBManifest:  dbManifest,
-		// Files-only path: file_index rows do not contribute to the snapshot's
-		// chunk_count/total_size (those track DB-manifest chunks only), matching
-		// the pre-ADR-050 behaviour where CompleteSnapshot was called with zeros.
-		TotalSize: 0,
-		ChunkRefs: 0,
-	})
-	if cierr != nil {
-		return 0, 0, cierr
-	}
-
-	// 4. Stamp cycle telemetry counters.
-	if serr := s.repo.UpdateSnapshotCycleStats(ctx, tenantID, snapshotID, CycleStatsInput{
-		CycleFilesScanned:  req.CycleFilesScanned,
-		CycleFilesChanged:  req.CycleFilesChanged,
-		CycleFilesDeleted:  req.CycleFilesDeleted,
-		CycleBytesUploaded: req.CycleBytesUploaded,
-	}); serr != nil {
-		// Best-effort: log and continue; the backup is already recorded.
-		slog.WarnContext(ctx, "backup: incremental cycle stats update failed (best-effort)",
-			slog.String("snapshot_id", snapshotID.String()),
-			slog.Any("error", serr))
-	}
-
-	// 5. Publish completed SSE event.
-	if completed, gerr := s.repo.GetSnapshot(ctx, tenantID, snapshotID); gerr == nil {
-		s.publish(BackupEvent{
-			SnapshotID:  snapshotID,
-			Phase:       "completed",
-			PhaseDetail: map[string]any{"chunk_refs": chunkRefs, "stored": storedCount, "incremental": true},
-			Status:      completed.Status,
-		})
-	}
-
-	// 6. Reconcile schedule run.
-	if s.scheduleRuns != nil {
-		_, _ = s.scheduleRuns.SetScheduleRunStatusBySnapshot(ctx, tenantID, snapshotID, SetScheduleRunStatusInput{
-			TenantID:    tenantID,
-			Status:      ScheduleRunStatusCompleted,
-			SetFinished: true,
-		})
-	}
-
-	return chunkRefs, storedCount, nil
-}
-
-// fileIndexSoftCap is the maximum number of backup_file_index rows for a
-// snapshot before the streaming endpoint returns 204 (agent AUTO-BASEs).
-const fileIndexSoftCap = 2_000_000
+// ADR-051: SubmitIncrementalManifest (the per-file backup_file_index recorder)
+// is RETIRED. An archive-delta increment submits the SAME SubmitManifestRequest
+// as a full backup — zip parts + DB dump + files-list + tombstones manifest
+// entries — and is recorded through SubmitManifest/RecordManifest, inheriting
+// its ADR-050 atomic completion for free.

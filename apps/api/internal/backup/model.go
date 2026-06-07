@@ -66,6 +66,15 @@ const (
 	EntryKindTheme     = "theme"
 	EntryKindUpload    = "upload"
 	EntryKindWPContent = "wp-content" // catch-all: NOT plugin/theme/upload
+	// ADR-051 archive-delta increments emit two extra manifest-entry kinds:
+	//   files-list:  ONE entry per snapshot, the relpath\tsize\tmtime list that
+	//                seeds the NEXT increment's diff (chunked like a part).
+	//   tombstones:  ONE entry per path whose deleted state changed since the
+	//                parent (path=<relpath>, chunk_hashes empty, mode carries the
+	//                delete/re-add delta). The restore overlay reads these via
+	//                ListManifest with no CP-side chunk fetch.
+	EntryKindFilesList  = "files-list"
+	EntryKindTombstones = "tombstones"
 )
 
 // Schedule cadences.
