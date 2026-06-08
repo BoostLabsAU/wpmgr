@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.31.1] - 2026-06-08
+
+### Fixed
+
+- Cancelling enrollment of a site that never connected now removes it cleanly so you can add the same URL again immediately. Sites that have connected are still archived with their history, as before.
+- The Sites page now surfaces disconnected sites even when you have no active sites, with Reconnect and Remove actions, so a previously connected or stranded site is never trapped on an empty screen.
+- Adding a URL already on your account now offers to reconnect that site (or open it if already connected) instead of returning a raw error.
+
 ## [0.31.0] - 2026-06-08
 
 ### Added

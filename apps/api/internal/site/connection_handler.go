@@ -36,6 +36,13 @@ func (h *Handler) RegisterConnection(r *gin.RouterGroup) {
 		authz.RequirePermission(authz.PermSiteWrite), authz.RequireOrgScope(), authz.RequireSiteAccess("siteId"), h.archive)
 	r.POST("/sites/:siteId/restore",
 		authz.RequirePermission(authz.PermSiteWrite), authz.RequireOrgScope(), authz.RequireSiteAccess("siteId"), h.restore)
+	// CancelEnrollment: hard-deletes a never-connected pending_enrollment site.
+	// Same middleware chain as archive/revoke (PermSiteWrite + org scope + site
+	// access gate). The service-layer guard enforces the never-connected
+	// invariant server-side; the middleware provides the authentication/authz
+	// outer shell.
+	r.POST("/sites/:siteId/cancel",
+		authz.RequirePermission(authz.PermSiteWrite), authz.RequireOrgScope(), authz.RequireSiteAccess("siteId"), h.cancelEnrollment)
 }
 
 // enrollmentCodeResponse is the once-shown enrollment code returned by the
@@ -147,6 +154,25 @@ func (h *Handler) archive(c *gin.Context) {
 	reason := optionalReason(c)
 	if err := h.conn.Archive(c.Request.Context(), ActorSiteInput{
 		TenantID: tenantID, SiteID: siteID, ActorID: actorID, Reason: reason,
+	}); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.Status(http.StatusNoContent)
+}
+
+// cancelEnrollment hard-deletes a never-connected pending_enrollment site.
+// The service enforces the never-connected guard (connection_state ==
+// pending_enrollment AND enrolled_at IS NULL AND agent_public_key == "").
+// Returns 204 on success, 409 with code "not_cancellable" if the site has
+// ever connected, and the standard 404/403 on access failures.
+func (h *Handler) cancelEnrollment(c *gin.Context) {
+	tenantID, siteID, actorID, ok := h.lifecycleCtx(c)
+	if !ok {
+		return
+	}
+	if err := h.conn.CancelEnrollment(c.Request.Context(), ActorSiteInput{
+		TenantID: tenantID, SiteID: siteID, ActorID: actorID,
 	}); err != nil {
 		httpx.Error(c, err)
 		return

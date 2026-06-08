@@ -83,6 +83,10 @@ const (
 	EventSiteDisconnected = "site.disconnected"
 	EventSiteArchived     = "site.archived"
 	EventSiteRestored     = "site.restored"
+	// EventSiteDeleted is published after a never-connected pending enrollment
+	// is hard-deleted via CancelEnrollment. The web removes the row from the
+	// sites list on receipt.
+	EventSiteDeleted = "site.deleted"
 
 	// Media Optimizer (ADR-043 §7) event types, published on the shared tenant
 	// SSE bus and filtered by site_id. The frontend (Phase 5) must add these
@@ -306,4 +310,11 @@ type ConnectionService interface {
 	// disconnected site, moving it back to pending_enrollment (generation bumps
 	// on the next consume).
 	BeginReEnrollment(ctx context.Context, in ActorSiteInput) (EnrollmentCode, error)
+
+	// CancelEnrollment hard-deletes a site that is in pending_enrollment AND has
+	// never connected (enrolled_at IS NULL, agent_public_key empty). This is the
+	// "Cancel" action in the enrollment modal. If the site has ever connected or
+	// an agent key is present the call returns a 409 with code "not_cancellable"
+	// — archive/revoke must be used instead.
+	CancelEnrollment(ctx context.Context, in ActorSiteInput) error
 }

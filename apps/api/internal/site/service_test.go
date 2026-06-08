@@ -126,6 +126,14 @@ func (f *fakeRepo) PairingCodeSiteID(_ context.Context, _ string) (uuid.UUID, bo
 	return uuid.Nil, false, nil
 }
 
+func (f *fakeRepo) GetSiteByURL(_ context.Context, _ uuid.UUID, _ string) (SiteURLHit, bool, error) {
+	return SiteURLHit{}, false, nil
+}
+
+func (f *fakeRepo) DeleteCancellable(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 1, nil
+}
+
 func orDefault(s string) string {
 	if s == "" {
 		return "pending"

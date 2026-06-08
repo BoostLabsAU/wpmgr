@@ -30,7 +30,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "v0.31.0 / open source",
+  badge: "v0.31.1 / open source",
   heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
     "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",

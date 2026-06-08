@@ -27,6 +27,7 @@ import {
   ChevronsUpDown,
   MoreHorizontal,
   RotateCw,
+  Trash2,
   Unplug,
   Zap,
 } from "lucide-react";
@@ -119,6 +120,8 @@ export interface SitesTableProps {
   onDisconnect?: (site: Site) => void;
   /** Phase 5 — start the Reconnect flow for a revoked/disconnected/archived site. */
   onReconnect?: (site: Site) => void;
+  /** Hard-remove an archived/disconnected site from WPMgr (operator-only). */
+  onRemove?: (site: Site) => void;
 }
 
 interface SiteRow {
@@ -196,6 +199,7 @@ function buildColumns(
   onOpenDetail: ((site: Site) => void) | undefined,
   onDisconnect: ((site: Site) => void) | undefined,
   onReconnect: ((site: Site) => void) | undefined,
+  onRemove: ((site: Site) => void) | undefined,
 ): ColumnDef<SiteRow>[] {
   const allVisibleSelected =
     visibleIds.length > 0 && visibleIds.every((id) => selection.selected.has(id));
@@ -404,6 +408,7 @@ function buildColumns(
           onOpenDetail={onOpenDetail}
           onDisconnect={onDisconnect}
           onReconnect={onReconnect}
+          onRemove={onRemove}
         />
       ),
     },
@@ -417,6 +422,7 @@ function RowActions({
   onOpenDetail,
   onDisconnect,
   onReconnect,
+  onRemove,
 }: {
   site: Site;
   connectionState: ConnectionState;
@@ -424,6 +430,7 @@ function RowActions({
   onOpenDetail: ((site: Site) => void) | undefined;
   onDisconnect: ((site: Site) => void) | undefined;
   onReconnect: ((site: Site) => void) | undefined;
+  onRemove: ((site: Site) => void) | undefined;
 }) {
   // pending_enrollment ("Awaiting agent") also needs the code action — the raw
   // code is shown once, so a stuck-pending site has no other way back to it.
@@ -436,6 +443,9 @@ function RowActions({
       : "Reconnect";
   const canDisconnect =
     connectionState === "connected" || connectionState === "degraded";
+  // Remove is only surfaced for archived/disconnected sites — states where
+  // neither connecting nor active management is possible.
+  const canRemove = isReconnectable(connectionState);
   return (
     <div className="flex items-center justify-end gap-1">
       <button
@@ -500,6 +510,21 @@ function RowActions({
               >
                 <RotateCw aria-hidden="true" className="size-4" />
                 {reconnectLabel}
+              </DropdownMenuItem>
+            </>
+          ) : null}
+          {canRemove && onRemove ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive focus:text-destructive"
+                onSelect={(e) => {
+                  e.preventDefault();
+                  onRemove(site);
+                }}
+              >
+                <Trash2 aria-hidden="true" className="size-4" />
+                Remove
               </DropdownMenuItem>
             </>
           ) : null}
@@ -586,6 +611,7 @@ export function SitesTable({
   onOpenDetail,
   onDisconnect,
   onReconnect,
+  onRemove,
 }: SitesTableProps) {
   const internalSelection = useSitesSelection();
   const selection = externalSelection ?? internalSelection;
@@ -607,6 +633,7 @@ export function SitesTable({
         onOpenDetail,
         onDisconnect,
         onReconnect,
+        onRemove,
       ),
     [
       selection,
@@ -615,6 +642,7 @@ export function SitesTable({
       onOpenDetail,
       onDisconnect,
       onReconnect,
+      onRemove,
     ],
   );
 

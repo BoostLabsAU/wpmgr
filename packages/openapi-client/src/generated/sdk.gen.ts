@@ -59,6 +59,9 @@ import type {
   CancelBackupData,
   CancelBackupErrors,
   CancelBackupResponses,
+  CancelEnrollmentData,
+  CancelEnrollmentErrors,
+  CancelEnrollmentResponses,
   CancelMediaData,
   CancelMediaResponses,
   CleanDatabaseData,
@@ -1210,6 +1213,36 @@ export const restoreSite = <ThrowOnError extends boolean = false>(
     RestoreSiteErrors,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/restore", ...options });
+
+/**
+ * Cancel a pending enrollment (hard-delete)
+ *
+ * Hard-deletes a site that is in `pending_enrollment` AND has **never
+ * connected** (`enrolled_at` is NULL and `agent_public_key` is absent).
+ * This is the "Cancel" action in the enrollment modal — it frees the URL
+ * so the operator can immediately re-add the same site.
+ *
+ * The never-connected guard is enforced server-side (NOT by the caller):
+ * `connection_state == pending_enrollment` AND `enrolled_at IS NULL` AND
+ * `agent_public_key == ""` must all hold. If the site has ever connected
+ * (enrolled at least once) the request is rejected with
+ * `code: "not_cancellable"` — use `archive` or `revoke` instead.
+ *
+ * On success a `site.deleted` SSE event is published to the tenant stream
+ * so open dashboards can remove the row without a poll.
+ *
+ * Requires `site:write` + org scope + site access (same chain as
+ * `archive`/`revoke`).
+ *
+ */
+export const cancelEnrollment = <ThrowOnError extends boolean = false>(
+  options: Options<CancelEnrollmentData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CancelEnrollmentResponses,
+    CancelEnrollmentErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/cancel", ...options });
 
 /**
  * Agent enrollment (public)

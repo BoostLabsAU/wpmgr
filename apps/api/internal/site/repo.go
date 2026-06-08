@@ -55,6 +55,13 @@ type Repo interface {
 	// "Add site" flow) and returns it.
 	CreatePending(ctx context.Context, tenantID uuid.UUID, url, name string, tags []string) (Site, error)
 
+	// GetSiteByURL returns the (id, connection_state) of any existing site with
+	// the given URL inside a tenant (including archived rows). Returns (zero,
+	// false, nil) when no row exists, and (row, true, nil) on a hit.
+	// Called by MintEnrollmentCode before CreatePending to surface a structured
+	// 409 with site_id + connection_state instead of a bare index-violation.
+	GetSiteByURL(ctx context.Context, tenantID uuid.UUID, url string) (SiteURLHit, bool, error)
+
 	// MintSiteBoundCode binds a fresh pairing code to an existing site_id.
 	MintSiteBoundCode(ctx context.Context, in CreatePairingCodeInput, siteID uuid.UUID, codeHash string, expiresAt time.Time) (PairingCode, error)
 
@@ -63,6 +70,13 @@ type Repo interface {
 	// one tenant-scoped tx. It returns the updated site and the from-state. The
 	// applyFn selects which state-write query to run for `to`.
 	Transition(ctx context.Context, in TransitionInput) (TransitionResult, error)
+
+	// DeleteCancellable hard-deletes a site inside the caller's tenant tx IFF the
+	// site is still in pending_enrollment with no enrolled_at and no agent key.
+	// Returns the number of rows deleted (0 or 1). rowsAffected==0 means the row
+	// either does not exist or has already raced to a connected/enrolled state;
+	// the service must treat 0 as not_cancellable (409).
+	DeleteCancellable(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error)
 
 	// ConsumeSiteBoundCode atomically consumes a code by hash (single-use) and,
 	// when the code is site-bound, transitions that site pending_enrollment→
@@ -92,6 +106,13 @@ type Repo interface {
 type SiteRef struct {
 	ID       uuid.UUID
 	TenantID uuid.UUID
+}
+
+// SiteURLHit is the minimal (id, connection_state) projection returned by
+// GetSiteByURL. Used by MintEnrollmentCode to build a structured 409.
+type SiteURLHit struct {
+	ID              uuid.UUID
+	ConnectionState ConnectionState
 }
 
 // TransitionInput drives a single state-machine write. ApplyFn runs the chosen

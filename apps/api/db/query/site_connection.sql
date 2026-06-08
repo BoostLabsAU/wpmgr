@@ -145,6 +145,15 @@ INSERT INTO sites (tenant_id, url, name, status, connection_state, tags)
 VALUES ($1, $2, $3, 'pending', 'pending_enrollment', $4)
 RETURNING *;
 
+-- name: GetSiteByURLForMint :one
+-- URL-dedup check before MintEnrollmentCode. Tenant-scoped; includes ALL states
+-- (archived, pending, etc.) so that a tombstone from a previously-cancelled or
+-- archived site is visible and the caller can return a structured 409 with
+-- site_id + connection_state instead of hitting the unique-index violation.
+SELECT id, connection_state FROM sites
+WHERE tenant_id = $1 AND url = $2
+LIMIT 1;
+
 -- ---------------------------------------------------------------------------
 -- Heartbeat liveness (tenant-scoped). Returns the current connection_state so
 -- the service can decide whether a recovery transition is needed and whether
@@ -224,6 +233,20 @@ SELECT * FROM site_events
 WHERE tenant_id = $1 AND event_id > $2
 ORDER BY event_id
 LIMIT $3;
+
+-- name: DeleteCancellableSite :execrows
+-- Hard-delete a site that has NEVER connected: the delete is conditional on
+-- all three never-connected predicates so the check and the delete are atomic
+-- in the same tenant-scoped tx. A concurrent AttachAgentAndConnect (enroll)
+-- that lands between a hypothetical separate-tx load and this DELETE cannot
+-- slip through because this single statement either matches and deletes the
+-- row (predicates still hold) or returns 0 rows (the agent already enrolled).
+-- rowsAffected==0 must be treated as not_cancellable by the service layer.
+DELETE FROM sites
+WHERE id = $1 AND tenant_id = $2
+  AND connection_state = 'pending_enrollment'
+  AND enrolled_at IS NULL
+  AND (agent_public_key IS NULL OR agent_public_key = '');
 
 -- name: PruneSiteEvents :execrows
 -- Ring-buffer prune: drop events older than the replay window (cross-tenant,

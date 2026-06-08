@@ -4130,9 +4130,31 @@ export type CreateSiteData = {
 
 export type CreateSiteErrors = {
   /**
-   * Site URL already exists for this tenant
+   * Site URL already exists for this tenant. The `details` object carries
+   * `site_id` (UUID string) and `connection_state` (string) of the
+   * existing row so the web can branch: offer "Cancel and re-add" when
+   * `pending_enrollment`, "Reconnect" when `archived`/`disconnected`,
+   * or a generic "already exists" message otherwise.
+   *
    */
-  409: Error;
+  409: Error & {
+    details?: {
+      /**
+       * ID of the existing site with this URL.
+       */
+      site_id: string;
+      /**
+       * Current connection state of the existing site.
+       */
+      connection_state:
+        | "pending_enrollment"
+        | "connected"
+        | "degraded"
+        | "disconnected"
+        | "revoked"
+        | "archived";
+    };
+  };
   /**
    * Validation failed
    */
@@ -4508,6 +4530,45 @@ export type RestoreSiteResponses = {
 
 export type RestoreSiteResponse =
   RestoreSiteResponses[keyof RestoreSiteResponses];
+
+export type CancelEnrollmentData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/cancel";
+};
+
+export type CancelEnrollmentErrors = {
+  /**
+   * Insufficient permissions
+   */
+  403: Error;
+  /**
+   * Site not found
+   */
+  404: Error;
+  /**
+   * Site cannot be cancelled because it has connected at least once
+   * (`not_cancellable`). Use `archive` or `revoke` instead.
+   *
+   */
+  409: Error;
+};
+
+export type CancelEnrollmentError =
+  CancelEnrollmentErrors[keyof CancelEnrollmentErrors];
+
+export type CancelEnrollmentResponses = {
+  /**
+   * Site hard-deleted; URL is now free.
+   */
+  204: void;
+};
+
+export type CancelEnrollmentResponse =
+  CancelEnrollmentResponses[keyof CancelEnrollmentResponses];
 
 export type EnrollData = {
   body: EnrollRequest;

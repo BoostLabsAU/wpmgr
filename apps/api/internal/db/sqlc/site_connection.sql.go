@@ -2,6 +2,11 @@
 // versions:
 //   sqlc v1.27.0
 // source: site_connection.sql
+// NOTE(#211): GetSiteByURLForMint was added manually because the full
+// sqlc regeneration is blocked by an unrelated schema issue (chain_id). It is
+// consistent with the sqlc v1.27.0 code style used throughout this file.
+// NOTE(#212): DeleteCancellableSite was added manually for the same reason
+// (chain_id blocker). Consistent with the sqlc v1.27.0 code style.
 
 package sqlc
 
@@ -992,4 +997,61 @@ func (q *Queries) TouchSiteHeartbeat(ctx context.Context, arg TouchSiteHeartbeat
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getSiteByURLForMint = `-- name: GetSiteByURLForMint :one
+SELECT id, connection_state FROM sites
+WHERE tenant_id = $1 AND url = $2
+LIMIT 1
+`
+
+// GetSiteByURLForMintParams are the parameters for GetSiteByURLForMint.
+type GetSiteByURLForMintParams struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+	Url      string    `json:"url"`
+}
+
+// GetSiteByURLForMintRow is the partial-row result of GetSiteByURLForMint.
+type GetSiteByURLForMintRow struct {
+	ID              uuid.UUID `json:"id"`
+	ConnectionState string    `json:"connection_state"`
+}
+
+// GetSiteByURLForMint looks up the minimal identity of any existing site with
+// the given URL inside a tenant, including archived rows. Used by
+// MintEnrollmentCode to return a structured 409 with site_id + connection_state
+// before the INSERT would hit the unique-index violation.
+func (q *Queries) GetSiteByURLForMint(ctx context.Context, arg GetSiteByURLForMintParams) (GetSiteByURLForMintRow, error) {
+	row := q.db.QueryRow(ctx, getSiteByURLForMint, arg.TenantID, arg.Url)
+	var i GetSiteByURLForMintRow
+	err := row.Scan(&i.ID, &i.ConnectionState)
+	return i, err
+}
+
+const deleteCancellableSite = `-- name: DeleteCancellableSite :execrows
+DELETE FROM sites
+WHERE id = $1 AND tenant_id = $2
+  AND connection_state = 'pending_enrollment'
+  AND enrolled_at IS NULL
+  AND (agent_public_key IS NULL OR agent_public_key = '')
+`
+
+// DeleteCancellableSiteParams are the parameters for DeleteCancellableSite.
+type DeleteCancellableSiteParams struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+// DeleteCancellableSite hard-deletes a site that has never connected. The
+// delete is conditional on all three never-connected predicates so the guard
+// and the delete execute atomically in the same transaction. A concurrent
+// AttachAgentAndConnect that lands between a hypothetical separate load and
+// this statement either races and enrolls first (rowsAffected==0) or loses
+// to this delete. The caller must treat rowsAffected==0 as not_cancellable.
+func (q *Queries) DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCancellableSite, arg.ID, arg.TenantID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

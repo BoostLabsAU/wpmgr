@@ -138,6 +138,12 @@ type Querier interface {
 	// job can delete the object from storage when the count reaches zero.
 	DecrementChunkRefcount(ctx context.Context, arg DecrementChunkRefcountParams) (DecrementChunkRefcountRow, error)
 	DeleteBackupSnapshot(ctx context.Context, arg DeleteBackupSnapshotParams) (int64, error)
+	// Hard-delete a site that has never connected. The delete is conditional on
+	// all three never-connected predicates (connection_state='pending_enrollment',
+	// enrolled_at IS NULL, agent_public_key empty) so the guard and delete are
+	// atomic in the same tenant tx. rowsAffected==0 means the site raced to
+	// connected and must be treated as not_cancellable by the service layer.
+	DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error)
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) (int64, error)
 	// Deletes a chunk row only if its refcount is zero (the object was already
 	// removed from storage by the GC job). Tenant-scoped.
@@ -265,6 +271,10 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	// Site load for a read-modify-write transition (tenant-scoped, FOR UPDATE).
 	// ---------------------------------------------------------------------------
+	// URL-dedup check before MintEnrollmentCode. Tenant-scoped; includes ALL states
+	// (archived, pending, etc.) so that a tombstone is visible and the caller can
+	// return a structured 409 with site_id + connection_state.
+	GetSiteByURLForMint(ctx context.Context, arg GetSiteByURLForMintParams) (GetSiteByURLForMintRow, error)
 	// Loads a site under the tenant scope with a row lock so the load → validate →
 	// write sequence is serialized against concurrent transitions on the same row.
 	GetSiteForTransition(ctx context.Context, arg GetSiteForTransitionParams) (Site, error)

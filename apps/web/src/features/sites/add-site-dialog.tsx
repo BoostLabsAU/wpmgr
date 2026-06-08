@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from "react";
-import { useNavigate } from "@tanstack/react-router";
+import { Link, useNavigate } from "@tanstack/react-router";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
@@ -30,7 +30,8 @@ import { cn } from "@/lib/utils";
 import {
   useCreateSiteFirst,
   useCreateEnrollmentCode,
-  useArchiveSite,
+  useCancelEnrollment,
+  SiteUrlExistsError,
 } from "@/features/sites/use-site-connection";
 import {
   useSiteEvents,
@@ -180,6 +181,29 @@ function AddSiteFlow({
     setStep("awaiting");
   }, []);
 
+  // Called from the UrlStep collision affordance: mint a fresh code for the
+  // existing site_id and jump to the awaiting step.
+  const newCode = useCreateEnrollmentCode();
+  const handleReconnectExisting = useCallback(
+    (siteId: string, url: string) => {
+      newCode.mutate(
+        { siteId },
+        {
+          onSuccess: (result) => {
+            setPending({
+              siteId,
+              url,
+              enrollmentCode: result.enrollment_code,
+              expiresAt: result.expires_at,
+            });
+            setStep("awaiting");
+          },
+        },
+      );
+    },
+    [newCode],
+  );
+
   const reset = useCallback(() => {
     setPending(null);
     setConnectedSite(null);
@@ -211,7 +235,12 @@ function AddSiteFlow({
             animate="animate"
             exit="exit"
           >
-            <UrlStep onCreated={handleCreated} onCancel={onClose} initialUrl={initialUrl} />
+            <UrlStep
+              onCreated={handleCreated}
+              onCancel={onClose}
+              onReconnectExisting={handleReconnectExisting}
+              initialUrl={initialUrl}
+            />
           </motion.div>
         ) : step === "awaiting" && pending ? (
           <motion.div
@@ -260,10 +289,12 @@ function AddSiteFlow({
 function UrlStep({
   onCreated,
   onCancel,
+  onReconnectExisting,
   initialUrl,
 }: {
   onCreated: (site: PendingSite) => void;
   onCancel: () => void;
+  onReconnectExisting: (siteId: string, url: string) => void;
   initialUrl?: string;
 }) {
   const create = useCreateSiteFirst();
@@ -299,6 +330,16 @@ function UrlStep({
     );
   }, [url, name, tags, create, onCreated]);
 
+  // Render a targeted affordance when the CP returns a structured 409 collision.
+  const urlExistsError =
+    create.isError && create.error instanceof SiteUrlExistsError
+      ? create.error
+      : null;
+  const genericError =
+    create.isError && !(create.error instanceof SiteUrlExistsError)
+      ? create.error.message
+      : null;
+
   return (
     <>
       <DialogBody>
@@ -314,6 +355,7 @@ function UrlStep({
             onChange={(e) => {
               setUrl(e.target.value);
               if (urlError) setUrlError(null);
+              if (create.isError) create.reset();
             }}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
@@ -355,9 +397,15 @@ function UrlStep({
           </p>
         </div>
 
-        {create.isError ? (
+        {urlExistsError ? (
+          <SiteUrlExistsAffordance
+            error={urlExistsError}
+            url={url.trim()}
+            onReconnect={onReconnectExisting}
+          />
+        ) : genericError ? (
           <p role="alert" className="text-sm text-destructive">
-            {create.error.message}
+            {genericError}
           </p>
         ) : null}
       </DialogBody>
@@ -376,6 +424,95 @@ function UrlStep({
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// URL-collision affordance
+// ---------------------------------------------------------------------------
+
+function SiteUrlExistsAffordance({
+  error,
+  url,
+  onReconnect,
+}: {
+  error: SiteUrlExistsError;
+  url: string;
+  onReconnect: (siteId: string, url: string) => void;
+}) {
+  const { connectionState, siteId } = error;
+
+  if (connectionState === "connected") {
+    return (
+      <div
+        role="alert"
+        className="rounded-md border border-border bg-muted/40 p-3 text-sm"
+      >
+        <p className="font-medium text-foreground">This site is already connected.</p>
+        <p className="mt-1 text-muted-foreground">
+          Open the site to manage it.
+        </p>
+        <Link
+          to="/sites/$siteId"
+          params={{ siteId }}
+          className="mt-2 inline-flex items-center text-sm font-medium text-primary underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          Go to site
+        </Link>
+      </div>
+    );
+  }
+
+  if (connectionState === "pending_enrollment") {
+    return (
+      <div
+        role="alert"
+        className="rounded-md border border-border bg-muted/40 p-3 text-sm"
+      >
+        <p className="font-medium text-foreground">
+          Enrollment for this site is already in progress.
+        </p>
+        <p className="mt-1 text-muted-foreground">
+          Check the awaiting-enrollment dialog, or reconnect to get a fresh
+          pairing code.
+        </p>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="mt-2"
+          onClick={() => onReconnect(siteId, url)}
+        >
+          <RotateCw aria-hidden="true" />
+          Reconnect
+        </Button>
+      </div>
+    );
+  }
+
+  // Reconnectable states: archived | revoked | disconnected
+  return (
+    <div
+      role="alert"
+      className="rounded-md border border-border bg-muted/40 p-3 text-sm"
+    >
+      <p className="font-medium text-foreground">
+        This site is already added but disconnected.
+      </p>
+      <p className="mt-1 text-muted-foreground">
+        Reconnect to get a fresh pairing code and re-enroll the agent.
+      </p>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        className="mt-2"
+        onClick={() => onReconnect(siteId, url)}
+      >
+        <RotateCw aria-hidden="true" />
+        Reconnect
+      </Button>
+    </div>
   );
 }
 
@@ -419,7 +556,7 @@ function AwaitingStep({
   onClose: () => void;
 }) {
   const now = useNow(1000);
-  const archive = useArchiveSite();
+  const cancel = useCancelEnrollment();
   const newCode = useCreateEnrollmentCode();
 
   const expiry = Date.parse(pending.expiresAt);
@@ -432,11 +569,15 @@ function AwaitingStep({
     typeof window !== "undefined" ? window.location.origin : "";
 
   const cancelEnrollment = useCallback(() => {
-    archive.mutate(
-      { siteId: pending.siteId, reason: "enrollment cancelled" },
-      { onSettled: onClose },
+    cancel.mutate(
+      { siteId: pending.siteId },
+      {
+        onSuccess: onClose,
+        // 404 is already treated as success inside the mutation, but even a
+        // genuine failure keeps the dialog open so the operator sees the error.
+      },
     );
-  }, [archive, pending.siteId, onClose]);
+  }, [cancel, pending.siteId, onClose]);
 
   const requestNewCode = useCallback(() => {
     newCode.mutate(
@@ -512,14 +653,20 @@ function AwaitingStep({
         </div>
       </DialogBody>
 
+      {cancel.isError ? (
+        <p role="alert" className="px-1 text-sm text-destructive">
+          {cancel.error.message}
+        </p>
+      ) : null}
+
       <DialogFooter className="pt-2">
         <Button
           type="button"
           variant="outline"
           onClick={cancelEnrollment}
-          disabled={archive.isPending}
+          disabled={cancel.isPending}
         >
-          {archive.isPending ? "Cancelling…" : "Cancel enrollment"}
+          {cancel.isPending ? "Cancelling…" : "Cancel enrollment"}
         </Button>
       </DialogFooter>
     </>
