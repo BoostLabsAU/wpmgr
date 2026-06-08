@@ -30,7 +30,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "v0.28.0 / open source",
+  badge: "v0.29.0 / open source",
   heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
     "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",
@@ -347,7 +347,7 @@ export const OPEN_SOURCE = {
     "WPMgr is open source first. Self-host it in minutes, read every line, open issues, submit PRs, and shape where it goes next.",
   bodyLines: [
     "The control plane and dashboard are AGPL-3.0. The WordPress agent is MIT-licensed. Both licenses are chosen so you can audit, fork, and deploy without restriction. There is no paid tier or per-site fee to run it yourself.",
-    "The bundled Docker Compose stack brings up the control plane, dashboard, database, and storage in a few commands. Prebuilt container images are published for production setups. Good-first-issue labels are kept current on GitHub so contributors have a clear on-ramp.",
+    "The bundled Docker Compose stack brings up the control plane, dashboard, database, and storage in a few commands. Prebuilt container images are published for production setups. A built-in startup check (`validate-env`) lists every misconfigured environment variable at once, and the control plane stays up in a degraded mode with a clear /readyz 503 if a setting is wrong, so you can diagnose the problem without watching a crash loop. Good-first-issue labels are kept current on GitHub so contributors have a clear on-ramp.",
   ],
   command: "docker compose up -d",
   chips: [

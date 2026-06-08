@@ -4,6 +4,7 @@
 //
 //	wpmgr-cli migrate        # apply embedded versioned migrations
 //	wpmgr-cli gen-secrets    # mint the boot-critical secrets (KEY=VALUE lines)
+//	wpmgr-cli validate-env   # check the environment config and list every problem at once
 package main
 
 import (
@@ -33,6 +34,11 @@ func main() {
 			fmt.Fprintln(os.Stderr, "gen-secrets:", err)
 			os.Exit(1)
 		}
+	case "validate-env":
+		if err := validateEnv(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "validate-env:", err)
+			os.Exit(1)
+		}
 	default:
 		usage()
 		os.Exit(2)
@@ -58,4 +64,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "wpmgr-cli — admin tooling")
 	fmt.Fprintln(os.Stderr, "  migrate        apply database migrations")
 	fmt.Fprintln(os.Stderr, "  gen-secrets    mint boot-critical secrets as KEY=VALUE lines")
+	fmt.Fprintln(os.Stderr, "  validate-env   check the environment config and list every problem at once")
 }
