@@ -481,7 +481,13 @@ final class MediaCleanCommand implements CommandInterface
         }
 
         $quarantine  = $this->quarantine ?? new MediaQuarantine();
-        $manifestId  = $quarantine->beginManifest($jobId);
+
+        try {
+            $manifestId = $quarantine->beginManifest($jobId);
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'media quarantine unavailable: ' . $e->getMessage()];
+        }
+
         $uploadDir   = wp_upload_dir();
         $uploadsBase = rtrim((string)($uploadDir['basedir'] ?? ''), '/\\');
         $moved          = 0;
@@ -565,8 +571,12 @@ final class MediaCleanCommand implements CommandInterface
         $quarantine = $this->quarantine ?? new MediaQuarantine();
         $restored   = 0;
 
-        foreach ($manifestIds as $mId) {
-            $restored += $quarantine->restoreManifest($mId);
+        try {
+            foreach ($manifestIds as $mId) {
+                $restored += $quarantine->restoreManifest($mId);
+            }
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'media quarantine unavailable: ' . $e->getMessage()];
         }
 
         return [
@@ -614,15 +624,19 @@ final class MediaCleanCommand implements CommandInterface
         $entriesProcessed = 0;
         $allResults       = [];
 
-        foreach ($manifestIds as $mId) {
-            $r                 = $quarantine->deleteManifest($mId);
-            $postsDeleted     += $r['posts_deleted'];
-            $postsFailed      += $r['posts_failed'];
-            $filesDeleted     += $r['files_deleted'];
-            $entriesProcessed += $r['entries_processed'];
-            foreach ($r['results'] as $row) {
-                $allResults[] = $row;
+        try {
+            foreach ($manifestIds as $mId) {
+                $r                 = $quarantine->deleteManifest($mId);
+                $postsDeleted     += $r['posts_deleted'];
+                $postsFailed      += $r['posts_failed'];
+                $filesDeleted     += $r['files_deleted'];
+                $entriesProcessed += $r['entries_processed'];
+                foreach ($r['results'] as $row) {
+                    $allResults[] = $row;
+                }
             }
+        } catch (\Throwable $e) {
+            return ['ok' => false, 'detail' => 'media quarantine unavailable: ' . $e->getMessage()];
         }
 
         // phpcs:disable WordPress.PHP.DevelopmentFunctions.error_log_error_log
