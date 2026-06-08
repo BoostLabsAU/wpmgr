@@ -96,12 +96,45 @@ final class MediaQuarantine
     private array $openManifests = [];
 
     /**
+     * Whether the constructor resolved a safe wp-content base path.
+     * False means no write operations may proceed; the instance is read-only.
+     */
+    private bool $basePathResolved = false;
+
+    /**
      * @param string|null $contentDir Override for WP_CONTENT_DIR (testing only).
      *                                Pass null (default) to use the runtime constant.
      */
     public function __construct(?string $contentDir = null)
     {
-        $base                  = $contentDir ?? (defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : '');
+        // Base-path resolution order:
+        //   1. Explicit $contentDir passed by the caller (test override or known path).
+        //   2. WP_CONTENT_DIR constant, when defined and non-empty (standard runtime).
+        //   3. ABSPATH constant, when defined and non-empty, with '/wp-content' appended
+        //      — mirrors how WordPress itself derives the WP_CONTENT_DIR default and how
+        //      sibling classes (class-backup-source.php, class-keystore.php) degrade.
+        //   4. Unresolved — instance is marked unavailable; writes are blocked before
+        //      any mkdir call so nothing is ever created at the filesystem root.
+        if (is_string($contentDir) && $contentDir !== '') {
+            $base                   = rtrim($contentDir, '/\\');
+            $this->basePathResolved = true;
+        } elseif (defined('WP_CONTENT_DIR') && is_string(WP_CONTENT_DIR) && WP_CONTENT_DIR !== '') {
+            $base                   = rtrim(WP_CONTENT_DIR, '/\\');
+            $this->basePathResolved = true;
+        } elseif (defined('ABSPATH') && is_string(ABSPATH) && ABSPATH !== '') {
+            $base                   = rtrim(ABSPATH, '/\\') . '/wp-content';
+            $this->basePathResolved = true;
+        } else {
+            // No safe base available. Set the *Root properties to non-empty strings
+            // so that the readonly scandir callers (quarantinedAttachmentIds,
+            // listManifests, listManifestsDetailed) simply return empty arrays on a
+            // non-existent path — their existing @scandir()/is_dir() guards handle this.
+            // ensureQuarantineRoot() will throw before any mkdir when $basePathResolved
+            // is false, so these paths are never written to.
+            $base                   = '';
+            $this->basePathResolved = false;
+        }
+
         $this->quarantineRoot  = $base . '/' . self::QUARANTINE_DIR;
         $this->mediaRoot       = $this->quarantineRoot . '/' . self::MEDIA_SUBDIR;
         $this->manifestsRoot   = $this->quarantineRoot . '/' . self::MANIFESTS_SUBDIR;
@@ -641,9 +674,22 @@ final class MediaQuarantine
      * ineffective; the primary protection for manifests is that they live in
      * the manifests/ directory (outside the media/ web tree), not inside a
      * directory that is ever served.
+     *
+     * @throws \RuntimeException When no safe wp-content base could be resolved at
+     *   construction time. The guard here is the single write gateway — it blocks
+     *   every code path that would otherwise mkdir or write files, preventing any
+     *   directory from being created at the filesystem root ('/').
      */
     private function ensureQuarantineRoot(): void
     {
+        if (!$this->basePathResolved) {
+            throw new \RuntimeException(
+                'WPMgr media quarantine unavailable: could not resolve a safe wp-content base ' .
+                '(WP_CONTENT_DIR undefined and ABSPATH unavailable). ' .
+                'Refusing to write at the filesystem root.'
+            );
+        }
+
         if (!is_dir($this->quarantineRoot)) {
             mkdir($this->quarantineRoot, 0755, true);
         }

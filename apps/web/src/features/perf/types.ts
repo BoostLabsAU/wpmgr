@@ -195,6 +195,30 @@ export const DB_CLEAN_INTERVALS = [
 ] as const;
 
 // ---------------------------------------------------------------------------
+// Cache Hit-Ratio History (#162)
+// ---------------------------------------------------------------------------
+
+/** One data point in the cache hit-ratio trend (GET /perf/cache/health). */
+export interface CacheHitRatioPoint {
+  /** Number of cache hits in the sample window. */
+  hit_count: number;
+  /** Number of cache misses in the sample window. */
+  miss_count: number;
+  /** Hit ratio as a percentage (0..100). */
+  ratio_pct: number;
+  /** RFC 3339 timestamp of the sample. */
+  sampled_at: string;
+}
+
+/** Response from GET /api/v1/sites/{siteId}/perf/cache/health */
+export interface CacheHealthResponse {
+  /** Trend series ordered oldest-first. Empty until the agent reports traffic. */
+  points: CacheHitRatioPoint[];
+  /** Average hit ratio across all points (0.0 when < 1 point). */
+  avg_ratio_pct: number;
+}
+
+// ---------------------------------------------------------------------------
 // DB Size History (Phase 3.4)
 // ---------------------------------------------------------------------------
 

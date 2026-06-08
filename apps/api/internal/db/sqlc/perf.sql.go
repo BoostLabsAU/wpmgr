@@ -1560,3 +1560,126 @@ func (q *Queries) UpsertRucssResult(ctx context.Context, arg UpsertRucssResultPa
 	)
 	return i, err
 }
+
+// ---------------------------------------------------------------------------
+// site_cache_hit_ratio_history (M52 / #162)
+// ---------------------------------------------------------------------------
+
+const insertCacheHitRatioHistory = `-- name: InsertCacheHitRatioHistory :one
+INSERT INTO site_cache_hit_ratio_history (
+    site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6
+)
+ON CONFLICT DO NOTHING
+RETURNING id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at
+`
+
+// InsertCacheHitRatioHistoryParams holds the input for one cache hit-ratio
+// history data point. RatioPct is passed as a *float64 so the caller can
+// supply NULL when counts are zero (defensive; the ingest guard prevents that
+// in practice).
+type InsertCacheHitRatioHistoryParams struct {
+	SiteID    uuid.UUID `json:"site_id"`
+	TenantID  uuid.UUID `json:"tenant_id"`
+	HitCount  int64     `json:"hit_count"`
+	MissCount int64     `json:"miss_count"`
+	RatioPct  *float64  `json:"ratio_pct"`
+	SampledAt time.Time `json:"sampled_at"`
+}
+
+// InsertCacheHitRatioHistory appends one hit-ratio data point. ON CONFLICT DO
+// NOTHING on (site_id, sampled_at) makes this idempotent if the agent emits
+// twice within the same second.
+func (q *Queries) InsertCacheHitRatioHistory(ctx context.Context, arg InsertCacheHitRatioHistoryParams) (SiteCacheHitRatioHistory, error) {
+	row := q.db.QueryRow(ctx, insertCacheHitRatioHistory,
+		arg.SiteID,
+		arg.TenantID,
+		arg.HitCount,
+		arg.MissCount,
+		arg.RatioPct,
+		arg.SampledAt,
+	)
+	var i SiteCacheHitRatioHistory
+	err := row.Scan(
+		&i.ID,
+		&i.SiteID,
+		&i.TenantID,
+		&i.HitCount,
+		&i.MissCount,
+		&i.RatioPct,
+		&i.SampledAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getCacheHitRatioHistory = `-- name: GetCacheHitRatioHistory :many
+SELECT id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at
+FROM site_cache_hit_ratio_history
+WHERE site_id   = $1
+  AND tenant_id = $2
+  AND sampled_at >= $3
+ORDER BY sampled_at ASC
+LIMIT 366
+`
+
+// GetCacheHitRatioHistoryParams holds the filter parameters for the trend query.
+type GetCacheHitRatioHistoryParams struct {
+	SiteID   uuid.UUID `json:"site_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	Since    time.Time `json:"since"`
+}
+
+// GetCacheHitRatioHistory returns up to 366 data points for the cache hit-ratio
+// trend chart, ordered oldest-first. Tenant-scoped via RLS (InTenantTx sets
+// app.tenant_id).
+func (q *Queries) GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error) {
+	rows, err := q.db.Query(ctx, getCacheHitRatioHistory, arg.SiteID, arg.TenantID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SiteCacheHitRatioHistory
+	for rows.Next() {
+		var i SiteCacheHitRatioHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.TenantID,
+			&i.HitCount,
+			&i.MissCount,
+			&i.RatioPct,
+			&i.SampledAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const pruneCacheHitRatioHistory = `-- name: PruneCacheHitRatioHistory :execrows
+DELETE FROM site_cache_hit_ratio_history
+WHERE id IN (
+    SELECT h.id FROM site_cache_hit_ratio_history h
+    WHERE h.created_at < $1
+    LIMIT 2000
+)
+`
+
+// PruneCacheHitRatioHistory deletes rows older than the cutoff across ALL
+// tenants (InAgentTx / app.agent). LIMIT 2000 keeps each GC transaction short;
+// the periodic job runs daily so at typical reporting frequency the cap is
+// never hit in practice.
+func (q *Queries) PruneCacheHitRatioHistory(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneCacheHitRatioHistory, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}

@@ -186,6 +186,9 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
     // ── stats: re-read the authoritative gauges ──────────────────────────────
     case "cache.stats.updated":
       void queryClient.invalidateQueries({ queryKey: perfKeys.stats(siteId) });
+      // A new stats push may carry updated hit/miss counters — refresh the
+      // hit-ratio trend so the chart stays current without a manual reload.
+      void queryClient.invalidateQueries({ queryKey: perfKeys.cacheHealth(siteId) });
       break;
 
     // ── purge lifecycle ──────────────────────────────────────────────────────

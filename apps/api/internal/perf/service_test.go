@@ -125,6 +125,17 @@ func (r *fakeRepo) PruneDBSizeHistory(_ context.Context, _ time.Duration) (int64
 	return 0, nil
 }
 
+// M52 / #162 — cache hit-ratio history stubs.
+func (r *fakeRepo) InsertCacheHitRatioHistoryTx(_ context.Context, _, _ uuid.UUID, _, _ int64, _ float64, _ time.Time) error {
+	return nil
+}
+func (r *fakeRepo) GetCacheHitRatioHistory(_ context.Context, _, _ uuid.UUID, _ time.Time) ([]CacheHitRatioPoint, error) {
+	return nil, nil
+}
+func (r *fakeRepo) PruneCacheHitRatioHistory(_ context.Context, _ time.Duration) (int64, error) {
+	return 0, nil
+}
+
 // P3.7 — fleet DB health stub.
 func (r *fakeRepo) GetFleetDbHealth(_ context.Context, _ uuid.UUID, _ time.Time) ([]FleetSiteDbSummary, error) {
 	return nil, nil

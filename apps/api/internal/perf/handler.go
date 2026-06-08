@@ -75,6 +75,8 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/perf/db/scan", authz.RequirePermission(authz.PermSiteRead), h.getDbScan)
 	// M42 Phase 3.4 — DB-size trend history + growth summary.
 	g.GET("/perf/db/health", authz.RequirePermission(authz.PermSiteRead), h.getDBHealth)
+	// M52 / #162 — cache hit-ratio history + avg.
+	g.GET("/perf/cache/health", authz.RequirePermission(authz.PermSiteRead), h.getCacheHealth)
 	// P3.5 — on-demand orphan classification report (READ-ONLY).
 	g.GET("/perf/db/orphans", authz.RequirePermission(authz.PermSiteRead), h.getOrphansReport)
 	// P3.8 — destructive orphan deletion (options / cron / tables from UNINSTALLED
@@ -458,6 +460,38 @@ func (h *Handler) getDBHealth(c *gin.Context) {
 		}
 	}
 	resp, err := h.svc.GetDBHealth(c.Request.Context(), p.TenantID, siteID, days)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// ---------------------------------------------------------------------------
+// M52 / #162 — cache hit-ratio health trend
+// ---------------------------------------------------------------------------
+
+// getCacheHealth returns the 90-day cache hit-ratio trend and average for a
+// site. The `days` query parameter adjusts the lookback window (clamped to
+// [7,365], default 90).
+func (h *Handler) getCacheHealth(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	days := 90
+	if s := c.Query("days"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			if n < 7 {
+				n = 7
+			} else if n > 365 {
+				n = 365
+			}
+			days = n
+		}
+	}
+	resp, err := h.svc.GetCacheHealth(c.Request.Context(), p.TenantID, siteID, days)
 	if err != nil {
 		httpx.Error(c, err)
 		return

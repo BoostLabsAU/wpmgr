@@ -160,6 +160,10 @@ function SitesPage() {
     expiresAt: string;
   } | null>(null);
 
+  // Onboarding handoff: when the OnboardingWizard fires its terminal CTA the
+  // URL the user entered lands here, which opens AddSiteDialog pre-filled.
+  const [onboardingUrl, setOnboardingUrl] = useState<string | null>(null);
+
   const handleDisconnect = useCallback((site: Site) => {
     setDisconnectTarget(site);
   }, []);
@@ -391,6 +395,7 @@ function SitesPage() {
       ) : sites.length === 0 ? (
         <SitesPageEmpty
           cta={operate ? undefined : <AddSitePlaceholder />}
+          onOnboardingHandoff={operate ? ({ url }) => setOnboardingUrl(url) : undefined}
         />
       ) : (
         <>
@@ -524,6 +529,16 @@ function SitesPage() {
               </p>
             </div>
           }
+        />
+      ) : null}
+
+      {/* Onboarding handoff: finishing the wizard with a URL opens AddSiteDialog
+          pre-filled at step A so the user continues into the real connect flow. */}
+      {operate ? (
+        <AddSiteDialog
+          open={onboardingUrl !== null}
+          onClose={() => setOnboardingUrl(null)}
+          initialUrl={onboardingUrl ?? undefined}
         />
       ) : null}
 

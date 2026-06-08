@@ -12,6 +12,7 @@ import { PreloadTuningCard } from "./PreloadTuningCard";
 import { CacheAdvancedSettings } from "./CacheAdvancedSettings";
 import { ServerStatusCard } from "./ServerStatusCard";
 import { PreloadProgress } from "./PreloadProgress";
+import { CacheHitRatioTrendCard } from "./CacheHitRatioTrendCard";
 
 // CacheTab — the Cache entry surface. Overview tiles + live preload progress +
 // the action toolbar + the server-status card + the basic/advanced settings
@@ -67,6 +68,8 @@ export function CacheTab({
       <CacheOverview stats={stats.data} />
 
       <PreloadProgress siteId={siteId} />
+
+      <CacheHitRatioTrendCard siteId={siteId} />
 
       {canOperate || canManage ? (
         <CacheControls

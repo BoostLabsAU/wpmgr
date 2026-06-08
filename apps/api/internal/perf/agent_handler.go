@@ -70,6 +70,10 @@ type statsReportBody struct {
 	LastPreloadAt    int64  `json:"last_preload_at,omitempty"`
 	PreloadPending   int    `json:"preload_pending"`
 	PreloadTotal     int    `json:"preload_total"`
+	// M52 / #162 — window DELTA hit/miss counts since the agent's last
+	// emission. Both optional: when absent or zero the history row is skipped.
+	CacheHitCount  int64 `json:"cache_hit_count,omitempty"`
+	CacheMissCount int64 `json:"cache_miss_count,omitempty"`
 }
 
 func (h *AgentHandler) statsReport(c *gin.Context) {
@@ -96,6 +100,10 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 		LastPurgeKind:    in.LastPurgeKind,
 		PreloadPending:   in.PreloadPending,
 		PreloadTotal:     in.PreloadTotal,
+		// Clamp to non-negative: a buggy/rogue agent could send a negative
+		// counter, which would skew the computed hit ratio (e.g. above 100%).
+		CacheHitCount:  max(0, in.CacheHitCount),
+		CacheMissCount: max(0, in.CacheMissCount),
 	}
 	if in.LastPurgedAt > 0 {
 		t := time.Unix(in.LastPurgedAt, 0).UTC()

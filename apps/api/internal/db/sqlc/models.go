@@ -387,6 +387,21 @@ type SiteDbSizeHistory struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
+// SiteCacheHitRatioHistory is one row of site_cache_hit_ratio_history (M52).
+// RatioPct is nullable: NULL only in the impossible case both counts are zero
+// (the ingest guard blocks that path). The *float64 is the pgx-compatible
+// representation for the numeric(5,2) column in the absence of pgtype.Numeric.
+type SiteCacheHitRatioHistory struct {
+	ID        uuid.UUID `json:"id"`
+	SiteID    uuid.UUID `json:"site_id"`
+	TenantID  uuid.UUID `json:"tenant_id"`
+	HitCount  int64     `json:"hit_count"`
+	MissCount int64     `json:"miss_count"`
+	RatioPct  *float64  `json:"ratio_pct"`
+	SampledAt time.Time `json:"sampled_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type SiteEvent struct {
 	EventID   string      `json:"event_id"`
 	TenantID  uuid.UUID   `json:"tenant_id"`
