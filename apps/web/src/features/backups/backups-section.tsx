@@ -1,6 +1,6 @@
-import { useState, type ReactNode } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import { Lock, LockOpen, Info } from "lucide-react";
+import { Lock, LockOpen, Info, ChevronDown, ChevronRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -39,6 +39,7 @@ import {
 } from "@/features/backups/backup-badges";
 import { InlineSnapshotProgress } from "@/features/backups/inline-snapshot-progress";
 import { isRestoreActive, PHASE_LABEL } from "@/features/backups/format-progress";
+import { RestoreDialog } from "@/features/backups/restore-dialog";
 import {
   useRestoreRuns,
   type RestoreRun,
@@ -157,6 +158,62 @@ function BackupNowControl({ siteId }: { siteId: string }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Chain grouping helpers (issue #177 — grouped chain rows)
+// ---------------------------------------------------------------------------
+
+/**
+ * A snapshot group. A SINGLETON has one member (a full/legacy snapshot, or a
+ * chain with only its base). A CHAIN group has 2+ members sorted by generation
+ * ASC; the TIP (last element) is the highest generation.
+ */
+interface SnapshotGroup {
+  /** The chain_id that binds this group, or the snapshot id for singletons. */
+  key: string;
+  /** All members, sorted by generation ASC (gen 0 first, tip last). */
+  members: BackupSnapshot[];
+}
+
+/**
+ * Group a flat snapshot list (API returns newest-created first) into chain
+ * groups ordered by the TIP's created_at DESC (same visual order the flat list
+ * had). Within each group members are sorted by generation ASC.
+ *
+ * Grouping key: chain_id when present, snapshot id otherwise. A group with a
+ * single member is a SINGLETON and renders exactly as the old flat row.
+ */
+function groupSnapshots(snaps: BackupSnapshot[]): SnapshotGroup[] {
+  const map = new Map<string, BackupSnapshot[]>();
+
+  for (const snap of snaps) {
+    const key = snap.chain_id ?? snap.id;
+    const bucket = map.get(key);
+    if (bucket) {
+      bucket.push(snap);
+    } else {
+      map.set(key, [snap]);
+    }
+  }
+
+  const groups: SnapshotGroup[] = Array.from(map.entries()).map(
+    ([key, members]) => ({
+      key,
+      members: [...members].sort((a, b) => (a.generation ?? 0) - (b.generation ?? 0)),
+    }),
+  );
+
+  // Keep the same visual order as the flat list: sort by the TIP's created_at
+  // descending (newest chain/singleton first). The non-null assertions are
+  // safe: every group has at least one member by construction above.
+  groups.sort((a, b) => {
+    const tipA = a.members[a.members.length - 1]!;
+    const tipB = b.members[b.members.length - 1]!;
+    return tipB.created_at.localeCompare(tipA.created_at);
+  });
+
+  return groups;
+}
+
 function SnapshotList({
   siteId,
   canOperate,
@@ -165,6 +222,11 @@ function SnapshotList({
   canOperate: boolean;
 }) {
   const { data, isPending, isError, error, refetch } = useBackups(siteId);
+
+  const groups = useMemo(
+    () => (data ? groupSnapshots(data) : []),
+    [data],
+  );
 
   if (isPending) {
     return (
@@ -208,72 +270,343 @@ function SnapshotList({
         </TableRow>
       </TableHeader>
       <TableBody>
-        {data.map((snap) => (
-          <TableRow key={snap.id} data-testid="backup-row">
-            <TableCell>
-              <div className="flex flex-col items-start gap-1">
-                <KindBadge kind={snap.kind} />
-                <IncrementalBadge
-                  isIncremental={snap.is_incremental}
-                  generation={snap.generation}
-                />
-              </div>
-            </TableCell>
-            <TableCell>
-              <div className="flex flex-col gap-1">
-                <StatusBadge status={snap.status} />
-                {snap.status === "running" ||
-                snap.status === "pending" ||
-                isRestoreActive(snap) ? (
-                  <InlineSnapshotProgress snapshot={snap} />
-                ) : null}
-                {snap.status === "failed" && snap.error ? (
-                  <span
-                    role="alert"
-                    className="text-xs text-destructive-subtle-fg"
-                  >
-                    {snap.error}
-                  </span>
-                ) : null}
-              </div>
-            </TableCell>
-            <TableCell className="tabular-nums">
-              {formatBytes(snap.total_size)}
-            </TableCell>
-            <TableCell className="tabular-nums">
-              {snap.chunk_count ?? "–"}
-            </TableCell>
-            <TableCell className="tabular-nums" title={snap.created_at}>
-              {relativeTime(snap.created_at) ?? "–"}
-            </TableCell>
-            <TableCell
-              className="tabular-nums"
-              title={snap.finished_at ?? undefined}
-            >
-              {relativeTime(snap.finished_at) ?? "–"}
-            </TableCell>
-            <TableCell className="text-right">
-              <div className="flex items-center justify-end gap-2">
-                {canOperate ? (
-                  <SnapshotLockToggle snapshot={snap} siteId={siteId} />
-                ) : null}
-                <Button asChild variant="outline" size="sm">
-                  <Link
-                    to="/backups/$snapshotId"
-                    params={{ snapshotId: snap.id }}
-                  >
-                    View
-                  </Link>
-                </Button>
-                {canOperate ? (
-                  <BackupRowActions snapshot={snap} siteId={siteId} />
-                ) : null}
-              </div>
-            </TableCell>
-          </TableRow>
-        ))}
+        {groups.map((group) =>
+          group.members.length === 1 ? (
+            // Safe: length===1 guarantees members[0] exists.
+            <SingletonRow
+              key={group.key}
+              snap={group.members[0]!}
+              siteId={siteId}
+              canOperate={canOperate}
+            />
+          ) : (
+            <ChainGroupRows
+              key={group.key}
+              group={group}
+              siteId={siteId}
+              canOperate={canOperate}
+            />
+          ),
+        )}
       </TableBody>
     </Table>
+  );
+}
+
+/** One flat row for a full/legacy snapshot — zero visual regression vs before. */
+function SingletonRow({
+  snap,
+  siteId,
+  canOperate,
+}: {
+  snap: BackupSnapshot;
+  siteId: string;
+  canOperate: boolean;
+}) {
+  return (
+    <TableRow data-testid="backup-row">
+      <TableCell>
+        <div className="flex flex-col items-start gap-1">
+          <KindBadge kind={snap.kind} />
+          <IncrementalBadge
+            isIncremental={snap.is_incremental}
+            generation={snap.generation}
+          />
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-col gap-1">
+          <StatusBadge status={snap.status} />
+          {snap.status === "running" ||
+          snap.status === "pending" ||
+          isRestoreActive(snap) ? (
+            <InlineSnapshotProgress snapshot={snap} />
+          ) : null}
+          {snap.status === "failed" && snap.error ? (
+            <span
+              role="alert"
+              className="text-xs text-destructive-subtle-fg"
+            >
+              {snap.error}
+            </span>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell className="tabular-nums">
+        {formatBytes(snap.total_size)}
+      </TableCell>
+      <TableCell className="tabular-nums">
+        {snap.chunk_count ?? "–"}
+      </TableCell>
+      <TableCell className="tabular-nums" title={snap.created_at}>
+        {relativeTime(snap.created_at) ?? "–"}
+      </TableCell>
+      <TableCell
+        className="tabular-nums"
+        title={snap.finished_at ?? undefined}
+      >
+        {relativeTime(snap.finished_at) ?? "–"}
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex items-center justify-end gap-2">
+          {canOperate ? (
+            <SnapshotLockToggle snapshot={snap} siteId={siteId} />
+          ) : null}
+          <Button asChild variant="outline" size="sm">
+            <Link
+              to="/backups/$snapshotId"
+              params={{ snapshotId: snap.id }}
+            >
+              View
+            </Link>
+          </Button>
+          {canOperate ? (
+            <BackupRowActions snapshot={snap} siteId={siteId} />
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
+  );
+}
+
+/**
+ * An expandable parent row for an incremental chain (2+ members).
+ * The parent shows the TIP (highest generation); a chevron toggle expands
+ * all members sorted generation ASC as indented child rows.
+ */
+function ChainGroupRows({
+  group,
+  siteId,
+  canOperate,
+}: {
+  group: SnapshotGroup;
+  siteId: string;
+  canOperate: boolean;
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  // Non-null assertion: ChainGroupRows is only rendered when members.length >= 2
+  // (guarded at the call site in SnapshotList). The tip is always the last
+  // element in the generation-ASC sorted array.
+  const tip = group.members[group.members.length - 1]!;
+  const baseCount = 1; // gen-0 member
+  const incrCount = group.members.length - baseCount;
+
+  // Aggregate totals across all members for the parent row display.
+  const totalSize = useMemo(
+    () => group.members.reduce((acc, s) => acc + (s.total_size ?? 0), 0),
+    [group.members],
+  );
+  const totalChunks = useMemo(
+    () => group.members.reduce((acc, s) => acc + (s.chunk_count ?? 0), 0),
+    [group.members],
+  );
+
+  // If any member is in-flight, show live progress on the parent.
+  const inFlightMember = group.members.find(
+    (s) => s.status === "running" || s.status === "pending" || isRestoreActive(s),
+  );
+
+  // Restore dialog state: open on the chain, version-picker defaults to tip.
+  const [restoreOpen, setRestoreOpen] = useState(false);
+
+  const subLabel = `base + ${incrCount} increment${incrCount === 1 ? "" : "s"}`;
+
+  return (
+    <>
+      {/* Parent row — the TIP */}
+      <TableRow data-testid="backup-row" data-chain-id={group.key}>
+        <TableCell>
+          <div className="flex flex-col items-start gap-1">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                aria-label={expanded ? "Collapse chain" : "Expand chain members"}
+                aria-expanded={expanded}
+                onClick={() => setExpanded((v) => !v)}
+                className="flex items-center gap-1 rounded p-0.5 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                {expanded ? (
+                  <ChevronDown aria-hidden className="size-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight aria-hidden className="size-3.5 shrink-0" />
+                )}
+              </button>
+              <KindBadge kind={tip.kind} />
+            </div>
+            <IncrementalBadge
+              isIncremental={tip.is_incremental}
+              generation={tip.generation}
+            />
+            <span className="text-xs text-muted-foreground">{subLabel}</span>
+          </div>
+        </TableCell>
+        <TableCell>
+          <div className="flex flex-col gap-1">
+            <StatusBadge status={tip.status} />
+            {inFlightMember ? (
+              <InlineSnapshotProgress snapshot={inFlightMember} />
+            ) : null}
+            {tip.status === "failed" && tip.error ? (
+              <span
+                role="alert"
+                className="text-xs text-destructive-subtle-fg"
+              >
+                {tip.error}
+              </span>
+            ) : null}
+          </div>
+        </TableCell>
+        <TableCell className="tabular-nums">
+          {formatBytes(totalSize)}
+        </TableCell>
+        <TableCell className="tabular-nums">
+          {totalChunks > 0 ? totalChunks : "–"}
+        </TableCell>
+        <TableCell className="tabular-nums" title={tip.created_at}>
+          {relativeTime(tip.created_at) ?? "–"}
+        </TableCell>
+        <TableCell
+          className="tabular-nums"
+          title={tip.finished_at ?? undefined}
+        >
+          {relativeTime(tip.finished_at) ?? "–"}
+        </TableCell>
+        <TableCell className="text-right">
+          <div className="flex items-center justify-end gap-2">
+            {canOperate && tip.status === "completed" ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRestoreOpen(true)}
+              >
+                Restore
+              </Button>
+            ) : null}
+            <Button asChild variant="outline" size="sm">
+              <Link
+                to="/backups/$snapshotId"
+                params={{ snapshotId: tip.id }}
+              >
+                View
+              </Link>
+            </Button>
+          </div>
+        </TableCell>
+      </TableRow>
+
+      {/* Expanded child rows — one per member, generation ASC */}
+      {expanded
+        ? group.members.map((member) => (
+            <ChainMemberRow
+              key={member.id}
+              member={member}
+              siteId={siteId}
+              canOperate={canOperate}
+            />
+          ))
+        : null}
+
+      {/* Restore dialog seeded with the full chain (version-picker) */}
+      {restoreOpen ? (
+        <tr aria-hidden>
+          <td colSpan={7} className="p-0">
+            <RestoreDialog
+              open={restoreOpen}
+              onClose={() => setRestoreOpen(false)}
+              snapshotId={tip.id}
+              entries={[]}
+              chainSnapshots={group.members}
+            />
+          </td>
+        </tr>
+      ) : null}
+    </>
+  );
+}
+
+/** Indented child row for one chain member (gen N). */
+function ChainMemberRow({
+  member,
+  siteId,
+  canOperate,
+}: {
+  member: BackupSnapshot;
+  siteId: string;
+  canOperate: boolean;
+}) {
+  const gen = member.generation ?? 0;
+  const genLabel = gen === 0 ? "base" : `gen ${gen}`;
+
+  return (
+    <TableRow
+      data-testid="backup-chain-member"
+      className="bg-muted/30 hover:bg-muted/50"
+    >
+      <TableCell>
+        <div className="flex flex-col items-start gap-1 pl-6">
+          <div className="flex items-center gap-1.5">
+            <span className="font-mono text-xs font-semibold text-foreground">
+              {genLabel}
+            </span>
+            <span aria-hidden className="text-muted-foreground">·</span>
+            <KindBadge kind={member.kind} />
+            <IncrementalBadge
+              isIncremental={member.is_incremental}
+              generation={member.generation}
+            />
+          </div>
+        </div>
+      </TableCell>
+      <TableCell>
+        <div className="flex flex-col gap-1">
+          <StatusBadge status={member.status} />
+          {member.status === "running" ||
+          member.status === "pending" ||
+          isRestoreActive(member) ? (
+            <InlineSnapshotProgress snapshot={member} />
+          ) : null}
+          {member.status === "failed" && member.error ? (
+            <span role="alert" className="text-xs text-destructive-subtle-fg">
+              {member.error}
+            </span>
+          ) : null}
+        </div>
+      </TableCell>
+      <TableCell className="tabular-nums">
+        {formatBytes(member.total_size)}
+      </TableCell>
+      <TableCell className="tabular-nums">
+        {member.chunk_count ?? "–"}
+      </TableCell>
+      <TableCell className="tabular-nums" title={member.created_at}>
+        {relativeTime(member.created_at) ?? "–"}
+      </TableCell>
+      <TableCell
+        className="tabular-nums"
+        title={member.finished_at ?? undefined}
+      >
+        {relativeTime(member.finished_at) ?? "–"}
+      </TableCell>
+      <TableCell className="text-right">
+        <div className="flex items-center justify-end gap-2">
+          {canOperate ? (
+            <SnapshotLockToggle snapshot={member} siteId={siteId} />
+          ) : null}
+          <Button asChild variant="outline" size="sm">
+            <Link
+              to="/backups/$snapshotId"
+              params={{ snapshotId: member.id }}
+            >
+              View
+            </Link>
+          </Button>
+          {canOperate ? (
+            <BackupRowActions snapshot={member} siteId={siteId} />
+          ) : null}
+        </div>
+      </TableCell>
+    </TableRow>
   );
 }
 

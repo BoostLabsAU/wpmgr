@@ -2557,6 +2557,179 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/restores:
+    get:
+      operationId: listRestoreRuns
+      summary: List restore runs for a site
+      description: |
+        Returns restore runs for the site, ordered newest-first. Each run
+        records a single restore attempt triggered via
+        `POST /backups/{snapshotId}/restore`. The `triggered_by_email` and
+        `triggered_by_name` fields are populated when the actor is a known
+        user in the tenant directory (API-key or system actors leave them
+        null). Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A list of restore runs for the site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreRunList"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/restores/{restoreId}:
+    get:
+      operationId: getRestoreRun
+      summary: Get a restore run by ID
+      description: |
+        Returns the restore run record by its UUID. Authorization is enforced
+        by resolving the run's `site_id` and applying the caller's
+        `PermSiteRead` grant on that site (the same by-id pattern as
+        `GET /backups/{snapshotId}`). Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/RestoreId"
+      responses:
+        "200":
+          description: The restore run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreRun"
+        "403":
+          description: The caller does not have access to the run's site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Restore run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/restores/{restoreId}/events:
+    get:
+      operationId: listRestoreRunEvents
+      summary: List phase-log events for a restore run
+      description: |
+        Returns the ordered phase log for a restore run, ascending by event
+        ID. Supports incremental polling via `?after=<id>`: pass the highest
+        `id` from the previous response to receive only newer events.
+        Authorization mirrors `GET /restores/{restoreId}` — the run's site
+        is resolved and the caller's `PermSiteRead` is enforced on it.
+        Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/RestoreId"
+        - name: after
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+            default: 0
+          description: |
+            Return only events with `id > after`. Pass the last seen event
+            `id` to poll incrementally. Omit (or pass 0) for the full log
+            from the beginning.
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: A page of phase-log events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RestoreRunEventList"
+        "403":
+          description: The caller does not have access to the run's site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Restore run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/schedule-runs:
+    get:
+      operationId: listScheduleRuns
+      summary: List schedule runs for a site
+      description: |
+        Returns a split view of schedule runs for the site: `upcoming`
+        (non-terminal: scheduled/queued/running, bounded to 10) and `past`
+        (terminal: completed/failed/skipped/canceled, paginated via
+        `limit`/`offset`). Filter to one set with `?status=upcoming` or
+        `?status=past`. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [upcoming, past]
+          description: |
+            Filter the result set. `upcoming` returns only non-terminal runs
+            (bounded to 10); `past` returns only terminal runs (paginated).
+            Omit to receive both sets in a single response.
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: Split schedule-run list (upcoming + past)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleRunList"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/schedule-runs/{runId}:
+    get:
+      operationId: getScheduleRun
+      summary: Get a schedule run by ID
+      description: |
+        Returns the schedule run record by its UUID. Authorization is enforced
+        by resolving the run's `site_id` and applying the caller's
+        `PermSiteRead` grant on that site. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - $ref: "#/components/parameters/RunId"
+      responses:
+        "200":
+          description: The schedule run
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScheduleRun"
+        "403":
+          description: The caller does not have access to the run's site
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Schedule run not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/sites/{siteId}/updates/refresh:
     post:
       operationId: refreshSiteUpdates
@@ -3546,6 +3719,130 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DbCleanResult"
+  /api/v1/sites/{siteId}/media/clean/scan:
+    get:
+      operationId: scanUnusedMedia
+      summary: Scan a site's media library for unreferenced attachments
+      description: |
+        Dispatches a read-only scan to the site's agent. The agent walks the
+        WordPress media library and checks every attachment against an exhaustive
+        set of reference surfaces (post_content, postmeta, options, termmeta,
+        usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+        nav menus, and more). Attachments for which no reference is found are
+        returned as candidates.
+
+        **Conservative rule**: when a check cannot run or the result is ambiguous
+        the attachment is treated as referenced (safe). False negatives (calling a
+        used image unused) are the dangerous failure; this implementation prefers
+        false positives.
+
+        Paginated by `offset`. Results are ordered by attachment ID ascending.
+        Requires the `site.media.clean.scan` permission (viewer+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Pagination offset (attachment scan cursor).
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Maximum number of candidates to return per page.
+      responses:
+        "200":
+          description: Scan page result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanScanResult"
+  /api/v1/sites/{siteId}/media/clean/isolate:
+    post:
+      operationId: isolateUnusedMedia
+      summary: Move selected attachments to quarantine (reversible)
+      description: |
+        Instructs the agent to move the original file and all generated thumbnail
+        sizes for the specified attachment IDs into the quarantine directory
+        (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+        intact so the Restore operation can undo the move cleanly.
+
+        **This operation is reversible** — use the restore endpoint to undo.
+        The attachment IDs must have appeared in a recent scan result.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanIsolateRequest"
+      responses:
+        "200":
+          description: Isolate result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanIsolateResult"
+  /api/v1/sites/{siteId}/media/clean/restore:
+    post:
+      operationId: restoreIsolatedMedia
+      summary: Restore quarantined attachments to their original locations
+      description: |
+        Moves quarantined attachment files back to the WordPress uploads directory
+        using the quarantine manifest. The attachment posts are already intact.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanRestoreRequest"
+      responses:
+        "200":
+          description: Restore result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanRestoreResult"
+  /api/v1/sites/{siteId}/media/clean/delete:
+    post:
+      operationId: deleteIsolatedMedia
+      summary: Permanently delete quarantined attachments (IRREVERSIBLE)
+      description: |
+        Permanently removes quarantined attachment files from disk and deletes
+        the corresponding WordPress attachment posts. **This cannot be undone.**
+
+        Only items already in the quarantine directory (isolated via the isolate
+        endpoint) can be deleted through this path. A `confirm` token of
+        `"DELETE"` must be included in the request body; the agent enforces this
+        independently.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanDeleteRequest"
+      responses:
+        "200":
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanDeleteResult"
   /api/v1/sites/{siteId}/perf/rucss/results:
     get:
       operationId: listRucssResults
@@ -3720,6 +4017,13 @@ components:
         format: uuid
     SnapshotId:
       name: snapshotId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+    RestoreId:
+      name: restoreId
       in: path
       required: true
       schema:
@@ -5502,6 +5806,214 @@ components:
             type: string
             format: email
           maxItems: 20
+    RestoreRun:
+      type: object
+      description: |
+        A single restore attempt, created when the operator calls
+        `POST /backups/{snapshotId}/restore`. The run advances through
+        phases as the agent executes the restore; `current_phase` reflects
+        the latest phase received from the agent. `triggered_by_email` and
+        `triggered_by_name` are resolved from the tenant user directory
+        when the actor is a known user; they are `null` for API-key or
+        system-triggered restores.
+      required:
+        - id
+        - site_id
+        - snapshot_id
+        - mode
+        - components
+        - status
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique restore run ID.
+        site_id:
+          type: string
+          format: uuid
+          description: ID of the site being restored.
+        snapshot_id:
+          type: string
+          format: uuid
+          description: ID of the backup snapshot used as the restore source.
+        mode:
+          type: string
+          description: |
+            Restore mode. `full` means all components were requested;
+            `partial` means a subset was specified.
+          enum: [full, partial]
+        components:
+          type: array
+          description: Which backup components were restored (e.g. `files`, `db`).
+          items:
+            type: string
+            enum: [files, db]
+        status:
+          type: string
+          description: Current status of the restore run.
+          enum: [queued, running, completed, failed, rolled_back]
+        current_phase:
+          type: string
+          description: The last phase reported by the agent runner (absent when queued).
+        error:
+          type: string
+          description: Human-readable error message when status is `failed` or `rolled_back`.
+        triggered_by:
+          type: string
+          description: Raw actor identifier (user UUID or `api-key:<id>` or `system`).
+        triggered_by_email:
+          type: string
+          format: email
+          nullable: true
+          description: Email of the triggering user (null for non-user actors or unresolvable IDs).
+        triggered_by_name:
+          type: string
+          nullable: true
+          description: Display name of the triggering user (null for non-user actors or unresolvable IDs).
+        created_at:
+          type: string
+          format: date-time
+          description: When the restore run was created.
+        started_at:
+          type: string
+          format: date-time
+          description: When the agent began executing the restore (absent until running).
+        finished_at:
+          type: string
+          format: date-time
+          description: When the restore run reached a terminal state.
+    RestoreRunList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RestoreRun"
+    RestoreRunEvent:
+      type: object
+      description: A single phase-log entry emitted by the restore engine.
+      required: [id, phase, status, occurred_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: Monotonically increasing event ID (use as cursor for `?after=`).
+        phase:
+          type: string
+          description: The restore phase that produced this event.
+        status:
+          type: string
+          description: Outcome of the phase at the time of this event.
+          enum: [started, completed, failed]
+        message:
+          type: string
+          description: Optional human-readable detail from the agent.
+        occurred_at:
+          type: string
+          format: date-time
+          description: Wall-clock time at which the event was recorded.
+    RestoreRunEventList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/RestoreRunEvent"
+    ScheduleRun:
+      type: object
+      description: |
+        A single scheduled-backup fire. Pre-inserted as `scheduled` before
+        the run window opens, then advanced to `queued` (dispatched to River),
+        `running` (agent executing), and finally a terminal status
+        (`completed`, `failed`, `skipped`, or `canceled`).
+        `triggered_by_email` and `triggered_by_name` are resolved from the
+        tenant user directory when the actor is a known user (schedule-fired
+        runs carry `triggered_by="schedule"` and leave these null).
+      required:
+        - id
+        - site_id
+        - schedule_id
+        - scheduled_for
+        - status
+        - kind
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Unique schedule run ID.
+        site_id:
+          type: string
+          format: uuid
+          description: ID of the site this run targets.
+        schedule_id:
+          type: string
+          format: uuid
+          description: ID of the backup schedule that generated this run.
+        snapshot_id:
+          type: string
+          format: uuid
+          description: ID of the backup snapshot created by this run (absent until the snapshot is created).
+        scheduled_for:
+          type: string
+          format: date-time
+          description: The scheduled fire time for this run.
+        status:
+          type: string
+          description: Current status of the schedule run.
+          enum: [scheduled, queued, running, completed, failed, skipped, canceled]
+        kind:
+          type: string
+          description: Backup kind that will be (or was) created by this run.
+          enum: [full, incremental]
+        error:
+          type: string
+          description: Human-readable error message when status is `failed`.
+        triggered_by:
+          type: string
+          description: Actor that triggered this run (`schedule` for automatic fires; user UUID for manual).
+        triggered_by_email:
+          type: string
+          format: email
+          nullable: true
+          description: Email of the triggering user (null for schedule-fired or unresolvable actors).
+        triggered_by_name:
+          type: string
+          nullable: true
+          description: Display name of the triggering user (null for schedule-fired or unresolvable actors).
+        created_at:
+          type: string
+          format: date-time
+          description: When the schedule run row was created.
+        started_at:
+          type: string
+          format: date-time
+          description: When the run transitioned to `running` (absent until then).
+        finished_at:
+          type: string
+          format: date-time
+          description: When the run reached a terminal state.
+    ScheduleRunList:
+      type: object
+      description: |
+        Split view of schedule runs for a site. `upcoming` contains
+        non-terminal runs (bounded to 10); `past` contains terminal runs
+        (paginated). One or both lists may be empty.
+      required: [upcoming, past]
+      properties:
+        upcoming:
+          type: array
+          description: Non-terminal schedule runs (scheduled/queued/running), newest-fire-time first.
+          items:
+            $ref: "#/components/schemas/ScheduleRun"
+        past:
+          type: array
+          description: Terminal schedule runs (completed/failed/skipped/canceled), newest first.
+          items:
+            $ref: "#/components/schemas/ScheduleRun"
     UptimeStatus:
       type: object
       description: Windowed uptime status for a single site (from the metrics store).
@@ -6898,3 +7410,145 @@ components:
         results:
           type: array
           items: { $ref: "#/components/schemas/BulkResult" }
+    MediaCleanCandidate:
+      type: object
+      description: One attachment candidate identified as potentially unused.
+      required: [id, title, url, file_size, sizes_count]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: WordPress attachment post ID.
+        title:
+          type: string
+          description: Attachment post title (may be the filename when no title is set).
+        url:
+          type: string
+          description: Public URL of the original (largest) file (guid).
+        thumb:
+          type: string
+          nullable: true
+          description: URL of the thumbnail-size variant; null when unavailable.
+        file_size:
+          type: integer
+          format: int64
+          description: Size of the original file in bytes. 0 when the file is missing from disk.
+        sizes_count:
+          type: integer
+          description: Number of generated thumbnail/resize variants registered in attachment metadata.
+    MediaCleanScanResult:
+      type: object
+      required: [ok, total, candidates, truncated]
+      properties:
+        ok:
+          type: boolean
+        total:
+          type: integer
+          description: >
+            Full unused-candidate count (capped at SCAN_MAX=500). Use this value
+            to drive client-side pagination of the candidates array.
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/MediaCleanCandidate" }
+          description: >
+            Unused attachment candidates sliced by the requested offset/limit.
+            The client should fetch once with offset=0 and limit=SCAN_MAX and
+            paginate the returned array client-side.
+        truncated:
+          type: boolean
+          description: >
+            True when the library has more unused attachments than SCAN_MAX.
+            The returned candidates and total are capped at SCAN_MAX.
+        detail:
+          type: string
+          description: Human-readable error message when ok=false.
+    MediaCleanIsolateRequest:
+      type: object
+      required: [job_id, attachment_ids]
+      properties:
+        job_id:
+          type: string
+          description: >
+            Client-minted UUID v4 for idempotency. The agent echoes it in the
+            response for correlation. Generate a new UUID per request.
+        attachment_ids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: >
+            Attachment IDs to move to quarantine. Maximum 200 per call.
+            Must be attachments that appeared in a recent scan result.
+    MediaCleanIsolateResult:
+      type: object
+      required: [ok, job_id, moved, manifest_id]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request for correlation.
+        moved:
+          type: integer
+          description: Number of attachment file sets moved to quarantine.
+        manifest_id:
+          type: string
+          description: >
+            Opaque quarantine manifest identifier. Store this value and pass it
+            back in quarantine_ids for restore or delete calls.
+        detail:
+          type: string
+    MediaCleanRestoreRequest:
+      type: object
+      required: [job_id, quarantine_ids]
+      properties:
+        job_id:
+          type: string
+          description: Client-minted UUID v4 for idempotency.
+        quarantine_ids:
+          type: array
+          items: { type: string }
+          description: >
+            Quarantine manifest IDs to restore. Each ID was returned by a prior
+            isolate call as manifest_id. Maximum 200 per call.
+    MediaCleanRestoreResult:
+      type: object
+      required: [ok, job_id, restored]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request.
+        restored:
+          type: integer
+          description: Number of manifest entries successfully restored to the uploads directory.
+        detail:
+          type: string
+    MediaCleanDeleteRequest:
+      type: object
+      required: [job_id, quarantine_ids, confirm]
+      properties:
+        job_id:
+          type: string
+          description: Client-minted UUID v4 for idempotency.
+        quarantine_ids:
+          type: array
+          items: { type: string }
+          description: >
+            Quarantine manifest IDs to permanently delete. Maximum 200 per call.
+        confirm:
+          type: string
+          description: Must equal "DELETE" exactly. The agent enforces this independently via hash_equals.
+    MediaCleanDeleteResult:
+      type: object
+      required: [ok, job_id, deleted]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request.
+        deleted:
+          type: integer
+          description: Number of manifest entries permanently removed from disk.
+        detail:
+          type: string

@@ -79,6 +79,22 @@ func (s *RestoreCreate) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *SiteBackupSettingsContents) setDefaults() {
+	{
+		val := bool(false)
+		s.IncludeCore.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *SiteBackupSettingsNotifications) setDefaults() {
+	{
+		val := SiteBackupSettingsNotificationsNotifyOnCompletion("never")
+		s.NotifyOnCompletion = val
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *SiteCreate) setDefaults() {
 	{
 		val := SiteCreateStatus("pending")

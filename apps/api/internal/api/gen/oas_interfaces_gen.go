@@ -65,6 +65,10 @@ type BulkConfigCacheRes interface {
 	bulkConfigCacheRes()
 }
 
+type CancelBackupRes interface {
+	cancelBackupRes()
+}
+
 type CreateApiKeyRes interface {
 	createApiKeyRes()
 }
@@ -109,6 +113,10 @@ type CreateUpdateRunRes interface {
 	createUpdateRunRes()
 }
 
+type DeleteBackupRes interface {
+	deleteBackupRes()
+}
+
 type DeleteMemberRes interface {
 	deleteMemberRes()
 }
@@ -129,12 +137,24 @@ type EnrollRes interface {
 	enrollRes()
 }
 
+type GetBackupEnvironmentRes interface {
+	getBackupEnvironmentRes()
+}
+
 type GetBackupRes interface {
 	getBackupRes()
 }
 
 type GetBackupScheduleRes interface {
 	getBackupScheduleRes()
+}
+
+type GetBackupSettingsContentsRes interface {
+	getBackupSettingsContentsRes()
+}
+
+type GetBackupSettingsNotificationsRes interface {
+	getBackupSettingsNotificationsRes()
 }
 
 type GetBackupSqlInspectionRes interface {
@@ -209,6 +229,10 @@ type ListSiteSharesRes interface {
 	listSiteSharesRes()
 }
 
+type LockBackupRes interface {
+	lockBackupRes()
+}
+
 type LoginRes interface {
 	loginRes()
 }
@@ -243,6 +267,14 @@ type PutAlertConfigRes interface {
 
 type PutBackupScheduleRes interface {
 	putBackupScheduleRes()
+}
+
+type PutBackupSettingsContentsRes interface {
+	putBackupSettingsContentsRes()
+}
+
+type PutBackupSettingsNotificationsRes interface {
+	putBackupSettingsNotificationsRes()
 }
 
 type PutPerfConfigRes interface {
@@ -295,6 +327,10 @@ type TestSiteDestinationRes interface {
 
 type UnblockSiteIPRes interface {
 	unblockSiteIPRes()
+}
+
+type UnlockBackupRes interface {
+	unlockBackupRes()
 }
 
 type UpdateSiteDestinationRes interface {

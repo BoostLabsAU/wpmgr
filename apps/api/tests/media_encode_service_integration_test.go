@@ -145,12 +145,18 @@ func (s *trackingStore) wasDeleted(key string) bool {
 
 // captureEnqueuer records each EncodeArgs the service enqueues (the encode would
 // normally run in the media-encoder process; here the test plays its role).
-type captureEnqueuer struct{ enqueued []model.EncodeArgs }
-
-func (e *captureEnqueuer) EnqueueEncode(_ context.Context, args model.EncodeArgs) error {
-	e.enqueued = append(e.enqueued, args)
-	return nil
+type captureEnqueuer struct {
+	enqueued    []model.EncodeArgs
+	nextRiverID int64
 }
+
+func (e *captureEnqueuer) EnqueueEncode(_ context.Context, args model.EncodeArgs) (int64, error) {
+	e.nextRiverID++
+	e.enqueued = append(e.enqueued, args)
+	return e.nextRiverID, nil
+}
+
+func (e *captureEnqueuer) CancelEncodeJob(_ context.Context, _ int64) error { return nil }
 
 // okAgent answers every media command OK (the dispatch transport is out of scope
 // for the orchestration test; the CGO test covers the real apply payload).

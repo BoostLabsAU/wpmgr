@@ -1946,8 +1946,12 @@ func (s *BackupManifestEntry) SetChunkCount(val int32) {
 type BackupManifestEntryEntryKind string
 
 const (
-	BackupManifestEntryEntryKindFile BackupManifestEntryEntryKind = "file"
-	BackupManifestEntryEntryKindDb   BackupManifestEntryEntryKind = "db"
+	BackupManifestEntryEntryKindFile      BackupManifestEntryEntryKind = "file"
+	BackupManifestEntryEntryKindDb        BackupManifestEntryEntryKind = "db"
+	BackupManifestEntryEntryKindPlugin    BackupManifestEntryEntryKind = "plugin"
+	BackupManifestEntryEntryKindTheme     BackupManifestEntryEntryKind = "theme"
+	BackupManifestEntryEntryKindUpload    BackupManifestEntryEntryKind = "upload"
+	BackupManifestEntryEntryKindWpContent BackupManifestEntryEntryKind = "wp-content"
 )
 
 // AllValues returns all BackupManifestEntryEntryKind values.
@@ -1955,6 +1959,10 @@ func (BackupManifestEntryEntryKind) AllValues() []BackupManifestEntryEntryKind {
 	return []BackupManifestEntryEntryKind{
 		BackupManifestEntryEntryKindFile,
 		BackupManifestEntryEntryKindDb,
+		BackupManifestEntryEntryKindPlugin,
+		BackupManifestEntryEntryKindTheme,
+		BackupManifestEntryEntryKindUpload,
+		BackupManifestEntryEntryKindWpContent,
 	}
 }
 
@@ -1964,6 +1972,14 @@ func (s BackupManifestEntryEntryKind) MarshalText() ([]byte, error) {
 	case BackupManifestEntryEntryKindFile:
 		return []byte(s), nil
 	case BackupManifestEntryEntryKindDb:
+		return []byte(s), nil
+	case BackupManifestEntryEntryKindPlugin:
+		return []byte(s), nil
+	case BackupManifestEntryEntryKindTheme:
+		return []byte(s), nil
+	case BackupManifestEntryEntryKindUpload:
+		return []byte(s), nil
+	case BackupManifestEntryEntryKindWpContent:
 		return []byte(s), nil
 	default:
 		return nil, errors.Errorf("invalid value: %q", s)
@@ -1978,6 +1994,18 @@ func (s *BackupManifestEntryEntryKind) UnmarshalText(data []byte) error {
 		return nil
 	case BackupManifestEntryEntryKindDb:
 		*s = BackupManifestEntryEntryKindDb
+		return nil
+	case BackupManifestEntryEntryKindPlugin:
+		*s = BackupManifestEntryEntryKindPlugin
+		return nil
+	case BackupManifestEntryEntryKindTheme:
+		*s = BackupManifestEntryEntryKindTheme
+		return nil
+	case BackupManifestEntryEntryKindUpload:
+		*s = BackupManifestEntryEntryKindUpload
+		return nil
+	case BackupManifestEntryEntryKindWpContent:
+		*s = BackupManifestEntryEntryKindWpContent
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
@@ -2023,31 +2051,6 @@ type BackupSchedule struct {
 	LastRunAt OptDateTime `json:"last_run_at"`
 	CreatedAt time.Time   `json:"created_at"`
 	UpdatedAt time.Time   `json:"updated_at"`
-	// Track B (m49): backup-completion email notification settings.
-	// NOTE: fields added manually pending next `go generate` run.
-	NotifyOnCompletion string   `json:"notify_on_completion"`
-	NotifyRecipients   []string `json:"notify_recipients"`
-	// Track A (m49): selective component backup + exclusions.
-	BackupComponents  []string `json:"backup_components,omitempty"`
-	ExcludePaths      []string `json:"exclude_paths,omitempty"`
-	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
-	ExcludeFileSizeMB int32    `json:"exclude_file_size_mb,omitempty"`
-	IncludeCore       bool     `json:"include_core"`
-}
-
-// GetNotifyOnCompletion returns the value of NotifyOnCompletion.
-func (s *BackupSchedule) GetNotifyOnCompletion() string {
-	return s.NotifyOnCompletion
-}
-
-// GetNotifyRecipients returns the value of NotifyRecipients.
-func (s *BackupSchedule) GetNotifyRecipients() []string {
-	return s.NotifyRecipients
-}
-
-// GetIncludeCore returns the value of IncludeCore.
-func (s *BackupSchedule) GetIncludeCore() bool {
-	return s.IncludeCore
 }
 
 // GetID returns the value of ID.
@@ -2420,16 +2423,6 @@ type BackupScheduleUpdate struct {
 	IncrementalEnabled OptBool `json:"incremental_enabled"`
 	// Optional override of the default incremental base window (7 days). Omit/null to use the default.
 	BaseWindowDays OptNilInt32 `json:"base_window_days"`
-	// Track B (m49): backup-completion email notification settings.
-	// NOTE: fields added manually pending next `go generate` run.
-	NotifyOnCompletion OptString `json:"notify_on_completion"`
-	NotifyRecipients   []string  `json:"notify_recipients,omitempty"`
-	// Track A (m49): selective component backup + exclusions.
-	BackupComponents  []string `json:"backup_components,omitempty"`
-	ExcludePaths      []string `json:"exclude_paths,omitempty"`
-	ExcludeExtensions []string `json:"exclude_extensions,omitempty"`
-	ExcludeFileSizeMB OptInt32 `json:"exclude_file_size_mb"`
-	IncludeCore       OptBool  `json:"include_core"`
 }
 
 // GetCadence returns the value of Cadence.
@@ -2714,20 +2707,10 @@ type BackupSnapshot struct {
 	ParentSnapshotID OptUUID `json:"parent_snapshot_id"`
 	// The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
 	BaseSnapshotID OptUUID `json:"base_snapshot_id"`
-	// Track C (m49): operator-set retention lock. When true the GC never
-	// auto-prunes this snapshot. Toggle via PATCH/DELETE /backups/:id/lock.
-	// NOTE: field added manually pending next `go generate` run (openapi sync).
+	// Track C (m49). When true the retention GC will never auto-prune this
+	// snapshot. Unlock via DELETE /backups/{snapshotId}/lock to restore
+	// normal GC eligibility.
 	Locked OptBool `json:"locked"`
-}
-
-// GetLocked returns the value of Locked.
-func (s *BackupSnapshot) GetLocked() OptBool {
-	return s.Locked
-}
-
-// SetLocked sets the value of Locked.
-func (s *BackupSnapshot) SetLocked(val OptBool) {
-	s.Locked = val
 }
 
 // GetID returns the value of ID.
@@ -2840,6 +2823,11 @@ func (s *BackupSnapshot) GetBaseSnapshotID() OptUUID {
 	return s.BaseSnapshotID
 }
 
+// GetLocked returns the value of Locked.
+func (s *BackupSnapshot) GetLocked() OptBool {
+	return s.Locked
+}
+
 // SetID sets the value of ID.
 func (s *BackupSnapshot) SetID(val uuid.UUID) {
 	s.ID = val
@@ -2950,8 +2938,15 @@ func (s *BackupSnapshot) SetBaseSnapshotID(val OptUUID) {
 	s.BaseSnapshotID = val
 }
 
-func (*BackupSnapshot) createBackupRes()  {}
-func (*BackupSnapshot) createRestoreRes() {}
+// SetLocked sets the value of Locked.
+func (s *BackupSnapshot) SetLocked(val OptBool) {
+	s.Locked = val
+}
+
+func (*BackupSnapshot) cancelBackupRes() {}
+func (*BackupSnapshot) createBackupRes() {}
+func (*BackupSnapshot) lockBackupRes()   {}
+func (*BackupSnapshot) unlockBackupRes() {}
 
 // Ref: #/components/schemas/BackupSnapshotDetail
 type BackupSnapshotDetail struct {
@@ -3362,6 +3357,14 @@ func (s *CacheStats) SetReportedAt(val OptDateTime) {
 	s.ReportedAt = val
 }
 
+type CancelBackupConflict Error
+
+func (*CancelBackupConflict) cancelBackupRes() {}
+
+type CancelBackupNotFound Error
+
+func (*CancelBackupNotFound) cancelBackupRes() {}
+
 type CancelMediaOK struct {
 	Ok             OptBool `json:"ok"`
 	CancelledCount OptInt  `json:"cancelled_count"`
@@ -3508,6 +3511,417 @@ func (*CreateOrgUnauthorized) createOrgRes() {}
 type CreateOrgUnprocessableEntity Error
 
 func (*CreateOrgUnprocessableEntity) createOrgRes() {}
+
+// Merged schema.
+type CreateRestoreAccepted struct {
+	ID        uuid.UUID                   `json:"id"`
+	TenantID  uuid.UUID                   `json:"tenant_id"`
+	SiteID    uuid.UUID                   `json:"site_id"`
+	CreatedBy OptUUID                     `json:"created_by"`
+	Kind      CreateRestoreAcceptedKind   `json:"kind"`
+	Status    CreateRestoreAcceptedStatus `json:"status"`
+	// The age PUBLIC recipient the chunks were encrypted to (provenance).
+	// NEVER a private key; the control plane cannot decrypt backups.
+	AgeRecipient OptString `json:"age_recipient"`
+	TotalSize    OptInt64  `json:"total_size"`
+	ChunkCount   OptInt64  `json:"chunk_count"`
+	// Kept by the monthly-archive retention rule.
+	Archived OptBool   `json:"archived"`
+	Error    OptString `json:"error"`
+	// M5.6 / ADR-032 phpbu runner progress. Empty `{}` until the runner posts
+	// its first phase. Shape:
+	// { "phase": "uploading", "phase_detail": {"chunks_done": 17, "chunks_total": 42, ...} }
+	// Phases form a closed set (see backup.allowedProgressPhases on the CP).
+	Progress OptCreateRestoreAcceptedProgress `json:"progress"`
+	// Server timestamp of the last progress POST from the runner. Used by the
+	// CP watchdog (>120s without an update on a running snapshot → marked
+	// failed/stalled) and by the frontend to detect a silent runner.
+	ProgressUpdatedAt OptDateTime `json:"progress_updated_at"`
+	StartedAt         OptDateTime `json:"started_at"`
+	FinishedAt        OptDateTime `json:"finished_at"`
+	CreatedAt         time.Time   `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
+	// ADR-048 incremental backup. True if this snapshot only stores files
+	// changed since its parent; false for full-base snapshots and all
+	// pre-m44 rows.
+	IsIncremental OptBool `json:"is_incremental"`
+	// Position of this snapshot within its incremental chain. 0 is the
+	// full base; 1+ are successive incrementals.
+	Generation OptInt `json:"generation"`
+	// Groups a full base and its incrementals into one chain. Null for legacy/full-base rows.
+	ChainID OptUUID `json:"chain_id"`
+	// The snapshot this incremental was diffed against. Null for full-base rows.
+	ParentSnapshotID OptUUID `json:"parent_snapshot_id"`
+	// The full-base snapshot at the root of this chain. Null for legacy/full-base rows.
+	BaseSnapshotID OptUUID `json:"base_snapshot_id"`
+	// Track C (m49). When true the retention GC will never auto-prune this
+	// snapshot. Unlock via DELETE /backups/{snapshotId}/lock to restore
+	// normal GC eligibility.
+	Locked OptBool `json:"locked"`
+	// The restore_run row ID created for this restore attempt. Use it to correlate SSE progress events.
+	// Absent when the restore-run store is not wired on this control plane.
+	RestoreRunID OptUUID `json:"restore_run_id"`
+}
+
+// GetID returns the value of ID.
+func (s *CreateRestoreAccepted) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *CreateRestoreAccepted) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *CreateRestoreAccepted) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetCreatedBy returns the value of CreatedBy.
+func (s *CreateRestoreAccepted) GetCreatedBy() OptUUID {
+	return s.CreatedBy
+}
+
+// GetKind returns the value of Kind.
+func (s *CreateRestoreAccepted) GetKind() CreateRestoreAcceptedKind {
+	return s.Kind
+}
+
+// GetStatus returns the value of Status.
+func (s *CreateRestoreAccepted) GetStatus() CreateRestoreAcceptedStatus {
+	return s.Status
+}
+
+// GetAgeRecipient returns the value of AgeRecipient.
+func (s *CreateRestoreAccepted) GetAgeRecipient() OptString {
+	return s.AgeRecipient
+}
+
+// GetTotalSize returns the value of TotalSize.
+func (s *CreateRestoreAccepted) GetTotalSize() OptInt64 {
+	return s.TotalSize
+}
+
+// GetChunkCount returns the value of ChunkCount.
+func (s *CreateRestoreAccepted) GetChunkCount() OptInt64 {
+	return s.ChunkCount
+}
+
+// GetArchived returns the value of Archived.
+func (s *CreateRestoreAccepted) GetArchived() OptBool {
+	return s.Archived
+}
+
+// GetError returns the value of Error.
+func (s *CreateRestoreAccepted) GetError() OptString {
+	return s.Error
+}
+
+// GetProgress returns the value of Progress.
+func (s *CreateRestoreAccepted) GetProgress() OptCreateRestoreAcceptedProgress {
+	return s.Progress
+}
+
+// GetProgressUpdatedAt returns the value of ProgressUpdatedAt.
+func (s *CreateRestoreAccepted) GetProgressUpdatedAt() OptDateTime {
+	return s.ProgressUpdatedAt
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *CreateRestoreAccepted) GetStartedAt() OptDateTime {
+	return s.StartedAt
+}
+
+// GetFinishedAt returns the value of FinishedAt.
+func (s *CreateRestoreAccepted) GetFinishedAt() OptDateTime {
+	return s.FinishedAt
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *CreateRestoreAccepted) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *CreateRestoreAccepted) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// GetIsIncremental returns the value of IsIncremental.
+func (s *CreateRestoreAccepted) GetIsIncremental() OptBool {
+	return s.IsIncremental
+}
+
+// GetGeneration returns the value of Generation.
+func (s *CreateRestoreAccepted) GetGeneration() OptInt {
+	return s.Generation
+}
+
+// GetChainID returns the value of ChainID.
+func (s *CreateRestoreAccepted) GetChainID() OptUUID {
+	return s.ChainID
+}
+
+// GetParentSnapshotID returns the value of ParentSnapshotID.
+func (s *CreateRestoreAccepted) GetParentSnapshotID() OptUUID {
+	return s.ParentSnapshotID
+}
+
+// GetBaseSnapshotID returns the value of BaseSnapshotID.
+func (s *CreateRestoreAccepted) GetBaseSnapshotID() OptUUID {
+	return s.BaseSnapshotID
+}
+
+// GetLocked returns the value of Locked.
+func (s *CreateRestoreAccepted) GetLocked() OptBool {
+	return s.Locked
+}
+
+// GetRestoreRunID returns the value of RestoreRunID.
+func (s *CreateRestoreAccepted) GetRestoreRunID() OptUUID {
+	return s.RestoreRunID
+}
+
+// SetID sets the value of ID.
+func (s *CreateRestoreAccepted) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *CreateRestoreAccepted) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *CreateRestoreAccepted) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetCreatedBy sets the value of CreatedBy.
+func (s *CreateRestoreAccepted) SetCreatedBy(val OptUUID) {
+	s.CreatedBy = val
+}
+
+// SetKind sets the value of Kind.
+func (s *CreateRestoreAccepted) SetKind(val CreateRestoreAcceptedKind) {
+	s.Kind = val
+}
+
+// SetStatus sets the value of Status.
+func (s *CreateRestoreAccepted) SetStatus(val CreateRestoreAcceptedStatus) {
+	s.Status = val
+}
+
+// SetAgeRecipient sets the value of AgeRecipient.
+func (s *CreateRestoreAccepted) SetAgeRecipient(val OptString) {
+	s.AgeRecipient = val
+}
+
+// SetTotalSize sets the value of TotalSize.
+func (s *CreateRestoreAccepted) SetTotalSize(val OptInt64) {
+	s.TotalSize = val
+}
+
+// SetChunkCount sets the value of ChunkCount.
+func (s *CreateRestoreAccepted) SetChunkCount(val OptInt64) {
+	s.ChunkCount = val
+}
+
+// SetArchived sets the value of Archived.
+func (s *CreateRestoreAccepted) SetArchived(val OptBool) {
+	s.Archived = val
+}
+
+// SetError sets the value of Error.
+func (s *CreateRestoreAccepted) SetError(val OptString) {
+	s.Error = val
+}
+
+// SetProgress sets the value of Progress.
+func (s *CreateRestoreAccepted) SetProgress(val OptCreateRestoreAcceptedProgress) {
+	s.Progress = val
+}
+
+// SetProgressUpdatedAt sets the value of ProgressUpdatedAt.
+func (s *CreateRestoreAccepted) SetProgressUpdatedAt(val OptDateTime) {
+	s.ProgressUpdatedAt = val
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *CreateRestoreAccepted) SetStartedAt(val OptDateTime) {
+	s.StartedAt = val
+}
+
+// SetFinishedAt sets the value of FinishedAt.
+func (s *CreateRestoreAccepted) SetFinishedAt(val OptDateTime) {
+	s.FinishedAt = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *CreateRestoreAccepted) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *CreateRestoreAccepted) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+// SetIsIncremental sets the value of IsIncremental.
+func (s *CreateRestoreAccepted) SetIsIncremental(val OptBool) {
+	s.IsIncremental = val
+}
+
+// SetGeneration sets the value of Generation.
+func (s *CreateRestoreAccepted) SetGeneration(val OptInt) {
+	s.Generation = val
+}
+
+// SetChainID sets the value of ChainID.
+func (s *CreateRestoreAccepted) SetChainID(val OptUUID) {
+	s.ChainID = val
+}
+
+// SetParentSnapshotID sets the value of ParentSnapshotID.
+func (s *CreateRestoreAccepted) SetParentSnapshotID(val OptUUID) {
+	s.ParentSnapshotID = val
+}
+
+// SetBaseSnapshotID sets the value of BaseSnapshotID.
+func (s *CreateRestoreAccepted) SetBaseSnapshotID(val OptUUID) {
+	s.BaseSnapshotID = val
+}
+
+// SetLocked sets the value of Locked.
+func (s *CreateRestoreAccepted) SetLocked(val OptBool) {
+	s.Locked = val
+}
+
+// SetRestoreRunID sets the value of RestoreRunID.
+func (s *CreateRestoreAccepted) SetRestoreRunID(val OptUUID) {
+	s.RestoreRunID = val
+}
+
+func (*CreateRestoreAccepted) createRestoreRes() {}
+
+type CreateRestoreAcceptedKind string
+
+const (
+	CreateRestoreAcceptedKindFiles CreateRestoreAcceptedKind = "files"
+	CreateRestoreAcceptedKindDb    CreateRestoreAcceptedKind = "db"
+	CreateRestoreAcceptedKindFull  CreateRestoreAcceptedKind = "full"
+)
+
+// AllValues returns all CreateRestoreAcceptedKind values.
+func (CreateRestoreAcceptedKind) AllValues() []CreateRestoreAcceptedKind {
+	return []CreateRestoreAcceptedKind{
+		CreateRestoreAcceptedKindFiles,
+		CreateRestoreAcceptedKindDb,
+		CreateRestoreAcceptedKindFull,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s CreateRestoreAcceptedKind) MarshalText() ([]byte, error) {
+	switch s {
+	case CreateRestoreAcceptedKindFiles:
+		return []byte(s), nil
+	case CreateRestoreAcceptedKindDb:
+		return []byte(s), nil
+	case CreateRestoreAcceptedKindFull:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *CreateRestoreAcceptedKind) UnmarshalText(data []byte) error {
+	switch CreateRestoreAcceptedKind(data) {
+	case CreateRestoreAcceptedKindFiles:
+		*s = CreateRestoreAcceptedKindFiles
+		return nil
+	case CreateRestoreAcceptedKindDb:
+		*s = CreateRestoreAcceptedKindDb
+		return nil
+	case CreateRestoreAcceptedKindFull:
+		*s = CreateRestoreAcceptedKindFull
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// M5.6 / ADR-032 phpbu runner progress. Empty `{}` until the runner posts
+// its first phase. Shape:
+// { "phase": "uploading", "phase_detail": {"chunks_done": 17, "chunks_total": 42, ...} }
+// Phases form a closed set (see backup.allowedProgressPhases on the CP).
+type CreateRestoreAcceptedProgress map[string]jx.Raw
+
+func (s *CreateRestoreAcceptedProgress) init() CreateRestoreAcceptedProgress {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+type CreateRestoreAcceptedStatus string
+
+const (
+	CreateRestoreAcceptedStatusPending   CreateRestoreAcceptedStatus = "pending"
+	CreateRestoreAcceptedStatusRunning   CreateRestoreAcceptedStatus = "running"
+	CreateRestoreAcceptedStatusCompleted CreateRestoreAcceptedStatus = "completed"
+	CreateRestoreAcceptedStatusFailed    CreateRestoreAcceptedStatus = "failed"
+)
+
+// AllValues returns all CreateRestoreAcceptedStatus values.
+func (CreateRestoreAcceptedStatus) AllValues() []CreateRestoreAcceptedStatus {
+	return []CreateRestoreAcceptedStatus{
+		CreateRestoreAcceptedStatusPending,
+		CreateRestoreAcceptedStatusRunning,
+		CreateRestoreAcceptedStatusCompleted,
+		CreateRestoreAcceptedStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s CreateRestoreAcceptedStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case CreateRestoreAcceptedStatusPending:
+		return []byte(s), nil
+	case CreateRestoreAcceptedStatusRunning:
+		return []byte(s), nil
+	case CreateRestoreAcceptedStatusCompleted:
+		return []byte(s), nil
+	case CreateRestoreAcceptedStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *CreateRestoreAcceptedStatus) UnmarshalText(data []byte) error {
+	switch CreateRestoreAcceptedStatus(data) {
+	case CreateRestoreAcceptedStatusPending:
+		*s = CreateRestoreAcceptedStatusPending
+		return nil
+	case CreateRestoreAcceptedStatusRunning:
+		*s = CreateRestoreAcceptedStatusRunning
+		return nil
+	case CreateRestoreAcceptedStatusCompleted:
+		*s = CreateRestoreAcceptedStatusCompleted
+		return nil
+	case CreateRestoreAcceptedStatusFailed:
+		*s = CreateRestoreAcceptedStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 type CreateSiteConflict Error
 
@@ -3904,6 +4318,284 @@ func (s *DbScanTableInventoryRowOwnerType) UnmarshalText(data []byte) error {
 	}
 }
 
+// Request body for creating a local database snapshot.
+// Ref: #/components/schemas/DbSnapshotCreate
+type DbSnapshotCreate struct {
+	// Optional human-readable label for the snapshot.
+	Label OptString `json:"label"`
+	// Maximum snapshots to retain after this one (default 5).
+	Retention OptInt `json:"retention"`
+}
+
+// GetLabel returns the value of Label.
+func (s *DbSnapshotCreate) GetLabel() OptString {
+	return s.Label
+}
+
+// GetRetention returns the value of Retention.
+func (s *DbSnapshotCreate) GetRetention() OptInt {
+	return s.Retention
+}
+
+// SetLabel sets the value of Label.
+func (s *DbSnapshotCreate) SetLabel(val OptString) {
+	s.Label = val
+}
+
+// SetRetention sets the value of Retention.
+func (s *DbSnapshotCreate) SetRetention(val OptInt) {
+	s.Retention = val
+}
+
+// Ref: #/components/schemas/DbSnapshotCreateResult
+type DbSnapshotCreateResult struct {
+	Ok       bool               `json:"ok"`
+	Snapshot OptDbSnapshotEntry `json:"snapshot"`
+	Detail   OptString          `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *DbSnapshotCreateResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetSnapshot returns the value of Snapshot.
+func (s *DbSnapshotCreateResult) GetSnapshot() OptDbSnapshotEntry {
+	return s.Snapshot
+}
+
+// GetDetail returns the value of Detail.
+func (s *DbSnapshotCreateResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *DbSnapshotCreateResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetSnapshot sets the value of Snapshot.
+func (s *DbSnapshotCreateResult) SetSnapshot(val OptDbSnapshotEntry) {
+	s.Snapshot = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *DbSnapshotCreateResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// One local database snapshot entry.
+// Ref: #/components/schemas/DbSnapshotEntry
+type DbSnapshotEntry struct {
+	// Unique snapshot identifier (snap_<hex>).
+	ID string `json:"id"`
+	// Operator-supplied label; may be empty.
+	Label string `json:"label"`
+	// Unix timestamp (seconds) when the snapshot was created.
+	CreatedAt int64 `json:"created_at"`
+	// Compressed SQL file size in bytes.
+	Size int64 `json:"size"`
+	// Number of database tables captured.
+	TableCount int `json:"table_count"`
+}
+
+// GetID returns the value of ID.
+func (s *DbSnapshotEntry) GetID() string {
+	return s.ID
+}
+
+// GetLabel returns the value of Label.
+func (s *DbSnapshotEntry) GetLabel() string {
+	return s.Label
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *DbSnapshotEntry) GetCreatedAt() int64 {
+	return s.CreatedAt
+}
+
+// GetSize returns the value of Size.
+func (s *DbSnapshotEntry) GetSize() int64 {
+	return s.Size
+}
+
+// GetTableCount returns the value of TableCount.
+func (s *DbSnapshotEntry) GetTableCount() int {
+	return s.TableCount
+}
+
+// SetID sets the value of ID.
+func (s *DbSnapshotEntry) SetID(val string) {
+	s.ID = val
+}
+
+// SetLabel sets the value of Label.
+func (s *DbSnapshotEntry) SetLabel(val string) {
+	s.Label = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *DbSnapshotEntry) SetCreatedAt(val int64) {
+	s.CreatedAt = val
+}
+
+// SetSize sets the value of Size.
+func (s *DbSnapshotEntry) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetTableCount sets the value of TableCount.
+func (s *DbSnapshotEntry) SetTableCount(val int) {
+	s.TableCount = val
+}
+
+// Ref: #/components/schemas/DbSnapshotList
+type DbSnapshotList struct {
+	Ok        bool              `json:"ok"`
+	Snapshots []DbSnapshotEntry `json:"snapshots"`
+	// Present on error (ok=false).
+	Detail OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *DbSnapshotList) GetOk() bool {
+	return s.Ok
+}
+
+// GetSnapshots returns the value of Snapshots.
+func (s *DbSnapshotList) GetSnapshots() []DbSnapshotEntry {
+	return s.Snapshots
+}
+
+// GetDetail returns the value of Detail.
+func (s *DbSnapshotList) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *DbSnapshotList) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetSnapshots sets the value of Snapshots.
+func (s *DbSnapshotList) SetSnapshots(val []DbSnapshotEntry) {
+	s.Snapshots = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *DbSnapshotList) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// Request body for the DESTRUCTIVE revert operation.
+// `confirm` MUST equal `"REVERT"` exactly.
+// Ref: #/components/schemas/DbSnapshotRevert
+type DbSnapshotRevert struct {
+	// Must be the exact string "REVERT".
+	Confirm string `json:"confirm"`
+	// When true, suppresses the automatic safety snapshot taken before
+	// the import. Defaults to false (safety snapshot is taken).
+	SkipSafetySnapshot OptBool `json:"skip_safety_snapshot"`
+}
+
+// GetConfirm returns the value of Confirm.
+func (s *DbSnapshotRevert) GetConfirm() string {
+	return s.Confirm
+}
+
+// GetSkipSafetySnapshot returns the value of SkipSafetySnapshot.
+func (s *DbSnapshotRevert) GetSkipSafetySnapshot() OptBool {
+	return s.SkipSafetySnapshot
+}
+
+// SetConfirm sets the value of Confirm.
+func (s *DbSnapshotRevert) SetConfirm(val string) {
+	s.Confirm = val
+}
+
+// SetSkipSafetySnapshot sets the value of SkipSafetySnapshot.
+func (s *DbSnapshotRevert) SetSkipSafetySnapshot(val OptBool) {
+	s.SkipSafetySnapshot = val
+}
+
+// Ref: #/components/schemas/DbSnapshotRevertResult
+type DbSnapshotRevertResult struct {
+	Ok bool `json:"ok"`
+	// Human-readable outcome.
+	Detail OptString `json:"detail"`
+	// ID of the auto-safety snapshot taken before the import.
+	// Empty string when the safety snapshot was skipped or failed.
+	SafetyID OptString `json:"safety_id"`
+}
+
+// GetOk returns the value of Ok.
+func (s *DbSnapshotRevertResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *DbSnapshotRevertResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// GetSafetyID returns the value of SafetyID.
+func (s *DbSnapshotRevertResult) GetSafetyID() OptString {
+	return s.SafetyID
+}
+
+// SetOk sets the value of Ok.
+func (s *DbSnapshotRevertResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *DbSnapshotRevertResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// SetSafetyID sets the value of SafetyID.
+func (s *DbSnapshotRevertResult) SetSafetyID(val OptString) {
+	s.SafetyID = val
+}
+
+// DeleteBackupNoContent is response for DeleteBackup operation.
+type DeleteBackupNoContent struct{}
+
+func (*DeleteBackupNoContent) deleteBackupRes() {}
+
+type DeleteBackupNotFound Error
+
+func (*DeleteBackupNotFound) deleteBackupRes() {}
+
+type DeleteBackupUnprocessableEntity Error
+
+func (*DeleteBackupUnprocessableEntity) deleteBackupRes() {}
+
+type DeleteDbSnapshotOK struct {
+	Ok     OptBool   `json:"ok"`
+	Detail OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *DeleteDbSnapshotOK) GetOk() OptBool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *DeleteDbSnapshotOK) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *DeleteDbSnapshotOK) SetOk(val OptBool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *DeleteDbSnapshotOK) SetDetail(val OptString) {
+	s.Detail = val
+}
+
 // Merged schema.
 type DeleteMediaOriginalsAccepted struct {
 	BatchJobID   OptString `json:"batch_job_id"`
@@ -4167,48 +4859,53 @@ func (s *Error) SetDetails(val OptErrorDetails) {
 	s.Details = val
 }
 
-func (*Error) agentDisconnectRes()         {}
-func (*Error) agentHeartbeatRes()          {}
-func (*Error) agentMediaAssetDeletedRes()  {}
-func (*Error) agentMediaEncodeReadyRes()   {}
-func (*Error) agentMediaJobStatusRes()     {}
-func (*Error) agentMediaPresignRes()       {}
-func (*Error) agentMediaRestoreStatusRes() {}
-func (*Error) agentMediaSyncBatchRes()     {}
-func (*Error) agentMediaSyncFinalizeRes()  {}
-func (*Error) archiveSiteRes()             {}
-func (*Error) beginReEnrollmentRes()       {}
-func (*Error) bulkConfigCacheRes()         {}
-func (*Error) createBackupRes()            {}
-func (*Error) createPairingCodeRes()       {}
-func (*Error) createRestoreRes()           {}
-func (*Error) createUpdateRunRes()         {}
-func (*Error) deleteSiteRes()              {}
-func (*Error) getBackupRes()               {}
-func (*Error) getBackupScheduleRes()       {}
-func (*Error) getBackupSqlInspectionRes()  {}
-func (*Error) getMeRes()                   {}
-func (*Error) getSiteAvailableUpdatesRes() {}
-func (*Error) getSiteDiagnosticsRes()      {}
-func (*Error) getSiteErrorConfigRes()      {}
-func (*Error) getSiteRes()                 {}
-func (*Error) getSiteUptimeRes()           {}
-func (*Error) getTenantRes()               {}
-func (*Error) getUpdateRunRes()            {}
-func (*Error) listSharedWithMeRes()        {}
-func (*Error) logoutRes()                  {}
-func (*Error) oidcLoginRes()               {}
-func (*Error) purgeCacheRes()              {}
-func (*Error) putAlertConfigRes()          {}
-func (*Error) putBackupScheduleRes()       {}
-func (*Error) putPerfConfigRes()           {}
-func (*Error) putSiteLoginBrandRes()       {}
-func (*Error) putSiteLoginProtectionRes()  {}
-func (*Error) refreshSiteDiagnosticsRes()  {}
-func (*Error) restoreSiteRes()             {}
-func (*Error) revokeSiteRes()              {}
-func (*Error) setSiteTagsRes()             {}
-func (*Error) silenceSitePHPErrorRes()     {}
+func (*Error) agentDisconnectRes()                {}
+func (*Error) agentHeartbeatRes()                 {}
+func (*Error) agentMediaAssetDeletedRes()         {}
+func (*Error) agentMediaEncodeReadyRes()          {}
+func (*Error) agentMediaJobStatusRes()            {}
+func (*Error) agentMediaPresignRes()              {}
+func (*Error) agentMediaRestoreStatusRes()        {}
+func (*Error) agentMediaSyncBatchRes()            {}
+func (*Error) agentMediaSyncFinalizeRes()         {}
+func (*Error) archiveSiteRes()                    {}
+func (*Error) beginReEnrollmentRes()              {}
+func (*Error) bulkConfigCacheRes()                {}
+func (*Error) createBackupRes()                   {}
+func (*Error) createPairingCodeRes()              {}
+func (*Error) createRestoreRes()                  {}
+func (*Error) createUpdateRunRes()                {}
+func (*Error) deleteSiteRes()                     {}
+func (*Error) getBackupRes()                      {}
+func (*Error) getBackupScheduleRes()              {}
+func (*Error) getBackupSettingsContentsRes()      {}
+func (*Error) getBackupSettingsNotificationsRes() {}
+func (*Error) getBackupSqlInspectionRes()         {}
+func (*Error) getMeRes()                          {}
+func (*Error) getSiteAvailableUpdatesRes()        {}
+func (*Error) getSiteDiagnosticsRes()             {}
+func (*Error) getSiteErrorConfigRes()             {}
+func (*Error) getSiteRes()                        {}
+func (*Error) getSiteUptimeRes()                  {}
+func (*Error) getTenantRes()                      {}
+func (*Error) getUpdateRunRes()                   {}
+func (*Error) listSharedWithMeRes()               {}
+func (*Error) logoutRes()                         {}
+func (*Error) oidcLoginRes()                      {}
+func (*Error) purgeCacheRes()                     {}
+func (*Error) putAlertConfigRes()                 {}
+func (*Error) putBackupScheduleRes()              {}
+func (*Error) putBackupSettingsContentsRes()      {}
+func (*Error) putBackupSettingsNotificationsRes() {}
+func (*Error) putPerfConfigRes()                  {}
+func (*Error) putSiteLoginBrandRes()              {}
+func (*Error) putSiteLoginProtectionRes()         {}
+func (*Error) refreshSiteDiagnosticsRes()         {}
+func (*Error) restoreSiteRes()                    {}
+func (*Error) revokeSiteRes()                     {}
+func (*Error) setSiteTagsRes()                    {}
+func (*Error) silenceSitePHPErrorRes()            {}
+func (*Error) unlockBackupRes()                   {}
 
 type ErrorDetails map[string]jx.Raw
 
@@ -4220,6 +4917,27 @@ func (s *ErrorDetails) init() ErrorDetails {
 	}
 	return m
 }
+
+type GetBackupEnvironmentNotFound Error
+
+func (*GetBackupEnvironmentNotFound) getBackupEnvironmentRes() {}
+
+type GetBackupEnvironmentOK map[string]jx.Raw
+
+func (s *GetBackupEnvironmentOK) init() GetBackupEnvironmentOK {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+func (*GetBackupEnvironmentOK) getBackupEnvironmentRes() {}
+
+type GetBackupEnvironmentServiceUnavailable Error
+
+func (*GetBackupEnvironmentServiceUnavailable) getBackupEnvironmentRes() {}
 
 // GetBackupSqlInspectionAccepted is response for GetBackupSqlInspection operation.
 type GetBackupSqlInspectionAccepted struct {
@@ -4658,6 +5376,14 @@ func (s *ListSitesState) UnmarshalText(data []byte) error {
 		return errors.Errorf("invalid value: %q", data)
 	}
 }
+
+type LockBackupConflict Error
+
+func (*LockBackupConflict) lockBackupRes() {}
+
+type LockBackupNotFound Error
+
+func (*LockBackupNotFound) lockBackupRes() {}
 
 // Ref: #/components/schemas/LoginRequest
 type LoginRequest struct {
@@ -5127,6 +5853,408 @@ func (s *MediaBatchResult) SetBatchJobID(val OptString) {
 // SetQueuedCount sets the value of QueuedCount.
 func (s *MediaBatchResult) SetQueuedCount(val OptInt) {
 	s.QueuedCount = val
+}
+
+// One attachment candidate identified as potentially unused.
+// Ref: #/components/schemas/MediaCleanCandidate
+type MediaCleanCandidate struct {
+	// WordPress attachment post ID.
+	ID int64 `json:"id"`
+	// Attachment post title (may be the filename when no title is set).
+	Title string `json:"title"`
+	// Public URL of the original (largest) file (guid).
+	URL string `json:"url"`
+	// URL of the thumbnail-size variant; null when unavailable.
+	Thumb OptNilString `json:"thumb"`
+	// Size of the original file in bytes. 0 when the file is missing from disk.
+	FileSize int64 `json:"file_size"`
+	// Number of generated thumbnail/resize variants registered in attachment metadata.
+	SizesCount int `json:"sizes_count"`
+}
+
+// GetID returns the value of ID.
+func (s *MediaCleanCandidate) GetID() int64 {
+	return s.ID
+}
+
+// GetTitle returns the value of Title.
+func (s *MediaCleanCandidate) GetTitle() string {
+	return s.Title
+}
+
+// GetURL returns the value of URL.
+func (s *MediaCleanCandidate) GetURL() string {
+	return s.URL
+}
+
+// GetThumb returns the value of Thumb.
+func (s *MediaCleanCandidate) GetThumb() OptNilString {
+	return s.Thumb
+}
+
+// GetFileSize returns the value of FileSize.
+func (s *MediaCleanCandidate) GetFileSize() int64 {
+	return s.FileSize
+}
+
+// GetSizesCount returns the value of SizesCount.
+func (s *MediaCleanCandidate) GetSizesCount() int {
+	return s.SizesCount
+}
+
+// SetID sets the value of ID.
+func (s *MediaCleanCandidate) SetID(val int64) {
+	s.ID = val
+}
+
+// SetTitle sets the value of Title.
+func (s *MediaCleanCandidate) SetTitle(val string) {
+	s.Title = val
+}
+
+// SetURL sets the value of URL.
+func (s *MediaCleanCandidate) SetURL(val string) {
+	s.URL = val
+}
+
+// SetThumb sets the value of Thumb.
+func (s *MediaCleanCandidate) SetThumb(val OptNilString) {
+	s.Thumb = val
+}
+
+// SetFileSize sets the value of FileSize.
+func (s *MediaCleanCandidate) SetFileSize(val int64) {
+	s.FileSize = val
+}
+
+// SetSizesCount sets the value of SizesCount.
+func (s *MediaCleanCandidate) SetSizesCount(val int) {
+	s.SizesCount = val
+}
+
+// Ref: #/components/schemas/MediaCleanDeleteRequest
+type MediaCleanDeleteRequest struct {
+	// Client-minted UUID v4 for idempotency.
+	JobID string `json:"job_id"`
+	// Quarantine manifest IDs to permanently delete. Maximum 200 per call.
+	QuarantineIds []string `json:"quarantine_ids"`
+	// Must equal "DELETE" exactly. The agent enforces this independently via hash_equals.
+	Confirm string `json:"confirm"`
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanDeleteRequest) GetJobID() string {
+	return s.JobID
+}
+
+// GetQuarantineIds returns the value of QuarantineIds.
+func (s *MediaCleanDeleteRequest) GetQuarantineIds() []string {
+	return s.QuarantineIds
+}
+
+// GetConfirm returns the value of Confirm.
+func (s *MediaCleanDeleteRequest) GetConfirm() string {
+	return s.Confirm
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanDeleteRequest) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetQuarantineIds sets the value of QuarantineIds.
+func (s *MediaCleanDeleteRequest) SetQuarantineIds(val []string) {
+	s.QuarantineIds = val
+}
+
+// SetConfirm sets the value of Confirm.
+func (s *MediaCleanDeleteRequest) SetConfirm(val string) {
+	s.Confirm = val
+}
+
+// Ref: #/components/schemas/MediaCleanDeleteResult
+type MediaCleanDeleteResult struct {
+	Ok bool `json:"ok"`
+	// Echoed from the request.
+	JobID string `json:"job_id"`
+	// Number of manifest entries permanently removed from disk.
+	Deleted int       `json:"deleted"`
+	Detail  OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *MediaCleanDeleteResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanDeleteResult) GetJobID() string {
+	return s.JobID
+}
+
+// GetDeleted returns the value of Deleted.
+func (s *MediaCleanDeleteResult) GetDeleted() int {
+	return s.Deleted
+}
+
+// GetDetail returns the value of Detail.
+func (s *MediaCleanDeleteResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *MediaCleanDeleteResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanDeleteResult) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetDeleted sets the value of Deleted.
+func (s *MediaCleanDeleteResult) SetDeleted(val int) {
+	s.Deleted = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *MediaCleanDeleteResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// Ref: #/components/schemas/MediaCleanIsolateRequest
+type MediaCleanIsolateRequest struct {
+	// Client-minted UUID v4 for idempotency. The agent echoes it in the response for correlation.
+	// Generate a new UUID per request.
+	JobID string `json:"job_id"`
+	// Attachment IDs to move to quarantine. Maximum 200 per call. Must be attachments that appeared in a
+	// recent scan result.
+	AttachmentIds []int64 `json:"attachment_ids"`
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanIsolateRequest) GetJobID() string {
+	return s.JobID
+}
+
+// GetAttachmentIds returns the value of AttachmentIds.
+func (s *MediaCleanIsolateRequest) GetAttachmentIds() []int64 {
+	return s.AttachmentIds
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanIsolateRequest) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetAttachmentIds sets the value of AttachmentIds.
+func (s *MediaCleanIsolateRequest) SetAttachmentIds(val []int64) {
+	s.AttachmentIds = val
+}
+
+// Ref: #/components/schemas/MediaCleanIsolateResult
+type MediaCleanIsolateResult struct {
+	Ok bool `json:"ok"`
+	// Echoed from the request for correlation.
+	JobID string `json:"job_id"`
+	// Number of attachment file sets moved to quarantine.
+	Moved int `json:"moved"`
+	// Opaque quarantine manifest identifier. Store this value and pass it back in quarantine_ids for
+	// restore or delete calls.
+	ManifestID string    `json:"manifest_id"`
+	Detail     OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *MediaCleanIsolateResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanIsolateResult) GetJobID() string {
+	return s.JobID
+}
+
+// GetMoved returns the value of Moved.
+func (s *MediaCleanIsolateResult) GetMoved() int {
+	return s.Moved
+}
+
+// GetManifestID returns the value of ManifestID.
+func (s *MediaCleanIsolateResult) GetManifestID() string {
+	return s.ManifestID
+}
+
+// GetDetail returns the value of Detail.
+func (s *MediaCleanIsolateResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *MediaCleanIsolateResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanIsolateResult) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetMoved sets the value of Moved.
+func (s *MediaCleanIsolateResult) SetMoved(val int) {
+	s.Moved = val
+}
+
+// SetManifestID sets the value of ManifestID.
+func (s *MediaCleanIsolateResult) SetManifestID(val string) {
+	s.ManifestID = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *MediaCleanIsolateResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// Ref: #/components/schemas/MediaCleanRestoreRequest
+type MediaCleanRestoreRequest struct {
+	// Client-minted UUID v4 for idempotency.
+	JobID string `json:"job_id"`
+	// Quarantine manifest IDs to restore. Each ID was returned by a prior isolate call as manifest_id.
+	// Maximum 200 per call.
+	QuarantineIds []string `json:"quarantine_ids"`
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanRestoreRequest) GetJobID() string {
+	return s.JobID
+}
+
+// GetQuarantineIds returns the value of QuarantineIds.
+func (s *MediaCleanRestoreRequest) GetQuarantineIds() []string {
+	return s.QuarantineIds
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanRestoreRequest) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetQuarantineIds sets the value of QuarantineIds.
+func (s *MediaCleanRestoreRequest) SetQuarantineIds(val []string) {
+	s.QuarantineIds = val
+}
+
+// Ref: #/components/schemas/MediaCleanRestoreResult
+type MediaCleanRestoreResult struct {
+	Ok bool `json:"ok"`
+	// Echoed from the request.
+	JobID string `json:"job_id"`
+	// Number of manifest entries successfully restored to the uploads directory.
+	Restored int       `json:"restored"`
+	Detail   OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *MediaCleanRestoreResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanRestoreResult) GetJobID() string {
+	return s.JobID
+}
+
+// GetRestored returns the value of Restored.
+func (s *MediaCleanRestoreResult) GetRestored() int {
+	return s.Restored
+}
+
+// GetDetail returns the value of Detail.
+func (s *MediaCleanRestoreResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *MediaCleanRestoreResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanRestoreResult) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetRestored sets the value of Restored.
+func (s *MediaCleanRestoreResult) SetRestored(val int) {
+	s.Restored = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *MediaCleanRestoreResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// Ref: #/components/schemas/MediaCleanScanResult
+type MediaCleanScanResult struct {
+	Ok bool `json:"ok"`
+	// Total number of unused attachments found (for progress/pagination display).
+	Total int `json:"total"`
+	// Unused attachment candidates in this page.
+	Candidates []MediaCleanCandidate `json:"candidates"`
+	// True when there are more pages at higher offsets.
+	HasMore bool `json:"has_more"`
+	// Human-readable error message when ok=false.
+	Detail OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *MediaCleanScanResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetTotal returns the value of Total.
+func (s *MediaCleanScanResult) GetTotal() int {
+	return s.Total
+}
+
+// GetCandidates returns the value of Candidates.
+func (s *MediaCleanScanResult) GetCandidates() []MediaCleanCandidate {
+	return s.Candidates
+}
+
+// GetHasMore returns the value of HasMore.
+func (s *MediaCleanScanResult) GetHasMore() bool {
+	return s.HasMore
+}
+
+// GetDetail returns the value of Detail.
+func (s *MediaCleanScanResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *MediaCleanScanResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetTotal sets the value of Total.
+func (s *MediaCleanScanResult) SetTotal(val int) {
+	s.Total = val
+}
+
+// SetCandidates sets the value of Candidates.
+func (s *MediaCleanScanResult) SetCandidates(val []MediaCleanCandidate) {
+	s.Candidates = val
+}
+
+// SetHasMore sets the value of HasMore.
+func (s *MediaCleanScanResult) SetHasMore(val bool) {
+	s.HasMore = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *MediaCleanScanResult) SetDetail(val OptString) {
+	s.Detail = val
 }
 
 // Ref: #/components/schemas/MediaJob
@@ -6893,6 +8021,52 @@ func (o OptComputeRucssReq) Or(d ComputeRucssReq) ComputeRucssReq {
 	return d
 }
 
+// NewOptCreateRestoreAcceptedProgress returns new OptCreateRestoreAcceptedProgress with value set to v.
+func NewOptCreateRestoreAcceptedProgress(v CreateRestoreAcceptedProgress) OptCreateRestoreAcceptedProgress {
+	return OptCreateRestoreAcceptedProgress{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptCreateRestoreAcceptedProgress is optional CreateRestoreAcceptedProgress.
+type OptCreateRestoreAcceptedProgress struct {
+	Value CreateRestoreAcceptedProgress
+	Set   bool
+}
+
+// IsSet returns true if OptCreateRestoreAcceptedProgress was set.
+func (o OptCreateRestoreAcceptedProgress) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptCreateRestoreAcceptedProgress) Reset() {
+	var v CreateRestoreAcceptedProgress
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptCreateRestoreAcceptedProgress) SetTo(v CreateRestoreAcceptedProgress) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptCreateRestoreAcceptedProgress) Get() (v CreateRestoreAcceptedProgress, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptCreateRestoreAcceptedProgress) Or(d CreateRestoreAcceptedProgress) CreateRestoreAcceptedProgress {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptDateTime returns new OptDateTime with value set to v.
 func NewOptDateTime(v time.Time) OptDateTime {
 	return OptDateTime{
@@ -7025,6 +8199,98 @@ func (o OptDbScanResultCategories) Get() (v DbScanResultCategories, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptDbScanResultCategories) Or(d DbScanResultCategories) DbScanResultCategories {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptDbSnapshotCreate returns new OptDbSnapshotCreate with value set to v.
+func NewOptDbSnapshotCreate(v DbSnapshotCreate) OptDbSnapshotCreate {
+	return OptDbSnapshotCreate{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptDbSnapshotCreate is optional DbSnapshotCreate.
+type OptDbSnapshotCreate struct {
+	Value DbSnapshotCreate
+	Set   bool
+}
+
+// IsSet returns true if OptDbSnapshotCreate was set.
+func (o OptDbSnapshotCreate) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptDbSnapshotCreate) Reset() {
+	var v DbSnapshotCreate
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptDbSnapshotCreate) SetTo(v DbSnapshotCreate) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptDbSnapshotCreate) Get() (v DbSnapshotCreate, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptDbSnapshotCreate) Or(d DbSnapshotCreate) DbSnapshotCreate {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptDbSnapshotEntry returns new OptDbSnapshotEntry with value set to v.
+func NewOptDbSnapshotEntry(v DbSnapshotEntry) OptDbSnapshotEntry {
+	return OptDbSnapshotEntry{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptDbSnapshotEntry is optional DbSnapshotEntry.
+type OptDbSnapshotEntry struct {
+	Value DbSnapshotEntry
+	Set   bool
+}
+
+// IsSet returns true if OptDbSnapshotEntry was set.
+func (o OptDbSnapshotEntry) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptDbSnapshotEntry) Reset() {
+	var v DbSnapshotEntry
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptDbSnapshotEntry) SetTo(v DbSnapshotEntry) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptDbSnapshotEntry) Get() (v DbSnapshotEntry, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptDbSnapshotEntry) Or(d DbSnapshotEntry) DbSnapshotEntry {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -8450,6 +9716,132 @@ func (o OptNilSiteAvailableUpdatesCoreUpdate) Or(d SiteAvailableUpdatesCoreUpdat
 	return d
 }
 
+// NewOptNilSiteBackupSettingsContentsBackupComponentsItemArray returns new OptNilSiteBackupSettingsContentsBackupComponentsItemArray with value set to v.
+func NewOptNilSiteBackupSettingsContentsBackupComponentsItemArray(v []SiteBackupSettingsContentsBackupComponentsItem) OptNilSiteBackupSettingsContentsBackupComponentsItemArray {
+	return OptNilSiteBackupSettingsContentsBackupComponentsItemArray{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilSiteBackupSettingsContentsBackupComponentsItemArray is optional nullable []SiteBackupSettingsContentsBackupComponentsItem.
+type OptNilSiteBackupSettingsContentsBackupComponentsItemArray struct {
+	Value []SiteBackupSettingsContentsBackupComponentsItem
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilSiteBackupSettingsContentsBackupComponentsItemArray was set.
+func (o OptNilSiteBackupSettingsContentsBackupComponentsItemArray) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilSiteBackupSettingsContentsBackupComponentsItemArray) Reset() {
+	var v []SiteBackupSettingsContentsBackupComponentsItem
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilSiteBackupSettingsContentsBackupComponentsItemArray) SetTo(v []SiteBackupSettingsContentsBackupComponentsItem) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilSiteBackupSettingsContentsBackupComponentsItemArray) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilSiteBackupSettingsContentsBackupComponentsItemArray) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v []SiteBackupSettingsContentsBackupComponentsItem
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilSiteBackupSettingsContentsBackupComponentsItemArray) Get() (v []SiteBackupSettingsContentsBackupComponentsItem, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilSiteBackupSettingsContentsBackupComponentsItemArray) Or(d []SiteBackupSettingsContentsBackupComponentsItem) []SiteBackupSettingsContentsBackupComponentsItem {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray returns new OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray with value set to v.
+func NewOptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray(v []SiteBackupSettingsContentsUpdateBackupComponentsItem) OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray {
+	return OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray is optional nullable []SiteBackupSettingsContentsUpdateBackupComponentsItem.
+type OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray struct {
+	Value []SiteBackupSettingsContentsUpdateBackupComponentsItem
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray was set.
+func (o OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) Reset() {
+	var v []SiteBackupSettingsContentsUpdateBackupComponentsItem
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) SetTo(v []SiteBackupSettingsContentsUpdateBackupComponentsItem) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v []SiteBackupSettingsContentsUpdateBackupComponentsItem
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) Get() (v []SiteBackupSettingsContentsUpdateBackupComponentsItem, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) Or(d []SiteBackupSettingsContentsUpdateBackupComponentsItem) []SiteBackupSettingsContentsUpdateBackupComponentsItem {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptNilSiteComponentAvailableUpdate returns new OptNilSiteComponentAvailableUpdate with value set to v.
 func NewOptNilSiteComponentAvailableUpdate(v SiteComponentAvailableUpdate) OptNilSiteComponentAvailableUpdate {
 	return OptNilSiteComponentAvailableUpdate{
@@ -8633,6 +10025,69 @@ func (o OptNilString) Get() (v string, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptNilString) Or(d string) string {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptNilStringArray returns new OptNilStringArray with value set to v.
+func NewOptNilStringArray(v []string) OptNilStringArray {
+	return OptNilStringArray{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilStringArray is optional nullable []string.
+type OptNilStringArray struct {
+	Value []string
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilStringArray was set.
+func (o OptNilStringArray) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilStringArray) Reset() {
+	var v []string
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilStringArray) SetTo(v []string) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilStringArray) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilStringArray) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v []string
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilStringArray) Get() (v []string, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilStringArray) Or(d []string) []string {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -8834,6 +10289,52 @@ func (o OptRole) Get() (v Role, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptRole) Or(d Role) Role {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion returns new OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion with value set to v.
+func NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion(v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
+	return OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion is optional SiteBackupSettingsNotificationsUpdateNotifyOnCompletion.
+type OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion struct {
+	Value SiteBackupSettingsNotificationsUpdateNotifyOnCompletion
+	Set   bool
+}
+
+// IsSet returns true if OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion was set.
+func (o OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) Reset() {
+	var v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) SetTo(v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) Get() (v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) Or(d SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) SiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -11040,6 +12541,191 @@ func (s *RucssResultList) SetItems(val []RucssResult) {
 	s.Items = val
 }
 
+// Request body for the serialization-safe database search-replace command.
+// Call with `dry_run: true` first to preview affected rows before applying.
+// Ref: #/components/schemas/SearchReplaceRequest
+type SearchReplaceRequest struct {
+	// Exact string to find in the database. Minimum 3 bytes. Treated as a
+	// literal (no regex, no wildcards).
+	Search string `json:"search"`
+	// Replacement string. May be empty to remove occurrences.
+	Replace string `json:"replace"`
+	// When `true` (required for the preview step) the agent scans and
+	// counts matching rows but writes nothing. `rows_changed` will be 0.
+	DryRun bool `json:"dry_run"`
+	// Optional allowlist of full table names to scan (including the wp_
+	// prefix, e.g. `wp_options`). When absent every eligible table is
+	// scanned.
+	Tables []string `json:"tables"`
+}
+
+// GetSearch returns the value of Search.
+func (s *SearchReplaceRequest) GetSearch() string {
+	return s.Search
+}
+
+// GetReplace returns the value of Replace.
+func (s *SearchReplaceRequest) GetReplace() string {
+	return s.Replace
+}
+
+// GetDryRun returns the value of DryRun.
+func (s *SearchReplaceRequest) GetDryRun() bool {
+	return s.DryRun
+}
+
+// GetTables returns the value of Tables.
+func (s *SearchReplaceRequest) GetTables() []string {
+	return s.Tables
+}
+
+// SetSearch sets the value of Search.
+func (s *SearchReplaceRequest) SetSearch(val string) {
+	s.Search = val
+}
+
+// SetReplace sets the value of Replace.
+func (s *SearchReplaceRequest) SetReplace(val string) {
+	s.Replace = val
+}
+
+// SetDryRun sets the value of DryRun.
+func (s *SearchReplaceRequest) SetDryRun(val bool) {
+	s.DryRun = val
+}
+
+// SetTables sets the value of Tables.
+func (s *SearchReplaceRequest) SetTables(val []string) {
+	s.Tables = val
+}
+
+// Result of a serialization-safe search-replace run or dry-run preview.
+// Ref: #/components/schemas/SearchReplaceResult
+type SearchReplaceResult struct {
+	Ok    bool      `json:"ok"`
+	JobID OptString `json:"job_id"`
+	// Echoes the `dry_run` flag from the request.
+	DryRun bool `json:"dry_run"`
+	// Number of tables the agent walked (after denylist filtering).
+	TablesScanned int `json:"tables_scanned"`
+	// Rows where at least one column value would change (or did change on
+	// a live run). This is the preview count shown before applying.
+	RowsMatched int `json:"rows_matched"`
+	// Rows actually written. Always 0 when `dry_run` was true.
+	RowsChanged int `json:"rows_changed"`
+	// Non-empty when no recent backup was found and `dry_run` was false.
+	// Advisory only — the replace still ran.
+	BackupWarning OptString `json:"backup_warning"`
+	// Human-readable reason on failure (ok=false).
+	Detail OptString `json:"detail"`
+}
+
+// GetOk returns the value of Ok.
+func (s *SearchReplaceResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetJobID returns the value of JobID.
+func (s *SearchReplaceResult) GetJobID() OptString {
+	return s.JobID
+}
+
+// GetDryRun returns the value of DryRun.
+func (s *SearchReplaceResult) GetDryRun() bool {
+	return s.DryRun
+}
+
+// GetTablesScanned returns the value of TablesScanned.
+func (s *SearchReplaceResult) GetTablesScanned() int {
+	return s.TablesScanned
+}
+
+// GetRowsMatched returns the value of RowsMatched.
+func (s *SearchReplaceResult) GetRowsMatched() int {
+	return s.RowsMatched
+}
+
+// GetRowsChanged returns the value of RowsChanged.
+func (s *SearchReplaceResult) GetRowsChanged() int {
+	return s.RowsChanged
+}
+
+// GetBackupWarning returns the value of BackupWarning.
+func (s *SearchReplaceResult) GetBackupWarning() OptString {
+	return s.BackupWarning
+}
+
+// GetDetail returns the value of Detail.
+func (s *SearchReplaceResult) GetDetail() OptString {
+	return s.Detail
+}
+
+// SetOk sets the value of Ok.
+func (s *SearchReplaceResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *SearchReplaceResult) SetJobID(val OptString) {
+	s.JobID = val
+}
+
+// SetDryRun sets the value of DryRun.
+func (s *SearchReplaceResult) SetDryRun(val bool) {
+	s.DryRun = val
+}
+
+// SetTablesScanned sets the value of TablesScanned.
+func (s *SearchReplaceResult) SetTablesScanned(val int) {
+	s.TablesScanned = val
+}
+
+// SetRowsMatched sets the value of RowsMatched.
+func (s *SearchReplaceResult) SetRowsMatched(val int) {
+	s.RowsMatched = val
+}
+
+// SetRowsChanged sets the value of RowsChanged.
+func (s *SearchReplaceResult) SetRowsChanged(val int) {
+	s.RowsChanged = val
+}
+
+// SetBackupWarning sets the value of BackupWarning.
+func (s *SearchReplaceResult) SetBackupWarning(val OptString) {
+	s.BackupWarning = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *SearchReplaceResult) SetDetail(val OptString) {
+	s.Detail = val
+}
+
+// SearchReplaceResultHeaders wraps SearchReplaceResult with response headers.
+type SearchReplaceResultHeaders struct {
+	XBackupWarning OptString
+	Response       SearchReplaceResult
+}
+
+// GetXBackupWarning returns the value of XBackupWarning.
+func (s *SearchReplaceResultHeaders) GetXBackupWarning() OptString {
+	return s.XBackupWarning
+}
+
+// GetResponse returns the value of Response.
+func (s *SearchReplaceResultHeaders) GetResponse() SearchReplaceResult {
+	return s.Response
+}
+
+// SetXBackupWarning sets the value of XBackupWarning.
+func (s *SearchReplaceResultHeaders) SetXBackupWarning(val OptString) {
+	s.XBackupWarning = val
+}
+
+// SetResponse sets the value of Response.
+func (s *SearchReplaceResultHeaders) SetResponse(val SearchReplaceResult) {
+	s.Response = val
+}
+
 // Ref: #/components/schemas/SecurityThresholds
 type SecurityThresholds struct {
 	// Number of failures before a CAPTCHA challenge is shown.
@@ -11960,6 +13646,507 @@ func (s *SiteAvailableUpdatesItemsItemType) UnmarshalText(data []byte) error {
 		return nil
 	case SiteAvailableUpdatesItemsItemTypeTheme:
 		*s = SiteAvailableUpdatesItemsItemTypeTheme
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Track-A backup scope/exclusion settings for a site (m50). A 404 means
+// no settings row exists — safe defaults apply (all components, no exclusions).
+// Ref: #/components/schemas/SiteBackupSettingsContents
+type SiteBackupSettingsContents struct {
+	SiteID uuid.UUID `json:"site_id"`
+	// Subset of archive components to include. Null/absent means all components (full backup).
+	// Singular vocabulary matching manifest entry_kind:
+	// "plugin" (wp-content/plugins/*), "theme" (wp-content/themes/*),
+	// "upload" (wp-content/uploads/*), "wp-content" (catch-all), "db" (database dump),
+	// "core" (ABSPATH: wp-admin, wp-includes, root PHP files).
+	BackupComponents OptNilSiteBackupSettingsContentsBackupComponentsItemArray `json:"backup_components"`
+	// When true, the WordPress core source root (ABSPATH) is archived.
+	IncludeCore OptBool `json:"include_core"`
+	// Path-segment names to exclude from file archiving.
+	ExcludePaths OptNilStringArray `json:"exclude_paths"`
+	// File extensions to skip (without leading dot, case-insensitive).
+	ExcludeExtensions OptNilStringArray `json:"exclude_extensions"`
+	// Skip files strictly larger than this value (MiB). 0/null = no filter.
+	ExcludeFileSizeMB OptNilInt32 `json:"exclude_file_size_mb"`
+	CreatedAt         OptDateTime `json:"created_at"`
+	UpdatedAt         time.Time   `json:"updated_at"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *SiteBackupSettingsContents) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetBackupComponents returns the value of BackupComponents.
+func (s *SiteBackupSettingsContents) GetBackupComponents() OptNilSiteBackupSettingsContentsBackupComponentsItemArray {
+	return s.BackupComponents
+}
+
+// GetIncludeCore returns the value of IncludeCore.
+func (s *SiteBackupSettingsContents) GetIncludeCore() OptBool {
+	return s.IncludeCore
+}
+
+// GetExcludePaths returns the value of ExcludePaths.
+func (s *SiteBackupSettingsContents) GetExcludePaths() OptNilStringArray {
+	return s.ExcludePaths
+}
+
+// GetExcludeExtensions returns the value of ExcludeExtensions.
+func (s *SiteBackupSettingsContents) GetExcludeExtensions() OptNilStringArray {
+	return s.ExcludeExtensions
+}
+
+// GetExcludeFileSizeMB returns the value of ExcludeFileSizeMB.
+func (s *SiteBackupSettingsContents) GetExcludeFileSizeMB() OptNilInt32 {
+	return s.ExcludeFileSizeMB
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *SiteBackupSettingsContents) GetCreatedAt() OptDateTime {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *SiteBackupSettingsContents) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *SiteBackupSettingsContents) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetBackupComponents sets the value of BackupComponents.
+func (s *SiteBackupSettingsContents) SetBackupComponents(val OptNilSiteBackupSettingsContentsBackupComponentsItemArray) {
+	s.BackupComponents = val
+}
+
+// SetIncludeCore sets the value of IncludeCore.
+func (s *SiteBackupSettingsContents) SetIncludeCore(val OptBool) {
+	s.IncludeCore = val
+}
+
+// SetExcludePaths sets the value of ExcludePaths.
+func (s *SiteBackupSettingsContents) SetExcludePaths(val OptNilStringArray) {
+	s.ExcludePaths = val
+}
+
+// SetExcludeExtensions sets the value of ExcludeExtensions.
+func (s *SiteBackupSettingsContents) SetExcludeExtensions(val OptNilStringArray) {
+	s.ExcludeExtensions = val
+}
+
+// SetExcludeFileSizeMB sets the value of ExcludeFileSizeMB.
+func (s *SiteBackupSettingsContents) SetExcludeFileSizeMB(val OptNilInt32) {
+	s.ExcludeFileSizeMB = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *SiteBackupSettingsContents) SetCreatedAt(val OptDateTime) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *SiteBackupSettingsContents) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*SiteBackupSettingsContents) getBackupSettingsContentsRes() {}
+func (*SiteBackupSettingsContents) putBackupSettingsContentsRes() {}
+
+type SiteBackupSettingsContentsBackupComponentsItem string
+
+const (
+	SiteBackupSettingsContentsBackupComponentsItemPlugin    SiteBackupSettingsContentsBackupComponentsItem = "plugin"
+	SiteBackupSettingsContentsBackupComponentsItemTheme     SiteBackupSettingsContentsBackupComponentsItem = "theme"
+	SiteBackupSettingsContentsBackupComponentsItemUpload    SiteBackupSettingsContentsBackupComponentsItem = "upload"
+	SiteBackupSettingsContentsBackupComponentsItemWpContent SiteBackupSettingsContentsBackupComponentsItem = "wp-content"
+	SiteBackupSettingsContentsBackupComponentsItemDb        SiteBackupSettingsContentsBackupComponentsItem = "db"
+	SiteBackupSettingsContentsBackupComponentsItemCore      SiteBackupSettingsContentsBackupComponentsItem = "core"
+)
+
+// AllValues returns all SiteBackupSettingsContentsBackupComponentsItem values.
+func (SiteBackupSettingsContentsBackupComponentsItem) AllValues() []SiteBackupSettingsContentsBackupComponentsItem {
+	return []SiteBackupSettingsContentsBackupComponentsItem{
+		SiteBackupSettingsContentsBackupComponentsItemPlugin,
+		SiteBackupSettingsContentsBackupComponentsItemTheme,
+		SiteBackupSettingsContentsBackupComponentsItemUpload,
+		SiteBackupSettingsContentsBackupComponentsItemWpContent,
+		SiteBackupSettingsContentsBackupComponentsItemDb,
+		SiteBackupSettingsContentsBackupComponentsItemCore,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteBackupSettingsContentsBackupComponentsItem) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteBackupSettingsContentsBackupComponentsItemPlugin:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsBackupComponentsItemTheme:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsBackupComponentsItemUpload:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsBackupComponentsItemWpContent:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsBackupComponentsItemDb:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsBackupComponentsItemCore:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteBackupSettingsContentsBackupComponentsItem) UnmarshalText(data []byte) error {
+	switch SiteBackupSettingsContentsBackupComponentsItem(data) {
+	case SiteBackupSettingsContentsBackupComponentsItemPlugin:
+		*s = SiteBackupSettingsContentsBackupComponentsItemPlugin
+		return nil
+	case SiteBackupSettingsContentsBackupComponentsItemTheme:
+		*s = SiteBackupSettingsContentsBackupComponentsItemTheme
+		return nil
+	case SiteBackupSettingsContentsBackupComponentsItemUpload:
+		*s = SiteBackupSettingsContentsBackupComponentsItemUpload
+		return nil
+	case SiteBackupSettingsContentsBackupComponentsItemWpContent:
+		*s = SiteBackupSettingsContentsBackupComponentsItemWpContent
+		return nil
+	case SiteBackupSettingsContentsBackupComponentsItemDb:
+		*s = SiteBackupSettingsContentsBackupComponentsItemDb
+		return nil
+	case SiteBackupSettingsContentsBackupComponentsItemCore:
+		*s = SiteBackupSettingsContentsBackupComponentsItemCore
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Update the Track-A backup scope/exclusion settings for a site.
+// Ref: #/components/schemas/SiteBackupSettingsContentsUpdate
+type SiteBackupSettingsContentsUpdate struct {
+	// Subset of archive components. Null/absent = all components (full backup).
+	BackupComponents  OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray `json:"backup_components"`
+	IncludeCore       OptBool                                                         `json:"include_core"`
+	ExcludePaths      OptNilStringArray                                               `json:"exclude_paths"`
+	ExcludeExtensions OptNilStringArray                                               `json:"exclude_extensions"`
+	// 0 or null clears the filter.
+	ExcludeFileSizeMB OptNilInt32 `json:"exclude_file_size_mb"`
+}
+
+// GetBackupComponents returns the value of BackupComponents.
+func (s *SiteBackupSettingsContentsUpdate) GetBackupComponents() OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray {
+	return s.BackupComponents
+}
+
+// GetIncludeCore returns the value of IncludeCore.
+func (s *SiteBackupSettingsContentsUpdate) GetIncludeCore() OptBool {
+	return s.IncludeCore
+}
+
+// GetExcludePaths returns the value of ExcludePaths.
+func (s *SiteBackupSettingsContentsUpdate) GetExcludePaths() OptNilStringArray {
+	return s.ExcludePaths
+}
+
+// GetExcludeExtensions returns the value of ExcludeExtensions.
+func (s *SiteBackupSettingsContentsUpdate) GetExcludeExtensions() OptNilStringArray {
+	return s.ExcludeExtensions
+}
+
+// GetExcludeFileSizeMB returns the value of ExcludeFileSizeMB.
+func (s *SiteBackupSettingsContentsUpdate) GetExcludeFileSizeMB() OptNilInt32 {
+	return s.ExcludeFileSizeMB
+}
+
+// SetBackupComponents sets the value of BackupComponents.
+func (s *SiteBackupSettingsContentsUpdate) SetBackupComponents(val OptNilSiteBackupSettingsContentsUpdateBackupComponentsItemArray) {
+	s.BackupComponents = val
+}
+
+// SetIncludeCore sets the value of IncludeCore.
+func (s *SiteBackupSettingsContentsUpdate) SetIncludeCore(val OptBool) {
+	s.IncludeCore = val
+}
+
+// SetExcludePaths sets the value of ExcludePaths.
+func (s *SiteBackupSettingsContentsUpdate) SetExcludePaths(val OptNilStringArray) {
+	s.ExcludePaths = val
+}
+
+// SetExcludeExtensions sets the value of ExcludeExtensions.
+func (s *SiteBackupSettingsContentsUpdate) SetExcludeExtensions(val OptNilStringArray) {
+	s.ExcludeExtensions = val
+}
+
+// SetExcludeFileSizeMB sets the value of ExcludeFileSizeMB.
+func (s *SiteBackupSettingsContentsUpdate) SetExcludeFileSizeMB(val OptNilInt32) {
+	s.ExcludeFileSizeMB = val
+}
+
+type SiteBackupSettingsContentsUpdateBackupComponentsItem string
+
+const (
+	SiteBackupSettingsContentsUpdateBackupComponentsItemPlugin    SiteBackupSettingsContentsUpdateBackupComponentsItem = "plugin"
+	SiteBackupSettingsContentsUpdateBackupComponentsItemTheme     SiteBackupSettingsContentsUpdateBackupComponentsItem = "theme"
+	SiteBackupSettingsContentsUpdateBackupComponentsItemUpload    SiteBackupSettingsContentsUpdateBackupComponentsItem = "upload"
+	SiteBackupSettingsContentsUpdateBackupComponentsItemWpContent SiteBackupSettingsContentsUpdateBackupComponentsItem = "wp-content"
+	SiteBackupSettingsContentsUpdateBackupComponentsItemDb        SiteBackupSettingsContentsUpdateBackupComponentsItem = "db"
+	SiteBackupSettingsContentsUpdateBackupComponentsItemCore      SiteBackupSettingsContentsUpdateBackupComponentsItem = "core"
+)
+
+// AllValues returns all SiteBackupSettingsContentsUpdateBackupComponentsItem values.
+func (SiteBackupSettingsContentsUpdateBackupComponentsItem) AllValues() []SiteBackupSettingsContentsUpdateBackupComponentsItem {
+	return []SiteBackupSettingsContentsUpdateBackupComponentsItem{
+		SiteBackupSettingsContentsUpdateBackupComponentsItemPlugin,
+		SiteBackupSettingsContentsUpdateBackupComponentsItemTheme,
+		SiteBackupSettingsContentsUpdateBackupComponentsItemUpload,
+		SiteBackupSettingsContentsUpdateBackupComponentsItemWpContent,
+		SiteBackupSettingsContentsUpdateBackupComponentsItemDb,
+		SiteBackupSettingsContentsUpdateBackupComponentsItemCore,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteBackupSettingsContentsUpdateBackupComponentsItem) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemPlugin:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemTheme:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemUpload:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemWpContent:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemDb:
+		return []byte(s), nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemCore:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteBackupSettingsContentsUpdateBackupComponentsItem) UnmarshalText(data []byte) error {
+	switch SiteBackupSettingsContentsUpdateBackupComponentsItem(data) {
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemPlugin:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemPlugin
+		return nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemTheme:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemTheme
+		return nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemUpload:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemUpload
+		return nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemWpContent:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemWpContent
+		return nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemDb:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemDb
+		return nil
+	case SiteBackupSettingsContentsUpdateBackupComponentsItemCore:
+		*s = SiteBackupSettingsContentsUpdateBackupComponentsItemCore
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Track-B notification settings for a site (m50). A 404 means no settings
+// row exists — safe defaults apply (never/empty). Fires for BOTH manual
+// and scheduled backup completions/failures.
+// Ref: #/components/schemas/SiteBackupSettingsNotifications
+type SiteBackupSettingsNotifications struct {
+	SiteID uuid.UUID `json:"site_id"`
+	// When to send a backup-event email. Fires for both manual and
+	// scheduled runs. "always" = every completion or failure;
+	// "on_failure" = only on failure; "never" = no email (default).
+	NotifyOnCompletion SiteBackupSettingsNotificationsNotifyOnCompletion `json:"notify_on_completion"`
+	// Email addresses to notify. Max 20.
+	NotifyRecipients []string    `json:"notify_recipients"`
+	CreatedAt        OptDateTime `json:"created_at"`
+	UpdatedAt        time.Time   `json:"updated_at"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *SiteBackupSettingsNotifications) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetNotifyOnCompletion returns the value of NotifyOnCompletion.
+func (s *SiteBackupSettingsNotifications) GetNotifyOnCompletion() SiteBackupSettingsNotificationsNotifyOnCompletion {
+	return s.NotifyOnCompletion
+}
+
+// GetNotifyRecipients returns the value of NotifyRecipients.
+func (s *SiteBackupSettingsNotifications) GetNotifyRecipients() []string {
+	return s.NotifyRecipients
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *SiteBackupSettingsNotifications) GetCreatedAt() OptDateTime {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *SiteBackupSettingsNotifications) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *SiteBackupSettingsNotifications) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetNotifyOnCompletion sets the value of NotifyOnCompletion.
+func (s *SiteBackupSettingsNotifications) SetNotifyOnCompletion(val SiteBackupSettingsNotificationsNotifyOnCompletion) {
+	s.NotifyOnCompletion = val
+}
+
+// SetNotifyRecipients sets the value of NotifyRecipients.
+func (s *SiteBackupSettingsNotifications) SetNotifyRecipients(val []string) {
+	s.NotifyRecipients = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *SiteBackupSettingsNotifications) SetCreatedAt(val OptDateTime) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *SiteBackupSettingsNotifications) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*SiteBackupSettingsNotifications) getBackupSettingsNotificationsRes() {}
+func (*SiteBackupSettingsNotifications) putBackupSettingsNotificationsRes() {}
+
+// When to send a backup-event email. Fires for both manual and
+// scheduled runs. "always" = every completion or failure;
+// "on_failure" = only on failure; "never" = no email (default).
+type SiteBackupSettingsNotificationsNotifyOnCompletion string
+
+const (
+	SiteBackupSettingsNotificationsNotifyOnCompletionAlways    SiteBackupSettingsNotificationsNotifyOnCompletion = "always"
+	SiteBackupSettingsNotificationsNotifyOnCompletionOnFailure SiteBackupSettingsNotificationsNotifyOnCompletion = "on_failure"
+	SiteBackupSettingsNotificationsNotifyOnCompletionNever     SiteBackupSettingsNotificationsNotifyOnCompletion = "never"
+)
+
+// AllValues returns all SiteBackupSettingsNotificationsNotifyOnCompletion values.
+func (SiteBackupSettingsNotificationsNotifyOnCompletion) AllValues() []SiteBackupSettingsNotificationsNotifyOnCompletion {
+	return []SiteBackupSettingsNotificationsNotifyOnCompletion{
+		SiteBackupSettingsNotificationsNotifyOnCompletionAlways,
+		SiteBackupSettingsNotificationsNotifyOnCompletionOnFailure,
+		SiteBackupSettingsNotificationsNotifyOnCompletionNever,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteBackupSettingsNotificationsNotifyOnCompletion) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteBackupSettingsNotificationsNotifyOnCompletionAlways:
+		return []byte(s), nil
+	case SiteBackupSettingsNotificationsNotifyOnCompletionOnFailure:
+		return []byte(s), nil
+	case SiteBackupSettingsNotificationsNotifyOnCompletionNever:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteBackupSettingsNotificationsNotifyOnCompletion) UnmarshalText(data []byte) error {
+	switch SiteBackupSettingsNotificationsNotifyOnCompletion(data) {
+	case SiteBackupSettingsNotificationsNotifyOnCompletionAlways:
+		*s = SiteBackupSettingsNotificationsNotifyOnCompletionAlways
+		return nil
+	case SiteBackupSettingsNotificationsNotifyOnCompletionOnFailure:
+		*s = SiteBackupSettingsNotificationsNotifyOnCompletionOnFailure
+		return nil
+	case SiteBackupSettingsNotificationsNotifyOnCompletionNever:
+		*s = SiteBackupSettingsNotificationsNotifyOnCompletionNever
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Update the Track-B notification settings for a site.
+// Ref: #/components/schemas/SiteBackupSettingsNotificationsUpdate
+type SiteBackupSettingsNotificationsUpdate struct {
+	NotifyOnCompletion OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion `json:"notify_on_completion"`
+	NotifyRecipients   []string                                                   `json:"notify_recipients"`
+}
+
+// GetNotifyOnCompletion returns the value of NotifyOnCompletion.
+func (s *SiteBackupSettingsNotificationsUpdate) GetNotifyOnCompletion() OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
+	return s.NotifyOnCompletion
+}
+
+// GetNotifyRecipients returns the value of NotifyRecipients.
+func (s *SiteBackupSettingsNotificationsUpdate) GetNotifyRecipients() []string {
+	return s.NotifyRecipients
+}
+
+// SetNotifyOnCompletion sets the value of NotifyOnCompletion.
+func (s *SiteBackupSettingsNotificationsUpdate) SetNotifyOnCompletion(val OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) {
+	s.NotifyOnCompletion = val
+}
+
+// SetNotifyRecipients sets the value of NotifyRecipients.
+func (s *SiteBackupSettingsNotificationsUpdate) SetNotifyRecipients(val []string) {
+	s.NotifyRecipients = val
+}
+
+type SiteBackupSettingsNotificationsUpdateNotifyOnCompletion string
+
+const (
+	SiteBackupSettingsNotificationsUpdateNotifyOnCompletionAlways    SiteBackupSettingsNotificationsUpdateNotifyOnCompletion = "always"
+	SiteBackupSettingsNotificationsUpdateNotifyOnCompletionOnFailure SiteBackupSettingsNotificationsUpdateNotifyOnCompletion = "on_failure"
+	SiteBackupSettingsNotificationsUpdateNotifyOnCompletionNever     SiteBackupSettingsNotificationsUpdateNotifyOnCompletion = "never"
+)
+
+// AllValues returns all SiteBackupSettingsNotificationsUpdateNotifyOnCompletion values.
+func (SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) AllValues() []SiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
+	return []SiteBackupSettingsNotificationsUpdateNotifyOnCompletion{
+		SiteBackupSettingsNotificationsUpdateNotifyOnCompletionAlways,
+		SiteBackupSettingsNotificationsUpdateNotifyOnCompletionOnFailure,
+		SiteBackupSettingsNotificationsUpdateNotifyOnCompletionNever,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionAlways:
+		return []byte(s), nil
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionOnFailure:
+		return []byte(s), nil
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionNever:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) UnmarshalText(data []byte) error {
+	switch SiteBackupSettingsNotificationsUpdateNotifyOnCompletion(data) {
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionAlways:
+		*s = SiteBackupSettingsNotificationsUpdateNotifyOnCompletionAlways
+		return nil
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionOnFailure:
+		*s = SiteBackupSettingsNotificationsUpdateNotifyOnCompletionOnFailure
+		return nil
+	case SiteBackupSettingsNotificationsUpdateNotifyOnCompletionNever:
+		*s = SiteBackupSettingsNotificationsUpdateNotifyOnCompletionNever
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)

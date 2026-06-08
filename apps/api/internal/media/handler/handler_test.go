@@ -70,8 +70,11 @@ func (r *stubRepo) GetJobAgent(context.Context, string) (model.Job, error) {
 func (r *stubRepo) ListJobs(context.Context, repo.ListJobsInput) ([]model.Job, string, error) {
 	return nil, "", nil
 }
-func (r *stubRepo) MarkJobInProgressAgent(context.Context, string, int) error       { return nil }
-func (r *stubRepo) CancelJobs(context.Context, uuid.UUID, uuid.UUID) (int64, error) { return 0, nil }
+func (r *stubRepo) MarkJobInProgressAgent(context.Context, string, int) error { return nil }
+func (r *stubRepo) CancelJobs(context.Context, uuid.UUID, uuid.UUID) (repo.CancelJobsResult, error) {
+	return repo.CancelJobsResult{}, nil
+}
+func (r *stubRepo) SetEncodeRiverJobID(context.Context, string, int64) error { return nil }
 func (r *stubRepo) FinalizeJobAgent(context.Context, string, repo.FinalizeJobInput) (model.Job, error) {
 	return model.Job{}, nil
 }
@@ -108,7 +111,8 @@ func (r *stubRepo) UpsertMediaSettings(_ context.Context, tenantID, siteID uuid.
 
 type stubEnq struct{}
 
-func (stubEnq) EnqueueEncode(context.Context, model.EncodeArgs) error { return nil }
+func (stubEnq) EnqueueEncode(_ context.Context, _ model.EncodeArgs) (int64, error) { return 1, nil }
+func (stubEnq) CancelEncodeJob(_ context.Context, _ int64) error                    { return nil }
 
 type stubAgent struct{}
 

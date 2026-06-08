@@ -40,18 +40,31 @@ type Repo interface {
 	ListJobs(ctx context.Context, in repo.ListJobsInput) ([]model.Job, string, error)
 	MarkJobInProgressAgent(ctx context.Context, jobID string, variantsTotal int) error
 	FinalizeJobAgent(ctx context.Context, jobID string, in repo.FinalizeJobInput) (model.Job, error)
-	CancelJobs(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error)
+	CancelJobs(ctx context.Context, tenantID, siteID uuid.UUID) (repo.CancelJobsResult, error)
+	// SetEncodeRiverJobID stores the River job ID on a media_optimization_jobs
+	// row so the cancel path can later cancel that River job proactively (m51).
+	// Best-effort: a failure is logged by the caller but does not fail the encode.
+	SetEncodeRiverJobID(ctx context.Context, jobID string, riverJobID int64) error
 	// variants
 	UpsertVariantAgent(ctx context.Context, tenantID uuid.UUID, in repo.UpsertVariantInput) error
 	ListVariantsForJob(ctx context.Context, tenantID uuid.UUID, jobID string) ([]model.VariantResult, error)
 	CountVariantStatesAgent(ctx context.Context, jobID string) (succeeded, failed int, err error)
 }
 
-// EncodeEnqueuer inserts media_encode River jobs. *RiverEnqueuer (worker pkg)
-// satisfies it; the main API wires it post-River-start. Insert-only — the API's
-// River client registers media_encode with MaxWorkers=0.
+// EncodeEnqueuer inserts media_encode River jobs and cancels them when
+// needed. *media.RiverEnqueuer satisfies it; the main API wires it
+// post-River-start. Insert-only on the API side — MaxWorkers=0 on the
+// media_encode queue; the encoder binary runs the actual workers.
 type EncodeEnqueuer interface {
-	EnqueueEncode(ctx context.Context, args model.EncodeArgs) error
+	// EnqueueEncode inserts one media_encode River job and returns the assigned
+	// River job ID (stored on the media_optimization_jobs row via m51 so the
+	// cancel path can cancel it proactively).
+	EnqueueEncode(ctx context.Context, args model.EncodeArgs) (int64, error)
+	// CancelEncodeJob cancels an enqueued media_encode River job by its River
+	// job ID. Best-effort and idempotent: already-terminal or not-found IDs are
+	// treated as success (log + continue). Returns an error only for unexpected
+	// River client failures.
+	CancelEncodeJob(ctx context.Context, riverJobID int64) error
 }
 
 // EncoderWaker nudges the scale-to-zero media-encoder awake right after a job is

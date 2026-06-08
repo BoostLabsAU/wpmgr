@@ -138,12 +138,20 @@ func run() error {
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, encodeWorker)
 
+	// encodeJobTimeout must match EncodeWorker.Timeout(). SoftStopTimeout gives
+	// in-flight jobs this long to finish after a SIGTERM before their contexts are
+	// hard-cancelled. Without it the work context inherits from the start context
+	// and is cancelled immediately on signal, which cuts Work() mid-variant-loop
+	// (root cause of the "stuck at 25%" bug: 1 variant recorded, others lost).
+	const encodeJobTimeout = 5 * time.Minute
+
 	client, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
 			model.MediaEncodeQueue: {MaxWorkers: workers},
 		},
-		Workers: riverWorkers,
+		Workers:         riverWorkers,
+		SoftStopTimeout: encodeJobTimeout,
 	})
 	if err != nil {
 		return err
@@ -166,7 +174,14 @@ func run() error {
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining encode queue")
-	stopCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout)
+
+	// The stop context must outlive SoftStopTimeout (encodeJobTimeout = 5 min) so
+	// River has the full window to let in-flight jobs finish before the context
+	// cancels and Stop() returns early. cfg.Shutdown.Timeout (default 15s) is
+	// sized for the main API; the encoder needs the full job timeout plus a margin
+	// for River's own teardown. We add 30s of margin for River bookkeeping.
+	stopTimeout := encodeJobTimeout + 30*time.Second
+	stopCtx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
 	if herr := healthSrv.Shutdown(stopCtx); herr != nil {
 		logger.Warn("health server shutdown", slog.Any("error", herr))

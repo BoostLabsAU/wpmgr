@@ -61,6 +61,12 @@ var canonicalOperatorRoutes = []string{
 	"PUT    /api/v1/cache/bulk-config",
 	// P3.7 — tenant-level (no :siteId) fleet DB health aggregate.
 	"GET    /api/v1/perf/db/fleet-health",
+	// #190 — unused media library cleaner (scan/quarantine/isolate/restore/delete).
+	"GET    /api/v1/sites/:siteId/media/clean/scan",
+	"GET    /api/v1/sites/:siteId/media/clean/quarantine",
+	"POST   /api/v1/sites/:siteId/media/clean/isolate",
+	"POST   /api/v1/sites/:siteId/media/clean/restore",
+	"POST   /api/v1/sites/:siteId/media/clean/delete",
 }
 
 // TestOperatorRoutesContract pins the registered operator route set to the

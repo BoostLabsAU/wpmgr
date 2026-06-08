@@ -538,19 +538,38 @@ func (s *Service) SaveMediaSettings(ctx context.Context, tenantID, siteID uuid.U
 	return saved, nil
 }
 
-// Cancel cancels all non-terminal jobs for a site.
+// Cancel cancels all non-terminal jobs for a site. It also proactively cancels
+// any corresponding River media_encode jobs (m51) so the encoder is never woken
+// for discarded work. River cancels are best-effort: a failure to cancel a
+// River job is logged and does not fail the operator's cancel request — the
+// media_optimization_jobs state is the source of truth, and the encoder worker
+// self-heals on a missing row (river.JobCancel on not-found).
 func (s *Service) Cancel(ctx context.Context, tenantID, siteID uuid.UUID, p domain.Principal) (CancelResult, error) {
-	n, err := s.repo.CancelJobs(ctx, tenantID, siteID)
+	res, err := s.repo.CancelJobs(ctx, tenantID, siteID)
 	if err != nil {
 		return CancelResult{}, err
 	}
-	if n > 0 {
+	if res.CancelledCount > 0 {
 		s.recordAudit(ctx, tenantID, p, audit.ActionMediaCancelled, siteID.String(), map[string]any{
 			"site_id":         siteID.String(),
-			"cancelled_count": n,
+			"cancelled_count": res.CancelledCount,
 		})
 	}
-	return CancelResult{OK: true, CancelledCount: n}, nil
+	// Proactively cancel any River media_encode jobs whose IDs were stored on
+	// the cancelled rows. Best-effort: log failures but never surface them to
+	// the operator — the River worker self-heals (discards the job) when it
+	// finds the media row already terminal.
+	if s.enqueuer != nil {
+		for _, rid := range res.EncodeRiverIDs {
+			if cerr := s.enqueuer.CancelEncodeJob(ctx, rid); cerr != nil {
+				s.logger.Warn("media cancel: could not cancel River encode job (best-effort)",
+					"river_job_id", rid,
+					"site_id", siteID.String(),
+					"err", cerr.Error())
+			}
+		}
+	}
+	return CancelResult{OK: true, CancelledCount: res.CancelledCount}, nil
 }
 
 // ---------------------------------------------------------------------------

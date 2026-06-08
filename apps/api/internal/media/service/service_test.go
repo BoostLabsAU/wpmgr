@@ -202,16 +202,26 @@ func (r *fakeRepo) FinalizeJobAgent(_ context.Context, jobID string, in repo.Fin
 	r.enqueuedStatus[jobID] = j.State
 	return j, nil
 }
-func (r *fakeRepo) CancelJobs(_ context.Context, _, _ uuid.UUID) (int64, error) {
-	var n int64
+func (r *fakeRepo) CancelJobs(_ context.Context, _, _ uuid.UUID) (repo.CancelJobsResult, error) {
+	var res repo.CancelJobsResult
 	for id, j := range r.jobs {
 		if j.State == model.JobQueued || j.State == model.JobInProgress {
 			j.State = model.JobCancelled
 			r.jobs[id] = j
-			n++
+			res.CancelledCount++
+			if j.EncodeRiverJobID != nil {
+				res.EncodeRiverIDs = append(res.EncodeRiverIDs, *j.EncodeRiverJobID)
+			}
 		}
 	}
-	return n, nil
+	return res, nil
+}
+
+func (r *fakeRepo) SetEncodeRiverJobID(_ context.Context, jobID string, riverJobID int64) error {
+	j := r.jobs[jobID]
+	j.EncodeRiverJobID = &riverJobID
+	r.jobs[jobID] = j
+	return nil
 }
 func (r *fakeRepo) UpsertVariantAgent(_ context.Context, _ uuid.UUID, in repo.UpsertVariantInput) error {
 	r.variants[in.JobID] = append(r.variants[in.JobID], model.VariantResult{
@@ -261,10 +271,20 @@ func (r *fakeRepo) UpsertMediaSettings(_ context.Context, tenantID, siteID uuid.
 	}, nil
 }
 
-type fakeEnqueuer struct{ enqueued []model.EncodeArgs }
+type fakeEnqueuer struct {
+	enqueued    []model.EncodeArgs
+	cancelled   []int64
+	nextRiverID int64 // incremented on each EnqueueEncode; starts at 1
+}
 
-func (e *fakeEnqueuer) EnqueueEncode(_ context.Context, args model.EncodeArgs) error {
+func (e *fakeEnqueuer) EnqueueEncode(_ context.Context, args model.EncodeArgs) (int64, error) {
+	e.nextRiverID++
 	e.enqueued = append(e.enqueued, args)
+	return e.nextRiverID, nil
+}
+
+func (e *fakeEnqueuer) CancelEncodeJob(_ context.Context, riverJobID int64) error {
+	e.cancelled = append(e.cancelled, riverJobID)
 	return nil
 }
 
@@ -565,6 +585,88 @@ func TestCancel_CancelsNonTerminalJobs(t *testing.T) {
 	}
 	if res.CancelledCount != 2 {
 		t.Errorf("cancelled %d, want 2 (queued + in_progress; succeeded untouched)", res.CancelledCount)
+	}
+}
+
+// TestCancel_CancelsRiverEncodeJobs is the regression guard for the orphaned
+// River job bug: when an operator cancels a media optimization job, the service
+// must also cancel any stored River media_encode job IDs so the encoder is
+// never woken for discarded work. River cancels are best-effort — a failure
+// does not fail the operator's cancel request.
+func TestCancel_CancelsRiverEncodeJobs(t *testing.T) {
+	tenantID, siteID := uuid.New(), uuid.New()
+	r := newFakeRepo()
+
+	// riverID1 simulates a job that has already been through encode-ready
+	// (HandleEncodeReady stored its River job ID). riverID2 is a second job.
+	// riverID values must be non-zero — 0 is the zero value of int64.
+	riverID1, riverID2 := int64(101), int64(202)
+	r.jobs["A"] = model.Job{ID: "A", SiteID: siteID, State: model.JobInProgress, EncodeRiverJobID: &riverID1}
+	r.jobs["B"] = model.Job{ID: "B", SiteID: siteID, State: model.JobQueued, EncodeRiverJobID: &riverID2}
+	// Job C has no River ID (non-optimize or encode-ready not yet called).
+	r.jobs["C"] = model.Job{ID: "C", SiteID: siteID, State: model.JobQueued}
+	// Job D is already terminal — must not be cancelled or cause a River call.
+	r.jobs["D"] = model.Job{ID: "D", SiteID: siteID, State: model.JobSucceeded}
+
+	enq := &fakeEnqueuer{}
+	svc := newTestService(r, &fakeStore{}, enq, &fakeAgent{}, fakeSites{enrolled: true})
+
+	res, err := svc.Cancel(context.Background(), tenantID, siteID, userPrincipal(tenantID))
+	if err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if res.CancelledCount != 3 {
+		t.Errorf("cancelled %d, want 3 (A+B+C; D terminal untouched)", res.CancelledCount)
+	}
+
+	// Verify the River cancel was called for the two jobs that had stored IDs.
+	// Job C had no River ID — it must NOT appear in the cancelled list.
+	if len(enq.cancelled) != 2 {
+		t.Fatalf("River CancelEncodeJob called %d times, want 2 (only jobs with stored River IDs)", len(enq.cancelled))
+	}
+	// Order is non-deterministic (map iteration); use a set.
+	cancelledSet := make(map[int64]bool, len(enq.cancelled))
+	for _, id := range enq.cancelled {
+		cancelledSet[id] = true
+	}
+	if !cancelledSet[riverID1] {
+		t.Errorf("River job %d not cancelled (expected for job A)", riverID1)
+	}
+	if !cancelledSet[riverID2] {
+		t.Errorf("River job %d not cancelled (expected for job B)", riverID2)
+	}
+}
+
+// TestHandleEncodeReady_StoresRiverJobID verifies that the River job ID
+// returned by EnqueueEncode is persisted on the media_optimization_jobs row via
+// SetEncodeRiverJobID. This is the other half of the cancel fix — the store
+// path that makes the cancel path possible.
+func TestHandleEncodeReady_StoresRiverJobID(t *testing.T) {
+	tenantID, siteID := uuid.New(), uuid.New()
+	r := newFakeRepo()
+	jobID := "JOB_RIVER_ID"
+	r.jobs[jobID] = model.Job{
+		ID: jobID, TenantID: tenantID, SiteID: siteID,
+		Kind: model.JobOptimize, TargetFormat: "webp", TargetQuality: "lossy",
+		State: model.JobQueued,
+	}
+	enq := &fakeEnqueuer{nextRiverID: 500} // will increment to 501 on first Enqueue
+	svc := newTestService(r, &fakeStore{}, enq, &fakeAgent{}, fakeSites{enrolled: true})
+
+	err := svc.HandleEncodeReady(context.Background(), tenantID, siteID, jobID, []EncodeReadyVariant{
+		{Name: "full", SourceSize: 1000, SourceMime: "image/jpeg"},
+	})
+	if err != nil {
+		t.Fatalf("HandleEncodeReady: %v", err)
+	}
+
+	// The River job ID (501) must now be stored on the job row.
+	got := r.jobs[jobID]
+	if got.EncodeRiverJobID == nil {
+		t.Fatal("EncodeRiverJobID is nil after HandleEncodeReady; expected it to be stored (m51)")
+	}
+	if *got.EncodeRiverJobID != 501 {
+		t.Errorf("EncodeRiverJobID = %d, want 501 (the ID returned by EnqueueEncode)", *got.EncodeRiverJobID)
 	}
 }
 

@@ -90,6 +90,16 @@ const (
 	// admin+ (above the operator-level cache perms), mirroring the
 	// PermMediaDeleteOriginals destructive-action precedent.
 	PermSiteCacheDeleteAll Permission = "site.cache.delete-everything"
+
+	// PermMediaCleanScan authorises the read-only attachment reference scan
+	// (#190). Viewer+ — no side effects.
+	PermMediaCleanScan Permission = "site.media.clean.scan"
+	// PermMediaCleanWrite authorises the reversible isolate and restore actions
+	// (#190). Operator+ — data-mutation operations comparable to PermSiteWrite.
+	PermMediaCleanWrite Permission = "site.media.clean.write"
+	// PermMediaCleanDelete authorises the PERMANENT deletion of quarantined
+	// attachments (#190). Admin+ — irreversible, mirrors PermMediaDeleteOriginals.
+	PermMediaCleanDelete Permission = "site.media.clean.delete"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -116,6 +126,11 @@ var minRoleFor = map[Permission]Role{
 	PermSiteCachePurge:     RoleOperator,
 	PermSitePerfConfig:     RoleOperator,
 	PermSiteCacheDeleteAll: RoleAdmin,
+	// Media Cleaner (#190). Scan is read-only (viewer+); isolate/restore are
+	// reversible mutations (operator+); permanent delete is admin+ (irreversible).
+	PermMediaCleanScan:   RoleViewer,
+	PermMediaCleanWrite:  RoleOperator,
+	PermMediaCleanDelete: RoleAdmin,
 }
 
 // Allows reports whether role r is permitted to perform p.

@@ -104,6 +104,8 @@ import type {
   DeleteBackupResponses,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponses,
+  DeleteIsolatedMediaData,
+  DeleteIsolatedMediaResponses,
   DeleteMediaOriginalsData,
   DeleteMediaOriginalsResponses,
   DeleteMemberData,
@@ -194,6 +196,8 @@ import type {
   InviteMemberData,
   InviteMemberErrors,
   InviteMemberResponses,
+  IsolateUnusedMediaData,
+  IsolateUnusedMediaResponses,
   ListApiKeysData,
   ListApiKeysErrors,
   ListApiKeysResponses,
@@ -204,6 +208,8 @@ import type {
   ListBackupsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
+  ListQuarantinedMediaData,
+  ListQuarantinedMediaResponses,
   ListMediaAssetsData,
   ListMediaAssetsResponses,
   ListMediaJobsData,
@@ -291,6 +297,8 @@ import type {
   RegisterData,
   RegisterErrors,
   RegisterResponses,
+  RestoreIsolatedMediaData,
+  RestoreIsolatedMediaResponses,
   RestoreMediaData,
   RestoreMediaResponses,
   RestoreSiteData,
@@ -306,6 +314,8 @@ import type {
   RevokeSiteResponses,
   RunSearchReplaceData,
   RunSearchReplaceResponses,
+  ScanUnusedMediaData,
+  ScanUnusedMediaResponses,
   SetSiteTagsData,
   SetSiteTagsErrors,
   SetSiteTagsResponses,
@@ -2722,6 +2732,139 @@ export const cleanDatabase = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/perf/db/clean", ...options });
+
+/**
+ * Scan a site's media library for unreferenced attachments
+ *
+ * Dispatches a read-only scan to the site's agent. The agent walks the
+ * WordPress media library and checks every attachment against an exhaustive
+ * set of reference surfaces (post_content, postmeta, options, termmeta,
+ * usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+ * nav menus, and more). Attachments for which no reference is found are
+ * returned as candidates.
+ *
+ * **Conservative rule**: when a check cannot run or the result is ambiguous
+ * the attachment is treated as referenced (safe). False negatives (calling a
+ * used image unused) are the dangerous failure; this implementation prefers
+ * false positives.
+ *
+ * Paginated by `offset`. Results are ordered by attachment ID ascending.
+ * Requires the `site.media.clean.scan` permission (viewer+).
+ *
+ */
+export const scanUnusedMedia = <ThrowOnError extends boolean = false>(
+  options: Options<ScanUnusedMediaData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ScanUnusedMediaResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/media/clean/scan", ...options });
+
+/**
+ * Move selected attachments to quarantine (reversible)
+ *
+ * Instructs the agent to move the original file and all generated thumbnail
+ * sizes for the specified attachment IDs into the quarantine directory
+ * (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+ * intact so the Restore operation can undo the move cleanly.
+ *
+ * **This operation is reversible** — use the restore endpoint to undo.
+ * The attachment IDs must have appeared in a recent scan result.
+ *
+ * Requires the `site.media.clean.write` permission (operator+).
+ *
+ */
+export const isolateUnusedMedia = <ThrowOnError extends boolean = false>(
+  options: Options<IsolateUnusedMediaData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    IsolateUnusedMediaResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/media/clean/isolate",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Restore quarantined attachments to their original locations
+ *
+ * Moves quarantined attachment files back to the WordPress uploads directory
+ * using the quarantine manifest. The attachment posts are already intact.
+ *
+ * Requires the `site.media.clean.write` permission (operator+).
+ *
+ */
+export const restoreIsolatedMedia = <ThrowOnError extends boolean = false>(
+  options: Options<RestoreIsolatedMediaData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RestoreIsolatedMediaResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/media/clean/restore",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Permanently delete quarantined attachments (IRREVERSIBLE)
+ *
+ * Permanently removes quarantined attachment files from disk and deletes
+ * the corresponding WordPress attachment posts. **This cannot be undone.**
+ *
+ * Only items already in the quarantine directory (isolated via the isolate
+ * endpoint) can be deleted through this path. A `confirm` token of
+ * `"DELETE"` must be included in the request body; the agent enforces this
+ * independently.
+ *
+ * Requires the `site.media.clean.write` permission (operator+).
+ *
+ */
+export const deleteIsolatedMedia = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteIsolatedMediaData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    DeleteIsolatedMediaResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/media/clean/delete",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List quarantined media manifests for a site
+ *
+ * Returns all quarantine manifests that have been created for this site
+ * and not yet restored or deleted. Each manifest contains the attachment
+ * entries and the isolation timestamp so the operator can act on items
+ * that survived a page refresh.
+ *
+ * Requires the `site.media.clean.scan` permission (viewer+).
+ *
+ */
+export const listQuarantinedMedia = <ThrowOnError extends boolean = false>(
+  options: Options<ListQuarantinedMediaData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListQuarantinedMediaResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/media/clean/quarantine", ...options });
 
 /**
  * List cached Used-CSS (RUCSS) results for a site

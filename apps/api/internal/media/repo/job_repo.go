@@ -16,7 +16,8 @@ import (
 const jobCols = `id, tenant_id, site_id, asset_id, wp_attachment_id, kind,
 	target_format, target_quality, state, bytes_before, bytes_after,
 	variants_total, variants_succeeded, variants_failed, error_reason,
-	initiator_user_id, created_at, started_at, completed_at, sync_generation`
+	initiator_user_id, created_at, started_at, completed_at, sync_generation,
+	encode_river_job_id`
 
 func jobFromRow(row pgx.Row) (model.Job, error) {
 	var j model.Job
@@ -25,17 +26,20 @@ func jobFromRow(row pgx.Row) (model.Job, error) {
 	var bytesBefore, bytesAfter *int64
 	var startedAt, completedAt *time.Time
 	var syncGeneration *int64
+	var encodeRiverJobID *int64
 	if err := row.Scan(
 		&j.ID, &j.TenantID, &j.SiteID, &assetID, &j.WPAttachmentID, &j.Kind,
 		&targetFormat, &targetQuality, &j.State, &bytesBefore, &bytesAfter,
 		&j.VariantsTotal, &j.VariantsSucceeded, &j.VariantsFailed, &errReason,
 		&initiator, &j.CreatedAt, &startedAt, &completedAt, &syncGeneration,
+		&encodeRiverJobID,
 	); err != nil {
 		return model.Job{}, err
 	}
 	j.AssetID = assetID
 	j.InitiatorUserID = initiator
 	j.SyncGeneration = syncGeneration
+	j.EncodeRiverJobID = encodeRiverJobID
 	if targetFormat != nil {
 		j.TargetFormat = *targetFormat
 	}
@@ -291,22 +295,65 @@ func (r *Repo) HasInFlightOptimizeJobAgent(ctx context.Context, tenantID, siteID
 	return exists, err
 }
 
+// CancelJobsResult is returned by CancelJobs and carries both the row count and
+// the River job IDs that must be cancelled so the encoder is not woken for
+// discarded work.
+type CancelJobsResult struct {
+	CancelledCount  int64
+	EncodeRiverIDs  []int64 // non-nil IDs of media_encode River jobs to cancel
+}
+
 // CancelJobs cancels all non-terminal jobs for a site (tenant-scoped, operator
-// path). Returns the cancelled count.
-func (r *Repo) CancelJobs(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error) {
-	var cancelled int64
+// path). It returns the cancelled count together with any River media_encode job
+// IDs that were stored on the cancelled rows so the caller can proactively
+// cancel those River jobs (m51 — prevent orphaned encoder wake-ups).
+func (r *Repo) CancelJobs(ctx context.Context, tenantID, siteID uuid.UUID) (CancelJobsResult, error) {
+	var res CancelJobsResult
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		tag, err := tx.Exec(ctx,
+		// RETURNING encode_river_job_id lets us collect the River job IDs to
+		// cancel in the same statement — no extra round-trip.
+		rows, err := tx.Query(ctx,
 			`UPDATE media_optimization_jobs
 			 SET state = 'cancelled', completed_at = now()
 			 WHERE tenant_id = $1 AND site_id = $2
-			   AND state IN ('queued','in_progress')`,
+			   AND state IN ('queued','in_progress')
+			 RETURNING encode_river_job_id`,
 			tenantID, siteID)
 		if err != nil {
 			return domain.Internal("media_jobs_cancel_failed", "failed to cancel media jobs").WithCause(err)
 		}
-		cancelled = tag.RowsAffected()
+		defer rows.Close()
+		for rows.Next() {
+			var rid *int64
+			if scanErr := rows.Scan(&rid); scanErr != nil {
+				return domain.Internal("media_jobs_cancel_failed", "failed to read cancelled job IDs").WithCause(scanErr)
+			}
+			res.CancelledCount++
+			if rid != nil {
+				res.EncodeRiverIDs = append(res.EncodeRiverIDs, *rid)
+			}
+		}
+		return rows.Err()
+	})
+	return res, err
+}
+
+// SetEncodeRiverJobID stores the River river_jobs.id for the media_encode job
+// that was just enqueued for this media_optimization_jobs row (m51). It runs
+// under the agent GUC (encode-ready callback) and is a best-effort write —
+// a failure only means the River job ID is not persisted, so the cancel path
+// falls back to the worker's own self-heal (already in place). The caller
+// logs and continues rather than failing the encode path.
+func (r *Repo) SetEncodeRiverJobID(ctx context.Context, jobID string, riverJobID int64) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		_, err := tx.Exec(ctx,
+			`UPDATE media_optimization_jobs
+			 SET encode_river_job_id = $2
+			 WHERE id = $1`,
+			jobID, riverJobID)
+		if err != nil {
+			return domain.Internal("media_encode_river_id_set_failed", "failed to store encode river job id").WithCause(err)
+		}
 		return nil
 	})
-	return cancelled, err
 }

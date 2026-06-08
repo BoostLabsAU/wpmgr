@@ -50,6 +50,7 @@ use WPMgr\Agent\Commands\DbOrphanDeleteCommand;
 use WPMgr\Agent\Commands\DbScanCommand;
 use WPMgr\Agent\Commands\DbSnapshotCommand;
 use WPMgr\Agent\Commands\DbTableActionCommand;
+use WPMgr\Agent\Commands\MediaCleanCommand;
 use WPMgr\Agent\Commands\SearchReplaceCommand;
 use WPMgr\Agent\Cache\AdminBarPurge;
 use WPMgr\Agent\Cache\CacheManager;
@@ -1059,6 +1060,12 @@ final class Plugin
             // in one click". Reuses DbDumper (same engine as full backups) for
             // the SQL dump; uses DbRestorer tmp-prefix+swap for the import.
             new DbSnapshotCommand(),
+            // #190 — Unused Media Cleaner: scan, isolate (quarantine), restore,
+            // delete. Builds an exhaustive conservative reference index before
+            // flagging any attachment as unused, and uses a reversible quarantine
+            // directory (wp-content/wpmgr-quarantine/media) before any permanent
+            // deletion. The command is synchronous; scan results are paginated.
+            new MediaCleanCommand(),
             new RucssComputeCommand($this->cacheManager),
             // Task #171 — signed preload-queue status + maintenance commands for
             // the React viewer. These go through the SIGNED wpmgr/v1/command/{cmd}

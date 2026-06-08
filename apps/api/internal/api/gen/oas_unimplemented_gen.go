@@ -224,6 +224,19 @@ func (UnimplementedHandler) BulkPurgeCache(ctx context.Context, req *BulkPurgeRe
 	return r, ht.ErrNotImplemented
 }
 
+// CancelBackup implements cancelBackup operation.
+//
+// Stops an in-flight backup by marking the snapshot failed
+// ("cancelled by operator"). After cancel the snapshot is deletable and a
+// late agent manifest submit is rejected. A snapshot that is already
+// terminal (completed/failed) is refused with 409 (snapshot_not_cancelable).
+// Requires operator+.
+//
+// POST /api/v1/backups/{snapshotId}/cancel
+func (UnimplementedHandler) CancelBackup(ctx context.Context, params CancelBackupParams) (r CancelBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // CancelMedia implements cancelMedia operation.
 //
 // Cancel all in-flight media jobs for a site.
@@ -316,6 +329,20 @@ func (UnimplementedHandler) CreateAutologin(ctx context.Context, req OptAutologi
 //
 // POST /api/v1/sites/{siteId}/backups
 func (UnimplementedHandler) CreateBackup(ctx context.Context, req *BackupCreate, params CreateBackupParams) (r CreateBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// CreateDbSnapshot implements createDbSnapshot operation.
+//
+// Dumps the site's database to a local `.sql.gz` file on the WP server
+// filesystem and records it in the snapshot manifest. This is a fast
+// local safety-net — not an encrypted off-site backup.
+// After the operation the oldest snapshots are pruned so the total count
+// does not exceed the configured retention (default 5, max 20).
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/snapshots
+func (UnimplementedHandler) CreateDbSnapshot(ctx context.Context, req OptDbSnapshotCreate, params CreateDbSnapshotParams) (r *DbSnapshotCreateResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -413,6 +440,47 @@ func (UnimplementedHandler) CreateTenant(ctx context.Context, req *TenantCreate)
 //
 // POST /api/v1/updates
 func (UnimplementedHandler) CreateUpdateRun(ctx context.Context, req *UpdateRunCreate) (r CreateUpdateRunRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// DeleteBackup implements deleteBackup operation.
+//
+// Deletes a completed or failed snapshot and reclaims any now-unreferenced
+// chunks via the reachability-based retention GC over the surviving
+// snapshots — a chunk a surviving snapshot still needs is never deleted.
+// CHAIN-SAFE: deleting a base or mid-chain increment that still has
+// dependent later-generation increments is refused with 422
+// (chain_has_dependents); delete the newer increments first. A
+// running/pending snapshot is refused with 422 (snapshot_in_progress) —
+// cancel it first. Requires operator+.
+//
+// DELETE /api/v1/backups/{snapshotId}
+func (UnimplementedHandler) DeleteBackup(ctx context.Context, params DeleteBackupParams) (r DeleteBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// DeleteDbSnapshot implements deleteDbSnapshot operation.
+//
+// Removes a snapshot from the WP server's local store. This is
+// irreversible. Requires the `site:write` permission (operator+).
+//
+// DELETE /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}
+func (UnimplementedHandler) DeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (r *DeleteDbSnapshotOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// DeleteIsolatedMedia implements deleteIsolatedMedia operation.
+//
+// Permanently removes quarantined attachment files from disk and deletes
+// the corresponding WordPress attachment posts. **This cannot be undone.**
+// Only items already in the quarantine directory (isolated via the isolate
+// endpoint) can be deleted through this path. A `confirm` token of
+// `"DELETE"` must be included in the request body; the agent enforces this
+// independently.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/delete
+func (UnimplementedHandler) DeleteIsolatedMedia(ctx context.Context, req *MediaCleanDeleteRequest, params DeleteIsolatedMediaParams) (r *MediaCleanDeleteResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -516,12 +584,44 @@ func (UnimplementedHandler) GetBackup(ctx context.Context, params GetBackupParam
 	return r, ht.ErrNotImplemented
 }
 
+// GetBackupEnvironment implements getBackupEnvironment operation.
+//
+// Returns the raw JSON the agent shipped as the synthetic `environment.json`
+// manifest entry for a snapshot (PHP version, WordPress version, active
+// plugins, server software, etc.). Returns 404 with code `env_not_recorded`
+// for snapshots that pre-date the environment-fingerprint feature (agent
+// v0.9.10+). Returns 503 when the environment reader is not wired on this
+// control plane. Requires viewer+.
+//
+// GET /api/v1/backups/{snapshotId}/environment
+func (UnimplementedHandler) GetBackupEnvironment(ctx context.Context, params GetBackupEnvironmentParams) (r GetBackupEnvironmentRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetBackupSchedule implements getBackupSchedule operation.
 //
 // Get a site's backup schedule.
 //
 // GET /api/v1/sites/{siteId}/backup-schedule
 func (UnimplementedHandler) GetBackupSchedule(ctx context.Context, params GetBackupScheduleParams) (r GetBackupScheduleRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetBackupSettingsContents implements getBackupSettingsContents operation.
+//
+// Get a site's backup content scope settings (Track-A, m50).
+//
+// GET /api/v1/sites/{siteId}/backup-settings/contents
+func (UnimplementedHandler) GetBackupSettingsContents(ctx context.Context, params GetBackupSettingsContentsParams) (r GetBackupSettingsContentsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetBackupSettingsNotifications implements getBackupSettingsNotifications operation.
+//
+// Get a site's backup notification settings (Track-B, m50).
+//
+// GET /api/v1/sites/{siteId}/backup-settings/notifications
+func (UnimplementedHandler) GetBackupSettingsNotifications(ctx context.Context, params GetBackupSettingsNotificationsParams) (r GetBackupSettingsNotificationsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -748,6 +848,21 @@ func (UnimplementedHandler) InviteMember(ctx context.Context, req *InviteRequest
 	return r, ht.ErrNotImplemented
 }
 
+// IsolateUnusedMedia implements isolateUnusedMedia operation.
+//
+// Instructs the agent to move the original file and all generated thumbnail
+// sizes for the specified attachment IDs into the quarantine directory
+// (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+// intact so the Restore operation can undo the move cleanly.
+// **This operation is reversible** — use the restore endpoint to undo.
+// The attachment IDs must have appeared in a recent scan result.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/isolate
+func (UnimplementedHandler) IsolateUnusedMedia(ctx context.Context, req *MediaCleanIsolateRequest, params IsolateUnusedMediaParams) (r *MediaCleanIsolateResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListApiKeys implements listApiKeys operation.
 //
 // List API keys for the active tenant (admin+).
@@ -772,6 +887,17 @@ func (UnimplementedHandler) ListAudit(ctx context.Context, params ListAuditParam
 //
 // GET /api/v1/sites/{siteId}/backups
 func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsParams) (r *BackupSnapshotList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListDbSnapshots implements listDbSnapshots operation.
+//
+// Returns the manifest of local database snapshots stored on the WP server.
+// Snapshots are a fast local safety-net (not encrypted off-site backups).
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/db/snapshots
+func (UnimplementedHandler) ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (r *DbSnapshotList, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -909,6 +1035,18 @@ func (UnimplementedHandler) ListUpdateRuns(ctx context.Context, params ListUpdat
 	return r, ht.ErrNotImplemented
 }
 
+// LockBackup implements lockBackup operation.
+//
+// Sets `locked=true` on a completed snapshot. Locked snapshots are never
+// auto-pruned by the retention GC regardless of age or count rules.
+// The operator must explicitly DELETE the lock before the GC can reclaim it.
+// Track C (m49). Requires operator+.
+//
+// PATCH /api/v1/backups/{snapshotId}/lock
+func (UnimplementedHandler) LockBackup(ctx context.Context, params LockBackupParams) (r LockBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // Login implements login operation.
 //
 // Email + password login.
@@ -1030,6 +1168,24 @@ func (UnimplementedHandler) PutBackupSchedule(ctx context.Context, req *BackupSc
 	return r, ht.ErrNotImplemented
 }
 
+// PutBackupSettingsContents implements putBackupSettingsContents operation.
+//
+// Create or update a site's backup content scope settings.
+//
+// PUT /api/v1/sites/{siteId}/backup-settings/contents
+func (UnimplementedHandler) PutBackupSettingsContents(ctx context.Context, req *SiteBackupSettingsContentsUpdate, params PutBackupSettingsContentsParams) (r PutBackupSettingsContentsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutBackupSettingsNotifications implements putBackupSettingsNotifications operation.
+//
+// Create or update a site's backup notification settings.
+//
+// PUT /api/v1/sites/{siteId}/backup-settings/notifications
+func (UnimplementedHandler) PutBackupSettingsNotifications(ctx context.Context, req *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (r PutBackupSettingsNotificationsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // PutPerfConfig implements putPerfConfig operation.
 //
 // Stores the new performance config and pushes it to the agent. If the
@@ -1117,6 +1273,17 @@ func (UnimplementedHandler) Register(ctx context.Context, req *RegisterRequest) 
 	return r, ht.ErrNotImplemented
 }
 
+// RestoreIsolatedMedia implements restoreIsolatedMedia operation.
+//
+// Moves quarantined attachment files back to the WordPress uploads directory
+// using the quarantine manifest. The attachment posts are already intact.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/restore
+func (UnimplementedHandler) RestoreIsolatedMedia(ctx context.Context, req *MediaCleanRestoreRequest, params RestoreIsolatedMediaParams) (r *MediaCleanRestoreResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // RestoreMedia implements restoreMedia operation.
 //
 // Restore selected attachments to their pre-optimization state.
@@ -1133,6 +1300,22 @@ func (UnimplementedHandler) RestoreMedia(ctx context.Context, req OptMediaAssetS
 //
 // POST /api/v1/sites/{siteId}/restore
 func (UnimplementedHandler) RestoreSite(ctx context.Context, params RestoreSiteParams) (r RestoreSiteRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// RevertDbSnapshot implements revertDbSnapshot operation.
+//
+// Replaces the entire live database with the SQL captured in a local
+// snapshot. **This is irreversible without another backup.**
+// An automatic safety snapshot is taken immediately before the import
+// so the pre-revert state is preserved locally (returned as `safety_id`).
+// The `confirm` field in the request body MUST equal `"REVERT"` exactly.
+// The agent enforces this independently — a request without the token is
+// rejected.
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert
+func (UnimplementedHandler) RevertDbSnapshot(ctx context.Context, req *DbSnapshotRevert, params RevertDbSnapshotParams) (r *DbSnapshotRevertResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1158,6 +1341,43 @@ func (UnimplementedHandler) RevokeApiKey(ctx context.Context, params RevokeApiKe
 //
 // POST /api/v1/sites/{siteId}/revoke
 func (UnimplementedHandler) RevokeSite(ctx context.Context, req OptSiteLifecycleReason, params RevokeSiteParams) (r RevokeSiteRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// RunSearchReplace implements runSearchReplace operation.
+//
+// Dispatches a serialization-safe search-replace command to the site's
+// agent. The command handles PHP-serialized blobs correctly by
+// unserializing, walking the data structure, replacing only string leaves,
+// and re-serializing (so `s:NN:` length prefixes are always recomputed).
+// **Always call with `dry_run: true` first** to get a preview of how many
+// rows would change before committing. The UI enforces this flow.
+// When `dry_run: false` and no recent backup is found, the response
+// includes an `X-Backup-Warning` header.
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/search-replace
+func (UnimplementedHandler) RunSearchReplace(ctx context.Context, req *SearchReplaceRequest, params RunSearchReplaceParams) (r *SearchReplaceResultHeaders, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ScanUnusedMedia implements scanUnusedMedia operation.
+//
+// Dispatches a read-only scan to the site's agent. The agent walks the
+// WordPress media library and checks every attachment against an exhaustive
+// set of reference surfaces (post_content, postmeta, options, termmeta,
+// usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+// nav menus, and more). Attachments for which no reference is found are
+// returned as candidates.
+// **Conservative rule**: when a check cannot run or the result is ambiguous
+// the attachment is treated as referenced (safe). False negatives (calling a
+// used image unused) are the dangerous failure; this implementation prefers
+// false positives.
+// Paginated by `offset`. Results are ordered by attachment ID ascending.
+// Requires the `site.media.clean.scan` permission (viewer+).
+//
+// GET /api/v1/sites/{siteId}/media/clean/scan
+func (UnimplementedHandler) ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (r *MediaCleanScanResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1239,6 +1459,16 @@ func (UnimplementedHandler) TriggerDbScan(ctx context.Context, req OptTriggerDbS
 //
 // POST /api/v1/sites/{siteId}/security/unblock-ip
 func (UnimplementedHandler) UnblockSiteIP(ctx context.Context, req *UnblockIPRequest, params UnblockSiteIPParams) (r UnblockSiteIPRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// UnlockBackup implements unlockBackup operation.
+//
+// Clears the `locked` flag, making the snapshot eligible for normal
+// retention GC again. Track C (m49). Requires operator+.
+//
+// DELETE /api/v1/backups/{snapshotId}/lock
+func (UnimplementedHandler) UnlockBackup(ctx context.Context, params UnlockBackupParams) (r UnlockBackupRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

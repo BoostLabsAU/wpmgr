@@ -480,6 +480,20 @@ func (c *Client) DBOrphanDelete(ctx context.Context, siteID uuid.UUID, siteURL s
 	return out, nil
 }
 
+// MediaClean sends the signed `media_clean` command to the site's agent.
+// The command is SYNCHRONOUS for all four actions (scan/isolate/restore/delete):
+// the full result is returned in the ACK body.
+//
+// MediaClean does NOT wrap ok=false in an error — the caller must inspect the
+// result. A transport error or non-2xx HTTP status IS returned as err.
+func (c *Client) MediaClean(ctx context.Context, siteID uuid.UUID, siteURL string, req MediaCleanRequest) (MediaCleanResult, error) {
+	var out MediaCleanResult
+	if err := c.post(ctx, siteID, siteURL, "media_clean", req, &out); err != nil {
+		return MediaCleanResult{}, err
+	}
+	return out, nil
+}
+
 // post mints a fresh JWT bound to siteID (aud) and command (cmd), POSTs body to
 // the named command endpoint at siteURL, and decodes the JSON response into
 // out. A non-2xx response is an error.

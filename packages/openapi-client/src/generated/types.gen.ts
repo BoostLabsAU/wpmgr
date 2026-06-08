@@ -2444,6 +2444,145 @@ export type BulkResultList = {
 };
 
 /**
+ * One attachment candidate identified as potentially unused.
+ */
+export type MediaCleanCandidate = {
+  /**
+   * WordPress attachment post ID.
+   */
+  id: number;
+  /**
+   * Attachment post title (may be the filename when no title is set).
+   */
+  title: string;
+  /**
+   * Public URL of the original (largest) file (guid).
+   */
+  url: string;
+  /**
+   * URL of the thumbnail-size variant; null when unavailable.
+   */
+  thumb?: string;
+  /**
+   * Size of the original file in bytes. 0 when the file is missing from disk.
+   */
+  file_size: number;
+  /**
+   * Number of generated thumbnail/resize variants registered in attachment metadata.
+   */
+  sizes_count: number;
+};
+
+export type MediaCleanScanResult = {
+  ok: boolean;
+  /**
+   * Full unused-candidate count (capped at SCAN_MAX=500). Use this value to
+   * drive client-side pagination of the candidates array.
+   */
+  total: number;
+  /**
+   * Unused attachment candidates sliced by the requested offset/limit. The
+   * client should fetch once with offset=0 and limit=SCAN_MAX and paginate
+   * the returned array client-side.
+   */
+  candidates: Array<MediaCleanCandidate>;
+  /**
+   * True when the library has more unused attachments than SCAN_MAX. The
+   * returned candidates and total are capped at SCAN_MAX.
+   */
+  truncated: boolean;
+  /**
+   * Human-readable error message when ok=false.
+   */
+  detail?: string;
+};
+
+export type MediaCleanIsolateRequest = {
+  /**
+   * Client-minted UUID v4 for idempotency. The agent echoes it in the response for correlation. Generate a new UUID per request.
+   *
+   */
+  job_id: string;
+  /**
+   * Attachment IDs to move to quarantine. Maximum 200 per call. Must be attachments that appeared in a recent scan result.
+   *
+   */
+  attachment_ids: Array<number>;
+};
+
+export type MediaCleanIsolateResult = {
+  ok: boolean;
+  /**
+   * Echoed from the request for correlation.
+   */
+  job_id: string;
+  /**
+   * Number of attachment file sets moved to quarantine.
+   */
+  moved: number;
+  /**
+   * Opaque quarantine manifest identifier. Store this value and pass it back in quarantine_ids for restore or delete calls.
+   *
+   */
+  manifest_id: string;
+  detail?: string;
+};
+
+export type MediaCleanRestoreRequest = {
+  /**
+   * Client-minted UUID v4 for idempotency.
+   */
+  job_id: string;
+  /**
+   * Quarantine manifest IDs to restore. Each ID was returned by a prior isolate call as manifest_id. Maximum 200 per call.
+   *
+   */
+  quarantine_ids: Array<string>;
+};
+
+export type MediaCleanRestoreResult = {
+  ok: boolean;
+  /**
+   * Echoed from the request.
+   */
+  job_id: string;
+  /**
+   * Number of manifest entries successfully restored to the uploads directory.
+   */
+  restored: number;
+  detail?: string;
+};
+
+export type MediaCleanDeleteRequest = {
+  /**
+   * Client-minted UUID v4 for idempotency.
+   */
+  job_id: string;
+  /**
+   * Quarantine manifest IDs to permanently delete. Maximum 200 per call.
+   *
+   */
+  quarantine_ids: Array<string>;
+  /**
+   * Must equal "DELETE" exactly. The agent enforces this independently via hash_equals.
+   */
+  confirm: string;
+};
+
+export type MediaCleanDeleteResult = {
+  ok: boolean;
+  /**
+   * Echoed from the request.
+   */
+  job_id: string;
+  /**
+   * Number of manifest entries permanently removed from disk.
+   */
+  deleted: number;
+  detail?: string;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -5964,6 +6103,153 @@ export type CleanDatabaseResponses = {
 
 export type CleanDatabaseResponse =
   CleanDatabaseResponses[keyof CleanDatabaseResponses];
+
+export type ScanUnusedMediaData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Pagination offset (attachment scan cursor).
+     */
+    offset?: number;
+    /**
+     * Maximum number of candidates to return per page.
+     */
+    limit?: number;
+  };
+  url: "/api/v1/sites/{siteId}/media/clean/scan";
+};
+
+export type ScanUnusedMediaResponses = {
+  /**
+   * Scan page result
+   */
+  200: MediaCleanScanResult;
+};
+
+export type ScanUnusedMediaResponse =
+  ScanUnusedMediaResponses[keyof ScanUnusedMediaResponses];
+
+export type IsolateUnusedMediaData = {
+  body: MediaCleanIsolateRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/media/clean/isolate";
+};
+
+export type IsolateUnusedMediaResponses = {
+  /**
+   * Isolate result
+   */
+  200: MediaCleanIsolateResult;
+};
+
+export type IsolateUnusedMediaResponse =
+  IsolateUnusedMediaResponses[keyof IsolateUnusedMediaResponses];
+
+export type RestoreIsolatedMediaData = {
+  body: MediaCleanRestoreRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/media/clean/restore";
+};
+
+export type RestoreIsolatedMediaResponses = {
+  /**
+   * Restore result
+   */
+  200: MediaCleanRestoreResult;
+};
+
+export type RestoreIsolatedMediaResponse =
+  RestoreIsolatedMediaResponses[keyof RestoreIsolatedMediaResponses];
+
+export type DeleteIsolatedMediaData = {
+  body: MediaCleanDeleteRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/media/clean/delete";
+};
+
+export type DeleteIsolatedMediaResponses = {
+  /**
+   * Delete result
+   */
+  200: MediaCleanDeleteResult;
+};
+
+export type DeleteIsolatedMediaResponse =
+  DeleteIsolatedMediaResponses[keyof DeleteIsolatedMediaResponses];
+
+export type MediaCleanQuarantineEntry = {
+  /**
+   * WordPress attachment post ID.
+   */
+  attachment_id: number;
+  /**
+   * Attachment post title.
+   */
+  title: string;
+  /**
+   * Number of physical files (original + generated sizes) held in quarantine.
+   */
+  file_count: number;
+};
+
+export type MediaCleanQuarantineManifest = {
+  /**
+   * Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.
+   */
+  manifest_id: string;
+  /**
+   * Echoed job_id from the isolate request that created this manifest.
+   */
+  job_id: string;
+  /**
+   * Unix timestamp (seconds) when the manifest was created.
+   */
+  isolated_at: number;
+  /**
+   * Total number of physical files held across all entries in this manifest.
+   */
+  total_files: number;
+  /**
+   * Per-attachment entries in this manifest.
+   */
+  entries: Array<MediaCleanQuarantineEntry>;
+};
+
+export type MediaCleanQuarantineList = {
+  ok: boolean;
+  manifests: Array<MediaCleanQuarantineManifest>;
+};
+
+export type ListQuarantinedMediaData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/media/clean/quarantine";
+};
+
+export type ListQuarantinedMediaResponses = {
+  /**
+   * Quarantine manifest list
+   */
+  200: MediaCleanQuarantineList;
+};
+
+export type ListQuarantinedMediaResponse =
+  ListQuarantinedMediaResponses[keyof ListQuarantinedMediaResponses];
 
 export type ListRucssResultsData = {
   body?: never;
