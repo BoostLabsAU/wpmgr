@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -15,7 +15,8 @@ import { Label } from "@/components/ui/label";
 import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
 import { useCreateRestore } from "@/features/backups/use-backups";
 import { SqlInspectionCard } from "@/features/backups/sql-inspection-card";
-import type { BackupManifestEntry, RestoreCreate } from "@wpmgr/api";
+import { formatBytes, relativeTime } from "@/lib/utils";
+import type { BackupManifestEntry, BackupSnapshot, RestoreCreate } from "@wpmgr/api";
 
 // Destructive restore dialog (operator+). Two-step flow:
 //   1. Modal A: choose WHAT to restore (everything / database only / files
@@ -87,6 +88,7 @@ export function RestoreDialog({
   snapshotTakenAt,
   sourceSiteUrl,
   targetSiteUrl,
+  chainSnapshots,
 }: {
   open: boolean;
   onClose: () => void;
@@ -116,6 +118,13 @@ export function RestoreDialog({
    */
   sourceSiteUrl?: string;
   targetSiteUrl?: string;
+  /**
+   * Issue #177 — when the snapshot is part of an incremental chain, pass
+   * ALL chain members (sorted generation ASC) so the version-picker can
+   * render a restore-point selector. Omit (or pass undefined / a 1-element
+   * array) for singleton/full snapshots; the dialog is unchanged in that case.
+   */
+  chainSnapshots?: BackupSnapshot[];
 }) {
   return (
     <Dialog open={open} onClose={onClose}>
@@ -130,6 +139,7 @@ export function RestoreDialog({
           snapshotTakenAt={snapshotTakenAt}
           sourceSiteUrl={sourceSiteUrl}
           targetSiteUrl={targetSiteUrl}
+          chainSnapshots={chainSnapshots}
         />
       ) : null}
     </Dialog>
@@ -146,6 +156,7 @@ function RestoreForm({
   snapshotTakenAt,
   sourceSiteUrl,
   targetSiteUrl,
+  chainSnapshots,
 }: {
   snapshotId: string;
   entries: BackupManifestEntry[];
@@ -156,8 +167,38 @@ function RestoreForm({
   snapshotTakenAt?: string;
   sourceSiteUrl?: string;
   targetSiteUrl?: string;
+  chainSnapshots?: BackupSnapshot[];
 }) {
-  const restore = useCreateRestore(snapshotId);
+  // Issue #177 — version-picker: when chainSnapshots has >1 member, let the
+  // operator choose which generation to restore. Default = the tip (newest
+  // completed generation). The restore mutation always targets selectedSnapshotId
+  // so the CP's planRestoreChain picks up exactly that generation's chain slice.
+  const completedChainMembers = useMemo(() => {
+    if (!chainSnapshots || chainSnapshots.length <= 1) return [];
+    return [...chainSnapshots]
+      .filter((s) => s.status === "completed")
+      .sort((a, b) => (b.generation ?? 0) - (a.generation ?? 0)); // newest first
+  }, [chainSnapshots]);
+
+  const hasChainPicker = completedChainMembers.length > 1;
+
+  // Default to the tip (first in descending-generation order = highest gen).
+  const defaultSelectedId =
+    hasChainPicker ? (completedChainMembers[0]?.id ?? snapshotId) : snapshotId;
+
+  const [selectedSnapshotId, setSelectedSnapshotId] = useState(defaultSelectedId);
+
+  // Resolve the selected snapshot object for timestamp/summary in step 2.
+  const selectedSnap = useMemo(
+    () => chainSnapshots?.find((s) => s.id === selectedSnapshotId) ?? null,
+    [chainSnapshots, selectedSnapshotId],
+  );
+  // The taken-at label uses the selected snapshot's created_at (step-2 confirm
+  // must reflect the chosen generation, not the tip's timestamp).
+  const effectiveTakenAt = selectedSnap?.created_at ?? snapshotTakenAt;
+
+  // The restore mutation targets the SELECTED snapshot id (not the fixed prop).
+  const restore = useCreateRestore(selectedSnapshotId);
   const [mode, setMode] = useState<Mode>("everything");
   const [narrow, setNarrow] = useState<Narrow>("full");
   const [paths, setPaths] = useState("");
@@ -230,9 +271,10 @@ function RestoreForm({
     !!normalizedSource &&
     !!normalizedTarget &&
     normalizedSource !== normalizedTarget;
-  const takenAtLabel = snapshotTakenAt
-    ? new Date(snapshotTakenAt).toISOString().replace("T", " ").slice(0, 16)
-    : `snapshot ${snapshotId.slice(0, 8)}`;
+  // Step-2 confirm title reflects the SELECTED generation's timestamp.
+  const takenAtLabel = effectiveTakenAt
+    ? new Date(effectiveTakenAt).toISOString().replace("T", " ").slice(0, 16)
+    : `snapshot ${selectedSnapshotId.slice(0, 8)}`;
 
   function switchMode(next: Mode) {
     setMode(next);
@@ -359,6 +401,70 @@ function RestoreForm({
             and/or database with the contents of this snapshot. There is no
             undo.
           </p>
+
+          {/* Issue #177 — Restore point (version-picker). Shown ONLY when the
+              snapshot is part of an incremental chain with >1 completed member.
+              For singletons or full snapshots this block is absent — dialog is
+              unchanged for those users. */}
+          {hasChainPicker ? (
+            <fieldset className="space-y-2 rounded-md border border-[var(--color-border)] p-3">
+              <legend className="px-1 text-sm font-medium">Restore point</legend>
+              <p className="text-xs text-[var(--color-muted-foreground)]">
+                This backup is part of an incremental chain. Restore the latest
+                version (default) or roll back to an earlier point in time
+                &mdash; files and database both restore to that point; later
+                changes are discarded.
+              </p>
+              <div className="space-y-2 pt-1">
+                {completedChainMembers.map((member, idx) => {
+                  const gen = member.generation ?? 0;
+                  const isDefault = idx === 0; // tip = first in descending list
+                  const genLabel =
+                    gen === 0 ? "base" : `gen ${gen}`;
+                  const tipLabel = isDefault ? " (latest)" : "";
+                  const takenLabel =
+                    relativeTime(member.created_at) ?? member.created_at.slice(0, 16);
+                  return (
+                    <label
+                      key={member.id}
+                      className="flex items-start gap-2 text-sm"
+                    >
+                      <input
+                        type="radio"
+                        name="restore-version"
+                        value={member.id}
+                        checked={selectedSnapshotId === member.id}
+                        onChange={() => setSelectedSnapshotId(member.id)}
+                        className="mt-1 accent-[var(--color-primary)]"
+                      />
+                      <span>
+                        <span className="font-medium">
+                          {genLabel}{tipLabel}
+                        </span>
+                        <span className="block text-xs text-[var(--color-muted-foreground)]">
+                          {formatBytes(member.total_size)}
+                          {member.chunk_count != null
+                            ? ` · ${member.chunk_count} chunks`
+                            : ""}
+                          {" · "}
+                          {takenLabel}
+                        </span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              {/* Surface non-completed members (running/failed/pending) as
+                  disabled, muted entries so the operator sees the full chain. */}
+              {chainSnapshots &&
+              chainSnapshots.some((s) => s.status !== "completed") ? (
+                <p className="text-xs text-[var(--color-muted-foreground)]">
+                  Some generations are not selectable (pending, running, or
+                  failed).
+                </p>
+              ) : null}
+            </fieldset>
+          ) : null}
 
           {/* Step 1 — top-level mode selector. Three radios in a single
               fieldset; the descriptions sit immediately under each label so
@@ -589,10 +695,21 @@ function RestoreForm({
               snapshot. The site will run in maintenance mode briefly while
               files and the database are swapped. There is no undo.
             </p>
-            {/* P0 URL rewriter (ADR-036): cross-environment restore notice.
-                Calm warning chip, not destructive-styled — the user is
-                already past the destructive header and we don't want to
-                add more red than necessary. */}
+            {/* Issue #177 — point-in-time rollback notice when restoring an
+                earlier chain generation. Make it explicit that later changes
+                are discarded, because this is not immediately obvious when
+                rolling back mid-chain. */}
+            {hasChainPicker && selectedSnap && (selectedSnap.generation ?? 0) < ((completedChainMembers[0]?.generation) ?? 0) ? (
+              <p
+                role="note"
+                className="rounded-md border border-[var(--color-border)] bg-[var(--color-muted)]/40 p-2 text-xs text-[var(--color-foreground)]"
+              >
+                Point-in-time rollback: files and database will be restored to
+                generation {selectedSnap.generation ?? 0} ({takenAtLabel}).
+                All changes made after that snapshot are discarded.
+              </p>
+            ) : null}
+            {/* P0 URL rewriter (ADR-036): cross-environment restore notice. */}
             {urlsDiffer ? (
               <p
                 role="note"
