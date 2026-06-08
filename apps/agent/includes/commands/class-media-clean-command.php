@@ -39,8 +39,13 @@
  *         }, ... ],
  *       "truncated": <bool>,            // true when library has more unused than SCAN_MAX
  *       "total_attachments": <int>,     // all attachment rows the walk visited
+ *                                       // (excludes quarantined IDs — they are out-of-scope)
  *       "referenced_count": <int>,      // count classified in-use among those visited
  *       "unused_count": <int>,          // == total (alias kept for backward compat)
+ *       "quarantined_count": <int>,     // attachment IDs excluded because they are
+ *                                       // already present in a quarantine manifest;
+ *                                       // those IDs are not walked, not counted in
+ *                                       // total_attachments, and not added to candidates.
  *       "referenced": [                 // in-use attachments among those visited
  *         {
  *           "id": <int>,
@@ -227,6 +232,11 @@ final class MediaCleanCommand implements CommandInterface
      * unused candidates), then applies offset/limit to the UNUSED list so that
      * offset=0&limit=N always returns the first N actual unused candidates.
      *
+     * Attachments whose IDs appear in any quarantine manifest on disk are excluded
+     * from the walk entirely — they are not counted in total_attachments, not tested
+     * for references, and not added to candidates. The count of excluded IDs is
+     * returned as quarantined_count.
+     *
      * @param array<string,mixed> $params
      * @return array<string,mixed>
      */
@@ -263,6 +273,15 @@ final class MediaCleanCommand implements CommandInterface
         $uploadDir   = wp_upload_dir();
         $uploadsBase = rtrim((string)($uploadDir['basedir'] ?? ''), '/\\');
 
+        // Load the set of attachment IDs that are already in a quarantine manifest.
+        // These are excluded from the scan: they are out-of-scope and must not
+        // resurface as fresh candidates after a prior isolation run.
+        // A missing or unreadable quarantine directory returns an empty set, which
+        // preserves the original scan behaviour when no quarantine has been created.
+        $quarantine        = $this->quarantine ?? new MediaQuarantine();
+        $quarantinedIds    = $quarantine->quarantinedAttachmentIds();
+        $quarantinedCount  = count($quarantinedIds);
+
         // Walk the FULL attachment library in batches, collecting unused candidates
         // until we have SCAN_MAX + 1 (the +1 lets us set the truncated flag).
         // We never apply offset/limit to the attachment walk — only to the UNUSED list.
@@ -271,7 +290,7 @@ final class MediaCleanCommand implements CommandInterface
         // is capped by SCAN_MAX).
         $allUnused        = [];
         $allReferenced    = []; // referenced entries to include in scan result
-        $totalAttachments = 0;  // diagnostic: total attachment rows walked
+        $totalAttachments = 0;  // diagnostic: total attachment rows walked (excludes quarantined)
         $scanCap          = self::SCAN_MAX + 1; // collect one extra to detect truncation
         $walkOffset       = 0;
         $walkBatch        = 200; // rows per DB round-trip
@@ -301,6 +320,13 @@ final class MediaCleanCommand implements CommandInterface
                 $id      = (int)($row['ID'] ?? 0);
                 $title   = (string)($row['post_title'] ?? '');
                 $guid    = (string)($row['guid'] ?? '');
+
+                // Skip attachments that are already quarantined. They are treated as
+                // out-of-scope: not counted in total_attachments, not tested for
+                // references, and not added to candidates or the referenced list.
+                if (isset($quarantinedIds[$id])) {
+                    continue;
+                }
 
                 $totalAttachments++; // count every attachment the walk actually visits
 
@@ -391,10 +417,11 @@ final class MediaCleanCommand implements CommandInterface
         // Log diagnostic summary to WP error_log for live investigation.
         // phpcs:disable WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log(sprintf(
-            '[wpmgr] media-clean scan: total_attachments=%d referenced=%d unused=%d truncated=%s',
+            '[wpmgr] media-clean scan: total_attachments=%d referenced=%d unused=%d quarantined=%d truncated=%s',
             $totalAttachments,
             $referencedCount,
             $unusedCount,
+            $quarantinedCount,
             $truncated ? 'true' : 'false'
         ));
         if (!empty($referencedEntries)) {
@@ -418,10 +445,11 @@ final class MediaCleanCommand implements CommandInterface
             'candidates'       => $candidates,
             'truncated'        => $truncated,
             // Diagnostic fields (always present; allows live re-scan diagnosis).
-            'total_attachments' => $totalAttachments,
-            'referenced_count'  => $referencedCount,
-            'unused_count'      => $unusedCount,
-            'referenced'        => $referencedEntries,
+            'total_attachments'  => $totalAttachments,
+            'referenced_count'   => $referencedCount,
+            'unused_count'       => $unusedCount,
+            'quarantined_count'  => $quarantinedCount,
+            'referenced'         => $referencedEntries,
         ];
     }
 

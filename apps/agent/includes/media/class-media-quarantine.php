@@ -101,7 +101,7 @@ final class MediaQuarantine
      */
     public function __construct(?string $contentDir = null)
     {
-        $base                  = $contentDir ?? WP_CONTENT_DIR;
+        $base                  = $contentDir ?? (defined('WP_CONTENT_DIR') ? WP_CONTENT_DIR : '');
         $this->quarantineRoot  = $base . '/' . self::QUARANTINE_DIR;
         $this->mediaRoot       = $this->quarantineRoot . '/' . self::MEDIA_SUBDIR;
         $this->manifestsRoot   = $this->quarantineRoot . '/' . self::MANIFESTS_SUBDIR;
@@ -438,6 +438,62 @@ final class MediaQuarantine
             'entries_processed' => count($results),
             'results'           => $results,
         ];
+    }
+
+    /**
+     * Return a set of all attachment IDs that are currently recorded in at
+     * least one quarantine manifest on disk. The returned array uses attachment
+     * ID as key with true as value, giving O(1) membership tests.
+     *
+     * Used by the scan action to exclude already-quarantined attachments from
+     * the candidate list so they do not resurface after a prior isolation run.
+     *
+     * A missing or unreadable manifests directory returns an empty array —
+     * no exclusions occur in that case, which preserves the original scan
+     * behaviour when no quarantine has ever been created.
+     *
+     * Corrupt or unreadable individual manifest files are silently skipped so
+     * a single bad file cannot break a full-library scan.
+     *
+     * @return array<int,true>
+     */
+    public function quarantinedAttachmentIds(): array
+    {
+        if (!is_dir($this->manifestsRoot)) {
+            return [];
+        }
+
+        $dirEntries = @scandir($this->manifestsRoot);
+        if ($dirEntries === false) {
+            return [];
+        }
+
+        $ids = [];
+
+        foreach ($dirEntries as $dirEntry) {
+            if ($dirEntry === '.' || $dirEntry === '..') {
+                continue;
+            }
+            if (!str_ends_with($dirEntry, '.json')) {
+                continue;
+            }
+
+            $manifestId = substr($dirEntry, 0, -5);
+            $manifest   = $this->loadManifest($manifestId);
+            if ($manifest === null) {
+                continue;
+            }
+
+            $entries = is_array($manifest['entries'] ?? null) ? $manifest['entries'] : [];
+            foreach ($entries as $entry) {
+                $attachmentId = (int)($entry['attachment_id'] ?? 0);
+                if ($attachmentId > 0) {
+                    $ids[$attachmentId] = true;
+                }
+            }
+        }
+
+        return $ids;
     }
 
     /**
