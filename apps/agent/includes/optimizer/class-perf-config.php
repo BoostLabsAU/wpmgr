@@ -152,6 +152,15 @@ final class PerfConfig
     /** @var bool Cap stored post revisions. */
     public bool $bloatPostRevisionsControl;
 
+    // -- WooCommerce cacheable-session (issue #169) -----------------------
+    /**
+     * When true, anonymous WooCommerce shoppers who hold only a cart or session
+     * cookie receive a shared cached shell; the cart widget is repainted by
+     * WooCommerce's cart-fragments. DEFAULT-OFF. When false the three Woo
+     * cart/session cookies remain in the hard-bypass set (behaviour unchanged).
+     */
+    public bool $wooCacheableSession;
+
     // -- Preload tuning (Task #171) ----------------------------------------
     /** @var int Parallel loopback drain workers (PreloadQueue concurrency, 1..4). */
     public int $preloadConcurrency;
@@ -211,6 +220,8 @@ final class PerfConfig
         $this->bloatDisableOembeds       = (bool) ($data['bloat_disable_oembeds'] ?? false);
         $this->bloatHeartbeatControl     = (bool) ($data['bloat_heartbeat_control'] ?? false);
         $this->bloatPostRevisionsControl = (bool) ($data['bloat_post_revisions_control'] ?? false);
+
+        $this->wooCacheableSession   = (bool) ($data['woo_cacheable_session'] ?? false);
 
         // Preload tuning (Task #171). Clamp (never reject) to the frozen bounds.
         $this->preloadConcurrency = self::clampInt($data['preload_concurrency'] ?? 1, 1, 4);
@@ -315,6 +326,7 @@ final class PerfConfig
             'bloat_disable_oembeds'        => $this->bloatDisableOembeds,
             'bloat_heartbeat_control'      => $this->bloatHeartbeatControl,
             'bloat_post_revisions_control' => $this->bloatPostRevisionsControl,
+            'woo_cacheable_session'        => $this->wooCacheableSession,
             'preload_concurrency'          => $this->preloadConcurrency,
             'preload_delay_ms'             => $this->preloadDelayMs,
             'preload_batch_size'           => $this->preloadBatchSize,

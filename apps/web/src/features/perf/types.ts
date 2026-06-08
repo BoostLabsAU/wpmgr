@@ -92,6 +92,14 @@ export interface PerfConfig {
   bloat_heartbeat_control: boolean;
   bloat_post_revisions_control: boolean;
 
+  // WooCommerce cart-session caching (#169)
+  //   woo_cacheable_session       — operator toggle (READ+WRITE).
+  //   woo_theme_fragments_supported — agent-reported capability flag (READ-ONLY;
+  //                                   server ignores it on PUT). When false the
+  //                                   toggle must be rendered disabled.
+  woo_cacheable_session: boolean;
+  readonly woo_theme_fragments_supported: boolean;
+
   // Server / install state (read-only, agent-reported)
   server_software?: string;
   dropin_installed: boolean;

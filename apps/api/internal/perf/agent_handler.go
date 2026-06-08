@@ -74,6 +74,11 @@ type statsReportBody struct {
 	// emission. Both optional: when absent or zero the history row is skipped.
 	CacheHitCount  int64 `json:"cache_hit_count,omitempty"`
 	CacheMissCount int64 `json:"cache_miss_count,omitempty"`
+	// M53 / #169 — WooCommerce theme fragments-support probe result (agent-reported,
+	// read-only from the operator API). The agent reports this on its regular cache
+	// stats heartbeat so the dashboard can gate the shell-cache toggle. Optional:
+	// pre-M53 agents omit it; when absent the CP leaves the stored value unchanged.
+	WooThemeFragmentsSupported *bool `json:"woo_theme_fragments_supported,omitempty"`
 }
 
 func (h *AgentHandler) statsReport(c *gin.Context) {
@@ -116,6 +121,14 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 	if _, err := h.svc.ReportCacheStats(c.Request.Context(), stats); err != nil {
 		httpx.Error(c, err)
 		return
+	}
+	// M53 / #169: persist the agent's WooCommerce theme fragments-support probe
+	// result when present. Best-effort: a failure must not fail the stats response
+	// (the agent re-reports it on every heartbeat).
+	if in.WooThemeFragmentsSupported != nil {
+		if wooErr := h.svc.MarkWooFragmentsSupported(c.Request.Context(), id.SiteID, *in.WooThemeFragmentsSupported); wooErr != nil {
+			_ = wooErr
+		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
 }

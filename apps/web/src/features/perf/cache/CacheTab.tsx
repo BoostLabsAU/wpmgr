@@ -10,6 +10,7 @@ import { CacheControls } from "./CacheControls";
 import { CacheBasicSettings } from "./CacheBasicSettings";
 import { PreloadTuningCard } from "./PreloadTuningCard";
 import { CacheAdvancedSettings } from "./CacheAdvancedSettings";
+import { WooCommerceSection } from "./WooCommerceSection";
 import { ServerStatusCard } from "./ServerStatusCard";
 import { PreloadProgress } from "./PreloadProgress";
 import { CacheHitRatioTrendCard } from "./CacheHitRatioTrendCard";
@@ -94,6 +95,13 @@ export function CacheTab({
       <PreloadTuningCard config={cfg} save={save} disabled={disabled} />
 
       <CacheAdvancedSettings config={cfg} save={save} disabled={disabled} />
+
+      <WooCommerceSection
+        config={cfg}
+        save={save}
+        disabled={disabled}
+        saving={update.isPending}
+      />
     </div>
   );
 }

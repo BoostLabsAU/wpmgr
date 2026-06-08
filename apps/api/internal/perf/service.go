@@ -84,6 +84,8 @@ type repository interface {
 	UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, error)
 	GetCDNCredentialsCiphertext(ctx context.Context, tenantID, siteID uuid.UUID) ([]byte, string, error)
 	UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error
+	// M53 / #169 — agent-reported WooCommerce theme probe result.
+	UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error
 	GetCacheStats(ctx context.Context, tenantID, siteID uuid.UUID) (CacheStats, error)
 	UpsertCacheStats(ctx context.Context, s CacheStats) (CacheStats, error)
 	MarkCachePurged(ctx context.Context, tenantID, siteID uuid.UUID, kind string) error
@@ -427,6 +429,14 @@ func (s *Service) ReportCacheStats(ctx context.Context, stats CacheStats) (Cache
 // from the perf/config-ack agent endpoint.
 func (s *Service) MarkConfigApplied(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error {
 	return s.repo.UpdateInstallState(ctx, siteID, serverSoftware, dropinInstalled, wpCacheConstantSet, htaccessManaged)
+}
+
+// MarkWooFragmentsSupported records the agent-reported WooCommerce theme-probe
+// result (InAgentTx). Called from the perf/config-ack agent endpoint whenever the
+// agent probes and reports woo_theme_fragments_supported. This is READ-ONLY from
+// the operator API; only the agent writes it.
+func (s *Service) MarkWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error {
+	return s.repo.UpdateWooFragmentsSupported(ctx, siteID, supported)
 }
 
 // ---------------------------------------------------------------------------
@@ -1749,6 +1759,8 @@ func toPerfConfigRequest(c Config) agentcmd.PerfConfigRequest {
 		BloatDisableOembeds:      c.BloatDisableOembeds,
 		BloatHeartbeatControl:    c.BloatHeartbeatControl,
 		BloatPostRevisionControl: c.BloatPostRevisionControl,
+		// M53 / #169 — WooCommerce cacheable-session flag.
+		WooCacheableSession: c.WooCacheableSession,
 	}
 }
 

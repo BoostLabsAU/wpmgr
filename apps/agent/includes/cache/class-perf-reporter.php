@@ -28,6 +28,15 @@ final class PerfReporter
     /** wp-option storing the last applied perf config_version. */
     public const OPTION_PERF_CONFIG_VERSION = 'wpmgr_perf_config_version';
 
+    /**
+     * wp-option that persists whether the active theme supports WooCommerce
+     * cart-fragments. Written by {@see persistWooSupported()}; read by
+     * {@see CacheConfig::toDropinArray()} and {@see Cacheability} so the
+     * pre-WP serve drop-in and the write path agree without calling the probe
+     * on every request.
+     */
+    public const OPTION_WOO_FRAGMENTS_SUPPORTED = 'wpmgr_woo_fragments_supported';
+
     /** wp-option storing the timestamp of the last completed preload. */
     public const OPTION_LAST_PRELOAD_AT = 'wpmgr_cache_last_preload_at';
 
@@ -109,11 +118,24 @@ final class PerfReporter
                 $lastPreloadAt = $stored !== null ? (int) $stored : null;
             }
 
+            // Phase 1 (issue #169): probe whether the active theme supports
+            // WooCommerce cart-fragments. Runs regardless of the woo_cacheable_session
+            // flag so the CP/dashboard can show support status before the operator
+            // enables the feature. Conservative: false unless confidently detected.
+            // The result is persisted so the serve path (drop-in) and write path
+            // (Cacheability) can read the baked value without re-running the probe
+            // on every request. When the value flips the drop-in config is rewritten
+            // and existing shells are purged so stale support state never serves
+            // cart-holding visitors a cached page.
+            $wooFragsSupported = WooFragmentsProbe::detectFromScriptRegistry();
+            self::persistWooSupported($wooFragsSupported, $this->cache);
+
             $body = [
-                'cached_pages_count' => $stats['pages'],
-                'cache_size_bytes'   => $stats['bytes'],
-                'preload_pending'    => $preloadPending,
-                'preload_total'      => $preloadTotal,
+                'cached_pages_count'         => $stats['pages'],
+                'cache_size_bytes'           => $stats['bytes'],
+                'preload_pending'            => $preloadPending,
+                'preload_total'              => $preloadTotal,
+                'woo_theme_fragments_supported' => $wooFragsSupported,
             ];
             if ($lastPreloadAt !== null) {
                 $body['last_preload_at'] = $lastPreloadAt;
@@ -200,6 +222,61 @@ final class PerfReporter
             $this->post(self::PATH_CONFIG_ACK, $body);
         } catch (\Throwable $e) {
             // Fire-and-forget: swallow.
+        }
+    }
+
+    /**
+     * Persist the WooCommerce fragments-support probe result. If the value FLIPS
+     * compared with what is stored, the drop-in config is rewritten (so
+     * `woo_supported` in the inlined array updates immediately) AND all cached
+     * pages are purged so previously-written shells are not served under the new
+     * support state.
+     *
+     * Called from {@see reportStats()} each cycle and from
+     * {@see PerfConfigUpdateCommand} when a new perf config is applied (so support
+     * state is re-evaluated eagerly after a theme or plugin change).
+     *
+     * @param bool              $supported Whether the probe confirmed support.
+     * @param CacheManager|null $cache     Cache manager for drop-in rewrite + purge
+     *                                     on a flip. When null (unit-test context)
+     *                                     only the option is updated.
+     * @return void
+     */
+    public static function persistWooSupported(bool $supported, ?CacheManager $cache = null): void
+    {
+        if (!function_exists('get_option') || !function_exists('update_option')) {
+            return;
+        }
+
+        $prev = get_option(self::OPTION_WOO_FRAGMENTS_SUPPORTED, null);
+
+        // Only write when the value changed (or was never set) so this is a
+        // no-op on the hot path.
+        if ($prev !== null && (bool) $prev === $supported) {
+            return;
+        }
+
+        update_option(self::OPTION_WOO_FRAGMENTS_SUPPORTED, $supported, false);
+
+        // If support flipped AND a CacheManager is available: rewrite the
+        // drop-in so the serve path immediately sees the new woo_supported flag,
+        // then purge everything so previously-written shells are evicted.
+        // The flip true→false is the dangerous direction (support lost: cached
+        // shells would keep serving ignoring Woo cookies), but we react to
+        // both directions for consistency.
+        if ($prev !== null && $cache !== null) {
+            try {
+                $config = $cache->config();
+                if ($config->enabled) {
+                    // Rewrite the drop-in with the new woo_supported baked in.
+                    $dropin = new DropinInstaller();
+                    $dropin->install($config->toDropinArray());
+                    // Purge all cached pages so stale shells are not served.
+                    (new Purge($cache->cacheRoot()))->purgeEverything();
+                }
+            } catch (\Throwable $e) {
+                // Best-effort: option is updated; artefact rewrite degraded.
+            }
         }
     }
 

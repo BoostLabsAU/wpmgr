@@ -150,6 +150,11 @@ func (r *fakeRepo) GetStalledDBOrphanDeleteJobs(_ context.Context, _ time.Durati
 	return nil, nil
 }
 
+// M53 / #169 — agent-reported WooCommerce theme probe result.
+func (r *fakeRepo) UpdateWooFragmentsSupported(_ context.Context, _ uuid.UUID, _ bool) error {
+	return nil
+}
+
 type fakeEvents struct {
 	mu     sync.Mutex
 	events []site.ConnectionEvent

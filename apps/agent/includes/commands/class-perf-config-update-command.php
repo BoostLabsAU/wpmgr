@@ -46,7 +46,7 @@ final class PerfConfigUpdateCommand implements CommandInterface
     private const KNOWN_KEYS = [
         'enabled', 'cache_logged_in', 'cache_mobile', 'auto_purge',
         'refresh_interval', 'include_queries', 'include_cookies',
-        'bypass_urls', 'bypass_cookies',
+        'bypass_urls', 'bypass_cookies', 'woo_cacheable_session',
     ];
 
     /** Hard ceiling on the refresh interval (30 days) to reject absurd values. */

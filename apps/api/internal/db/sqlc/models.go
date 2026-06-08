@@ -478,8 +478,17 @@ type SitePerfConfig struct {
 	ActiveDbCleanStarted      pgtype.Timestamptz `json:"active_db_clean_started"`
 	ActiveDbScanJobID         *string            `json:"active_db_scan_job_id"`
 	ActiveDbScanStarted       pgtype.Timestamptz `json:"active_db_scan_started"`
-	CreatedAt                 time.Time          `json:"created_at"`
-	UpdatedAt                 time.Time          `json:"updated_at"`
+	// M53 / #169 — WooCommerce cacheable-session flag.
+	// WooCacheableSession is operator-writable (default false). When true the CP
+	// includes this flag in the perf-config push so the agent can cache the
+	// WooCommerce catalog shell for anonymous shoppers who have a cart.
+	WooCacheableSession bool `json:"woo_cacheable_session"`
+	// WooThemeFragmentsSupported is agent-reported (read-only from the operator
+	// API). The agent sets it after probing its own theme and WooCommerce hooks;
+	// the CP stores it but never lets an operator PUT overwrite it.
+	WooThemeFragmentsSupported bool      `json:"woo_theme_fragments_supported"`
+	CreatedAt                  time.Time `json:"created_at"`
+	UpdatedAt                  time.Time `json:"updated_at"`
 }
 
 type SiteShare struct {

@@ -7076,6 +7076,30 @@ components:
         dropin_installed: { type: boolean, readOnly: true }
         wp_cache_constant_set: { type: boolean, readOnly: true }
         htaccess_managed: { type: boolean, readOnly: true }
+        # WooCommerce cacheable-session (M53 / #169)
+        woo_cacheable_session:
+          type: boolean
+          default: false
+          description: |
+            When true the agent will cache the WooCommerce catalog shell for
+            anonymous shoppers who have an active cart. The agent additionally
+            hard-gates on its own theme probe (`woo_theme_fragments_supported`)
+            before serving cached pages to cart-holding visitors, providing a
+            defense-in-depth layer independent of this flag.
+            The API accepts `woo_cacheable_session: true` even when
+            `woo_theme_fragments_supported` is false — the agent will not act on
+            it until its own probe passes. This allows operators to pre-enable the
+            flag before the agent performs its first probe.
+        woo_theme_fragments_supported:
+          type: boolean
+          readOnly: true
+          default: false
+          description: |
+            Agent-reported (read-only). Set to true by the agent after it probes
+            the site's active theme and confirms WooCommerce fragment-refresh
+            compatibility (wc_ajax_get_refreshed_fragments hook availability).
+            The CP stores this value but never lets an operator write it via PUT.
+            Old agents that pre-date M53 will leave this field false.
         config_version: { type: integer, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }
     CacheStats:

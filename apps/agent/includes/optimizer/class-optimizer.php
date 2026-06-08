@@ -35,6 +35,8 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Optimizer;
 
+use WPMgr\Agent\Cache\PerfReporter;
+use WPMgr\Agent\Cache\WooFragmentsRuntime;
 use WPMgr\Agent\Keystore;
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
@@ -160,6 +162,21 @@ final class Optimizer
         // 8. JS delay + runtime.
         if ($this->config->jsDelay) {
             $html = $this->stage($html, fn (string $h): string => (new JsDelay($this->config->jsDelayMethod, $this->config->jsDelayExcludes))->process($h));
+        }
+
+        // 8b. WooCommerce cart-fragments JS-delay compatibility shim.
+        // Injected only when BOTH the woo_cacheable_session flag is on AND the
+        // agent's own probe has confirmed fragment support, AND the JS-delay method
+        // is 'interaction' or 'idle' (those two methods re-sequence jQuery events
+        // in a way that prevents the native cart-fragments script from firing; the
+        // shim replays the ready/load events so it fires correctly). The 'defer'
+        // method uses native browser deferral and does not need the shim.
+        if ($this->config->wooCacheableSession && $this->config->jsDelay) {
+            $wooSupported = (bool) (function_exists('get_option')
+                ? get_option(PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED, false)
+                : false);
+            $runtime = new WooFragmentsRuntime($this->config->wooCacheableSession && $wooSupported, $this->config->jsDelayMethod);
+            $html = $this->stage($html, fn (string $h): string => $runtime->maybeInject($h));
         }
 
         // 9. Speculation rules.

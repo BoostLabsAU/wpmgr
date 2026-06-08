@@ -56,6 +56,26 @@ final class Cacheability
     ];
 
     /**
+     * The three WooCommerce cart/session cookie patterns that are eligible to be
+     * moved from the hard-bypass set into a non-keying, non-bypassing ignore set
+     * when `woo_cacheable_session` is ON. Moving them allows an anonymous shopper
+     * who holds only these cookies to receive the same shared cached shell as a
+     * no-cookie anonymous visitor; the per-user cart widget is then repainted by
+     * WooCommerce's own cart-fragments mechanism.
+     *
+     * These patterns are NEVER moved out of bypass unless the flag is explicitly
+     * on. When off, they stay in DEFAULT_BYPASS_COOKIES and the behaviour is
+     * byte-identical to the pre-feature state.
+     *
+     * @var list<string>
+     */
+    public const WOO_SESSION_COOKIES = [
+        'wp_woocommerce_session_',
+        'woocommerce_cart_hash',
+        'woocommerce_items_in_cart',
+    ];
+
+    /**
      * Merge the baked-in default bypass cookies with an operator-supplied list,
      * de-duplicated (case-insensitively) and order-stable (defaults first). This
      * is the single source of truth used by BOTH the PHP cacheability path and
@@ -63,11 +83,29 @@ final class Cacheability
      * guaranteeing the pre-WP fast path and the PHP write layer bypass the exact
      * same cookie set.
      *
-     * @param list<string> $operator Operator-configured bypass cookies.
+     * When $wooSession is TRUE the three WooCommerce cart/session patterns listed
+     * in {@see WOO_SESSION_COOKIES} are excluded from the bypass set — they are
+     * handled separately as "neither bypass nor key" (ignored) so an anonymous
+     * shopper with only those cookies maps to the same shared shell as a no-cookie
+     * visitor. When $wooSession is FALSE (the default) the output is byte-identical
+     * to the pre-feature behaviour.
+     *
+     * @param list<string> $operator   Operator-configured bypass cookies.
+     * @param bool         $wooSession Whether the WooCommerce cacheable-session flag is ON.
      * @return list<string> Effective bypass-cookie list.
      */
-    public static function effectiveBypassCookies(array $operator): array
+    public static function effectiveBypassCookies(array $operator, bool $wooSession = false): array
     {
+        // When the WooCommerce session flag is on, the three Woo cart/session
+        // patterns are promoted out of the bypass set. Build a case-insensitive
+        // lookup of the patterns to exclude.
+        $wooIgnoreLower = [];
+        if ($wooSession) {
+            foreach (self::WOO_SESSION_COOKIES as $pattern) {
+                $wooIgnoreLower[strtolower($pattern)] = true;
+            }
+        }
+
         $out  = [];
         $seen = [];
         foreach (array_merge(self::DEFAULT_BYPASS_COOKIES, $operator) as $cookie) {
@@ -76,6 +114,10 @@ final class Cacheability
                 continue;
             }
             $lower = strtolower($cookie);
+            // Skip Woo cart/session patterns when the feature flag is on.
+            if ($wooSession && isset($wooIgnoreLower[$lower])) {
+                continue;
+            }
             if (isset($seen[$lower])) {
                 continue;
             }
@@ -107,14 +149,30 @@ final class Cacheability
     private array $bypassCookies;
 
     /**
+     * Whether the WooCommerce cacheable-session feature is effectively active.
+     * True only when BOTH the operator flag (woo_cacheable_session) AND the
+     * persisted probe result (wpmgr_woo_fragments_supported) are true. When
+     * either is false the three Woo cart/session cookie patterns remain in the
+     * hard-bypass set and behaviour is byte-identical to flag-off. DEFAULT-OFF.
+     */
+    private bool $wooSession;
+
+    /**
      * @param list<string> $extraIncludeQueries Operator-added cache-varying query params.
      * @param list<string> $bypassUrls          Substrings that disable caching for a URL.
      * @param list<string> $bypassCookies       Cookie-name keywords that disable caching.
+     * @param bool         $wooSession          WooCommerce cacheable-session flag (default off).
+     * @param bool|null    $wooSupported        Persisted probe result (null = read from option).
+     *                                           Explicit false always disables the feature
+     *                                           regardless of $wooSession. Injected by tests
+     *                                           to avoid a real get_option() call.
      */
     public function __construct(
         array $extraIncludeQueries = [],
         array $bypassUrls = [],
-        array $bypassCookies = []
+        array $bypassCookies = [],
+        bool $wooSession = false,
+        ?bool $wooSupported = null
     ) {
         $this->extraIncludeQueries = array_values(array_filter(
             array_map('strval', $extraIncludeQueries),
@@ -127,11 +185,33 @@ final class Cacheability
         // The baked-in default "always-bypass" cookies (cart/session/logged-in/
         // password/comment-author) are ALWAYS merged in, so a logged-out cart
         // request is non-cacheable even when the operator configured nothing.
+        // When $wooSession is TRUE AND the probe confirms fragment support, the
+        // three Woo cart/session patterns are promoted out of the bypass set.
+        // If support is not confirmed, behaviour is byte-identical to flag-off.
         $operatorBypass = array_values(array_filter(
             array_map('strval', $bypassCookies),
             static fn (string $s): bool => $s !== ''
         ));
-        $this->bypassCookies = self::effectiveBypassCookies($operatorBypass);
+
+        // Resolve the support probe result. Only relevant when the operator flag
+        // is on — if the flag is off we never promote Woo cookies out of bypass
+        // regardless of support state, so there is no point reading the option.
+        // This avoids an unnecessary get_option() call (and Brain Monkey stub
+        // requirement in tests) on all flag-off sites.
+        if ($wooSession) {
+            if ($wooSupported === null) {
+                $wooSupported = (bool) (function_exists('get_option')
+                    ? get_option(PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED, false)
+                    : false);
+            }
+        } else {
+            $wooSupported = false;
+        }
+
+        // The feature is active only when BOTH the operator flag AND the agent's
+        // own probe have confirmed support.
+        $this->wooSession    = $wooSession && $wooSupported;
+        $this->bypassCookies = self::effectiveBypassCookies($operatorBypass, $this->wooSession);
     }
 
     /**
@@ -237,13 +317,146 @@ final class Cacheability
         if (!empty($ctx['wc_excluded']) || $this->isWooCommerceExcludedPage()) {
             return false;
         }
+
+        // Non-empty-cart guard (Phase 2b): when the WooCommerce session flag is ON
+        // we must ONLY write the shared shell when the generating request has an
+        // EMPTY cart. A non-empty cart must never be baked into the shared shell
+        // (that would serve one shopper's cart to the next). The wc_cart_empty
+        // context key is resolved by CacheWriter::resolveContext and defaults to
+        // true (safe) when absent. When the flag is OFF this guard is vacuously
+        // satisfied (wooSession is false so the condition never fires).
+        if ($this->wooSession && isset($ctx['wc_cart_empty']) && $ctx['wc_cart_empty'] === false) {
+            return false;
+        }
+
         // The response body must be a full HTML document.
         $body = (string) ($ctx['body'] ?? '');
         if (preg_match('/<!DOCTYPE\s*html\b[^>]*>/i', $body) !== 1) {
             return false;
         }
 
+        // Phase 3 nonce guard: when the WooCommerce session flag is ON, inspect
+        // the body for state-mutating nonces that cannot be safely refreshed
+        // client-side. Add-to-cart nonces are safe (they are refreshed by the
+        // cart-fragments response or verified server-side with redirect-on-fail).
+        // Any other state-mutating nonce field (checkout, payment, account forms)
+        // indicates a page we cannot safely serve as a shared shell — fall back to
+        // full bypass. Cart/checkout/account are already excluded above, but
+        // plugins may embed actionable nonce fields on otherwise-innocuous pages.
+        if ($this->wooSession && $body !== '' && $this->hasNonRefreshableNonce($body)) {
+            return false;
+        }
+
         return true;
+    }
+
+    /**
+     * Detect state-mutating nonce fields in the page body that cannot be safely
+     * refreshed client-side from WooCommerce's AJAX surface.
+     *
+     * Safe nonces (add-to-cart): WooCommerce verifies these server-side and
+     * redirects on failure (no destructive consequence of a stale nonce). They
+     * are also refreshed in the mini-cart fragment HTML when cart-fragments runs.
+     *
+     * Unsafe nonces: any nonce field whose name pattern suggests a destructive
+     * or irreversible action — checkout submission, payment, account mutation,
+     * subscription, etc. If ANY such nonce is present the page is NOT shell-
+     * cacheable (safe fallback: full bypass).
+     *
+     * PRIME DIRECTIVE: when uncertain, return TRUE (force bypass).
+     *
+     * Hardened checks:
+     *   (a) Hidden-input detection tolerates unquoted attribute values (HTML5
+     *       allows omitting quotes when the value contains no whitespace or ">").
+     *   (b) Name extraction tolerates both quoted and unquoted values.
+     *   (c) When the flag is on, a bare `_wpnonce` token or any `*-nonce`/
+     *       `*_nonce` token appearing anywhere in the body (outside the allowlist)
+     *       also forces bypass — nonces can appear in data-attributes, inline
+     *       script variables (e.g. wpApiSettings.nonce), or button values.
+     *
+     * @param string $body The rendered page HTML.
+     * @return bool True when an unsafe nonce was found (page must NOT be cached).
+     */
+    private function hasNonRefreshableNonce(string $body): bool
+    {
+        // --- Pass 1: hidden <input> fields (quoted AND unquoted attribute values) ---
+        // Matches <input … type="hidden" …> or <input … type=hidden …>.
+        if (preg_match_all(
+            '/<input\b[^>]+type=(["\']{0,1})hidden\1[^>]*>/i',
+            $body,
+            $inputs
+        )) {
+            foreach ($inputs[0] as $input) {
+                // Extract the name attribute value, tolerating quoted or unquoted.
+                // Pattern: name= followed by an optional quote, then the value,
+                // then the matching quote (or end-of-attribute for unquoted).
+                if (!preg_match('/\bname=(["\'"]?)([^"\'>\s]+)\1/i', $input, $nameMatch)) {
+                    continue;
+                }
+                $name = strtolower($nameMatch[2]);
+
+                // Skip if this is not nonce-related.
+                if (strpos($name, 'nonce') === false && strpos($name, '_wpnonce') === false
+                    && strpos($name, 'security') === false
+                ) {
+                    continue;
+                }
+
+                // Safe nonce patterns: add-to-cart actions. These are verified
+                // server-side with redirect-on-fail, not destructive, and refreshed
+                // by the cart-fragments response.
+                if ($this->isSafeNonceName($name)) {
+                    continue;
+                }
+
+                // Any other nonce field on a page we would cache is a signal that
+                // the page has actionable state we cannot safely serve from a
+                // shared shell. Safe fallback: force full bypass.
+                return true;
+            }
+        }
+
+        // --- Pass 2: bare nonce tokens anywhere in the body -----------------------
+        // Nonces also appear in data-attributes (data-nonce="..."), inline JS
+        // variables (wpApiSettings.nonce = "..."), and button values. A bare
+        // `_wpnonce` token or any identifier ending in `-nonce` / `_nonce`
+        // appearing in the body is treated as a nonce signal — unless it matches
+        // the add-to-cart allowlist.
+        //
+        // Pattern: an identifier that ends with -nonce or _nonce, or is exactly
+        // _wpnonce, followed by a non-identifier character (to avoid false-positive
+        // on e.g. class="add-noncense"). We also allow a leading word-boundary so
+        // we don't match substrings inside longer tokens.
+        if (preg_match_all(
+            '/\b(_wpnonce|(?:[a-z0-9_-]+-nonce|[a-z0-9_-]+_nonce))\b/i',
+            $body,
+            $nonces
+        )) {
+            foreach ($nonces[1] as $token) {
+                $lower = strtolower($token);
+                if ($this->isSafeNonceName($lower)) {
+                    continue;
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Whether a nonce name is on the add-to-cart allowlist (safe to cache).
+     * These nonces are verified server-side with redirect-on-fail, are not
+     * destructive, and are refreshed by the cart-fragments response.
+     *
+     * @param string $name Lower-cased nonce name or identifier.
+     * @return bool
+     */
+    private function isSafeNonceName(string $name): bool
+    {
+        return strpos($name, 'add_to_cart') !== false
+            || strpos($name, 'add-to-cart') !== false
+            || strpos($name, 'woocommerce-add-to-cart') !== false;
     }
 
     /**

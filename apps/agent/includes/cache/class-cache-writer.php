@@ -81,10 +81,19 @@ final class CacheWriter
         $this->config       = $config;
         $this->cacheRoot    = rtrim($cacheRoot, '/\\');
         $this->key          = $key ?? new CacheKey();
+        // When no Cacheability is injected (live path) we build one, passing the
+        // persisted woo_supported probe result so the write path and the drop-in
+        // serve path agree: Woo cookies are only promoted out of bypass when BOTH
+        // the operator flag is on AND the agent's own probe confirmed support.
+        // The Cacheability constructor reads get_option when wooSupported is null,
+        // but on the live path we let it do that (one cheap option read per
+        // request). Tests inject an explicit Cacheability to avoid the DB call.
         $this->cacheability = $cacheability ?? new Cacheability(
             $config->includeQueries,
             $config->bypassUrls,
-            $config->bypassCookies
+            $config->bypassCookies,
+            $config->wooCacheableSession
+            // wooSupported left null → Cacheability reads the option itself.
         );
         if ($optimizer !== null) {
             $this->optimizer         = $optimizer;
@@ -293,6 +302,17 @@ final class CacheWriter
             $pwd = true;
         }
 
+        // wc_excluded: true when the current page is WooCommerce cart, checkout,
+        // account, or any WC endpoint. These pages are never cacheable. Wiring this
+        // here makes the exclusion explicit on the write path and unit-testable.
+        $wcExcluded = $this->isWooCommerceExcludedPage();
+
+        // wc_cart_empty: true when the visitor's WooCommerce cart is empty (or
+        // WooCommerce is not active). Only relevant when woo_cacheable_session is ON
+        // (Phase 2b non-empty-cart guard). Defaults to true (safe: allow write) so
+        // that non-WC sites are unaffected.
+        $wcCartEmpty = $this->resolveWcCartEmpty();
+
         return [
             'url'               => $uri,
             'uri_path'          => $uri,
@@ -307,7 +327,97 @@ final class CacheWriter
             'logged_in'         => $loggedIn,
             'cache_logged_in'   => $this->config->cacheLoggedIn,
             'password_required' => $pwd,
+            'wc_excluded'       => $wcExcluded,
+            'wc_cart_empty'     => $wcCartEmpty,
         ];
+    }
+
+    /**
+     * Whether the current request is for a WooCommerce page that must never be
+     * written to the shared disk cache (cart, checkout, account, WC endpoints).
+     * Guards are function_exists so this is a cheap false on non-WC sites.
+     *
+     * @return bool
+     */
+    private function isWooCommerceExcludedPage(): bool
+    {
+        if (!class_exists('WooCommerce')) {
+            return false;
+        }
+        if (function_exists('is_cart') && is_cart()) {
+            return true;
+        }
+        if (function_exists('is_checkout') && is_checkout()) {
+            return true;
+        }
+        if (function_exists('is_account_page') && is_account_page()) {
+            return true;
+        }
+        if (function_exists('is_wc_endpoint_url') && is_wc_endpoint_url()) {
+            return true;
+        }
+        return false;
+    }
+
+    /**
+     * Whether the current visitor's WooCommerce cart is definitively empty.
+     *
+     * When woo_cacheable_session is OFF this guard is vacuously satisfied (the
+     * feature is not active) so the method returns true and the non-empty-cart
+     * check in Cacheability is never reached. Behaviour is byte-identical to the
+     * pre-feature state.
+     *
+     * When the flag is ON the method is deliberately FAIL-SAFE in the direction
+     * that protects shoppers: it returns true (safe to write a shared shell) ONLY
+     * for two definitively-confirmed cases:
+     *   1. WooCommerce is not active on this site.
+     *   2. WC()->cart->get_cart_contents_count() returns exactly 0.
+     * Every other outcome — null cart, missing method, exception, any uncertain
+     * state — returns false (do NOT write a shared shell; fall back to a normal
+     * uncached render). This ensures a cart that cannot be read is never silently
+     * baked into the shared shell and served to the next visitor.
+     *
+     * Uses WooCommerce's public `WC()->cart` surface. Guarded so it is safe to
+     * call on any site.
+     *
+     * @return bool True only when the cart is definitively empty (or WC inactive).
+     */
+    private function resolveWcCartEmpty(): bool
+    {
+        if (!$this->config->wooCacheableSession) {
+            // Flag is off — guard is vacuously satisfied; return true so the
+            // non-empty-cart check in Cacheability is never reached (no regression
+            // for non-WooCommerce sites and for sites with the flag off).
+            return true;
+        }
+
+        // Definitively-safe case 1: WooCommerce is not active.
+        if (!class_exists('WooCommerce')) {
+            return true;
+        }
+
+        // All remaining paths: flag is ON and WooCommerce is active. The only
+        // safe return value is a confirmed cart count of zero. Every uncertain
+        // branch (WC() unavailable, null cart, missing method, exception) returns
+        // false so the shared shell is never written from an unreadable state.
+        if (!function_exists('WC')) {
+            return false;
+        }
+        try {
+            $wc = WC();
+            if ($wc === null || !isset($wc->cart) || !is_object($wc->cart)) {
+                return false; // Cart state unreadable → do not write shell.
+            }
+            if (!method_exists($wc->cart, 'get_cart_contents_count')) {
+                return false; // API missing → do not write shell.
+            }
+            $count = (int) $wc->cart->get_cart_contents_count();
+            // Definitively-safe case 2: confirmed empty cart.
+            return $count === 0;
+        } catch (\Throwable $e) {
+            // Any failure → cart state unknown → do not write shell.
+            return false;
+        }
     }
 
     /**

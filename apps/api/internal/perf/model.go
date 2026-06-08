@@ -103,6 +103,22 @@ type Config struct {
 	WPCacheConstantSet bool
 	HtaccessManaged    bool
 
+	// M53 / #169 — WooCommerce cacheable-session (issue #169).
+	// WooCacheableSession is operator-writable (default false). When true the CP
+	// includes this flag in the perf-config push to the agent so the agent can
+	// cache the WooCommerce catalog shell for anonymous shoppers with a cart.
+	// The API ACCEPTS woo_cacheable_session=true even when
+	// WooThemeFragmentsSupported=false: the agent hard-gates on its own theme
+	// probe (defense-in-depth), and the web UI disables the toggle when the agent
+	// reports unsupported. We do not hard-reject at the CP to allow an operator
+	// to pre-enable the flag before the agent probes (or when using a custom theme
+	// that supports it without the standard fragments WC_AJAX hook).
+	WooCacheableSession bool
+	// WooThemeFragmentsSupported is agent-reported (read-only from the operator
+	// API). The agent sets this after probing its own theme and WooCommerce hook
+	// compatibility. The CP stores it but NEVER lets an operator PUT overwrite it.
+	WooThemeFragmentsSupported bool
+
 	ConfigVersion int
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
