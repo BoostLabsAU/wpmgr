@@ -101,6 +101,13 @@ type PerfConfigRequest struct {
 	BloatDisableOembeds      bool `json:"bloat_disable_oembeds"`
 	BloatHeartbeatControl    bool `json:"bloat_heartbeat_control"`
 	BloatPostRevisionControl bool `json:"bloat_post_revisions_control"`
+
+	// M53 / #169 — WooCommerce cacheable-session.
+	// When true the agent MAY cache the WooCommerce catalog shell for anonymous
+	// shoppers with a cart. The agent hard-gates on its own theme probe
+	// (woo_theme_fragments_supported) before acting; this flag is a CP-side
+	// permission level only.
+	WooCacheableSession bool `json:"woo_cacheable_session"`
 }
 
 // PerfConfigResult is the agent's response to `perf_config_update`. The agent

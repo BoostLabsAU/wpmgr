@@ -163,6 +163,12 @@ import type {
   GetReadyzData,
   GetReadyzErrors,
   GetReadyzResponses,
+  GetRestoreRunData,
+  GetRestoreRunErrors,
+  GetRestoreRunResponses,
+  GetScheduleRunData,
+  GetScheduleRunErrors,
+  GetScheduleRunResponses,
   GetSiteAvailableUpdatesData,
   GetSiteAvailableUpdatesErrors,
   GetSiteAvailableUpdatesResponses,
@@ -208,8 +214,6 @@ import type {
   ListBackupsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
-  ListQuarantinedMediaData,
-  ListQuarantinedMediaResponses,
   ListMediaAssetsData,
   ListMediaAssetsResponses,
   ListMediaJobsData,
@@ -217,8 +221,19 @@ import type {
   ListMembersData,
   ListMembersErrors,
   ListMembersResponses,
+  ListQuarantinedMediaData,
+  ListQuarantinedMediaResponses,
+  ListRestoreRunEventsData,
+  ListRestoreRunEventsErrors,
+  ListRestoreRunEventsResponses,
+  ListRestoreRunsData,
+  ListRestoreRunsErrors,
+  ListRestoreRunsResponses,
   ListRucssResultsData,
   ListRucssResultsResponses,
+  ListScheduleRunsData,
+  ListScheduleRunsErrors,
+  ListScheduleRunsResponses,
   ListSharedWithMeData,
   ListSharedWithMeErrors,
   ListSharedWithMeResponses,
@@ -1981,6 +1996,100 @@ export const putBackupSettingsNotifications = <
   });
 
 /**
+ * List restore runs for a site
+ *
+ * Returns restore runs for the site, ordered newest-first. Each run
+ * records a single restore attempt triggered via
+ * `POST /backups/{snapshotId}/restore`. The `triggered_by_email` and
+ * `triggered_by_name` fields are populated when the actor is a known
+ * user in the tenant directory (API-key or system actors leave them
+ * null). Requires viewer+.
+ *
+ */
+export const listRestoreRuns = <ThrowOnError extends boolean = false>(
+  options: Options<ListRestoreRunsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListRestoreRunsResponses,
+    ListRestoreRunsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/restores", ...options });
+
+/**
+ * Get a restore run by ID
+ *
+ * Returns the restore run record by its UUID. Authorization is enforced
+ * by resolving the run's `site_id` and applying the caller's
+ * `PermSiteRead` grant on that site (the same by-id pattern as
+ * `GET /backups/{snapshotId}`). Requires viewer+.
+ *
+ */
+export const getRestoreRun = <ThrowOnError extends boolean = false>(
+  options: Options<GetRestoreRunData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetRestoreRunResponses,
+    GetRestoreRunErrors,
+    ThrowOnError
+  >({ url: "/api/v1/restores/{restoreId}", ...options });
+
+/**
+ * List phase-log events for a restore run
+ *
+ * Returns the ordered phase log for a restore run, ascending by event
+ * ID. Supports incremental polling via `?after=<id>`: pass the highest
+ * `id` from the previous response to receive only newer events.
+ * Authorization mirrors `GET /restores/{restoreId}` — the run's site
+ * is resolved and the caller's `PermSiteRead` is enforced on it.
+ * Requires viewer+.
+ *
+ */
+export const listRestoreRunEvents = <ThrowOnError extends boolean = false>(
+  options: Options<ListRestoreRunEventsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListRestoreRunEventsResponses,
+    ListRestoreRunEventsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/restores/{restoreId}/events", ...options });
+
+/**
+ * List schedule runs for a site
+ *
+ * Returns a split view of schedule runs for the site: `upcoming`
+ * (non-terminal: scheduled/queued/running, bounded to 10) and `past`
+ * (terminal: completed/failed/skipped/canceled, paginated via
+ * `limit`/`offset`). Filter to one set with `?status=upcoming` or
+ * `?status=past`. Requires viewer+.
+ *
+ */
+export const listScheduleRuns = <ThrowOnError extends boolean = false>(
+  options: Options<ListScheduleRunsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListScheduleRunsResponses,
+    ListScheduleRunsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/schedule-runs", ...options });
+
+/**
+ * Get a schedule run by ID
+ *
+ * Returns the schedule run record by its UUID. Authorization is enforced
+ * by resolving the run's `site_id` and applying the caller's
+ * `PermSiteRead` grant on that site. Requires viewer+.
+ *
+ */
+export const getScheduleRun = <ThrowOnError extends boolean = false>(
+  options: Options<GetScheduleRunData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetScheduleRunResponses,
+    GetScheduleRunErrors,
+    ThrowOnError
+  >({ url: "/api/v1/schedule-runs/{runId}", ...options });
+
+/**
  * Trigger an immediate inventory + available-updates refresh
  *
  * Enqueues a CP->agent refresh-inventory command for the site. The agent
@@ -2847,12 +2956,12 @@ export const deleteIsolatedMedia = <ThrowOnError extends boolean = false>(
   });
 
 /**
- * List quarantined media manifests for a site
+ * Returns all quarantine manifests currently held on the site (READ-ONLY).
  *
- * Returns all quarantine manifests that have been created for this site
- * and not yet restored or deleted. Each manifest contains the attachment
- * entries and the isolation timestamp so the operator can act on items
- * that survived a page refresh.
+ * Returns all quarantine manifests currently held on the site. Each manifest
+ * was created by a prior isolate call and describes the set of attachment
+ * files that were moved to the quarantine directory. This endpoint is
+ * read-only — it does not modify any files or attachment posts.
  *
  * Requires the `site.media.clean.scan` permission (viewer+).
  *

@@ -58,8 +58,15 @@ if ($wpmgr_method !== 'GET' && $wpmgr_method !== 'HEAD') {
 }
 
 // Bypass cookies: any matching cookie name disables the cache for this request.
+// When woo_cacheable_session is ON the three WooCommerce cart/session cookie
+// patterns are listed in woo_ignore_cookies instead of bypass_cookies, so they
+// neither bypass nor key the cache — the anonymous visitor maps to the same
+// shared shell as a no-cookie visitor. When the flag is OFF this array is empty
+// and the bypass set is byte-identical to the pre-feature behaviour.
 $wpmgr_bypass_cookies = isset($config['bypass_cookies']) && is_array($config['bypass_cookies'])
     ? $config['bypass_cookies'] : array();
+$wpmgr_woo_ignore = isset($config['woo_ignore_cookies']) && is_array($config['woo_ignore_cookies'])
+    ? array_map('strtolower', $config['woo_ignore_cookies']) : array();
 if (!empty($_COOKIE) && $wpmgr_bypass_cookies) {
     $wpmgr_cookie_names = array_keys($_COOKIE);
     foreach ($wpmgr_bypass_cookies as $wpmgr_bypass) {
@@ -73,6 +80,11 @@ if (!empty($_COOKIE) && $wpmgr_bypass_cookies) {
         }
     }
 }
+// Logged-in guard: even when woo_cacheable_session is ON, a wordpress_logged_in_*
+// cookie always forces a cache bypass (logged-in users never receive a shared shell).
+// This is already in the bypass_cookies list above, but we make it explicit as a
+// defence-in-depth guard for readability and to document the invariant.
+// (No additional code needed — wordpress_logged_in_ remains in bypass_cookies.)
 
 // --- Build the cache file name (mirrors CacheKey::build) ----------------------
 

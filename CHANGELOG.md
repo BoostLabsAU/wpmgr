@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-06-08
+
+### Added
+
+- WooCommerce cart-session page caching (#169). Per-site, opt-in, default OFF. When enabled, catalog pages (shop, category, home, blog) are served from the page cache for shoppers who already have items in their cart; cart totals and the mini-cart update live via WooCommerce's own cart-fragments mechanism. Cart, checkout, and account pages are always bypassed. WPMgr auto-detects whether the active theme supports cart fragments and only surfaces the toggle when it does. Conservative by design: any uncertainty about theme support, cart state, or a sensitive form token causes the full uncached page to be served so a shopper never sees the wrong cart.
+
 ## [0.29.0] - 2026-06-08
 
 ### Added

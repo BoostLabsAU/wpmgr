@@ -63,6 +63,17 @@ final class CacheConfig
     public array $bypassCookies;
 
     /**
+     * When true, allow anonymous WooCommerce shoppers who hold only a Woo cart or
+     * session cookie to receive a shared cached shell. The three Woo cart/session
+     * cookie patterns are moved from the hard-bypass set into a non-keying,
+     * non-bypassing ignore set so an empty-cart shell is served and the per-user
+     * cart widget is repainted client-side by WooCommerce's own cart-fragments.
+     *
+     * DEFAULT-OFF. When false, behaviour is byte-identical to today.
+     */
+    public bool $wooCacheableSession;
+
+    /**
      * Operator-configured include-queries, BEFORE i18n/currency presets are folded
      * in. Persisted as-is (so round-trips don't bake auto-detected presets into the
      * stored config) while {@see $includeQueries} carries the effective set.
@@ -102,8 +113,9 @@ final class CacheConfig
         $this->includeQueries  = EcosystemPresets::effectiveIncludeQueries($this->operatorIncludeQueries);
         $this->includeCookies  = EcosystemPresets::effectiveIncludeCookies($this->operatorIncludeCookies);
 
-        $this->bypassUrls      = self::stringList($data['bypass_urls'] ?? []);
-        $this->bypassCookies   = self::stringList($data['bypass_cookies'] ?? []);
+        $this->bypassUrls           = self::stringList($data['bypass_urls'] ?? []);
+        $this->bypassCookies        = self::stringList($data['bypass_cookies'] ?? []);
+        $this->wooCacheableSession  = (bool) ($data['woo_cacheable_session'] ?? false);
     }
 
     /**
@@ -115,18 +127,43 @@ final class CacheConfig
      */
     public function toDropinArray(): array
     {
+        // Read the persisted theme-fragments support probe result. Only relevant
+        // when the operator flag is on — if off, the Woo cookies stay in bypass
+        // regardless and there is no point reading the option.
+        // Written by PerfReporter::persistWooSupported() on each reportStats cycle.
+        $wooSupported = false;
+        if ($this->wooCacheableSession) {
+            $wooSupported = (bool) (function_exists('get_option')
+                ? get_option(PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED, false)
+                : false);
+        }
+
+        // The Woo cookies are moved to the ignore set only when BOTH the operator
+        // flag is on AND the agent's own probe has confirmed fragment support.
+        // When either is false the behaviour is byte-identical to flag-off (full
+        // bypass on all three Woo cart/session cookie patterns).
+        $wooActive = $this->wooCacheableSession && $wooSupported;
+
         return [
-            'cache_logged_in'  => $this->cacheLoggedIn,
-            'cache_mobile'     => $this->cacheMobile,
-            'include_cookies'  => $this->includeCookies,
+            'cache_logged_in'       => $this->cacheLoggedIn,
+            'cache_mobile'          => $this->cacheMobile,
+            'include_cookies'       => $this->includeCookies,
             // The baked-in default "always-bypass" cookies (WooCommerce/EDD cart,
             // session, logged-in, password, comment-author) are merged with the
             // operator list via the SAME helper the PHP cacheability path uses, so
             // the pre-WP drop-in and the PHP write layer bypass an identical set.
             // This is what prevents a logged-out cart page from ever being served
             // from (or written to) the shared disk cache.
-            'bypass_cookies'   => Cacheability::effectiveBypassCookies($this->bypassCookies),
-            'ignore_queries'   => MarketingParams::ignoreList(),
+            // When woo_cacheable_session is ON AND woo_supported is confirmed, the
+            // three Woo cart/session patterns are moved to the ignore set so they
+            // neither bypass nor key the cache.
+            'bypass_cookies'        => Cacheability::effectiveBypassCookies($this->bypassCookies, $wooActive),
+            'woo_ignore_cookies'    => $wooActive ? Cacheability::WOO_SESSION_COOKIES : [],
+            'ignore_queries'        => MarketingParams::ignoreList(),
+            'woo_cacheable_session' => $this->wooCacheableSession,
+            // Baked probe result: the drop-in can read this for diagnostics; the
+            // PHP write path reads it live from the option (same source of truth).
+            'woo_supported'         => $wooSupported,
         ];
     }
 
@@ -148,8 +185,9 @@ final class CacheConfig
             // presets into stored config (they are re-derived live on each load).
             'include_queries'  => $this->operatorIncludeQueries,
             'include_cookies'  => $this->operatorIncludeCookies,
-            'bypass_urls'      => $this->bypassUrls,
-            'bypass_cookies'   => $this->bypassCookies,
+            'bypass_urls'           => $this->bypassUrls,
+            'bypass_cookies'        => $this->bypassCookies,
+            'woo_cacheable_session' => $this->wooCacheableSession,
         ];
     }
 

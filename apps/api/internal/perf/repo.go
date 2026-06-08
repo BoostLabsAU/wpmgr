@@ -154,6 +154,7 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 			BloatHeartbeatControl:     c.BloatHeartbeatControl,
 			BloatPostRevisionsControl: c.BloatPostRevisionControl,
 			ConfigVersion:             int32(c.ConfigVersion),
+			WooCacheableSession:       c.WooCacheableSession,
 		})
 		if qerr != nil {
 			return qerr
@@ -186,6 +187,18 @@ func (r *Repo) UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverS
 			return qerr
 		}
 		return nil
+	})
+}
+
+// UpdateWooFragmentsSupported stamps the agent-reported woo_theme_fragments_supported
+// flag. Agent write path (InAgentTx) — the agent is the sole writer; operators
+// can never set this via the API.
+func (r *Repo) UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).UpdateWooThemeFragmentsSupported(ctx, sqlc.UpdateWooThemeFragmentsSupportedParams{
+			WooThemeFragmentsSupported: supported,
+			SiteID:                     siteID,
+		})
 	})
 }
 
@@ -885,13 +898,15 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		BloatDisableOembeds:       row.BloatDisableOembeds,
 		BloatHeartbeatControl:     row.BloatHeartbeatControl,
 		BloatPostRevisionControl:  row.BloatPostRevisionsControl,
-		ServerSoftware:            derefStr(row.ServerSoftware),
-		DropinInstalled:           row.DropinInstalled,
-		WPCacheConstantSet:        row.WpCacheConstantSet,
-		HtaccessManaged:           row.HtaccessManaged,
-		ConfigVersion:             int(row.ConfigVersion),
-		CreatedAt:                 row.CreatedAt,
-		UpdatedAt:                 row.UpdatedAt,
+		ServerSoftware:             derefStr(row.ServerSoftware),
+		DropinInstalled:            row.DropinInstalled,
+		WPCacheConstantSet:         row.WpCacheConstantSet,
+		HtaccessManaged:            row.HtaccessManaged,
+		WooCacheableSession:        row.WooCacheableSession,
+		WooThemeFragmentsSupported: row.WooThemeFragmentsSupported,
+		ConfigVersion:              int(row.ConfigVersion),
+		CreatedAt:                  row.CreatedAt,
+		UpdatedAt:                  row.UpdatedAt,
 	}
 }
 

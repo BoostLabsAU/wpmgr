@@ -2519,6 +2519,284 @@ export const SiteBackupSettingsNotificationsUpdateSchema = {
   },
 } as const;
 
+export const RestoreRunSchema = {
+  type: "object",
+  description:
+    "A single restore attempt, created when the operator calls\n`POST /backups/{snapshotId}/restore`. The run advances through\nphases as the agent executes the restore; `current_phase` reflects\nthe latest phase received from the agent. `triggered_by_email` and\n`triggered_by_name` are resolved from the tenant user directory\nwhen the actor is a known user; they are `null` for API-key or\nsystem-triggered restores.\n",
+  required: [
+    "id",
+    "site_id",
+    "snapshot_id",
+    "mode",
+    "components",
+    "status",
+    "created_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+      description: "Unique restore run ID.",
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+      description: "ID of the site being restored.",
+    },
+    snapshot_id: {
+      type: "string",
+      format: "uuid",
+      description: "ID of the backup snapshot used as the restore source.",
+    },
+    mode: {
+      type: "string",
+      description:
+        "Restore mode. `full` means all components were requested;\n`partial` means a subset was specified.\n",
+      enum: ["full", "partial"],
+    },
+    components: {
+      type: "array",
+      description:
+        "Which backup components were restored (e.g. `files`, `db`).",
+      items: {
+        type: "string",
+        enum: ["files", "db"],
+      },
+    },
+    status: {
+      type: "string",
+      description: "Current status of the restore run.",
+      enum: ["queued", "running", "completed", "failed", "rolled_back"],
+    },
+    current_phase: {
+      type: "string",
+      description:
+        "The last phase reported by the agent runner (absent when queued).",
+    },
+    error: {
+      type: "string",
+      description:
+        "Human-readable error message when status is `failed` or `rolled_back`.",
+    },
+    triggered_by: {
+      type: "string",
+      description:
+        "Raw actor identifier (user UUID or `api-key:<id>` or `system`).",
+    },
+    triggered_by_email: {
+      type: "string",
+      format: "email",
+      nullable: true,
+      description:
+        "Email of the triggering user (null for non-user actors or unresolvable IDs).",
+    },
+    triggered_by_name: {
+      type: "string",
+      nullable: true,
+      description:
+        "Display name of the triggering user (null for non-user actors or unresolvable IDs).",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      description: "When the restore run was created.",
+    },
+    started_at: {
+      type: "string",
+      format: "date-time",
+      description:
+        "When the agent began executing the restore (absent until running).",
+    },
+    finished_at: {
+      type: "string",
+      format: "date-time",
+      description: "When the restore run reached a terminal state.",
+    },
+  },
+} as const;
+
+export const RestoreRunListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/RestoreRun",
+      },
+    },
+  },
+} as const;
+
+export const RestoreRunEventSchema = {
+  type: "object",
+  description: "A single phase-log entry emitted by the restore engine.",
+  required: ["id", "phase", "status", "occurred_at"],
+  properties: {
+    id: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Monotonically increasing event ID (use as cursor for `?after=`).",
+    },
+    phase: {
+      type: "string",
+      description: "The restore phase that produced this event.",
+    },
+    status: {
+      type: "string",
+      description: "Outcome of the phase at the time of this event.",
+      enum: ["started", "completed", "failed"],
+    },
+    message: {
+      type: "string",
+      description: "Optional human-readable detail from the agent.",
+    },
+    occurred_at: {
+      type: "string",
+      format: "date-time",
+      description: "Wall-clock time at which the event was recorded.",
+    },
+  },
+} as const;
+
+export const RestoreRunEventListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/RestoreRunEvent",
+      },
+    },
+  },
+} as const;
+
+export const ScheduleRunSchema = {
+  type: "object",
+  description:
+    'A single scheduled-backup fire. Pre-inserted as `scheduled` before\nthe run window opens, then advanced to `queued` (dispatched to River),\n`running` (agent executing), and finally a terminal status\n(`completed`, `failed`, `skipped`, or `canceled`).\n`triggered_by_email` and `triggered_by_name` are resolved from the\ntenant user directory when the actor is a known user (schedule-fired\nruns carry `triggered_by="schedule"` and leave these null).\n',
+  required: [
+    "id",
+    "site_id",
+    "schedule_id",
+    "scheduled_for",
+    "status",
+    "kind",
+    "created_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+      description: "Unique schedule run ID.",
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+      description: "ID of the site this run targets.",
+    },
+    schedule_id: {
+      type: "string",
+      format: "uuid",
+      description: "ID of the backup schedule that generated this run.",
+    },
+    snapshot_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "ID of the backup snapshot created by this run (absent until the snapshot is created).",
+    },
+    scheduled_for: {
+      type: "string",
+      format: "date-time",
+      description: "The scheduled fire time for this run.",
+    },
+    status: {
+      type: "string",
+      description: "Current status of the schedule run.",
+      enum: [
+        "scheduled",
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "skipped",
+        "canceled",
+      ],
+    },
+    kind: {
+      type: "string",
+      description: "Backup kind that will be (or was) created by this run.",
+      enum: ["full", "incremental"],
+    },
+    error: {
+      type: "string",
+      description: "Human-readable error message when status is `failed`.",
+    },
+    triggered_by: {
+      type: "string",
+      description:
+        "Actor that triggered this run (`schedule` for automatic fires; user UUID for manual).",
+    },
+    triggered_by_email: {
+      type: "string",
+      format: "email",
+      nullable: true,
+      description:
+        "Email of the triggering user (null for schedule-fired or unresolvable actors).",
+    },
+    triggered_by_name: {
+      type: "string",
+      nullable: true,
+      description:
+        "Display name of the triggering user (null for schedule-fired or unresolvable actors).",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      description: "When the schedule run row was created.",
+    },
+    started_at: {
+      type: "string",
+      format: "date-time",
+      description:
+        "When the run transitioned to `running` (absent until then).",
+    },
+    finished_at: {
+      type: "string",
+      format: "date-time",
+      description: "When the run reached a terminal state.",
+    },
+  },
+} as const;
+
+export const ScheduleRunListSchema = {
+  type: "object",
+  description:
+    "Split view of schedule runs for a site. `upcoming` contains\nnon-terminal runs (bounded to 10); `past` contains terminal runs\n(paginated). One or both lists may be empty.\n",
+  required: ["upcoming", "past"],
+  properties: {
+    upcoming: {
+      type: "array",
+      description:
+        "Non-terminal schedule runs (scheduled/queued/running), newest-fire-time first.",
+      items: {
+        $ref: "#/components/schemas/ScheduleRun",
+      },
+    },
+    past: {
+      type: "array",
+      description:
+        "Terminal schedule runs (completed/failed/skipped/canceled), newest first.",
+      items: {
+        $ref: "#/components/schemas/ScheduleRun",
+      },
+    },
+  },
+} as const;
+
 export const UptimeStatusSchema = {
   type: "object",
   description:
@@ -4168,6 +4446,19 @@ export const PerfConfigSchema = {
       type: "boolean",
       readOnly: true,
     },
+    woo_cacheable_session: {
+      type: "boolean",
+      default: false,
+      description:
+        "When true the agent will cache the WooCommerce catalog shell for\nanonymous shoppers who have an active cart. The agent additionally\nhard-gates on its own theme probe (`woo_theme_fragments_supported`)\nbefore serving cached pages to cart-holding visitors, providing a\ndefense-in-depth layer independent of this flag.\nThe API accepts `woo_cacheable_session: true` even when\n`woo_theme_fragments_supported` is false — the agent will not act on\nit until its own probe passes. This allows operators to pre-enable the\nflag before the agent performs its first probe.\n",
+    },
+    woo_theme_fragments_supported: {
+      type: "boolean",
+      readOnly: true,
+      default: false,
+      description:
+        "Agent-reported (read-only). Set to true by the agent after it probes\nthe site's active theme and confirms WooCommerce fragment-refresh\ncompatibility (wc_ajax_get_refreshed_fragments hook availability).\nThe CP stores this value but never lets an operator write it via PUT.\nOld agents that pre-date M53 will leave this field false.\n",
+    },
     config_version: {
       type: "integer",
       readOnly: true,
@@ -4752,7 +5043,7 @@ export const MediaCleanScanResultSchema = {
     total: {
       type: "integer",
       description:
-        "Full unused-candidate count (capped at SCAN_MAX=500). Use this value to drive client-side pagination of the candidates array.",
+        "Full unused-candidate count (capped at SCAN_MAX=500). Use this value to drive client-side pagination of the candidates array.\n",
     },
     candidates: {
       type: "array",
@@ -4760,12 +5051,12 @@ export const MediaCleanScanResultSchema = {
         $ref: "#/components/schemas/MediaCleanCandidate",
       },
       description:
-        "Unused attachment candidates sliced by the requested offset/limit. The client should fetch once with offset=0 and limit=SCAN_MAX and paginate the returned array client-side.",
+        "Unused attachment candidates sliced by the requested offset/limit. The client should fetch once with offset=0 and limit=SCAN_MAX and paginate the returned array client-side.\n",
     },
     truncated: {
       type: "boolean",
       description:
-        "True when the library has more unused attachments than SCAN_MAX. The returned candidates and total are capped at SCAN_MAX.",
+        "True when the library has more unused attachments than SCAN_MAX. The returned candidates and total are capped at SCAN_MAX.\n",
     },
     detail: {
       type: "string",
@@ -4903,6 +5194,81 @@ export const MediaCleanDeleteResultSchema = {
     },
     detail: {
       type: "string",
+    },
+  },
+} as const;
+
+export const MediaCleanQuarantineEntrySchema = {
+  type: "object",
+  description: "One attachment record inside a quarantine manifest.",
+  required: ["attachment_id", "title", "file_count"],
+  properties: {
+    attachment_id: {
+      type: "integer",
+      format: "int64",
+      description: "WordPress attachment post ID.",
+    },
+    title: {
+      type: "string",
+      description: "Attachment post title.",
+    },
+    file_count: {
+      type: "integer",
+      description:
+        "Number of physical files (original + generated sizes) held in quarantine.",
+    },
+  },
+} as const;
+
+export const MediaCleanQuarantineManifestSchema = {
+  type: "object",
+  description: "One quarantine manifest created by a prior isolate call.",
+  required: ["manifest_id", "job_id", "isolated_at", "total_files", "entries"],
+  properties: {
+    manifest_id: {
+      type: "string",
+      description:
+        "Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.",
+    },
+    job_id: {
+      type: "string",
+      description:
+        "Echoed job_id from the isolate request that created this manifest.",
+    },
+    isolated_at: {
+      type: "integer",
+      format: "int64",
+      description: "Unix timestamp (seconds) when the manifest was created.",
+    },
+    total_files: {
+      type: "integer",
+      description:
+        "Total number of physical files held across all entries in this manifest.",
+    },
+    entries: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/MediaCleanQuarantineEntry",
+      },
+      description: "Per-attachment entries in this manifest.",
+    },
+  },
+} as const;
+
+export const MediaCleanQuarantineListSchema = {
+  type: "object",
+  description: "Response body for the list-quarantined-media endpoint.",
+  required: ["ok", "manifests"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    manifests: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/MediaCleanQuarantineManifest",
+      },
+      description: "All quarantine manifests currently held on the site.",
     },
   },
 } as const;
@@ -5115,6 +5481,12 @@ export const PerfConfigWritableSchema = {
     },
     bloat_post_revisions_control: {
       type: "boolean",
+    },
+    woo_cacheable_session: {
+      type: "boolean",
+      default: false,
+      description:
+        "When true the agent will cache the WooCommerce catalog shell for\nanonymous shoppers who have an active cart. The agent additionally\nhard-gates on its own theme probe (`woo_theme_fragments_supported`)\nbefore serving cached pages to cart-holding visitors, providing a\ndefense-in-depth layer independent of this flag.\nThe API accepts `woo_cacheable_session: true` even when\n`woo_theme_fragments_supported` is false — the agent will not act on\nit until its own probe passes. This allows operators to pre-enable the\nflag before the agent performs its first probe.\n",
     },
   },
 } as const;

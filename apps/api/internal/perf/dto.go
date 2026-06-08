@@ -99,6 +99,14 @@ type perfConfigDTO struct {
 	WPCacheConstantSet bool   `json:"wp_cache_constant_set"`
 	HtaccessManaged    bool   `json:"htaccess_managed"`
 
+	// M53 / #169 — WooCommerce cacheable-session.
+	// WooCacheableSession is operator read+write (default false).
+	WooCacheableSession bool `json:"woo_cacheable_session"`
+	// WooThemeFragmentsSupported is agent-reported, read-only from the web.
+	// The CP ignores this field on PUT; the agent is the sole writer via
+	// perf/config-ack.
+	WooThemeFragmentsSupported bool `json:"woo_theme_fragments_supported"`
+
 	ConfigVersion int    `json:"config_version"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
 }
@@ -159,11 +167,13 @@ func toConfigDTO(c Config) perfConfigDTO {
 		BloatDisableOembeds:       c.BloatDisableOembeds,
 		BloatHeartbeatControl:     c.BloatHeartbeatControl,
 		BloatPostRevisionControl:  c.BloatPostRevisionControl,
-		ServerSoftware:            c.ServerSoftware,
-		DropinInstalled:           c.DropinInstalled,
-		WPCacheConstantSet:        c.WPCacheConstantSet,
-		HtaccessManaged:           c.HtaccessManaged,
-		ConfigVersion:             c.ConfigVersion,
+		ServerSoftware:             c.ServerSoftware,
+		DropinInstalled:            c.DropinInstalled,
+		WPCacheConstantSet:         c.WPCacheConstantSet,
+		HtaccessManaged:            c.HtaccessManaged,
+		WooCacheableSession:        c.WooCacheableSession,
+		WooThemeFragmentsSupported: c.WooThemeFragmentsSupported,
+		ConfigVersion:              c.ConfigVersion,
 	}
 	if !c.UpdatedAt.IsZero() {
 		dto.UpdatedAt = c.UpdatedAt.UTC().Format(time.RFC3339)
@@ -219,15 +229,19 @@ func fromConfigDTO(dto perfConfigDTO, tenantID, siteID uuid.UUID) Config {
 		DBCommentsTrashed:         dto.DBCommentsTrashed,
 		DBTransientsExpired:       dto.DBTransientsExpired,
 		DBOptimizeTables:          dto.DBOptimizeTables,
-		BloatDisableBlockCSS:      dto.BloatDisableBlockCSS,
-		BloatDisableDashicons:     dto.BloatDisableDashicons,
-		BloatDisableEmojis:        dto.BloatDisableEmojis,
-		BloatDisableJQueryMig:     dto.BloatDisableJQueryMig,
-		BloatDisableXMLRPC:        dto.BloatDisableXMLRPC,
-		BloatDisableRSSFeed:       dto.BloatDisableRSSFeed,
-		BloatDisableOembeds:       dto.BloatDisableOembeds,
-		BloatHeartbeatControl:     dto.BloatHeartbeatControl,
-		BloatPostRevisionControl:  dto.BloatPostRevisionControl,
+		BloatDisableBlockCSS:     dto.BloatDisableBlockCSS,
+		BloatDisableDashicons:    dto.BloatDisableDashicons,
+		BloatDisableEmojis:       dto.BloatDisableEmojis,
+		BloatDisableJQueryMig:    dto.BloatDisableJQueryMig,
+		BloatDisableXMLRPC:       dto.BloatDisableXMLRPC,
+		BloatDisableRSSFeed:      dto.BloatDisableRSSFeed,
+		BloatDisableOembeds:      dto.BloatDisableOembeds,
+		BloatHeartbeatControl:    dto.BloatHeartbeatControl,
+		BloatPostRevisionControl: dto.BloatPostRevisionControl,
+		// M53 / #169: WooCacheableSession is operator-writable; accept it from PUT.
+		// WooThemeFragmentsSupported is agent-reported and deliberately NOT read from
+		// dto here — the PUT handler must not let an operator write it.
+		WooCacheableSession: dto.WooCacheableSession,
 	}
 }
 

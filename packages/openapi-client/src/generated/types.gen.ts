@@ -1202,6 +1202,204 @@ export type SiteBackupSettingsNotificationsUpdate = {
 };
 
 /**
+ * A single restore attempt, created when the operator calls
+ * `POST /backups/{snapshotId}/restore`. The run advances through
+ * phases as the agent executes the restore; `current_phase` reflects
+ * the latest phase received from the agent. `triggered_by_email` and
+ * `triggered_by_name` are resolved from the tenant user directory
+ * when the actor is a known user; they are `null` for API-key or
+ * system-triggered restores.
+ *
+ */
+export type RestoreRun = {
+  /**
+   * Unique restore run ID.
+   */
+  id: string;
+  /**
+   * ID of the site being restored.
+   */
+  site_id: string;
+  /**
+   * ID of the backup snapshot used as the restore source.
+   */
+  snapshot_id: string;
+  /**
+   * Restore mode. `full` means all components were requested;
+   * `partial` means a subset was specified.
+   *
+   */
+  mode: "full" | "partial";
+  /**
+   * Which backup components were restored (e.g. `files`, `db`).
+   */
+  components: Array<"files" | "db">;
+  /**
+   * Current status of the restore run.
+   */
+  status: "queued" | "running" | "completed" | "failed" | "rolled_back";
+  /**
+   * The last phase reported by the agent runner (absent when queued).
+   */
+  current_phase?: string;
+  /**
+   * Human-readable error message when status is `failed` or `rolled_back`.
+   */
+  error?: string;
+  /**
+   * Raw actor identifier (user UUID or `api-key:<id>` or `system`).
+   */
+  triggered_by?: string;
+  /**
+   * Email of the triggering user (null for non-user actors or unresolvable IDs).
+   */
+  triggered_by_email?: string;
+  /**
+   * Display name of the triggering user (null for non-user actors or unresolvable IDs).
+   */
+  triggered_by_name?: string;
+  /**
+   * When the restore run was created.
+   */
+  created_at: string;
+  /**
+   * When the agent began executing the restore (absent until running).
+   */
+  started_at?: string;
+  /**
+   * When the restore run reached a terminal state.
+   */
+  finished_at?: string;
+};
+
+export type RestoreRunList = {
+  items: Array<RestoreRun>;
+};
+
+/**
+ * A single phase-log entry emitted by the restore engine.
+ */
+export type RestoreRunEvent = {
+  /**
+   * Monotonically increasing event ID (use as cursor for `?after=`).
+   */
+  id: number;
+  /**
+   * The restore phase that produced this event.
+   */
+  phase: string;
+  /**
+   * Outcome of the phase at the time of this event.
+   */
+  status: "started" | "completed" | "failed";
+  /**
+   * Optional human-readable detail from the agent.
+   */
+  message?: string;
+  /**
+   * Wall-clock time at which the event was recorded.
+   */
+  occurred_at: string;
+};
+
+export type RestoreRunEventList = {
+  items: Array<RestoreRunEvent>;
+};
+
+/**
+ * A single scheduled-backup fire. Pre-inserted as `scheduled` before
+ * the run window opens, then advanced to `queued` (dispatched to River),
+ * `running` (agent executing), and finally a terminal status
+ * (`completed`, `failed`, `skipped`, or `canceled`).
+ * `triggered_by_email` and `triggered_by_name` are resolved from the
+ * tenant user directory when the actor is a known user (schedule-fired
+ * runs carry `triggered_by="schedule"` and leave these null).
+ *
+ */
+export type ScheduleRun = {
+  /**
+   * Unique schedule run ID.
+   */
+  id: string;
+  /**
+   * ID of the site this run targets.
+   */
+  site_id: string;
+  /**
+   * ID of the backup schedule that generated this run.
+   */
+  schedule_id: string;
+  /**
+   * ID of the backup snapshot created by this run (absent until the snapshot is created).
+   */
+  snapshot_id?: string;
+  /**
+   * The scheduled fire time for this run.
+   */
+  scheduled_for: string;
+  /**
+   * Current status of the schedule run.
+   */
+  status:
+    | "scheduled"
+    | "queued"
+    | "running"
+    | "completed"
+    | "failed"
+    | "skipped"
+    | "canceled";
+  /**
+   * Backup kind that will be (or was) created by this run.
+   */
+  kind: "full" | "incremental";
+  /**
+   * Human-readable error message when status is `failed`.
+   */
+  error?: string;
+  /**
+   * Actor that triggered this run (`schedule` for automatic fires; user UUID for manual).
+   */
+  triggered_by?: string;
+  /**
+   * Email of the triggering user (null for schedule-fired or unresolvable actors).
+   */
+  triggered_by_email?: string;
+  /**
+   * Display name of the triggering user (null for schedule-fired or unresolvable actors).
+   */
+  triggered_by_name?: string;
+  /**
+   * When the schedule run row was created.
+   */
+  created_at: string;
+  /**
+   * When the run transitioned to `running` (absent until then).
+   */
+  started_at?: string;
+  /**
+   * When the run reached a terminal state.
+   */
+  finished_at?: string;
+};
+
+/**
+ * Split view of schedule runs for a site. `upcoming` contains
+ * non-terminal runs (bounded to 10); `past` contains terminal runs
+ * (paginated). One or both lists may be empty.
+ *
+ */
+export type ScheduleRunList = {
+  /**
+   * Non-terminal schedule runs (scheduled/queued/running), newest-fire-time first.
+   */
+  upcoming: Array<ScheduleRun>;
+  /**
+   * Terminal schedule runs (completed/failed/skipped/canceled), newest first.
+   */
+  past: Array<ScheduleRun>;
+};
+
+/**
  * Windowed uptime status for a single site (from the metrics store).
  */
 export type UptimeStatus = {
@@ -2089,6 +2287,28 @@ export type PerfConfig = {
   readonly dropin_installed?: boolean;
   readonly wp_cache_constant_set?: boolean;
   readonly htaccess_managed?: boolean;
+  /**
+   * When true the agent will cache the WooCommerce catalog shell for
+   * anonymous shoppers who have an active cart. The agent additionally
+   * hard-gates on its own theme probe (`woo_theme_fragments_supported`)
+   * before serving cached pages to cart-holding visitors, providing a
+   * defense-in-depth layer independent of this flag.
+   * The API accepts `woo_cacheable_session: true` even when
+   * `woo_theme_fragments_supported` is false — the agent will not act on
+   * it until its own probe passes. This allows operators to pre-enable the
+   * flag before the agent performs its first probe.
+   *
+   */
+  woo_cacheable_session?: boolean;
+  /**
+   * Agent-reported (read-only). Set to true by the agent after it probes
+   * the site's active theme and confirms WooCommerce fragment-refresh
+   * compatibility (wc_ajax_get_refreshed_fragments hook availability).
+   * The CP stores this value but never lets an operator write it via PUT.
+   * Old agents that pre-date M53 will leave this field false.
+   *
+   */
+  readonly woo_theme_fragments_supported?: boolean;
   readonly config_version?: number;
   readonly updated_at?: string;
 };
@@ -2476,19 +2696,18 @@ export type MediaCleanCandidate = {
 export type MediaCleanScanResult = {
   ok: boolean;
   /**
-   * Full unused-candidate count (capped at SCAN_MAX=500). Use this value to
-   * drive client-side pagination of the candidates array.
+   * Full unused-candidate count (capped at SCAN_MAX=500). Use this value to drive client-side pagination of the candidates array.
+   *
    */
   total: number;
   /**
-   * Unused attachment candidates sliced by the requested offset/limit. The
-   * client should fetch once with offset=0 and limit=SCAN_MAX and paginate
-   * the returned array client-side.
+   * Unused attachment candidates sliced by the requested offset/limit. The client should fetch once with offset=0 and limit=SCAN_MAX and paginate the returned array client-side.
+   *
    */
   candidates: Array<MediaCleanCandidate>;
   /**
-   * True when the library has more unused attachments than SCAN_MAX. The
-   * returned candidates and total are capped at SCAN_MAX.
+   * True when the library has more unused attachments than SCAN_MAX. The returned candidates and total are capped at SCAN_MAX.
+   *
    */
   truncated: boolean;
   /**
@@ -2583,6 +2802,61 @@ export type MediaCleanDeleteResult = {
 };
 
 /**
+ * One attachment record inside a quarantine manifest.
+ */
+export type MediaCleanQuarantineEntry = {
+  /**
+   * WordPress attachment post ID.
+   */
+  attachment_id: number;
+  /**
+   * Attachment post title.
+   */
+  title: string;
+  /**
+   * Number of physical files (original + generated sizes) held in quarantine.
+   */
+  file_count: number;
+};
+
+/**
+ * One quarantine manifest created by a prior isolate call.
+ */
+export type MediaCleanQuarantineManifest = {
+  /**
+   * Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.
+   */
+  manifest_id: string;
+  /**
+   * Echoed job_id from the isolate request that created this manifest.
+   */
+  job_id: string;
+  /**
+   * Unix timestamp (seconds) when the manifest was created.
+   */
+  isolated_at: number;
+  /**
+   * Total number of physical files held across all entries in this manifest.
+   */
+  total_files: number;
+  /**
+   * Per-attachment entries in this manifest.
+   */
+  entries: Array<MediaCleanQuarantineEntry>;
+};
+
+/**
+ * Response body for the list-quarantined-media endpoint.
+ */
+export type MediaCleanQuarantineList = {
+  ok: boolean;
+  /**
+   * All quarantine manifests currently held on the site.
+   */
+  manifests: Array<MediaCleanQuarantineManifest>;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -2645,6 +2919,19 @@ export type PerfConfigWritable = {
   bloat_disable_oembeds?: boolean;
   bloat_heartbeat_control?: boolean;
   bloat_post_revisions_control?: boolean;
+  /**
+   * When true the agent will cache the WooCommerce catalog shell for
+   * anonymous shoppers who have an active cart. The agent additionally
+   * hard-gates on its own theme probe (`woo_theme_fragments_supported`)
+   * before serving cached pages to cart-holding visitors, providing a
+   * defense-in-depth layer independent of this flag.
+   * The API accepts `woo_cacheable_session: true` even when
+   * `woo_theme_fragments_supported` is false — the agent will not act on
+   * it until its own probe passes. This allows operators to pre-enable the
+   * flag before the agent performs its first probe.
+   *
+   */
+  woo_cacheable_session?: boolean;
 };
 
 export type Limit = number;
@@ -2660,6 +2947,8 @@ export type ApiKeyId = string;
 export type RunId = string;
 
 export type SnapshotId = string;
+
+export type RestoreId = string;
 
 export type DestinationId = string;
 
@@ -5232,6 +5521,183 @@ export type PutBackupSettingsNotificationsResponses = {
 export type PutBackupSettingsNotificationsResponse =
   PutBackupSettingsNotificationsResponses[keyof PutBackupSettingsNotificationsResponses];
 
+export type ListRestoreRunsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    limit?: number;
+  };
+  url: "/api/v1/sites/{siteId}/restores";
+};
+
+export type ListRestoreRunsErrors = {
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type ListRestoreRunsError =
+  ListRestoreRunsErrors[keyof ListRestoreRunsErrors];
+
+export type ListRestoreRunsResponses = {
+  /**
+   * A list of restore runs for the site
+   */
+  200: RestoreRunList;
+};
+
+export type ListRestoreRunsResponse =
+  ListRestoreRunsResponses[keyof ListRestoreRunsResponses];
+
+export type GetRestoreRunData = {
+  body?: never;
+  path: {
+    restoreId: string;
+  };
+  query?: never;
+  url: "/api/v1/restores/{restoreId}";
+};
+
+export type GetRestoreRunErrors = {
+  /**
+   * The caller does not have access to the run's site
+   */
+  403: Error;
+  /**
+   * Restore run not found
+   */
+  404: Error;
+};
+
+export type GetRestoreRunError = GetRestoreRunErrors[keyof GetRestoreRunErrors];
+
+export type GetRestoreRunResponses = {
+  /**
+   * The restore run
+   */
+  200: RestoreRun;
+};
+
+export type GetRestoreRunResponse =
+  GetRestoreRunResponses[keyof GetRestoreRunResponses];
+
+export type ListRestoreRunEventsData = {
+  body?: never;
+  path: {
+    restoreId: string;
+  };
+  query?: {
+    /**
+     * Return only events with `id > after`. Pass the last seen event
+     * `id` to poll incrementally. Omit (or pass 0) for the full log
+     * from the beginning.
+     *
+     */
+    after?: number;
+    limit?: number;
+  };
+  url: "/api/v1/restores/{restoreId}/events";
+};
+
+export type ListRestoreRunEventsErrors = {
+  /**
+   * The caller does not have access to the run's site
+   */
+  403: Error;
+  /**
+   * Restore run not found
+   */
+  404: Error;
+};
+
+export type ListRestoreRunEventsError =
+  ListRestoreRunEventsErrors[keyof ListRestoreRunEventsErrors];
+
+export type ListRestoreRunEventsResponses = {
+  /**
+   * A page of phase-log events
+   */
+  200: RestoreRunEventList;
+};
+
+export type ListRestoreRunEventsResponse =
+  ListRestoreRunEventsResponses[keyof ListRestoreRunEventsResponses];
+
+export type ListScheduleRunsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Filter the result set. `upcoming` returns only non-terminal runs
+     * (bounded to 10); `past` returns only terminal runs (paginated).
+     * Omit to receive both sets in a single response.
+     *
+     */
+    status?: "upcoming" | "past";
+    limit?: number;
+    offset?: number;
+  };
+  url: "/api/v1/sites/{siteId}/schedule-runs";
+};
+
+export type ListScheduleRunsErrors = {
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type ListScheduleRunsError =
+  ListScheduleRunsErrors[keyof ListScheduleRunsErrors];
+
+export type ListScheduleRunsResponses = {
+  /**
+   * Split schedule-run list (upcoming + past)
+   */
+  200: ScheduleRunList;
+};
+
+export type ListScheduleRunsResponse =
+  ListScheduleRunsResponses[keyof ListScheduleRunsResponses];
+
+export type GetScheduleRunData = {
+  body?: never;
+  path: {
+    runId: string;
+  };
+  query?: never;
+  url: "/api/v1/schedule-runs/{runId}";
+};
+
+export type GetScheduleRunErrors = {
+  /**
+   * The caller does not have access to the run's site
+   */
+  403: Error;
+  /**
+   * Schedule run not found
+   */
+  404: Error;
+};
+
+export type GetScheduleRunError =
+  GetScheduleRunErrors[keyof GetScheduleRunErrors];
+
+export type GetScheduleRunResponses = {
+  /**
+   * The schedule run
+   */
+  200: ScheduleRun;
+};
+
+export type GetScheduleRunResponse =
+  GetScheduleRunResponses[keyof GetScheduleRunResponses];
+
 export type RefreshSiteUpdatesData = {
   body?: never;
   path: {
@@ -6188,49 +6654,6 @@ export type DeleteIsolatedMediaResponses = {
 
 export type DeleteIsolatedMediaResponse =
   DeleteIsolatedMediaResponses[keyof DeleteIsolatedMediaResponses];
-
-export type MediaCleanQuarantineEntry = {
-  /**
-   * WordPress attachment post ID.
-   */
-  attachment_id: number;
-  /**
-   * Attachment post title.
-   */
-  title: string;
-  /**
-   * Number of physical files (original + generated sizes) held in quarantine.
-   */
-  file_count: number;
-};
-
-export type MediaCleanQuarantineManifest = {
-  /**
-   * Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.
-   */
-  manifest_id: string;
-  /**
-   * Echoed job_id from the isolate request that created this manifest.
-   */
-  job_id: string;
-  /**
-   * Unix timestamp (seconds) when the manifest was created.
-   */
-  isolated_at: number;
-  /**
-   * Total number of physical files held across all entries in this manifest.
-   */
-  total_files: number;
-  /**
-   * Per-attachment entries in this manifest.
-   */
-  entries: Array<MediaCleanQuarantineEntry>;
-};
-
-export type MediaCleanQuarantineList = {
-  ok: boolean;
-  manifests: Array<MediaCleanQuarantineManifest>;
-};
 
 export type ListQuarantinedMediaData = {
   body?: never;
