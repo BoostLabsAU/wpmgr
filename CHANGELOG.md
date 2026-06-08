@@ -6,6 +6,20 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-06-08
+
+### Added
+
+- `validate-env` command (also `make validate-env`) that checks your configuration and prints every problem at once before you start the stack, so you discover missing or invalid environment variables before the first container starts instead of one restart at a time.
+
+### Changed
+
+- The control plane no longer restart-loops when a required setting is missing or invalid. It stays up in a degraded state: `/healthz` keeps answering, and `/readyz` returns a 503 that names exactly which environment variables are misconfigured (names and reasons only, never values), so you can read the endpoint to diagnose the problem instead of watching a crash loop.
+
+### Fixed
+
+- A failed backup now shows the real reason in the dashboard (for example a database connection failure) instead of only a generic "stalled, no progress" message. The agent's failure detail is preserved on the snapshot so you can see what actually went wrong.
+
 ## [0.28.1] - 2026-06-08
 
 ### Fixed

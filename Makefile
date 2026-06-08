@@ -152,6 +152,10 @@ gen-secrets: ## Print the boot-critical self-host secrets as ready-to-paste env 
 	# own boot parsers before it is printed (see apps/api/cmd/wpmgr-cli).
 	cd apps/api && go run ./cmd/wpmgr-cli gen-secrets
 
+.PHONY: validate-env
+validate-env: ## Check the environment config and list every problem at once
+	cd apps/api && go run ./cmd/wpmgr-cli validate-env
+
 .PHONY: init-env
 init-env: ## Copy .env.example -> .env and inject fresh secrets (preserves existing .env)
 	./scripts/init-env.sh

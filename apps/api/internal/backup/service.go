@@ -1761,9 +1761,33 @@ func (s *Service) RecordProgress(ctx context.Context, tenantID, snapshotID uuid.
 	if err != nil {
 		return nil, err
 	}
+
+	// When the agent reports "failed" (e.g. a PHP exception or out-of-disk
+	// mid-backup), extract the agent's reason and immediately mark the snapshot
+	// failed so the dashboard shows the real cause rather than waiting for the
+	// stall watchdog to stamp a generic "stalled" message.
+	//
+	// Guard: only call FailSnapshot when the snapshot is not already in a
+	// terminal state (failed/completed/cancelled). This prevents double-failing
+	// a row that was concurrently cancelled by the operator or already failed by
+	// the watchdog before this progress POST arrived.
+	if phase == "failed" && snap.Status != StatusFailed && snap.Status != StatusCompleted {
+		reason := agentFailReason(phaseDetail)
+		if reason != "" {
+			// Best-effort: if FailSnapshot errors (e.g. a race lost to the
+			// watchdog), log and continue — the progress JSON is already stored.
+			if _, ferr := s.FailSnapshot(ctx, tenantID, snapshotID, reason); ferr != nil {
+				slog.Warn("RecordProgress: agent-reported failure could not be persisted",
+					slog.String("snapshot_id", snapshotID.String()),
+					slog.String("tenant_id", tenantID.String()),
+					slog.Any("error", ferr))
+			}
+		}
+	}
+
 	// Fan out the validated progress to live SSE subscribers. The Status mirrors
-	// the snapshot's current status (the runner's "completed"/"failed" phase is
-	// only authoritative once the manifest is submitted / the worker marks it).
+	// the snapshot's status as returned by UpdateSnapshotProgress (the
+	// FailSnapshot call above, if it ran, publishes its own terminal SSE event).
 	s.publish(BackupEvent{
 		SnapshotID:  snapshotID,
 		Phase:       phase,
@@ -1779,6 +1803,30 @@ func (s *Service) RecordProgress(ctx context.Context, tenantID, snapshotID uuid.
 	}
 
 	return raw, nil
+}
+
+// agentFailReason extracts the operator-safe failure reason from a "failed"
+// phase_detail map. The agent sends the scrubbed reason under "message" (the
+// primary field); "error" is accepted as a fallback for older agents. Returns
+// an empty string when neither key is present or both are empty.
+func agentFailReason(phaseDetail map[string]any) string {
+	for _, key := range []string{"message", "error"} {
+		if v, ok := phaseDetail[key]; ok {
+			if s, ok := v.(string); ok && s != "" {
+				// Defense in depth: the agent already scrubs and truncates this
+				// reason, but the CP must not rely on a (possibly compromised)
+				// agent honoring its own budget before persisting it to the
+				// snapshot.error text column. Clamp to a sane operator-readable
+				// length on a rune boundary.
+				const maxReasonLen = 512
+				if len(s) > maxReasonLen {
+					s = strings.ToValidUTF8(s[:maxReasonLen], "")
+				}
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 // persistRestoreRunEvent is the best-effort restore-run event persistence

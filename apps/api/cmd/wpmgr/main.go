@@ -73,16 +73,12 @@ import (
 var version = "0.0.0-dev"
 
 func main() {
-	if err := run(); err != nil {
-		slog.Error("fatal", slog.Any("error", err))
-		os.Exit(1)
-	}
-}
-
-func run() error {
+	// Load config and initialize the logger as early as possible so all boot
+	// paths have structured output.
 	cfg, err := config.Load(os.Getenv("WPMGR_CONFIG_FILE"))
 	if err != nil {
-		return err
+		slog.Error("fatal: config load failed", slog.Any("error", err))
+		os.Exit(1)
 	}
 
 	logger := newLogger(cfg)
@@ -90,6 +86,26 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Aggregate ALL config issues before touching the DB or starting any server.
+	// On any issue we park in degraded mode (no crash-loop) so an operator can
+	// curl /readyz to read which env vars need fixing.
+	if issues := config.Validate(cfg); len(issues) > 0 {
+		if err := serveDegraded(ctx, cfg.HTTPAddr, issues); err != nil {
+			slog.Error("degraded server error", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return
+	}
+
+	if err := run(ctx, cfg, logger); err != nil {
+		slog.Error("fatal", slog.Any("error", err))
+		os.Exit(1)
+	}
+}
+
+func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
+	slog.SetDefault(logger)
 
 	tp, err := telemetry.Init(ctx, telemetry.Config{
 		ServiceName:  cfg.OTel.ServiceName,
@@ -100,6 +116,10 @@ func run() error {
 	}
 	defer func() { _ = tp.Shutdown(context.Background()) }()
 
+	// Defense-in-depth: individual guards still run inside run() so any future
+	// caller of run() that skips the validateConfig pre-check still hard-fails
+	// cleanly rather than proceeding with a bad config.
+	//
 	// Refuse to boot with a weak/placeholder session secret.
 	if err := cfg.ValidateSessionSecret(); err != nil {
 		return err
