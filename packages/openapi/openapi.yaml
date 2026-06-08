@@ -3843,6 +3843,27 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaCleanDeleteResult"
+  /api/v1/sites/{siteId}/media/clean/quarantine:
+    get:
+      operationId: listQuarantinedMedia
+      summary: Returns all quarantine manifests currently held on the site (READ-ONLY).
+      description: |
+        Returns all quarantine manifests currently held on the site. Each manifest
+        was created by a prior isolate call and describes the set of attachment
+        files that were moved to the quarantine directory. This endpoint is
+        read-only — it does not modify any files or attachment posts.
+
+        Requires the `site.media.clean.scan` permission (viewer+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Quarantine manifest list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanQuarantineList"
   /api/v1/sites/{siteId}/perf/rucss/results:
     get:
       operationId: listRucssResults
@@ -7576,3 +7597,51 @@ components:
           description: Number of manifest entries permanently removed from disk.
         detail:
           type: string
+    MediaCleanQuarantineEntry:
+      type: object
+      description: One attachment record inside a quarantine manifest.
+      required: [attachment_id, title, file_count]
+      properties:
+        attachment_id:
+          type: integer
+          format: int64
+          description: WordPress attachment post ID.
+        title:
+          type: string
+          description: Attachment post title.
+        file_count:
+          type: integer
+          description: Number of physical files (original + generated sizes) held in quarantine.
+    MediaCleanQuarantineManifest:
+      type: object
+      description: One quarantine manifest created by a prior isolate call.
+      required: [manifest_id, job_id, isolated_at, total_files, entries]
+      properties:
+        manifest_id:
+          type: string
+          description: Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.
+        job_id:
+          type: string
+          description: Echoed job_id from the isolate request that created this manifest.
+        isolated_at:
+          type: integer
+          format: int64
+          description: Unix timestamp (seconds) when the manifest was created.
+        total_files:
+          type: integer
+          description: Total number of physical files held across all entries in this manifest.
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/MediaCleanQuarantineEntry" }
+          description: Per-attachment entries in this manifest.
+    MediaCleanQuarantineList:
+      type: object
+      description: Response body for the list-quarantined-media endpoint.
+      required: [ok, manifests]
+      properties:
+        ok:
+          type: boolean
+        manifests:
+          type: array
+          items: { $ref: "#/components/schemas/MediaCleanQuarantineManifest" }
+          description: All quarantine manifests currently held on the site.
