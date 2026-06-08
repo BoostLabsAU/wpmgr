@@ -160,10 +160,23 @@ func (e *captureEnqueuer) CancelEncodeJob(_ context.Context, _ int64) error { re
 
 // okAgent answers every media command OK (the dispatch transport is out of scope
 // for the orchestration test; the CGO test covers the real apply payload).
-type okAgent struct{ optimizeCalls int }
+// optimized is signalled once per MediaOptimize dispatch. StartOptimize fires the
+// dispatch in a DETACHED goroutine, so tests MUST await this signal before
+// reading optimizeCalls — reading it directly after StartOptimize returns would
+// race the goroutine and data-race the counter write.
+type okAgent struct {
+	optimizeCalls int
+	optimized     chan struct{}
+}
 
 func (a *okAgent) MediaOptimize(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.MediaOptimizeRequest) (agentcmd.MediaOptimizeResponse, error) {
 	a.optimizeCalls++
+	if a.optimized != nil {
+		select {
+		case a.optimized <- struct{}{}:
+		default:
+		}
+	}
 	return agentcmd.MediaOptimizeResponse{OK: true}, nil
 }
 func (a *okAgent) MediaSync(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.MediaSyncRequest) (agentcmd.MediaSyncResponse, error) {
@@ -212,7 +225,7 @@ func TestMediaOptimizeService_CallbackChain(t *testing.T) {
 	mediaRepo := repo.NewRepo(pool)
 	store := newTrackingStore()
 	enq := &captureEnqueuer{}
-	agent := &okAgent{}
+	agent := &okAgent{optimized: make(chan struct{}, 1)}
 	pub := &memPublisher{}
 
 	svc := mediaservice.NewService(
@@ -259,6 +272,13 @@ func TestMediaOptimizeService_CallbackChain(t *testing.T) {
 	}
 	if res.QueuedCount != 1 {
 		t.Fatalf("queued_count = %d, want 1", res.QueuedCount)
+	}
+	// StartOptimize dispatches the agent command in a detached goroutine; await
+	// the signal before reading the counter to avoid a data race.
+	select {
+	case <-agent.optimized:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for detached media_optimize dispatch")
 	}
 	if agent.optimizeCalls != 1 {
 		t.Fatalf("media_optimize dispatched %d times, want 1", agent.optimizeCalls)
