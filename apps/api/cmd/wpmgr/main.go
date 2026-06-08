@@ -866,6 +866,11 @@ func run() error {
 	// 120 days, once per day. Always wired (no signing key required).
 	dbSizeHistoryGCWorker := perf.NewDBSizeHistoryGCWorker(perfRepo, logger)
 
+	// M52 / #162 — cache hit-ratio history GC: sweeps
+	// site_cache_hit_ratio_history rows older than 120 days, once per day.
+	// Always wired (no signing key required).
+	cacheHitRatioHistoryGCWorker := perf.NewCacheHitRatioHistoryGCWorker(perfRepo, logger)
+
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
 		healthInterval:         cfg.Agent.HealthInterval,
@@ -904,6 +909,8 @@ func run() error {
 		dbOrphanDeleteWatchdogWorker: dbOrphanDeleteWatchdogWorker,
 		// M42 — DB-size history GC (always wired).
 		dbSizeHistoryGCWorker: dbSizeHistoryGCWorker,
+		// M52 / #162 — cache hit-ratio history GC (always wired).
+		cacheHitRatioHistoryGCWorker: cacheHitRatioHistoryGCWorker,
 	})
 	if err != nil {
 		return err
@@ -1631,6 +1638,8 @@ type riverDeps struct {
 	dbOrphanDeleteWatchdogWorker *perf.DBOrphanDeleteWatchdogWorker
 	// M42 — DB-size history GC (always wired).
 	dbSizeHistoryGCWorker *perf.DBSizeHistoryGCWorker
+	// M52 / #162 — cache hit-ratio history GC (always wired).
+	cacheHitRatioHistoryGCWorker *perf.CacheHitRatioHistoryGCWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -1883,6 +1892,21 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics, river.NewPeriodicJob(
 			river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return perf.DBSizeHistoryGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// M52 / #162 — cache hit-ratio history GC: prune
+	// site_cache_hit_ratio_history rows older than 120 days. Always
+	// registered; runs once per day cross-tenant (InAgentTx).
+	// RunOnStart: false — the table is empty on a fresh deploy; no rush.
+	if d.cacheHitRatioHistoryGCWorker != nil {
+		river.AddWorker(workers, d.cacheHitRatioHistoryGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return perf.CacheHitRatioHistoryGCArgs{}, nil
+			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
 	}

@@ -268,6 +268,47 @@ func (w *DBSizeHistoryGCWorker) Work(ctx context.Context, _ *river.Job[DBSizeHis
 }
 
 // ----------------------------------------------------------------------------
+// CacheHitRatioHistoryGCWorker — M52 / #162
+// ----------------------------------------------------------------------------
+
+// CacheHitRatioHistoryGCArgs is the River job-args type for the cache
+// hit-ratio history GC worker.
+type CacheHitRatioHistoryGCArgs struct{}
+
+// Kind implements river.JobArgs.
+func (CacheHitRatioHistoryGCArgs) Kind() string { return "perf_cache_hit_ratio_history_gc" }
+
+// CacheHitRatioHistoryGCWorker deletes site_cache_hit_ratio_history rows older
+// than 120 days. It runs cross-tenant under InAgentTx (app.agent = 'on'),
+// matching the DBSizeHistoryGCWorker pattern exactly.
+type CacheHitRatioHistoryGCWorker struct {
+	river.WorkerDefaults[CacheHitRatioHistoryGCArgs]
+	repo   *Repo
+	logger *slog.Logger
+}
+
+// NewCacheHitRatioHistoryGCWorker builds the GC worker.
+func NewCacheHitRatioHistoryGCWorker(repo *Repo, logger *slog.Logger) *CacheHitRatioHistoryGCWorker {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &CacheHitRatioHistoryGCWorker{repo: repo, logger: logger}
+}
+
+// Work deletes rows older than 120 days in a single cross-tenant pass.
+func (w *CacheHitRatioHistoryGCWorker) Work(ctx context.Context, _ *river.Job[CacheHitRatioHistoryGCArgs]) error {
+	deleted, err := w.repo.PruneCacheHitRatioHistory(ctx, 120*24*time.Hour)
+	if err != nil {
+		w.logger.Warn("cache hit-ratio history GC error", slog.Any("error", err))
+		return err
+	}
+	if deleted > 0 {
+		w.logger.Info("cache hit-ratio history GC", slog.Int64("rows_deleted", deleted))
+	}
+	return nil
+}
+
+// ----------------------------------------------------------------------------
 // SSE publish helper for the worker layer (no DB access needed)
 // ----------------------------------------------------------------------------
 

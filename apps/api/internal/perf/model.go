@@ -120,6 +120,14 @@ type CacheStats struct {
 	PreloadPending   int
 	PreloadTotal     int
 	ReportedAt       time.Time
+
+	// M52 / #162 — window DELTA counts emitted by the agent since its last
+	// report. When BOTH are zero/absent the history row is skipped. These
+	// fields are ephemeral: they are not persisted to site_cache_stats and
+	// are only used by ReportCacheStats to decide whether to append a
+	// site_cache_hit_ratio_history row.
+	CacheHitCount  int64
+	CacheMissCount int64
 }
 
 // PurgeKind enumerates the cache_purge_audit.kind values.
@@ -167,6 +175,30 @@ type DBHealthResponse struct {
 	Points      []DbSizeTrendPoint `json:"points"`
 	GrowthBytes int64              `json:"growth_bytes"`
 	GrowthPct   float64            `json:"growth_pct"`
+}
+
+// CacheHitRatioPoint is one row of site_cache_hit_ratio_history as returned
+// by GetCacheHitRatioHistory. Only the trend fields are serialized to the API
+// response; row identity and tenant_id are internal and omitted.
+type CacheHitRatioPoint struct {
+	ID        uuid.UUID `json:"-"`
+	SiteID    uuid.UUID `json:"-"`
+	TenantID  uuid.UUID `json:"-"`
+	HitCount  int64     `json:"hit_count"`
+	MissCount int64     `json:"miss_count"`
+	RatioPct  float64   `json:"ratio_pct"`
+	SampledAt time.Time `json:"sampled_at"`
+	CreatedAt time.Time `json:"-"`
+}
+
+// CacheHealthResponse is the payload for GET /sites/:siteId/perf/cache/health.
+// Points is ordered ascending by sampled_at (oldest first). AvgRatioPct is
+// the arithmetic mean of each point's ratio_pct; zero when Points is empty.
+// The frontend must treat an empty Points slice as an empty-state condition
+// and show the chart empty state rather than a line.
+type CacheHealthResponse struct {
+	Points      []CacheHitRatioPoint `json:"points"`
+	AvgRatioPct float64              `json:"avg_ratio_pct"`
 }
 
 // ---------------------------------------------------------------------------

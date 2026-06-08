@@ -105,6 +105,10 @@ type repository interface {
 	// M42 — DB-size trend history (Phase 3.4).
 	GetDBSizeHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]DbSizeTrendPoint, error)
 	PruneDBSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
+	// M52 / #162 — cache hit-ratio history.
+	InsertCacheHitRatioHistoryTx(ctx context.Context, tenantID, siteID uuid.UUID, hitCount, missCount int64, ratioPct float64, sampledAt time.Time) error
+	GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]CacheHitRatioPoint, error)
+	PruneCacheHitRatioHistory(ctx context.Context, retention time.Duration) (int64, error)
 	// P3.7 — Fleet / Portfolio DB Health aggregate (tenant-level).
 	GetFleetDbHealth(ctx context.Context, tenantID uuid.UUID, since time.Time) ([]FleetSiteDbSummary, error)
 	// P3.8 — watchdog columns for db_orphan_delete.
@@ -365,10 +369,31 @@ func (s *Service) GetCacheStats(ctx context.Context, tenantID, siteID uuid.UUID)
 // ReportCacheStats persists the agent-reported gauges (InAgentTx) and emits
 // cache.stats.updated. Called from the agent-facing endpoint; tenant + site come
 // from the verified agent identity (the handler asserts the binding).
+//
+// M52 / #162: when the report carries a non-zero window delta
+// (CacheHitCount + CacheMissCount > 0), one hit-ratio history row is appended
+// under a separate InTenantTx. The two transactions are both short and
+// independent; a history-insert failure is logged but does NOT fail the gauge
+// upsert (the gauges are the primary signal; history is best-effort).
 func (s *Service) ReportCacheStats(ctx context.Context, stats CacheStats) (CacheStats, error) {
 	saved, err := s.repo.UpsertCacheStats(ctx, stats)
 	if err != nil {
 		return CacheStats{}, err
+	}
+	// Append a hit-ratio history point when the agent supplies a non-zero
+	// window delta. Both counts must be present (sum > 0) to form a meaningful
+	// ratio; skip silently when the agent omits them (older agents, or a window
+	// where no requests were served).
+	if stats.CacheHitCount+stats.CacheMissCount > 0 {
+		total := stats.CacheHitCount + stats.CacheMissCount
+		ratioPct := math.Round(float64(stats.CacheHitCount)/float64(total)*100*100) / 100
+		sampledAt := time.Now().UTC()
+		if herr := s.repo.InsertCacheHitRatioHistoryTx(ctx, saved.TenantID, saved.SiteID, stats.CacheHitCount, stats.CacheMissCount, ratioPct, sampledAt); herr != nil {
+			s.logger.Warn("cache hit-ratio history insert failed",
+				slog.String("site_id", saved.SiteID.String()),
+				slog.Any("error", herr),
+			)
+		}
 	}
 	s.publish(ctx, saved.TenantID, saved.SiteID, site.EventCacheStatsUpdated, map[string]any{
 		"cached_pages_count": saved.CachedPagesCount,
@@ -1076,6 +1101,33 @@ func (s *Service) GetDBHealth(ctx context.Context, tenantID, siteID uuid.UUID, d
 		Points:      points,
 		GrowthBytes: growthBytes,
 		GrowthPct:   growthPct,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// cache hit-ratio health (M52 / #162)
+// ---------------------------------------------------------------------------
+
+// GetCacheHealth returns the cache hit-ratio trend for the given site over the
+// last `days` days. days is caller-clamped to [7, 365] before this call.
+// AvgRatioPct is the arithmetic mean across Points; zero when Points is empty.
+func (s *Service) GetCacheHealth(ctx context.Context, tenantID, siteID uuid.UUID, days int) (CacheHealthResponse, error) {
+	since := time.Now().UTC().AddDate(0, 0, -days)
+	points, err := s.repo.GetCacheHitRatioHistory(ctx, tenantID, siteID, since)
+	if err != nil {
+		return CacheHealthResponse{}, err
+	}
+	var sum float64
+	for _, p := range points {
+		sum += p.RatioPct
+	}
+	var avg float64
+	if len(points) > 0 {
+		avg = math.Round(sum/float64(len(points))*100) / 100
+	}
+	return CacheHealthResponse{
+		Points:      points,
+		AvgRatioPct: avg,
 	}, nil
 }
 

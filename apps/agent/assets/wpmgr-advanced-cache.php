@@ -176,7 +176,20 @@ $wpmgr_content = defined('WP_CONTENT_DIR') ? (string) WP_CONTENT_DIR : (dirname(
 $wpmgr_file = rtrim($wpmgr_content, '/\\')
     . '/cache/wpmgr/' . $wpmgr_host . $wpmgr_path . '/' . $wpmgr_name . '.html.gz';
 
+// Resolve the tally metrics dir once, before the HIT/MISS branch.
+// Stored in a local var so both branches share the same computation.
+$wpmgr_metrics_dir = rtrim($wpmgr_content, '/\\') . '/cache/wpmgr/.metrics';
+$wpmgr_tally_hour  = gmdate('YmdH');
+
 if (!is_file($wpmgr_file)) {
+    // MISS — append one line to the hour-bucket miss file, then hand back to WordPress.
+    // One file_put_contents per miss: no DB, no WP calls, no flock.
+    // The mkdir guard runs only when the bucket file is new (first miss of the hour).
+    $wpmgr_miss_file = $wpmgr_metrics_dir . '/miss-' . $wpmgr_tally_hour;
+    if (!@file_exists($wpmgr_miss_file)) {
+        @mkdir($wpmgr_metrics_dir, 0755, true);
+    }
+    @file_put_contents($wpmgr_miss_file, "\n", FILE_APPEND);
     return false; // MISS — boot WordPress
 }
 
@@ -215,6 +228,15 @@ if (!headers_sent()) {
 if ($wpmgr_method === 'HEAD') {
     exit();
 }
+
+// HIT — append one line to the hour-bucket hit file before streaming.
+// One file_put_contents: no DB, no WP calls, no flock.
+// The mkdir guard runs only when the bucket file is new (first hit of the hour).
+$wpmgr_hit_file = $wpmgr_metrics_dir . '/hit-' . $wpmgr_tally_hour;
+if (!@file_exists($wpmgr_hit_file)) {
+    @mkdir($wpmgr_metrics_dir, 0755, true);
+}
+@file_put_contents($wpmgr_hit_file, "\n", FILE_APPEND);
 
 readfile($wpmgr_file);
 exit();

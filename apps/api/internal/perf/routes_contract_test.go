@@ -43,6 +43,8 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/db/table-action",
 	// M42 Phase 3.4 — DB-size trend history + growth summary.
 	"GET    /api/v1/sites/:siteId/perf/db/health",
+	// M52 / #162 — cache hit-ratio history + avg.
+	"GET    /api/v1/sites/:siteId/perf/cache/health",
 	// P3.5 — on-demand orphan classification report (read-only).
 	"GET    /api/v1/sites/:siteId/perf/db/orphans",
 	// P3.8 — destructive orphan deletion (options/cron/tables, UNINSTALLED plugins only).

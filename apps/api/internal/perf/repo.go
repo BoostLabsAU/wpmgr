@@ -676,6 +676,88 @@ func (r *Repo) PruneDBSizeHistory(ctx context.Context, retention time.Duration) 
 	return deleted, nil
 }
 
+// ---------------------------------------------------------------------------
+// site_cache_hit_ratio_history (M52 / #162)
+// ---------------------------------------------------------------------------
+
+// InsertCacheHitRatioHistoryTx appends one hit-ratio data point for a site
+// under InTenantTx (tenant_isolation RLS policy). The ratioPct argument is
+// pre-computed by the caller: round(100*hit/(hit+miss), 2).
+// ON CONFLICT DO NOTHING on (site_id, sampled_at) ensures idempotency.
+func (r *Repo) InsertCacheHitRatioHistoryTx(ctx context.Context, tenantID, siteID uuid.UUID, hitCount, missCount int64, ratioPct float64, sampledAt time.Time) error {
+	rp := &ratioPct
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, err := sqlc.New(tx).InsertCacheHitRatioHistory(ctx, sqlc.InsertCacheHitRatioHistoryParams{
+			SiteID:    siteID,
+			TenantID:  tenantID,
+			HitCount:  hitCount,
+			MissCount: missCount,
+			RatioPct:  rp,
+			SampledAt: sampledAt,
+		})
+		return err
+	})
+}
+
+// GetCacheHitRatioHistory returns hit-ratio trend data points for a site from
+// `since` onwards (up to 366 points), ordered oldest-first. Operator read path
+// (InTenantTx).
+func (r *Repo) GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]CacheHitRatioPoint, error) {
+	var out []CacheHitRatioPoint
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetCacheHitRatioHistory(ctx, sqlc.GetCacheHitRatioHistoryParams{
+			SiteID:   siteID,
+			TenantID: tenantID,
+			Since:    since,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]CacheHitRatioPoint, 0, len(rows))
+		for _, row := range rows {
+			rp := 0.0
+			if row.RatioPct != nil {
+				rp = *row.RatioPct
+			}
+			out = append(out, CacheHitRatioPoint{
+				ID:        row.ID,
+				SiteID:    row.SiteID,
+				TenantID:  row.TenantID,
+				HitCount:  row.HitCount,
+				MissCount: row.MissCount,
+				RatioPct:  rp,
+				SampledAt: row.SampledAt,
+				CreatedAt: row.CreatedAt,
+			})
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PruneCacheHitRatioHistory deletes hit-ratio-history rows older than
+// retention across all tenants. Cross-tenant write path (InAgentTx / app.agent
+// GUC). Returns the count of deleted rows.
+func (r *Repo) PruneCacheHitRatioHistory(ctx context.Context, retention time.Duration) (int64, error) {
+	cutoff := time.Now().UTC().Add(-retention)
+	var deleted int64
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		ct, qerr := sqlc.New(tx).PruneCacheHitRatioHistory(ctx, cutoff)
+		if qerr != nil {
+			return qerr
+		}
+		deleted = ct
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return deleted, nil
+}
+
 // DBScanResult is the model returned from a scan result lookup.
 // Phase 2.1: TablesJSON holds the per-table inventory JSONB column.
 // Phase 3.3 (M41): OrphanedOptionsJSON, OrphanedCronJSON, InstalledPluginsJSON

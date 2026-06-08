@@ -137,6 +137,19 @@ final class PerfReporter
                 }
             }
 
+            // Hit/miss tally: consume completed hour buckets from the append-only
+            // tally files written by the drop-in on the zero-DB hit/miss paths.
+            // Fields are omitted entirely when no completed buckets exist so the
+            // CP inserts no history row and the chart does not flatline with zeros.
+            $cacheRoot = $this->cache->cacheRoot();
+            if ($cacheRoot !== '') {
+                $tally = (new TallyConsumer($cacheRoot))->consume();
+                if ($tally !== null) {
+                    $body['cache_hit_count']  = $tally['hits'];
+                    $body['cache_miss_count'] = $tally['misses'];
+                }
+            }
+
             $this->post(self::PATH_STATS, $body);
         } catch (\Throwable $e) {
             // Fire-and-forget: swallow.
