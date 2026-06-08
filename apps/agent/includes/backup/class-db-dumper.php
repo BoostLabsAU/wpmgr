@@ -84,8 +84,9 @@ final class DbDumper
 
     /**
      * @param array{host:string,user:string,password:string,name:string,prefix:string} $db
-     *      WordPress DB credentials. `host` may include a `:port` suffix
-     *      (we split it off — mysqli's constructor takes port as a separate arg).
+     *      WordPress DB credentials. `host` follows WordPress DB_HOST semantics:
+     *      may carry a `:port` suffix, a `:/path/to/socket` suffix, or both
+     *      (`host:port:/path/to/socket`). All forms are parsed by splitHostPort().
      * @param array<string,mixed> $opts Reserved.
      */
     public function __construct(array $db, array $opts = [])
@@ -224,7 +225,7 @@ final class DbDumper
      */
     private function connect(): \mysqli
     {
-        [$host, $port] = $this->splitHostPort($this->db['host']);
+        [$host, $port, $socket] = $this->splitHostPort($this->db['host']);
 
         // mysqli_report controls how mysqli surfaces errors. Be explicit:
         // throw exceptions (introduced default in PHP 8.1+ but worth pinning)
@@ -232,12 +233,18 @@ final class DbDumper
         mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
 
         try {
+            // mysqli constructor: ($host, $user, $pass, $db, $port, $socket).
+            // When a Unix socket path is provided, mysqli uses it for a local
+            // connection (the $host value is effectively ignored by the driver
+            // in that case, but we still pass whatever the caller gave us so
+            // MySQL grant scoping against 'localhost' is preserved).
             $mysqli = new \mysqli(
                 $host,
                 $this->db['user'],
                 $this->db['password'],
                 $this->db['name'],
-                $port ?? 3306
+                $port ?? 3306,
+                $socket ?? ''
             );
         } catch (\Throwable $e) {
             throw new \RuntimeException('connect failed');
@@ -504,22 +511,84 @@ final class DbDumper
     }
 
     /**
-     * @return array{0:string,1:?int} [host, port]. Splits only on the LAST
-     * colon and only if the suffix is all digits — defensive against IPv6 in
-     * brackets, though no WP host known to do that.
+     * Parse a WordPress DB_HOST value into its three components.
+     *
+     * WordPress DB_HOST accepts these forms (same semantics as wpdb):
+     *   hostname                          → host, no port, no socket
+     *   hostname:3306                     → host + numeric port
+     *   hostname:/path/to/mysqld.sock     → host + socket (no port)
+     *   hostname:3306:/path/to/mysql.sock → host + port + socket
+     *   :/path/to/mysqld.sock             → socket only (host stays as-is)
+     *   [::1]:3306                        → bracketed IPv6 + port
+     *
+     * Rule: a colon-delimited segment is a socket if it starts with `/` or
+     * `\` (an absolute path), a port if it is all-digits, and left alone
+     * (host kept intact, port/socket null) if neither condition matches — so
+     * an unrecognised colon-part never corrupts the host string.
+     *
+     * @return array{0:string,1:?int,2:?string} [host, port, socket]
      */
     private function splitHostPort(string $host): array
     {
-        $port = null;
-        if (str_contains($host, ':')) {
-            $pos = strrpos($host, ':');
-            $portPart = substr($host, $pos + 1);
-            if ($portPart !== '' && ctype_digit($portPart)) {
-                $port = (int) $portPart;
-                $host = substr($host, 0, $pos);
-            }
+        $port   = null;
+        $socket = null;
+
+        if (!str_contains($host, ':')) {
+            return [$host, $port, $socket];
         }
-        return [$host, $port];
+
+        // Bracketed IPv6 — e.g. [::1]:3306. A leading '[' means the host
+        // portion is everything up to and including the matching ']'. Only
+        // parse a port after the closing bracket; ignore anything else so we
+        // never mangle the address.
+        if (str_starts_with($host, '[')) {
+            $close = strpos($host, ']');
+            if ($close !== false) {
+                $bracket = substr($host, 0, $close + 1);
+                $rest    = substr($host, $close + 1); // e.g. ':3306' or ''
+                if (str_starts_with($rest, ':')) {
+                    $after = substr($rest, 1);
+                    if ($after !== '' && ctype_digit($after)) {
+                        return [$bracket, (int) $after, null];
+                    }
+                }
+            }
+            // Could not parse cleanly — leave host intact.
+            return [$host, null, null];
+        }
+
+        // Non-bracketed: split on ':' and classify each segment after the
+        // first as port or socket. WordPress core wpdb supports up to three
+        // colon-delimited parts: host, port, socket.
+        $parts = explode(':', $host, 3);
+
+        $rawHost = $parts[0];
+        $seg1    = $parts[1] ?? null; // port-or-socket
+        $seg2    = $parts[2] ?? null; // socket (only when seg1 was a port)
+
+        if ($seg1 !== null) {
+            if (ctype_digit($seg1) && $seg1 !== '') {
+                // Second segment is a numeric port.
+                $port = (int) $seg1;
+                $host = $rawHost;
+                if ($seg2 !== null && $seg2 !== '' && (str_starts_with($seg2, '/') || str_starts_with($seg2, '\\'))) {
+                    // Third segment is a socket path: host:port:socket
+                    $socket = $seg2;
+                }
+                // If seg2 exists but is not an absolute path, ignore it
+                // (leave socket null) rather than corrupt host.
+            } elseif ($seg2 === null && ($seg1 === '' || str_starts_with($seg1, '/') || str_starts_with($seg1, '\\'))) {
+                // Second segment is a socket path (no port): host:/path or :/path
+                $socket = $seg1 !== '' ? $seg1 : null;
+                $host   = $rawHost;
+                // :/path/to/sock → rawHost is '', leave it as '' so callers
+                // can treat empty-string as "localhost" if they wish.
+            }
+            // Any other pattern (non-digit, non-path) → leave host intact,
+            // port/socket null — do not guess.
+        }
+
+        return [$host, $port, $socket];
     }
 
     /**
