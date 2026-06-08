@@ -14,6 +14,7 @@ import (
 	"github.com/riverqueue/river"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
+	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/encoder"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
@@ -120,6 +121,18 @@ func (w *EncodeWorker) Work(ctx context.Context, job *river.Job[model.EncodeArgs
 	// 1. Re-read authoritative job state; return nil early if terminal (dup-safe).
 	cur, err := w.repo.GetJobAgent(ctx, a.JobID)
 	if err != nil {
+		// The media_optimization_jobs row was deleted while the River job was still
+		// in the queue (e.g. the user cancelled/deleted the media job from the UI,
+		// which does not automatically cancel the corresponding River job). Returning
+		// a retryable error here would cause River to retry indefinitely, keeping
+		// the queue non-empty (preventing scale-to-zero) and starving live workers.
+		// Instead, permanently discard the River job with river.JobCancel so it is
+		// removed from the queue on this attempt rather than re-scheduled.
+		if de, ok := domain.AsDomain(err); ok && de.Kind == domain.KindNotFound {
+			w.logger.WarnContext(ctx, "media encode: job row gone, discarding River job",
+				slog.String("job_id", a.JobID))
+			return river.JobCancel(err)
+		}
 		return fmt.Errorf("media encode: get job: %w", err)
 	}
 	if cur.State.Terminal() {

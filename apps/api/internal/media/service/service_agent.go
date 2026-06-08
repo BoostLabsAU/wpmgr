@@ -172,7 +172,7 @@ func (s *Service) HandleEncodeReady(ctx context.Context, tenantID, siteID uuid.U
 	if err := s.repo.MarkJobInProgressAgent(ctx, jobID, len(encVariants)); err != nil {
 		return err
 	}
-	if err := s.enqueuer.EnqueueEncode(ctx, model.EncodeArgs{
+	riverJobID, err := s.enqueuer.EnqueueEncode(ctx, model.EncodeArgs{
 		TenantID:       tenantID,
 		SiteID:         siteID,
 		JobID:          jobID,
@@ -180,9 +180,19 @@ func (s *Service) HandleEncodeReady(ctx context.Context, tenantID, siteID uuid.U
 		TargetFormat:   job.TargetFormat,
 		TargetQuality:  job.TargetQuality,
 		Variants:       encVariants,
-	}); err != nil {
+	})
+	if err != nil {
 		s.failJob(ctx, tenantID, siteID, jobID, "encode enqueue failed: "+err.Error())
 		return domain.Internal("media_encode_enqueue_failed", "failed to enqueue encode job").WithCause(err)
+	}
+	// Store the River job ID on the media row so the cancel path can cancel it
+	// proactively (m51). Best-effort: a storage failure only means the cancel
+	// path falls back to the worker's own self-heal and is not fatal.
+	if storeErr := s.repo.SetEncodeRiverJobID(ctx, jobID, riverJobID); storeErr != nil {
+		s.logger.Warn("media encode-ready: could not store River job ID (best-effort)",
+			"job_id", jobID,
+			"river_job_id", riverJobID,
+			"err", storeErr.Error())
 	}
 	// Nudge the scale-to-zero media-encoder awake so it cold-starts and drains the
 	// just-enqueued job. No-op on self-host (always-on encoder) and when unwired.

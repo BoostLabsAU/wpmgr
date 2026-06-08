@@ -83,4 +83,9 @@ type Job struct {
 	// every asset whose sync_generation is older than this run. Nil/0 on non-sync
 	// jobs and on legacy sync jobs created before M24.
 	SyncGeneration *int64
+	// EncodeRiverJobID is the River river_jobs.id for the media_encode job that
+	// was enqueued at encode-ready time (m51). Nil for non-optimize jobs and for
+	// rows created before the m51 migration. The cancel path uses this to cancel
+	// the River job proactively so the encoder is never woken for discarded work.
+	EncodeRiverJobID *int64
 }
