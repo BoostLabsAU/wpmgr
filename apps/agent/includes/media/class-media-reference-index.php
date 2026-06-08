@@ -31,6 +31,9 @@
  *  16. wp_usermeta — wp_user_avatars (Simple Local Avatars), gravatar IDs.
  *  17. wp_posts (nav_menu_item) — _menu_item_object_id pointing at attachments.
  *  18. Attachment's own _wp_attachment_metadata sub-sizes + original_image.
+ *  19. wp_postmeta — SEO-plugin image-ID keys (_yoast_wpseo_opengraph-image-id,
+ *       _yoast_wpseo_twitter-image-id, rank_math_facebook_image_id, etc.).
+ *  20. wp_options — ACF options-page bare attachment IDs (options_* / _options_*).
  *
  * All DB queries use $wpdb->prepare() with %d / %s placeholders. String compares
  * use URL-fragment matching (substr after uploads base) rather than LIKE '%' to
@@ -141,7 +144,9 @@ final class MediaReferenceIndex
         $this->indexFeaturedImages();
         $this->indexPostmetaPageBuilders();
         $this->indexPostmetaGeneric();
+        $this->indexSeoMeta();
         $this->indexOptions();
+        $this->indexOptionsNumericIds();
         $this->indexTermMeta();
         $this->indexUserMeta();
         $this->indexNavMenuItems();
@@ -191,6 +196,43 @@ final class MediaReferenceIndex
                 // would both be considered referenced when only one actually is.
                 // Full-path matching is conservative enough: URLs embedded in content
                 // always include the upload subdirectory fragment.
+            }
+        }
+
+        // Gap 1: sub-size → parent derivation.
+        //
+        // When _wp_attachment_metadata['sizes'] is missing or incomplete (plugin-
+        // generated sizes, corrupt meta, external crop plugins), the $allPaths list
+        // above only contains the parent path and whatever sizes ARE registered. A
+        // sub-size URL like "2024/01/hero-300x200.jpg" would not appear in $allPaths
+        // if that size record was never written to metadata, causing a false negative.
+        //
+        // Mitigation: scan every indexed path key for a "-WxH" infix (dimensions
+        // suffix added by WordPress core). Strip the infix and compare the resulting
+        // candidate parent path against $relPath. A match means a sub-size of THIS
+        // attachment is referenced in content, so the parent must be considered
+        // referenced too — regardless of whether the sub-size appears in metadata.
+        //
+        // Safety constraint (preserves the basename-collision invariant): the match
+        // is accepted ONLY when the dir+basename (before the infix) resolves to
+        // exactly $relPath. Two attachments with the same filename in different
+        // subdirectories cannot collide: "2023/01/logo.jpg" vs "2024/06/logo.jpg"
+        // produce different stripped parents, so only the correct one matches.
+        if (empty($matchedUsages) && $relPath !== '') {
+            foreach ($this->paths as $indexedPath => $_) {
+                // Strip the -WxH infix from the indexed path.
+                $parentCandidate = $this->deriveParentFromSubSize((string)$indexedPath);
+                if ($parentCandidate === null || $parentCandidate === $indexedPath) {
+                    // Not a sub-size path, or stripping produced no change — skip.
+                    continue;
+                }
+                if ($parentCandidate === $relPath) {
+                    // This indexed path is a sub-size of the attachment under test.
+                    foreach ($this->pathUsages[$indexedPath] ?? [['surface' => 'subsize_derived', 'source_id' => null, 'source_label' => null, 'edit_url' => null, 'detail' => $indexedPath]] as $u) {
+                        $matchedUsages[] = $u;
+                    }
+                    break; // One sub-size match is sufficient to mark as referenced.
+                }
             }
         }
 
@@ -591,7 +633,7 @@ final class MediaReferenceIndex
                AND p2.post_type = 'attachment'
              LEFT JOIN {$wpdb->posts} p ON p.ID = pm.post_id
              WHERE pm.meta_key NOT LIKE '\_%'
-               AND pm.meta_value REGEXP '^[1-9][0-9]{0,6}$'",
+               AND pm.meta_value REGEXP '^[1-9][0-9]{0,9}$'",
             ARRAY_A
         );
         foreach ($acfRows as $row) {
@@ -694,6 +736,118 @@ final class MediaReferenceIndex
                     $postId,
                     $postTitle,
                     $editUrl
+                );
+            }
+        }
+    }
+
+    /**
+     * Gap 3: Index SEO-plugin postmeta keys that store attachment IDs under
+     * underscore-prefixed names, which the generic ACF numeric scan skips because
+     * it filters out `_`-prefixed keys.
+     *
+     * This uses an ALLOWLIST of exact meta_key names rather than a broad scan,
+     * keeping precision high while catching the most common SEO plugins:
+     *   Yoast SEO, Rank Math, SEOPress.
+     *
+     * Both the image-ID keys (integer attachment ID) and the URL-valued twins are
+     * included; URL-valued twins are already caught by indexPostmetaGeneric() URL
+     * scan, so we focus on the ID-valued keys here (by-ID match).
+     *
+     * Attribution: surface='postmeta', detail=meta_key.
+     */
+    private function indexSeoMeta(): void
+    {
+        global $wpdb;
+
+        // Allowlist of exact `_`-prefixed meta_keys that store a bare attachment ID.
+        $seoIdKeys = [
+            '_yoast_wpseo_opengraph-image-id',
+            '_yoast_wpseo_twitter-image-id',
+            'rank_math_facebook_image_id',
+            'rank_math_twitter_image_id',
+            '_seopress_social_fb_img-id',
+            '_seopress_social_twitter_img-id',
+        ];
+
+        // Build a parameterised IN-list. $wpdb->prepare() with %s placeholders
+        // for string values; we repeat the placeholder count to match the key count.
+        $placeholders = implode(', ', array_fill(0, count($seoIdKeys), '%s'));
+
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+        $rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT pm.post_id, pm.meta_key, pm.meta_value, p.post_title
+             FROM {$wpdb->postmeta} pm
+             INNER JOIN {$wpdb->posts} p2
+               ON p2.ID = CAST(pm.meta_value AS UNSIGNED)
+               AND p2.post_type = 'attachment'
+             LEFT JOIN {$wpdb->posts} p ON p.ID = pm.post_id
+             WHERE pm.meta_key IN ({$placeholders})
+               AND pm.meta_value REGEXP '^[1-9][0-9]{0,9}$'",
+            ...$seoIdKeys
+        ), ARRAY_A);
+        // phpcs:enable
+
+        foreach ($rows as $row) {
+            $id        = (int)($row['meta_value'] ?? 0);
+            $postId    = (int)($row['post_id'] ?? 0);
+            $postTitle = (string)($row['post_title'] ?? '');
+            $metaKey   = (string)($row['meta_key'] ?? '');
+            $editUrl   = $postId > 0 ? $this->buildPostEditUrl($postId) : null;
+            if ($id > 0) {
+                $this->addId(
+                    $id,
+                    'postmeta',
+                    $postId > 0 ? $postId : null,
+                    $postTitle !== '' ? $postTitle : null,
+                    $editUrl,
+                    $metaKey
+                );
+            }
+        }
+    }
+
+    /**
+     * Gap 4: Scan wp_options for bare attachment IDs stored by ACF options pages
+     * and similar plugins that store numeric IDs under image-suggestive option_name
+     * keys (e.g. options_hero_image, _options_logo_id, site_banner_id).
+     *
+     * The scan is bounded to option_names that contain an image-suggestive keyword
+     * (matching the heuristic in extractFromArrayAttributed) and uses an INNER JOIN
+     * against wp_posts(post_type='attachment') to validate that the numeric value
+     * corresponds to a real attachment post.
+     *
+     * Attribution: surface='option', detail=option_name.
+     */
+    private function indexOptionsNumericIds(): void
+    {
+        global $wpdb;
+
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+        $rows = $wpdb->get_results(
+            "SELECT o.option_name, CAST(o.option_value AS UNSIGNED) AS attach_id
+             FROM {$wpdb->options} o
+             INNER JOIN {$wpdb->posts} p
+               ON p.ID = CAST(o.option_value AS UNSIGNED)
+               AND p.post_type = 'attachment'
+             WHERE o.option_value REGEXP '^[1-9][0-9]{0,9}$'
+               AND o.option_name REGEXP '(image|gallery|attachment|thumbnail|photo|logo|icon|bg|avatar|picture|media|img|src|pic|file|banner|hero|poster)'
+               AND o.option_name NOT LIKE 'wpmgr\\_%'",
+            ARRAY_A
+        );
+        // phpcs:enable
+
+        foreach ($rows as $row) {
+            $id      = (int)($row['attach_id'] ?? 0);
+            $optName = (string)($row['option_name'] ?? '');
+            if ($id > 0 && $optName !== '') {
+                $this->addId(
+                    $id,
+                    'option',
+                    null,
+                    $optName,
+                    $this->buildOptionsEditUrl(),
+                    $optName
                 );
             }
         }
@@ -1017,6 +1171,57 @@ final class MediaReferenceIndex
             }
         }
 
+        // Gap 2: Gutenberg / FSE block-comment attachment IDs.
+        //
+        // Block markup embeds attachment IDs in HTML comments as JSON attributes.
+        // We extract them with bounded, non-backtracking patterns directly from the
+        // comment JSON fragment — no block parser, no render engine, no HTTP.
+        //
+        // Patterns covered (all use {1,12} to cap backtracking):
+        //   wp:image {"id":N}         — standard image block
+        //   wp:cover {"id":N}         — cover block
+        //   wp:media-text {"mediaId":N}  — media-text block
+        //   wp:image-gallery "ids":[N,N] — gallery block (comma-separated list)
+        //   Any block JSON "id":N     — belt-and-braces for future/custom blocks
+        //
+        // "ids" array: bounded to 500 characters of content to prevent ReDoS on
+        // adversarially large hand-crafted HTML. Each individual numeric token is
+        // captured independently to avoid unbounded alternation.
+
+        // "id": N — covers wp:image, wp:cover, and any JSON block attribute named
+        // "id". Bounded: \d{1,12} (max 999999999999, well above 2^31).
+        if (preg_match_all('/"id"\s*:\s*(\d{1,12})/', $html, $m)) {
+            foreach ($m[1] as $idStr) {
+                $id = (int)$idStr;
+                if ($id > 0) {
+                    $this->addId($id, $surface, $sourceId, $sourceLabel, $editUrl, $detail ?? 'block:id');
+                }
+            }
+        }
+
+        // "mediaId": N — wp:media-text block.
+        if (preg_match_all('/"mediaId"\s*:\s*(\d{1,12})/', $html, $m)) {
+            foreach ($m[1] as $idStr) {
+                $id = (int)$idStr;
+                if ($id > 0) {
+                    $this->addId($id, $surface, $sourceId, $sourceLabel, $editUrl, $detail ?? 'block:mediaId');
+                }
+            }
+        }
+
+        // "ids": [N, N, N, …] — gallery block. Inner content bounded to 500 chars
+        // to prevent ReDoS. Each token inside the captured group is split separately.
+        if (preg_match_all('/"ids"\s*:\s*\[([0-9,\s]{1,500})\]/', $html, $m)) {
+            foreach ($m[1] as $idList) {
+                foreach (explode(',', $idList) as $idStr) {
+                    $id = (int)trim($idStr);
+                    if ($id > 0) {
+                        $this->addId($id, $surface, $sourceId, $sourceLabel, $editUrl, $detail ?? 'block:ids');
+                    }
+                }
+            }
+        }
+
         // [gallery ids="1,2,3"] shortcode — surface override to 'gallery' when
         // the calling surface is post_content (not excerpt or revision).
         $gallerySurface = $surface === 'post_content' ? 'gallery' : $surface;
@@ -1171,11 +1376,11 @@ final class MediaReferenceIndex
                     $this->extractFromHtmlAttributed($value, $surface, $sourceId, $sourceLabel, $editUrl, $detail);
                 }
                 // Numeric string that could be an attachment ID (only for known
-                // image-bearing key patterns).
+                // image-bearing key patterns — Gap 6: broadened keyword set).
                 if (
                     is_numeric($value)
                     && (int)$value > 0
-                    && (int)$value < 10_000_000
+                    && (int)$value <= 2_147_483_647
                     && (
                         stripos((string)$key, 'image') !== false
                         || stripos((string)$key, 'thumbnail') !== false
@@ -1187,6 +1392,14 @@ final class MediaReferenceIndex
                         || stripos((string)$key, 'attachment') !== false
                         || stripos((string)$key, 'bg') !== false
                         || stripos((string)$key, 'gallery') !== false
+                        || stripos((string)$key, 'media') !== false
+                        || stripos((string)$key, 'img') !== false
+                        || stripos((string)$key, 'src') !== false
+                        || stripos((string)$key, 'pic') !== false
+                        || stripos((string)$key, 'file') !== false
+                        || stripos((string)$key, 'banner') !== false
+                        || stripos((string)$key, 'hero') !== false
+                        || stripos((string)$key, 'poster') !== false
                     )
                 ) {
                     $this->addId(
@@ -1198,7 +1411,7 @@ final class MediaReferenceIndex
                         $detail ?? (string)$key
                     );
                 }
-            } elseif (is_int($value) && $value > 0 && $value < 10_000_000) {
+            } elseif (is_int($value) && $value > 0 && $value <= 2_147_483_647) {
                 // Bare integer in an array. Two conservative cases:
                 //
                 // 1. Positional (numeric) key — ACF galleries store [123, 456, 789].
@@ -1221,6 +1434,14 @@ final class MediaReferenceIndex
                     || stripos($keyStr, 'attachment') !== false
                     || stripos($keyStr, 'bg') !== false
                     || stripos($keyStr, 'gallery') !== false
+                    || stripos($keyStr, 'media') !== false
+                    || stripos($keyStr, 'img') !== false
+                    || stripos($keyStr, 'src') !== false
+                    || stripos($keyStr, 'pic') !== false
+                    || stripos($keyStr, 'file') !== false
+                    || stripos($keyStr, 'banner') !== false
+                    || stripos($keyStr, 'hero') !== false
+                    || stripos($keyStr, 'poster') !== false
                 ) {
                     $this->addId(
                         $value,
@@ -1377,7 +1598,7 @@ final class MediaReferenceIndex
                 if (
                     is_numeric($value)
                     && (int)$value > 0
-                    && (int)$value < 10_000_000
+                    && (int)$value <= 2_147_483_647
                     && (
                         stripos((string)$key, 'image') !== false
                         || stripos((string)$key, 'thumbnail') !== false
@@ -1389,11 +1610,19 @@ final class MediaReferenceIndex
                         || stripos((string)$key, 'attachment') !== false
                         || stripos((string)$key, 'bg') !== false
                         || stripos((string)$key, 'gallery') !== false
+                        || stripos((string)$key, 'media') !== false
+                        || stripos((string)$key, 'img') !== false
+                        || stripos((string)$key, 'src') !== false
+                        || stripos((string)$key, 'pic') !== false
+                        || stripos((string)$key, 'file') !== false
+                        || stripos((string)$key, 'banner') !== false
+                        || stripos((string)$key, 'hero') !== false
+                        || stripos((string)$key, 'poster') !== false
                     )
                 ) {
                     $this->addId((int)$value);
                 }
-            } elseif (is_int($value) && $value > 0 && $value < 10_000_000) {
+            } elseif (is_int($value) && $value > 0 && $value <= 2_147_483_647) {
                 $keyStr = (string)$key;
                 if (
                     stripos($keyStr, 'image') !== false
@@ -1406,6 +1635,14 @@ final class MediaReferenceIndex
                     || stripos($keyStr, 'attachment') !== false
                     || stripos($keyStr, 'bg') !== false
                     || stripos($keyStr, 'gallery') !== false
+                    || stripos($keyStr, 'media') !== false
+                    || stripos($keyStr, 'img') !== false
+                    || stripos($keyStr, 'src') !== false
+                    || stripos($keyStr, 'pic') !== false
+                    || stripos($keyStr, 'file') !== false
+                    || stripos($keyStr, 'banner') !== false
+                    || stripos($keyStr, 'hero') !== false
+                    || stripos($keyStr, 'poster') !== false
                 ) {
                     $this->addId($value);
                 }
@@ -1449,9 +1686,9 @@ final class MediaReferenceIndex
         }
         // Walk the array looking for bare numeric values.
         array_walk_recursive($decoded, function ($v) {
-            if (is_int($v) && $v > 0 && $v < 10_000_000) {
+            if (is_int($v) && $v > 0 && $v <= 2_147_483_647) {
                 $this->addId($v, 'direct_id');
-            } elseif (is_string($v) && ctype_digit($v) && (int)$v > 0 && (int)$v < 10_000_000) {
+            } elseif (is_string($v) && ctype_digit($v) && (int)$v > 0 && (int)$v <= 2_147_483_647) {
                 $this->addId((int)$v, 'direct_id');
             }
         });
@@ -1460,6 +1697,42 @@ final class MediaReferenceIndex
     // -------------------------------------------------------------------------
     // Private helpers
     // -------------------------------------------------------------------------
+
+    /**
+     * Given an upload-relative path that may be a WordPress-generated sub-size
+     * (e.g. "2024/01/hero-300x200.jpg"), strip the "-WxH" dimensions infix and
+     * return the inferred parent path (e.g. "2024/01/hero.jpg").
+     *
+     * Returns null when the path contains no recognisable dimensions infix, or
+     * when the stripping would produce a path equal to the original (not a sub-size).
+     *
+     * The regex is anchored to the end of the basename (before the extension) and
+     * uses a bounded quantifier to avoid catastrophic backtracking:
+     *   -    literal hyphen
+     *   \d{1,5}  width (1-5 digits, covers up to 99999 px)
+     *   x
+     *   \d{1,5}  height
+     * followed by a literal dot and the file extension.
+     *
+     * The directory prefix is preserved exactly so a "2023/01/logo-150x150.jpg"
+     * can only derive "2023/01/logo.jpg", not "2024/06/logo.jpg".
+     *
+     * @param string $path Upload-relative path (no leading slash).
+     * @return string|null Inferred parent path, or null if not a sub-size.
+     */
+    private function deriveParentFromSubSize(string $path): ?string
+    {
+        // Match a -WxH infix immediately before the file extension.
+        // Pattern: (.+)-\d{1,5}x\d{1,5}(\.[a-zA-Z]{2,5})$
+        // The leading (.+) is non-greedy? No — use greedy with an anchored end so
+        // we match the LAST occurrence of -WxH in the basename (some filenames have
+        // hyphens). The {1,5} quantifiers prevent catastrophic backtracking.
+        if (!preg_match('/^(.+)-\d{1,5}x\d{1,5}(\.[a-zA-Z]{2,5})$/D', $path, $m)) {
+            return null;
+        }
+        $candidate = $m[1] . $m[2]; // e.g. "2024/01/hero" + ".jpg"
+        return $candidate !== $path ? $candidate : null;
+    }
 
     /**
      * Collect all upload-relative paths for an attachment (main file +
