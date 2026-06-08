@@ -80,6 +80,12 @@ export interface AddSiteDialogProps {
     enrollmentCode: string;
     expiresAt: string;
   };
+  /**
+   * Pre-fill the URL field on the URL step. Used for the onboarding wizard
+   * handoff — the user typed a URL in the wizard and clicking "Continue"
+   * opens this dialog with the field already populated. Does NOT auto-submit.
+   */
+  initialUrl?: string;
 }
 
 type Step = "url" | "awaiting" | "success";
@@ -95,6 +101,7 @@ export function AddSiteDialog({
   open: controlledOpen,
   onClose: controlledOnClose,
   initialSite,
+  initialUrl,
 }: AddSiteDialogProps = {}) {
   const isControlled = controlledOpen !== undefined;
   const [internalOpen, setInternalOpen] = useState(false);
@@ -119,6 +126,7 @@ export function AddSiteDialog({
             key={initialSite?.siteId ?? "new"}
             onClose={close}
             initialSite={initialSite}
+            initialUrl={initialUrl}
           />
         ) : null}
       </Dialog>
@@ -131,9 +139,11 @@ export function AddSiteDialog({
 function AddSiteFlow({
   onClose,
   initialSite,
+  initialUrl,
 }: {
   onClose: () => void;
   initialSite?: AddSiteDialogProps["initialSite"];
+  initialUrl?: string;
 }) {
   const navigate = useNavigate();
   const [step, setStep] = useState<Step>(initialSite ? "awaiting" : "url");
@@ -201,7 +211,7 @@ function AddSiteFlow({
             animate="animate"
             exit="exit"
           >
-            <UrlStep onCreated={handleCreated} onCancel={onClose} />
+            <UrlStep onCreated={handleCreated} onCancel={onClose} initialUrl={initialUrl} />
           </motion.div>
         ) : step === "awaiting" && pending ? (
           <motion.div
@@ -250,12 +260,14 @@ function AddSiteFlow({
 function UrlStep({
   onCreated,
   onCancel,
+  initialUrl,
 }: {
   onCreated: (site: PendingSite) => void;
   onCancel: () => void;
+  initialUrl?: string;
 }) {
   const create = useCreateSiteFirst();
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl ?? "");
   const [name, setName] = useState("");
   const [tags, setTags] = useState("");
   const [urlError, setUrlError] = useState<string | null>(null);
@@ -416,6 +428,9 @@ function AwaitingStep({
     : Math.max(0, Math.round((expiry - now) / 1000));
   const expired = remaining <= 0;
 
+  const controlPlaneUrl =
+    typeof window !== "undefined" ? window.location.origin : "";
+
   const cancelEnrollment = useCallback(() => {
     archive.mutate(
       { siteId: pending.siteId, reason: "enrollment cancelled" },
@@ -442,10 +457,21 @@ function AwaitingStep({
     <>
       <DialogBody>
         <div className="space-y-2.5">
-          <ol className="list-decimal space-y-1 rounded-md border border-border p-3 pl-7 text-sm text-muted-foreground">
-            <li>Download the WPMgr Agent plugin and install it on your WordPress site.</li>
-            <li>Open the plugin settings and enter your control-plane URL.</li>
-            <li>Paste the enrollment code below and click Enroll.</li>
+          <ol className="list-decimal space-y-2 rounded-md border border-border p-3 pl-7 text-sm text-muted-foreground">
+            <li>
+              Download the WPMgr Agent plugin below, then install it on your
+              WordPress site (Plugins → Add New → Upload Plugin) and activate
+              it.
+            </li>
+            <li>
+              In wp-admin, open the WPMgr menu and paste this Control-plane URL,
+              then Save:
+              <ControlPlaneUrlChip url={controlPlaneUrl} />
+            </li>
+            <li>
+              Paste the pairing code below into the Pairing code field and click
+              Enroll.
+            </li>
           </ol>
           {/* Direct download of the latest published agent plugin zip (GitHub
               release asset). The browser downloads it as an attachment, so this
@@ -458,15 +484,20 @@ function AwaitingStep({
           </Button>
         </div>
 
-        {expired ? (
-          <ExpiredPanel
-            onRequest={requestNewCode}
-            isPending={newCode.isPending}
-            error={newCode.isError ? newCode.error.message : null}
-          />
-        ) : (
-          <CodePanel code={pending.enrollmentCode} remaining={remaining} />
-        )}
+        <div className="space-y-1">
+          <p className="text-xs font-medium text-muted-foreground">
+            Your one-time pairing code
+          </p>
+          {expired ? (
+            <ExpiredPanel
+              onRequest={requestNewCode}
+              isPending={newCode.isPending}
+              error={newCode.isError ? newCode.error.message : null}
+            />
+          ) : (
+            <CodePanel code={pending.enrollmentCode} remaining={remaining} />
+          )}
+        </div>
 
         {/* Live wait state — announced politely so SR users hear progress. */}
         <div
@@ -492,6 +523,38 @@ function AwaitingStep({
         </Button>
       </DialogFooter>
     </>
+  );
+}
+
+/** Copyable chip displaying the control-plane URL for step 2 of enrollment. */
+function ControlPlaneUrlChip({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setCopied(false);
+    }
+  }, [url]);
+
+  return (
+    <span className="mt-1.5 flex items-center gap-2">
+      <code className="flex-1 overflow-x-auto rounded-md border border-border bg-muted/40 px-3 py-1.5 font-mono text-xs tabular-nums text-foreground">
+        {url}
+      </code>
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        onClick={() => void copy()}
+        className="shrink-0"
+      >
+        {copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+        {copied ? "Copied" : "Copy"}
+      </Button>
+    </span>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft, ArrowRight, Loader2 } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -7,29 +7,30 @@ import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { useOnboardingState } from "./use-onboarding-state";
 
-// Surface 4.12 — first-site onboarding. Inline 3-step wizard (NOT a modal,
-// per DESIGN.md "Don't use modals as a reflex"). Replaces NoSitesEmpty for
-// brand-new tenants who haven't completed onboarding yet, so the very first
-// thing they see after auth is a concrete path to enrolling site 1.
+// Surface 4.12 — first-site onboarding. Inline wizard (NOT a modal, per
+// DESIGN.md "Don't use modals as a reflex"). Replaces NoSitesEmpty for
+// brand-new tenants who haven't completed onboarding yet.
 //
-// Three steps, each with a calm operator-grade copy line and a single
-// next/back affordance:
+// AUTO_INSTALL_METHODS_ENABLED controls whether the full 3-step wizard
+// (URL → Method → Sync) is shown, or the collapsed single-step flow
+// (URL → handoff to the real Add-site connect flow).
 //
-//   1. URL — collect and HTTPS-validate the site URL.
-//   2. Method — pick the enrollment method (Direct enrollment recommended;
-//      WP-CLI and Manual upload available for hardened sites).
-//   3. Sync — show the in-flight pairing handshake (hostname-aware).
+// When false (current): the wizard captures the site URL, then the "Continue"
+// button fires onHandoff + complete(), handing off to AddSiteDialog which
+// hosts the real download + pairing-code flow. MethodStep and SyncStep are
+// NOT shown — the method picker is unbuilt, and SyncStep is a redundant
+// placeholder whose real equivalent is AddSiteDialog's AwaitingStep.
 //
-// Step indicator uses "·" between numbers, never em dashes (DESIGN.md UI-copy
-// ban). Verb-first labels throughout: "Generate code", "Continue", "Back".
-//
-// Integration plan (out of Sprint 4 scope, AddSiteDialog locked by Sprint 3):
-//   TODO(post-sprint-4): The "Generate code" terminal action on step 3 should
-//   trigger the same `usePairingCode().mutateAsync({ site_name, tags })` call
-//   that AddSiteDialog uses, and surface the returned pairing code in-place
-//   (not in a modal). Until then, the wizard records the URL+method choices
-//   and hands off to AddSiteDialog via the locally-rendered fallback CTA on
-//   step 3.
+// When true: the full 3-step flow runs (Method picker + Sync spinner).
+// Re-enable when the WPMgr Agent is approved on wordpress.org and the
+// WP-CLI / Manual paths are wired.
+
+// Auto-install method picker (Direct / WP-CLI / Manual). These automated
+// install paths are not built yet — re-enable when the WPMgr Agent is
+// approved on wordpress.org and the WP-CLI / Manual paths are wired. Until
+// then the wizard goes URL -> the real Add-site connect flow (download the
+// plugin + paste a pairing code), which IS built.
+const AUTO_INSTALL_METHODS_ENABLED = false;
 
 type Step = 1 | 2 | 3;
 
@@ -73,9 +74,9 @@ function isHttpsUrl(value: string): { ok: true; hostname: string } | { ok: false
 
 export interface OnboardingWizardProps {
   /**
-   * Invoked when the wizard reaches step 3 (sync) and the operator is ready
-   * to hand off to the real enrollment flow. The route can use this to scroll
-   * to / open the AddSiteDialog. Marking `complete()` is called automatically.
+   * Invoked when the wizard reaches the terminal CTA. The route can use this
+   * to open AddSiteDialog pre-filled with the user's URL. Marking `complete()`
+   * is called automatically after onHandoff fires.
    */
   onHandoff?: (input: { url: string; method: EnrollMethod }) => void;
 }
@@ -92,13 +93,17 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
 
   function handleNext() {
     if (step === 1 && !canProceedFromUrl) return;
-    if (step === 1) setStep(2);
-    else if (step === 2) setStep(3);
+    if (AUTO_INSTALL_METHODS_ENABLED) {
+      if (step === 1) setStep(2);
+      else if (step === 2) setStep(3);
+    }
   }
 
   function handleBack() {
-    if (step === 3) setStep(2);
-    else if (step === 2) setStep(1);
+    if (AUTO_INSTALL_METHODS_ENABLED) {
+      if (step === 3) setStep(2);
+      else if (step === 2) setStep(1);
+    }
   }
 
   function handleFinish() {
@@ -109,6 +114,10 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
   function handleSkip() {
     complete();
   }
+
+  // When collapsed: the wizard is a single URL step whose primary CTA fires
+  // handleFinish directly (no intermediate steps).
+  const isCollapsed = !AUTO_INSTALL_METHODS_ENABLED;
 
   return (
     <section
@@ -125,7 +134,7 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
         <h2 className="text-balance text-xl font-semibold text-[var(--color-foreground)]">
           Enroll a WordPress site to populate this console.
         </h2>
-        <StepIndicator step={step} />
+        {!isCollapsed ? <StepIndicator step={step} /> : null}
       </header>
 
       <div className="mt-8">
@@ -136,15 +145,17 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
             invalid={url.length > 0 && !canProceedFromUrl}
           />
         ) : null}
-        {step === 2 ? (
+        {AUTO_INSTALL_METHODS_ENABLED && step === 2 ? (
           <MethodStep method={method} onMethodChange={setMethod} />
         ) : null}
-        {step === 3 ? <SyncStep hostname={hostname} /> : null}
+        {AUTO_INSTALL_METHODS_ENABLED && step === 3 ? (
+          <SyncStep hostname={hostname} />
+        ) : null}
       </div>
 
       <footer className="mt-8 flex items-center justify-between gap-3 border-t border-[var(--color-border)] pt-6">
         <div className="flex items-center gap-3">
-          {step > 1 ? (
+          {AUTO_INSTALL_METHODS_ENABLED && step > 1 ? (
             <Button type="button" variant="ghost" size="sm" onClick={handleBack}>
               <ArrowLeft aria-hidden="true" />
               Back
@@ -160,7 +171,16 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
           )}
         </div>
         <div>
-          {step < 3 ? (
+          {isCollapsed ? (
+            <Button
+              type="button"
+              onClick={handleFinish}
+              disabled={!canProceedFromUrl}
+            >
+              Continue
+              <ArrowRight aria-hidden="true" />
+            </Button>
+          ) : step < 3 ? (
             <Button
               type="button"
               onClick={handleNext}
@@ -182,7 +202,7 @@ export function OnboardingWizard({ onHandoff }: OnboardingWizardProps = {}) {
 }
 
 // ---------------------------------------------------------------------------
-// Step indicator
+// Step indicator (only rendered in the full 3-step flow)
 // ---------------------------------------------------------------------------
 
 function StepIndicator({ step }: { step: Step }) {
@@ -291,7 +311,7 @@ function UrlStep({
 }
 
 // ---------------------------------------------------------------------------
-// Step 2 — Connection method
+// Step 2 — Connection method (full flow only; gated by AUTO_INSTALL_METHODS_ENABLED)
 // ---------------------------------------------------------------------------
 
 function MethodStep({
@@ -345,7 +365,8 @@ function MethodStep({
 }
 
 // ---------------------------------------------------------------------------
-// Step 3 — First sync (placeholder spinner; real handshake lands post-Sprint 4)
+// Step 3 — First sync placeholder (full flow only; gated by AUTO_INSTALL_METHODS_ENABLED)
+// The real handshake/SSE wait lives in AddSiteDialog's AwaitingStep.
 // ---------------------------------------------------------------------------
 
 function SyncStep({ hostname }: { hostname: string }) {
@@ -356,20 +377,16 @@ function SyncStep({ hostname }: { hostname: string }) {
       aria-live="polite"
       className="flex flex-col items-center gap-4 py-4 text-center"
     >
-      <Loader2
-        aria-hidden="true"
-        className="size-8 animate-spin text-[var(--color-primary)]"
-      />
       <p className="text-sm text-[var(--color-foreground)]">
-        Connecting to{" "}
+        Ready to connect{" "}
         <span className="font-mono text-[var(--color-foreground)]">
           {target}
         </span>
-        ...
+        .
       </p>
       <ol className="space-y-1 text-xs text-[var(--color-muted-foreground)]">
-        <li>Pairing code generated</li>
-        <li>Waiting for agent ACK</li>
+        <li>Pairing code will be generated</li>
+        <li>Agent will enroll on paste</li>
       </ol>
     </div>
   );
