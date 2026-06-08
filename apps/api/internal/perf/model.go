@@ -57,6 +57,11 @@ type Config struct {
 	FontsDisplaySwap    bool
 	FontsOptimizeGoogle bool
 	FontsPreload        bool
+	// FontsTranscodeWOFF2 enables server-side WOFF2 transcoding for self-hosted
+	// fonts. When true the agent requests transcode jobs from the CP; the CP
+	// enqueues a font_transcode River job which produces <hash>.woff2 in object
+	// storage. Default false. Pinned contract field name: fonts_transcode_woff2.
+	FontsTranscodeWOFF2 bool
 
 	// Media / lazy-load
 	LazyLoad           bool
@@ -122,6 +127,33 @@ type Config struct {
 	ConfigVersion int
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
+}
+
+// FontTranscodeState is the outcome recorded in font_transcode_results for a
+// single content-addressed source font hash.
+type FontTranscodeState string
+
+const (
+	// FontTranscodePending means a River job has been inserted but has not
+	// completed yet. The agent should poll again on the next build.
+	FontTranscodePending FontTranscodeState = "pending"
+	// FontTranscodeReady means the WOFF2 is available at Woff2Key.
+	FontTranscodeReady FontTranscodeState = "ready"
+	// FontTranscodeNegative means transcoding permanently failed for this
+	// hash; the agent must serve the original font indefinitely.
+	FontTranscodeNegative FontTranscodeState = "negative"
+)
+
+// FontTranscodeResult is the domain view of one font_transcode_results row.
+type FontTranscodeResult struct {
+	SourceHash  string
+	TenantID    uuid.UUID
+	SiteID      uuid.UUID
+	// State is derived: pending when Woff2Key==nil && !Negative; ready when
+	// Woff2Key!=nil; negative when Negative==true.
+	State       FontTranscodeState
+	Woff2Key    string // empty unless State==FontTranscodeReady
+	ErrorDetail string // non-empty when State==FontTranscodeNegative
 }
 
 // CacheStats is the latest cache gauge set the agent reported for one site.

@@ -486,9 +486,30 @@ type SitePerfConfig struct {
 	// WooThemeFragmentsSupported is agent-reported (read-only from the operator
 	// API). The agent sets it after probing its own theme and WooCommerce hooks;
 	// the CP stores it but never lets an operator PUT overwrite it.
-	WooThemeFragmentsSupported bool      `json:"woo_theme_fragments_supported"`
-	CreatedAt                  time.Time `json:"created_at"`
-	UpdatedAt                  time.Time `json:"updated_at"`
+	WooThemeFragmentsSupported bool `json:"woo_theme_fragments_supported"`
+	// M54 — Font transcode to WOFF2 flag.
+	// FontsTranscodeWOFF2 is operator-writable (default false). When true the
+	// CP includes this flag in the perf-config push so the agent requests
+	// server-side WOFF2 transcoding for self-hosted fonts.
+	FontsTranscodeWoff2 bool      `json:"fonts_transcode_woff2"`
+	CreatedAt           time.Time `json:"created_at"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+// FontTranscodeResult is one row of font_transcode_results. It records the
+// transcoding outcome for a single content-addressed source font (identified
+// by its BLAKE3 hex hash). When Negative=true the agent must serve the
+// original font permanently; the CP never retries the hash.
+type FontTranscodeResult struct {
+	SourceHash  string     `json:"source_hash"`
+	TenantID    uuid.UUID  `json:"tenant_id"`
+	SiteID      uuid.UUID  `json:"site_id"`
+	RiverJobID  *int64     `json:"river_job_id"`
+	Woff2Key    *string    `json:"woff2_key"`
+	Negative    bool       `json:"negative"`
+	ErrorDetail *string    `json:"error_detail"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
 }
 
 type SiteShare struct {

@@ -1955,6 +1955,86 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /agent/v1/fonts/transcode:
+    post:
+      operationId: agentFontsTranscode
+      summary: Enqueue or poll a font WOFF2 transcode job (agent-authenticated)
+      description: |
+        Font Transcoder (M54 / Phase 1) — the agent POSTs when it discovers a
+        self-hosted font (TTF/OTF/WOFF) that needs a WOFF2 encoding so it can
+        serve the font with correct `format()` fallbacks.
+
+        **Upload flow:**
+        1. Agent POSTs `FontTranscodeRequest` (no storage key — the agent MUST
+           NOT supply or guess a key; the CP derives all keys from the verified
+           tenant identity + `source_hash`).
+        2. If no job exists yet, the CP enqueues a `font_transcode` River job
+           and returns `state="pending"` with a `source_put_url` (presigned
+           S3 PUT, same TTL as the source-upload URL for media). The agent
+           MUST PUT the raw font bytes to this URL before the encoder runs.
+        3. On subsequent POSTs for the same hash (`state="pending"` row
+           already exists), `source_put_url` is absent — the source is already
+           uploaded. The agent polls on every page build until state changes.
+        4. When `state="ready"`, `woff2_get_url` is a short-TTL presigned GET
+           URL minted by the CP for the server-derived, GuardStorageKey-
+           validated WOFF2 object. The agent fetches the WOFF2 bytes from this
+           URL. The agent MUST NOT presign or construct a storage key itself.
+           `woff2_key` is also present as an informational field.
+        5. When `state="negative"`, transcoding permanently failed; the agent
+           serves the original font forever (no retry).
+
+        **Security:** keys are SERVER-DERIVED from the verified tenant identity
+        + the caller-validated `source_hash`; `GuardStorageKey` validates every
+        key before it reaches the presigner. The agent identity (Ed25519
+        signed-request middleware) drives the tenant scope — the body never
+        influences which tenant's namespace is used.
+      tags: [agent, perf]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FontTranscodeRequest"
+      responses:
+        "200":
+          description: Current transcode state for this hash
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FontTranscodeResponse"
+        "400":
+          description: Invalid request (source_size <= 0)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: source_hash is not a valid 64-char lowercase hex BLAKE3 digest
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "429":
+          description: Daily per-tenant font transcode enqueue cap exceeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Font transcode enqueuer not available (degraded deployment)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/sites/{siteId}:
     get:
       operationId: getSite
@@ -4621,6 +4701,79 @@ components:
       required: [job_id]
       properties:
         job_id: { type: string }
+    FontTranscodeRequest:
+      type: object
+      description: |
+        M54 Phase 1 — body the agent POSTs to /agent/v1/fonts/transcode when
+        it encounters a self-hosted font that needs WOFF2 encoding.
+        The agent MUST NOT supply a storage key; the CP derives all keys
+        server-side from the verified tenant identity + source_hash.
+      required: [source_hash, source_size]
+      properties:
+        source_hash:
+          type: string
+          description: |
+            Hex-encoded BLAKE3 content hash of the raw source font bytes.
+            Must be exactly 64 lowercase hex characters. The CP validates this
+            strictly before deriving any storage keys — malformed values are
+            rejected with 422.
+          pattern: "^[0-9a-f]{64}$"
+          example: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+        source_size:
+          type: integer
+          format: int64
+          description: Byte length of the source font. Must be > 0. Capped at 10 MiB.
+          minimum: 1
+        source_ext:
+          type: string
+          description: >
+            File extension hint: "ttf", "otf", or "woff". Informational only;
+            the CP detects the real format from the magic bytes on the uploaded
+            object. Omit for WOFF2 (transcoding is a no-op for WOFF2).
+          enum: [ttf, otf, woff]
+
+    FontTranscodeResponse:
+      type: object
+      description: |
+        M54 Phase 1 — CP's reply to a FontTranscodeRequest.
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [pending, ready, negative]
+          description: |
+            "pending"  — a job is enqueued or in flight. `source_put_url` is
+                         present on the first-enqueue response; absent on polls.
+            "ready"    — WOFF2 is available. `woff2_get_url` and `woff2_key`
+                         are present.
+            "negative" — permanent failure; serve the original font forever.
+        source_put_url:
+          type: string
+          description: |
+            Presigned S3 PUT URL (15-min TTL) for the raw source font bytes.
+            Present ONLY when state=="pending" AND the job was just freshly
+            enqueued. The agent MUST PUT the source bytes here (Content-Type:
+            application/octet-stream) before the encoder can run.
+            Absent on subsequent polls (source already uploaded).
+        woff2_key:
+          type: string
+          description: |
+            Server-derived object-storage key for the WOFF2 output.
+            Present only when state=="ready". Informational — the agent MUST
+            NOT presign this key itself; use woff2_get_url instead.
+        woff2_get_url:
+          type: string
+          description: |
+            Short-TTL presigned GET URL for the WOFF2 object, minted by the
+            CP using the server-derived, GuardStorageKey-validated,
+            tenant-scoped key. Present ONLY when state=="ready". The agent
+            fetches the WOFF2 bytes from this URL. The agent MUST NOT
+            presign or construct any storage key itself — that would
+            reintroduce the path-traversal risk this design prevents.
+        error_detail:
+          type: string
+          description: Short diagnostic string. Present only when state=="negative".
+
     AgentMetadata:
       type: object
       properties:
@@ -7057,6 +7210,13 @@ components:
         fonts_display_swap: { type: boolean }
         fonts_optimize_google: { type: boolean }
         fonts_preload: { type: boolean }
+        fonts_transcode_woff2:
+          type: boolean
+          description: >
+            Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for
+            self-hosted fonts. When true the agent requests transcode jobs from
+            the CP; the CP enqueues a font_transcode River job which produces
+            the WOFF2 in object storage. Default false.
         # Media / lazy-load
         lazy_load: { type: boolean }
         lazy_load_exclusions: { type: array, items: { type: string } }

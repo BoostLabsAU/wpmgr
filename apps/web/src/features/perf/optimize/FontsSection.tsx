@@ -32,8 +32,8 @@ export function FontsSection({
         saving={saving}
       />
       <SettingRow
-        label="Optimize Google Fonts"
-        description="Self-host and combine Google Fonts to remove the extra third-party connection."
+        label="Self-host Google Fonts"
+        description="Download and serve Google Fonts from your own server to remove the extra third-party connection."
         checked={config.fonts_optimize_google}
         onChange={(v) => save({ fonts_optimize_google: v })}
         disabled={disabled}
@@ -44,6 +44,14 @@ export function FontsSection({
         description="Preload the fonts used above the fold so headings don't reflow."
         checked={config.fonts_preload}
         onChange={(v) => save({ fonts_preload: v })}
+        disabled={disabled}
+        saving={saving}
+      />
+      <SettingRow
+        label="Convert fonts to WOFF2"
+        description="Transcode self-hosted fonts (TTF, OTF, WOFF) to WOFF2, the modern compressed format, and serve them with the original as a fallback. Typically 50 to 65 percent smaller for TTF and OTF fonts. Conversion happens in the background; the original font is served until the WOFF2 is ready, so pages never wait."
+        checked={config.fonts_transcode_woff2}
+        onChange={(v) => save({ fonts_transcode_woff2: v })}
         disabled={disabled}
         saving={saving}
       />

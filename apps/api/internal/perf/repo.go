@@ -155,6 +155,7 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 			BloatPostRevisionsControl: c.BloatPostRevisionControl,
 			ConfigVersion:             int32(c.ConfigVersion),
 			WooCacheableSession:       c.WooCacheableSession,
+			FontsTranscodeWoff2:       c.FontsTranscodeWOFF2,
 		})
 		if qerr != nil {
 			return qerr
@@ -866,10 +867,10 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		JSDelayExcludes:           coalesce(row.JsDelayExcludes),
 		JSDelayThirdParty:         row.JsDelayThirdParty,
 		JSDelayThirdPartyExcludes: coalesce(row.JsDelayThirdPartyExcludes),
-		FontsDisplaySwap:          row.FontsDisplaySwap,
-		FontsOptimizeGoogle:       row.FontsOptimizeGoogle,
-		FontsPreload:              row.FontsPreload,
-		LazyLoad:                  row.LazyLoad,
+		FontsDisplaySwap:    row.FontsDisplaySwap,
+		FontsOptimizeGoogle: row.FontsOptimizeGoogle,
+		FontsPreload:        row.FontsPreload,
+		LazyLoad:            row.LazyLoad,
 		LazyLoadExclusions:        coalesce(row.LazyLoadExclusions),
 		ProperlySizeImages:        row.ProperlySizeImages,
 		YouTubePlaceholder:        row.YoutubePlaceholder,
@@ -904,9 +905,10 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		HtaccessManaged:            row.HtaccessManaged,
 		WooCacheableSession:        row.WooCacheableSession,
 		WooThemeFragmentsSupported: row.WooThemeFragmentsSupported,
-		ConfigVersion:              int(row.ConfigVersion),
-		CreatedAt:                  row.CreatedAt,
-		UpdatedAt:                  row.UpdatedAt,
+		FontsTranscodeWOFF2: row.FontsTranscodeWoff2,
+		ConfigVersion:       int(row.ConfigVersion),
+		CreatedAt:           row.CreatedAt,
+		UpdatedAt:           row.UpdatedAt,
 	}
 }
 

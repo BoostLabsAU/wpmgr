@@ -67,6 +67,12 @@ type PerfConfigRequest struct {
 	FontsDisplaySwap    bool `json:"fonts_display_swap"`
 	FontsOptimizeGoogle bool `json:"fonts_optimize_google"`
 	FontsPreload        bool `json:"fonts_preload"`
+	// FontsTranscodeWOFF2 enables server-side WOFF2 transcoding for self-hosted
+	// fonts. When true the agent requests transcode jobs from the CP for each
+	// discovered TTF/OTF/WOFF font file it encounters. The CP enqueues a
+	// font_transcode River job; the agent polls the result on subsequent builds
+	// and serves WOFF2 with format() fallbacks when the result is ready.
+	FontsTranscodeWOFF2 bool `json:"fonts_transcode_woff2"`
 
 	// Media / lazy-load
 	LazyLoad           bool     `json:"lazy_load"`
