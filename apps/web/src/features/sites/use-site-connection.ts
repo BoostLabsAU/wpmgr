@@ -6,6 +6,7 @@ import {
 import { client } from "@wpmgr/api";
 
 import { sitesKeys } from "./use-sites";
+import type { ConnectionState } from "./connection-state";
 
 // Phase 5 — connection-lifecycle mutations.
 //
@@ -20,6 +21,25 @@ import { sitesKeys } from "./use-sites";
 //   POST /api/v1/sites/:id/revoke   { reason? }
 //   POST /api/v1/sites/:id/archive  { reason? }
 //   POST /api/v1/sites/:id/restore
+//   POST /api/v1/sites/:id/cancel   → 204 (hard-delete pending site)
+
+/**
+ * Structured error thrown when POST /api/v1/sites returns 409 with
+ * code:"site_url_exists". The details carry the existing site_id and its
+ * current connection_state so the caller can offer a targeted affordance.
+ */
+export class SiteUrlExistsError extends Error {
+  readonly code = "site_url_exists" as const;
+  readonly siteId: string;
+  readonly connectionState: ConnectionState;
+
+  constructor(siteId: string, connectionState: ConnectionState) {
+    super("A site with this URL already exists.");
+    this.name = "SiteUrlExistsError";
+    this.siteId = siteId;
+    this.connectionState = connectionState;
+  }
+}
 
 /** Result of creating a site (site-first enrollment flow). */
 export interface CreateSiteResult {
@@ -56,11 +76,34 @@ function toError(error: unknown, fallback: string): Error {
 }
 
 /**
+ * Type guard: is this value the shape of an API error body?
+ * The generated `ApiError` type has `code: string`, `message: string`, and
+ * `details?: { [key: string]: unknown }`. We check code+message to narrow.
+ */
+function isApiErrorShape(
+  value: unknown,
+): value is { code: string; message: string; details?: Record<string, unknown> } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "code" in value &&
+    typeof (value as Record<string, unknown>).code === "string" &&
+    "message" in value &&
+    typeof (value as Record<string, unknown>).message === "string"
+  );
+}
+
+/**
  * Create a site (site-first flow). Returns the new site_id + the one-time
  * enrollment code the operator pastes into the agent. We invalidate the sites
  * lists so the new (pending_enrollment) row appears; the SSE `site.created`
  * event also triggers an invalidate, but doing it here too closes the gap if
  * the stream is momentarily reconnecting.
+ *
+ * On a URL collision the CP returns 409 with code:"site_url_exists" and
+ * details:{site_id, connection_state}. We surface this as a typed
+ * `SiteUrlExistsError` so the UrlStep can render a targeted reconnect
+ * affordance instead of the raw message.
  */
 export function useCreateSiteFirst(): UseMutationResult<
   CreateSiteResult,
@@ -70,10 +113,22 @@ export function useCreateSiteFirst(): UseMutationResult<
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: async (input: CreateSiteInput) => {
-      const { data, error } = await client.post<{ 200: CreateSiteResult }>({
+      const { data, error, response } = await client.post<{ 200: CreateSiteResult }>({
         url: "/api/v1/sites",
         body: input,
       });
+      if (response?.status === 409 && isApiErrorShape(error)) {
+        if (
+          error.code === "site_url_exists" &&
+          typeof error.details?.site_id === "string" &&
+          typeof error.details?.connection_state === "string"
+        ) {
+          throw new SiteUrlExistsError(
+            error.details.site_id,
+            error.details.connection_state as ConnectionState,
+          );
+        }
+      }
       if (error) throw toError(error, "Could not create the site");
       if (!data) throw new Error("Empty response");
       return data;
@@ -127,6 +182,33 @@ export function useRevokeSite(): UseMutationResult<
     },
     onSuccess: (_data, { siteId }) => {
       void queryClient.invalidateQueries({ queryKey: sitesKeys.detail(siteId) });
+    },
+  });
+}
+
+/**
+ * Cancel enrollment for a never-connected (pending) site. The CP hard-deletes
+ * the site record (only valid for `pending_enrollment` state; returns
+ * 409 not_cancellable otherwise). On success, invalidate sites lists so the
+ * row disappears immediately.
+ */
+export function useCancelEnrollment(): UseMutationResult<
+  void,
+  Error,
+  { siteId: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ siteId }) => {
+      const { error, response } = await client.post({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/cancel`,
+      });
+      // 404 means the site is already gone — treat as success.
+      if (response?.status === 404) return;
+      if (error) throw toError(error, "Could not cancel enrollment");
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
     },
   });
 }

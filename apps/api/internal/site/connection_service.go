@@ -98,6 +98,20 @@ func (s *connService) MintEnrollmentCode(ctx context.Context, in MintEnrollmentI
 	}
 	tags := normalizeTags(in.Tags)
 
+	// 0. URL-dedup: look up any existing site (incl. archived) before the INSERT
+	// so we can return a structured 409 carrying site_id + connection_state
+	// instead of a bare unique-index violation. The web uses these fields to
+	// decide whether to offer "Cancel and re-add", "Reconnect", or nothing.
+	if hit, found, lookupErr := s.repo.GetSiteByURL(ctx, in.TenantID, in.URL); lookupErr != nil {
+		return EnrollmentCode{}, lookupErr
+	} else if found {
+		return EnrollmentCode{}, domain.Conflict("site_url_exists", "a site with this URL already exists for this tenant").
+			WithDetails(map[string]any{
+				"site_id":          hit.ID.String(),
+				"connection_state": string(hit.ConnectionState),
+			})
+	}
+
 	// 1. Create the pending_enrollment site row first.
 	st, err := s.repo.CreatePending(ctx, in.TenantID, in.URL, name, tags)
 	if err != nil {
@@ -328,6 +342,77 @@ func (s *connService) Restore(ctx context.Context, in ActorSiteInput) (Site, err
 	s.recordAudit(ctx, in.TenantID, in.SiteID, audit.ActorUser, in.ActorID, audit.ActionSiteRestored, nil)
 	s.publishStateChange(ctx, in.TenantID, in.SiteID, EventSiteRestored, res.From, StateDisconnected, res.Site, nil)
 	return res.Site, nil
+}
+
+// CancelEnrollment hard-deletes a never-connected pending_enrollment site.
+// Guard (all three must hold — enforced by the DB, not the caller):
+//   - connection_state == 'pending_enrollment'
+//   - enrolled_at IS NULL
+//   - agent_public_key IS NULL OR agent_public_key == ''
+//
+// The guard and the delete are a single conditional DELETE statement executed
+// inside one InTenantTx, eliminating the TOCTOU window that existed when a
+// separate SELECT preceded a bare DELETE. A concurrent AttachAgentAndConnect
+// (the enroll path) changes all three predicates; whichever transaction
+// commits first wins. If the delete returns rowsAffected==0 the site either
+// does not exist or has already connected — return not_cancellable (409)
+// without distinguishing the two (both are safe; the site must be
+// archived/revoked instead).
+// Audit + SSE are only emitted when a row was actually deleted (rowsAffected>0)
+// to prevent a bogus site.deleted event for a now-connected site.
+func (s *connService) CancelEnrollment(ctx context.Context, in ActorSiteInput) error {
+	if in.TenantID == uuid.Nil {
+		return domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+
+	// Single conditional DELETE — load+guard+delete in one statement, one tx.
+	// rowsAffected==0 means either not found or raced-into-connected; both map
+	// to not_cancellable (409).
+	n, err := s.repo.DeleteCancellable(ctx, in.TenantID, in.SiteID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.Conflict("not_cancellable", "this site has connected and cannot be cancelled; archive it instead")
+	}
+
+	// Row was actually deleted — emit audit + SSE. Both are best-effort; the
+	// commit already happened so a failure here must not undo the delete.
+	s.recordAudit(ctx, in.TenantID, in.SiteID, audit.ActorUser, in.ActorID, audit.ActionSiteDelete,
+		map[string]any{"cancelled": true})
+	// Publish a minimal site.deleted event (we have no URL here because we did
+	// not load the row — the dashboard uses site_id to remove the row from the list).
+	s.publishDeletedByID(ctx, in.TenantID, in.SiteID)
+	return nil
+}
+
+func (s *connService) publishDeleted(ctx context.Context, tenantID, siteID uuid.UUID, st Site) {
+	if s.pub == nil {
+		return
+	}
+	_ = s.pub.Publish(ctx, ConnectionEvent{
+		Type:     EventSiteDeleted,
+		TenantID: tenantID,
+		SiteID:   siteID,
+		TS:       s.clock.Now().UTC(),
+		Data:     map[string]any{"site": siteSummary(st)},
+	})
+}
+
+// publishDeletedByID publishes a site.deleted SSE event when only the IDs are
+// available (no pre-loaded Site row). The dashboard removes the row by site_id
+// alone, so no extra fields are required.
+func (s *connService) publishDeletedByID(ctx context.Context, tenantID, siteID uuid.UUID) {
+	if s.pub == nil {
+		return
+	}
+	_ = s.pub.Publish(ctx, ConnectionEvent{
+		Type:     EventSiteDeleted,
+		TenantID: tenantID,
+		SiteID:   siteID,
+		TS:       s.clock.Now().UTC(),
+		Data:     map[string]any{},
+	})
 }
 
 func (s *connService) BeginReEnrollment(ctx context.Context, in ActorSiteInput) (EnrollmentCode, error) {

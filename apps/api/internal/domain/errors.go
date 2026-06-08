@@ -47,11 +47,17 @@ const (
 )
 
 // Error is a domain error carrying a Kind, a stable machine code, a
-// human-readable message, and an optional wrapped cause.
+// human-readable message, an optional wrapped cause, and optional structured
+// details (e.g. a conflicting resource's id and state for the caller to branch
+// on without parsing the message string).
 type Error struct {
 	Kind    Kind
 	Code    string
 	Message string
+	// Details carries caller-actionable key/value pairs for structured 4xx
+	// responses. The HTTP layer serialises this map as a top-level "details"
+	// object in the JSON error envelope when non-nil.
+	Details map[string]any
 	cause   error
 }
 
@@ -68,6 +74,14 @@ func (e *Error) Unwrap() error { return e.cause }
 // WithCause attaches an underlying cause and returns the error for chaining.
 func (e *Error) WithCause(cause error) *Error {
 	e.cause = cause
+	return e
+}
+
+// WithDetails attaches structured caller-actionable details and returns the
+// error for chaining. The map is serialised as a top-level "details" object
+// in the JSON error envelope by httpx.Error.
+func (e *Error) WithDetails(details map[string]any) *Error {
+	e.Details = details
 	return e
 }
 

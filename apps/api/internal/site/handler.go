@@ -92,7 +92,10 @@ func (h *Handler) record(c *gin.Context, tenantID uuid.UUID, action, siteID stri
 func (h *Handler) Register(r *gin.RouterGroup) {
 	// Tenant-wide collection routes: no :siteId, site-scoped filtering is done
 	// by RLS (InScopedTenantTx activated by RunTenantTx in the repo.List path).
-	r.POST("/sites", authz.RequirePermission(authz.PermSiteWrite), h.create)
+	// POST /sites requires org scope so a site-scoped collaborator (PermSiteWrite
+	// on one granted site) cannot mint new sites or probe the org via the
+	// site_url_exists 409 details (Phase 6 security review, finding FIX-2).
+	r.POST("/sites", authz.RequirePermission(authz.PermSiteWrite), authz.RequireOrgScope(), h.create)
 	r.GET("/sites", authz.RequirePermission(authz.PermSiteRead), h.list)
 	r.POST("/sites/pairing-codes", authz.RequirePermission(authz.PermSiteWrite), h.createPairingCode)
 	// M21 connection-lifecycle mutations (revoke/archive/restore/re-enroll).

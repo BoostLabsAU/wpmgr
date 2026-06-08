@@ -54,6 +54,22 @@ function SitesPage() {
   const { data: sites, isPending, isError, error, refetch, isFetching } =
     useSites(appliedTag, { view: showArchived ? "archived" : "active" });
 
+  // When the active bucket is empty, also fetch the archived bucket so we can
+  // surface a "Disconnected sites" panel above the onboarding empty state.
+  // We skip the fetch entirely when the active list is still loading, errored,
+  // or non-empty to avoid unnecessary requests.
+  const activeIsEmpty = !isPending && !isError && (sites?.length ?? 0) === 0;
+  const { data: archivedSites } = useSites(appliedTag, {
+    view: "archived",
+  });
+  // Only show the panel when: active bucket is genuinely empty AND archived has
+  // sites. When showArchived is on we already show the archived list via the
+  // main table, so the panel is not needed.
+  const disconnectedSites =
+    activeIsEmpty && !showArchived && (archivedSites?.length ?? 0) > 0
+      ? (archivedSites ?? [])
+      : null;
+
   // Phase 5 — keep the list + detail caches live over SSE (no polling).
   // Cardinality events invalidate the list; in-place events patch the cache.
   useSitesLiveSync();
@@ -151,6 +167,10 @@ function SitesPage() {
   // Disconnect confirm target (DestructiveConfirm — type the hostname).
   const [disconnectTarget, setDisconnectTarget] = useState<Site | null>(null);
 
+  // Remove confirm target — hard-delete an archived/disconnected site.
+  const [removeTarget, setRemoveTarget] = useState<Site | null>(null);
+  const [removing, setRemoving] = useState(false);
+
   // Reconnect: when set, the AddSiteDialog opens directly at step B with a
   // freshly-minted enrollment code bound to the existing site.
   const [reconnectTarget, setReconnectTarget] = useState<{
@@ -232,6 +252,29 @@ function SitesPage() {
     },
     [enrollmentCode],
   );
+
+  const handleRemove = useCallback((site: Site) => {
+    setRemoveTarget(site);
+  }, []);
+
+  const confirmRemove = useCallback(async () => {
+    const site = removeTarget;
+    if (!site) return;
+    setRemoving(true);
+    try {
+      await deleteSite.mutateAsync(site.id);
+      setRemoveTarget(null);
+      toast.success(`${hostOf(site.url)} removed.`, {
+        description: "The WPMgr record has been deleted. The WordPress site itself is untouched.",
+      });
+    } catch (err) {
+      toast.error(`Could not remove ${hostOf(site.url)}`, {
+        description: err instanceof Error ? err.message : "An unexpected error occurred.",
+      });
+    } finally {
+      setRemoving(false);
+    }
+  }, [removeTarget, deleteSite]);
 
   // -------------------------------------------------------------------------
   // Bulk action handlers (Sprint 3 wires the obvious ones, stubs the rest)
@@ -393,10 +436,19 @@ function SitesPage() {
           isRetrying={isFetching}
         />
       ) : sites.length === 0 ? (
-        <SitesPageEmpty
-          cta={operate ? undefined : <AddSitePlaceholder />}
-          onOnboardingHandoff={operate ? ({ url }) => setOnboardingUrl(url) : undefined}
-        />
+        <>
+          {disconnectedSites ? (
+            <DisconnectedSitesPanel
+              sites={disconnectedSites}
+              onReconnect={operate ? handleReconnect : undefined}
+              onRemove={operate ? handleRemove : undefined}
+            />
+          ) : null}
+          <SitesPageEmpty
+            cta={operate ? undefined : <AddSitePlaceholder />}
+            onOnboardingHandoff={operate ? ({ url }) => setOnboardingUrl(url) : undefined}
+          />
+        </>
       ) : (
         <>
           <SitesToolbar
@@ -532,6 +584,40 @@ function SitesPage() {
         />
       ) : null}
 
+      {/* Remove confirm — hard-delete a single archived/disconnected site. */}
+      {operate ? (
+        <DestructiveConfirm
+          open={removeTarget !== null}
+          onClose={() => setRemoveTarget(null)}
+          onConfirm={confirmRemove}
+          title={`Remove ${removeTarget ? hostOf(removeTarget.url) : "site"}`}
+          resourceName={removeTarget ? hostOf(removeTarget.url) : ""}
+          confirmLabel="Remove site"
+          cancelLabel="Keep site"
+          isPending={removing}
+          errorMessage={deleteSite.isError ? deleteSite.error.message : null}
+          consequencesBody={
+            <div className="space-y-2">
+              <p>
+                This permanently removes the WPMgr record for{" "}
+                <strong>{removeTarget ? hostOf(removeTarget.url) : "this site"}</strong>{" "}
+                and all associated history (backup metadata, scans, monitoring,
+                activity).
+              </p>
+              <p>
+                The WordPress site itself is not touched. Nothing is changed or
+                deleted on the server.
+              </p>
+              <p>
+                Type{" "}
+                <strong>{removeTarget ? hostOf(removeTarget.url) : ""}</strong>{" "}
+                to confirm.
+              </p>
+            </div>
+          }
+        />
+      ) : null}
+
       {/* Onboarding handoff: finishing the wizard with a URL opens AddSiteDialog
           pre-filled at step A so the user continues into the real connect flow. */}
       {operate ? (
@@ -600,6 +686,41 @@ function SitesTableSkeleton() {
 // an inert placeholder so the row layout stays stable across roles.
 function AddSitePlaceholder() {
   return null;
+}
+
+/**
+ * Compact panel shown above the onboarding empty state when the active bucket
+ * is empty but there are archived/disconnected sites. Lets the operator
+ * reconnect without having to find the archived filter chip.
+ */
+function DisconnectedSitesPanel({
+  sites,
+  onReconnect,
+  onRemove,
+}: {
+  sites: Site[];
+  onReconnect?: (site: Site) => void;
+  onRemove?: (site: Site) => void;
+}) {
+  const count = sites.length;
+  return (
+    <section aria-labelledby="disconnected-sites-heading" className="space-y-3">
+      <p
+        id="disconnected-sites-heading"
+        className="text-sm font-medium text-muted-foreground"
+      >
+        {count === 1
+          ? "You have 1 disconnected site"
+          : `You have ${count} disconnected sites`}
+      </p>
+      <SitesTable
+        sites={sites}
+        isLoading={false}
+        onReconnect={onReconnect}
+        onRemove={onRemove}
+      />
+    </section>
+  );
 }
 
 function hostOf(url: string): string {

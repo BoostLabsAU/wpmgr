@@ -16,6 +16,30 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
+// GetSiteByURL returns the minimal (id, connection_state) for any existing site
+// with the given URL in the tenant, including archived rows. Returns (zero,
+// false, nil) when no matching row exists.
+func (r *pgRepo) GetSiteByURL(ctx context.Context, tenantID uuid.UUID, url string) (SiteURLHit, bool, error) {
+	var hit SiteURLHit
+	var found bool
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, err := sqlc.New(tx).GetSiteByURLForMint(ctx, sqlc.GetSiteByURLForMintParams{
+			TenantID: tenantID,
+			Url:      url,
+		})
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return domain.Internal("site_url_lookup_failed", "failed to check for existing site URL").WithCause(err)
+		}
+		hit = SiteURLHit{ID: row.ID, ConnectionState: ConnectionState(row.ConnectionState)}
+		found = true
+		return nil
+	})
+	return hit, found, err
+}
+
 // CreatePending creates a sites row in pending_enrollment (site-first flow).
 func (r *pgRepo) CreatePending(ctx context.Context, tenantID uuid.UUID, url, name string, tags []string) (Site, error) {
 	if tags == nil {
@@ -109,6 +133,29 @@ func (r *pgRepo) Transition(ctx context.Context, in TransitionInput) (Transition
 		return nil
 	})
 	return out, err
+}
+
+// DeleteCancellable hard-deletes a site inside one tenant tx IFF the row is
+// still pending_enrollment with no enrolled_at and no agent key. A concurrent
+// AttachAgentAndConnect that won the race will have changed connection_state,
+// set enrolled_at, and written agent_public_key — any of those three predicate
+// failures returns rowsAffected==0, which the service must surface as a
+// not_cancellable 409. The load and delete are a single statement, so there is
+// no window between checking state and deleting.
+func (r *pgRepo) DeleteCancellable(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error) {
+	var rows int64
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		n, err := sqlc.New(tx).DeleteCancellableSite(ctx, sqlc.DeleteCancellableSiteParams{
+			ID:       siteID,
+			TenantID: tenantID,
+		})
+		if err != nil {
+			return domain.Internal("site_cancel_delete_failed", "failed to delete cancellable site").WithCause(err)
+		}
+		rows = n
+		return nil
+	})
+	return rows, err
 }
 
 // ConsumeSiteBoundCode atomically consumes a code and, when site-bound,

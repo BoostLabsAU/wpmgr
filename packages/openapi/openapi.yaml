@@ -1053,11 +1053,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/SiteEnrollmentCode"
         "409":
-          description: Site URL already exists for this tenant
+          description: |
+            Site URL already exists for this tenant. The `details` object carries
+            `site_id` (UUID string) and `connection_state` (string) of the
+            existing row so the web can branch: offer "Cancel and re-add" when
+            `pending_enrollment`, "Reconnect" when `archived`/`disconnected`,
+            or a generic "already exists" message otherwise.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                allOf:
+                  - $ref: "#/components/schemas/Error"
+                  - type: object
+                    properties:
+                      details:
+                        type: object
+                        required: [site_id, connection_state]
+                        properties:
+                          site_id:
+                            type: string
+                            format: uuid
+                            description: ID of the existing site with this URL.
+                          connection_state:
+                            type: string
+                            enum: [pending_enrollment, connected, degraded, disconnected, revoked, archived]
+                            description: Current connection state of the existing site.
         "422":
           description: Validation failed
           content:
@@ -1428,6 +1448,53 @@ paths:
                 $ref: "#/components/schemas/Site"
         "409":
           description: Site is not archived
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/cancel:
+    post:
+      operationId: cancelEnrollment
+      summary: Cancel a pending enrollment (hard-delete)
+      description: |
+        Hard-deletes a site that is in `pending_enrollment` AND has **never
+        connected** (`enrolled_at` is NULL and `agent_public_key` is absent).
+        This is the "Cancel" action in the enrollment modal — it frees the URL
+        so the operator can immediately re-add the same site.
+
+        The never-connected guard is enforced server-side (NOT by the caller):
+        `connection_state == pending_enrollment` AND `enrolled_at IS NULL` AND
+        `agent_public_key == ""` must all hold. If the site has ever connected
+        (enrolled at least once) the request is rejected with
+        `code: "not_cancellable"` — use `archive` or `revoke` instead.
+
+        On success a `site.deleted` SSE event is published to the tenant stream
+        so open dashboards can remove the row without a poll.
+
+        Requires `site:write` + org scope + site access (same chain as
+        `archive`/`revoke`).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "204":
+          description: Site hard-deleted; URL is now free.
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "409":
+          description: |
+            Site cannot be cancelled because it has connected at least once
+            (`not_cancellable`). Use `archive` or `revoke` instead.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permissions
           content:
             application/json:
               schema:
