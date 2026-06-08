@@ -104,8 +104,10 @@ jobs:
 
       # make agent-zip builds vendor/ via a composer:2 container, then stages the
       # plugin under a stable wpmgr-agent/ folder (the WP slug) and zips it.
+      # VERSION is passed so the staged copy is stamped with the release tag
+      # (leading 'v' stripped inside agent-zip). The source file is not modified.
       - name: Build agent plugin zip
-        run: make agent-zip
+        run: make agent-zip VERSION=${{ steps.vars.outputs.version }}
 
       - name: Publish GitHub Release with the agent zip
         uses: softprops/action-gh-release@v2
