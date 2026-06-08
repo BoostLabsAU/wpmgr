@@ -30,7 +30,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "v0.19.1 / open source",
+  badge: "v0.20.0 / open source",
   heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
     "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",
@@ -116,6 +116,18 @@ export const FEATURES = {
       title: "Unused Image Cleaner",
       desc:
         "Scan the WordPress media library for attachments that are not referenced anywhere, with a report showing exactly where each in-use image appears. Move unused images to a reversible quarantine and delete permanently only when you confirm. Conservative by design: ambiguous references are treated as in-use, so a genuinely used image is never flagged.",
+    },
+    {
+      icon: "Replace",
+      title: "Search and Replace",
+      desc:
+        "Run a serialization-safe find-and-replace across the entire WordPress database. Handles PHP-serialized data correctly so URLs and structured values survive the replacement without corruption. Preview matches before committing.",
+    },
+    {
+      icon: "DatabaseBackup",
+      title: "Database Snapshots",
+      desc:
+        "Take a quick local database snapshot before a risky change and revert to it instantly if something goes wrong. Faster and lighter than a full backup for local safety nets; no remote storage required.",
     },
     {
       icon: "DatabaseZap",
