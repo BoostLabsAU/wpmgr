@@ -30,7 +30,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "v0.17.0 / open source",
+  badge: "v0.19.1 / open source",
   heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
     "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",
@@ -85,7 +85,7 @@ export const FEATURES = {
       icon: "DatabaseBackup",
       title: "Backups and restore",
       desc:
-        "Schedule full or incremental backups of your database and files. Increments pack only files that changed since the last backup, so each one is small and fast. Restore the whole site, just the database, just files, or a single plugin, theme, or upload to any point in the chain, with the site staying online throughout.",
+        "Schedule full or incremental backups of your database and files. Increments pack only files that changed since the last backup, so each one is small and fast. Incremental backups group as a base plus its increments in a single expandable chain. Pick the exact point in time to roll back to: files and database both restore to the chosen snapshot, with the site staying online throughout.",
     },
     {
       icon: "RefreshCw",
@@ -110,6 +110,12 @@ export const FEATURES = {
       title: "Performance and caching",
       desc:
         "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. A failed optimization never breaks the page.",
+    },
+    {
+      icon: "ImageOff",
+      title: "Unused Image Cleaner",
+      desc:
+        "Scan the WordPress media library for attachments that are not referenced anywhere, with a report showing exactly where each in-use image appears. Move unused images to a reversible quarantine and delete permanently only when you confirm. Conservative by design: ambiguous references are treated as in-use, so a genuinely used image is never flagged.",
     },
     {
       icon: "DatabaseZap",
@@ -152,6 +158,7 @@ export const MEDIA = {
   bodyLines: [
     "WPMgr totals the bytes saved across every variant, including all the thumbnail sizes WordPress generates, plus a running count of images optimized, so the number on your dashboard reflects real files, not one hero image per upload.",
     "No image bytes ever pass through WPMgr's control plane. Source files move from your site to your storage, and optimized files move from the encoder to your storage, using short-lived presigned URLs while WPMgr keeps only metadata.",
+    "The Unused Image Cleaner finds attachments that are not referenced anywhere, shows exactly where each image in use appears, and moves unwanted images to a reversible quarantine. Permanent deletion requires explicit confirmation. Ambiguous references are always treated as in-use, so the cleaner never flags a genuinely used image.",
   ],
   chips: [
     { icon: "ImageDown", value: "AVIF + WebP", label: "Modern formats served automatically, GIFs to animated WebP" },
