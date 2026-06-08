@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-06-08
+
+### Changed
+
+- Unified versioning: the open-source release tag, the api/web/media-encoder container images, and the WordPress agent plugin now all share one version number. The number jumps from 0.20.0 to 0.27.0 to land above the agent's prior 0.25.x line so the agent self-update applies cleanly. From this release forward a single tag controls what ships everywhere.
+
+### Fixed
+
+- Unused Image Cleaner: a re-scan no longer resurfaces attachments that are already in quarantine. Isolated items (files moved to quarantine, post still present) are excluded from scan candidates and reported as a separate quarantined count.
+
 ## [0.20.0] - 2026-06-08
 
 ### Added

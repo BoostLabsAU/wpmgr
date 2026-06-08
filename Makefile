@@ -113,6 +113,19 @@ agent-zip: agent-vendor ## Package the WordPress agent plugin as a zip (with ifs
 		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
 		--exclude '.DS_Store' --exclude '*.zip' \
 		apps/agent/ release/wpmgr-agent/
+	# VERSION override: when VERSION is provided (e.g. from the release tag),
+	# strip any leading 'v' and stamp ONLY the staged copy — the source file is
+	# never modified. Two precise in-place sed replacements target exactly the
+	# plugin header "Version:" line and the WPMGR_AGENT_VERSION constant, leaving
+	# all other lines unchanged. When VERSION is unset the staged copy carries the
+	# source baseline unchanged, making this step a no-op.
+	@if [ -n "$(VERSION)" ]; then \
+		_v=$$(echo "$(VERSION)" | sed 's/^v//'); \
+		echo "agent-zip: stamping staged copy with version $$_v"; \
+		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v/" release/wpmgr-agent/wpmgr-agent.php; \
+		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v\2/" release/wpmgr-agent/wpmgr-agent.php; \
+		rm -f release/wpmgr-agent/wpmgr-agent.php.bak; \
+	fi
 	cd release && zip -r wpmgr-agent.zip wpmgr-agent
 	rm -rf release/wpmgr-agent
 	@echo "agent zip: $$(du -sh release/wpmgr-agent.zip | cut -f1)"
