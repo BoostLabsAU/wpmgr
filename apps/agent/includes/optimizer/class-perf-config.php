@@ -68,6 +68,13 @@ final class PerfConfig
     /** Emit <link rel=preload> for critical fonts heuristically. */
     public bool $fontsPreload;
 
+    /**
+     * Transcode self-hosted TTF/OTF/WOFF fonts to WOFF2 via the media-encoder
+     * and rewrite @font-face src to woff2-first with the original as fallback.
+     * DEFAULT-OFF. Flag OFF is byte-identical to today's output.
+     */
+    public bool $fontsTranscodeWoff2;
+
     // -- Images / iframe ---------------------------------------------------
     /** Add loading=lazy + width/height + srcset + fetchpriority to <img>. */
     public bool $lazyLoad;
@@ -190,6 +197,7 @@ final class PerfConfig
         $this->fontsDisplaySwap      = (bool) ($data['fonts_display_swap'] ?? false);
         $this->fontsOptimizeGoogle   = (bool) ($data['fonts_optimize_google'] ?? false);
         $this->fontsPreload          = (bool) ($data['fonts_preload'] ?? false);
+        $this->fontsTranscodeWoff2   = (bool) ($data['fonts_transcode_woff2'] ?? false);
 
         $this->lazyLoad              = (bool) ($data['lazy_load'] ?? false);
         $this->properlySizeImages    = (bool) ($data['properly_size_images'] ?? false);
@@ -256,6 +264,7 @@ final class PerfConfig
             || $this->fontsDisplaySwap
             || $this->fontsOptimizeGoogle
             || $this->fontsPreload
+            || $this->fontsTranscodeWoff2
             || $this->lazyLoad
             || $this->properlySizeImages
             || $this->youtubePlaceholder
@@ -301,6 +310,7 @@ final class PerfConfig
             'fonts_display_swap'           => $this->fontsDisplaySwap,
             'fonts_optimize_google'        => $this->fontsOptimizeGoogle,
             'fonts_preload'                => $this->fontsPreload,
+            'fonts_transcode_woff2'        => $this->fontsTranscodeWoff2,
             'lazy_load'                    => $this->lazyLoad,
             'properly_size_images'         => $this->properlySizeImages,
             'lazy_load_exclusions'         => $this->lazyLoadExclusions,

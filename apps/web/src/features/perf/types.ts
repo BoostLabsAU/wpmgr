@@ -53,6 +53,7 @@ export interface PerfConfig {
   fonts_display_swap: boolean;
   fonts_optimize_google: boolean;
   fonts_preload: boolean;
+  fonts_transcode_woff2: boolean;
 
   // Media / lazy-load
   lazy_load: boolean;

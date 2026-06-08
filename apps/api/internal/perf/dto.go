@@ -55,6 +55,9 @@ type perfConfigDTO struct {
 	FontsDisplaySwap    bool `json:"fonts_display_swap"`
 	FontsOptimizeGoogle bool `json:"fonts_optimize_google"`
 	FontsPreload        bool `json:"fonts_preload"`
+	// FontsTranscodeWOFF2 enables server-side TTF/OTF/WOFF → WOFF2 transcoding.
+	// When true the agent requests transcode jobs from the CP. Default false.
+	FontsTranscodeWOFF2 bool `json:"fonts_transcode_woff2"`
 
 	// Media / lazy-load
 	LazyLoad           bool     `json:"lazy_load"`
@@ -136,10 +139,11 @@ func toConfigDTO(c Config) perfConfigDTO {
 		JSDelayExcludes:           nonNil(c.JSDelayExcludes),
 		JSDelayThirdParty:         c.JSDelayThirdParty,
 		JSDelayThirdPartyExcludes: nonNil(c.JSDelayThirdPartyExcludes),
-		FontsDisplaySwap:          c.FontsDisplaySwap,
-		FontsOptimizeGoogle:       c.FontsOptimizeGoogle,
-		FontsPreload:              c.FontsPreload,
-		LazyLoad:                  c.LazyLoad,
+		FontsDisplaySwap:    c.FontsDisplaySwap,
+		FontsOptimizeGoogle: c.FontsOptimizeGoogle,
+		FontsPreload:        c.FontsPreload,
+		FontsTranscodeWOFF2: c.FontsTranscodeWOFF2,
+		LazyLoad:            c.LazyLoad,
 		LazyLoadExclusions:        nonNil(c.LazyLoadExclusions),
 		ProperlySizeImages:        c.ProperlySizeImages,
 		YouTubePlaceholder:        c.YouTubePlaceholder,
@@ -208,10 +212,11 @@ func fromConfigDTO(dto perfConfigDTO, tenantID, siteID uuid.UUID) Config {
 		JSDelayExcludes:           dto.JSDelayExcludes,
 		JSDelayThirdParty:         dto.JSDelayThirdParty,
 		JSDelayThirdPartyExcludes: dto.JSDelayThirdPartyExcludes,
-		FontsDisplaySwap:          dto.FontsDisplaySwap,
-		FontsOptimizeGoogle:       dto.FontsOptimizeGoogle,
-		FontsPreload:              dto.FontsPreload,
-		LazyLoad:                  dto.LazyLoad,
+		FontsDisplaySwap:    dto.FontsDisplaySwap,
+		FontsOptimizeGoogle: dto.FontsOptimizeGoogle,
+		FontsPreload:        dto.FontsPreload,
+		FontsTranscodeWOFF2: dto.FontsTranscodeWOFF2,
+		LazyLoad:            dto.LazyLoad,
 		LazyLoadExclusions:        dto.LazyLoadExclusions,
 		ProperlySizeImages:        dto.ProperlySizeImages,
 		YouTubePlaceholder:        dto.YouTubePlaceholder,

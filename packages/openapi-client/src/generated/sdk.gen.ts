@@ -15,6 +15,9 @@ import type {
   AgentDisconnectData,
   AgentDisconnectErrors,
   AgentDisconnectResponses,
+  AgentFontsTranscodeData,
+  AgentFontsTranscodeErrors,
+  AgentFontsTranscodeResponses,
   AgentHeartbeatData,
   AgentHeartbeatErrors,
   AgentHeartbeatResponses,
@@ -1565,6 +1568,56 @@ export const agentMediaSyncFinalize = <ThrowOnError extends boolean = false>(
   >({
     security: [{ name: "X-WPMgr-Signature", type: "apiKey" }],
     url: "/agent/v1/media/sync-finalize",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Enqueue or poll a font WOFF2 transcode job (agent-authenticated)
+ *
+ * Font Transcoder (M54 / Phase 1) — the agent POSTs when it discovers a
+ * self-hosted font (TTF/OTF/WOFF) that needs a WOFF2 encoding so it can
+ * serve the font with correct `format()` fallbacks.
+ *
+ * **Upload flow:**
+ * 1. Agent POSTs `FontTranscodeRequest` (no storage key — the agent MUST
+ * NOT supply or guess a key; the CP derives all keys from the verified
+ * tenant identity + `source_hash`).
+ * 2. If no job exists yet, the CP enqueues a `font_transcode` River job
+ * and returns `state="pending"` with a `source_put_url` (presigned
+ * S3 PUT, same TTL as the source-upload URL for media). The agent
+ * MUST PUT the raw font bytes to this URL before the encoder runs.
+ * 3. On subsequent POSTs for the same hash (`state="pending"` row
+ * already exists), `source_put_url` is absent — the source is already
+ * uploaded. The agent polls on every page build until state changes.
+ * 4. When `state="ready"`, `woff2_get_url` is a short-TTL presigned GET
+ * URL minted by the CP for the server-derived, GuardStorageKey-
+ * validated WOFF2 object. The agent fetches the WOFF2 bytes from this
+ * URL. The agent MUST NOT presign or construct a storage key itself.
+ * `woff2_key` is also present as an informational field.
+ * 5. When `state="negative"`, transcoding permanently failed; the agent
+ * serves the original font forever (no retry).
+ *
+ * **Security:** keys are SERVER-DERIVED from the verified tenant identity
+ * + the caller-validated `source_hash`; `GuardStorageKey` validates every
+ * key before it reaches the presigner. The agent identity (Ed25519
+ * signed-request middleware) drives the tenant scope — the body never
+ * influences which tenant's namespace is used.
+ *
+ */
+export const agentFontsTranscode = <ThrowOnError extends boolean = false>(
+  options: Options<AgentFontsTranscodeData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    AgentFontsTranscodeResponses,
+    AgentFontsTranscodeErrors,
+    ThrowOnError
+  >({
+    security: [{ name: "X-WPMgr-Signature", type: "apiKey" }],
+    url: "/agent/v1/fonts/transcode",
     ...options,
     headers: {
       "Content-Type": "application/json",

@@ -822,6 +822,70 @@ export const AgentMediaSyncFinalizeSchema = {
   },
 } as const;
 
+export const FontTranscodeRequestSchema = {
+  type: "object",
+  description:
+    "M54 Phase 1 — body the agent POSTs to /agent/v1/fonts/transcode when\nit encounters a self-hosted font that needs WOFF2 encoding.\nThe agent MUST NOT supply a storage key; the CP derives all keys\nserver-side from the verified tenant identity + source_hash.\n",
+  required: ["source_hash", "source_size"],
+  properties: {
+    source_hash: {
+      type: "string",
+      description:
+        "Hex-encoded BLAKE3 content hash of the raw source font bytes.\nMust be exactly 64 lowercase hex characters. The CP validates this\nstrictly before deriving any storage keys — malformed values are\nrejected with 422.\n",
+      pattern: "^[0-9a-f]{64}$",
+      example:
+        "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+    },
+    source_size: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Byte length of the source font. Must be > 0. Capped at 10 MiB.",
+      minimum: 1,
+    },
+    source_ext: {
+      type: "string",
+      description:
+        'File extension hint: "ttf", "otf", or "woff". Informational only; the CP detects the real format from the magic bytes on the uploaded object. Omit for WOFF2 (transcoding is a no-op for WOFF2).\n',
+      enum: ["ttf", "otf", "woff"],
+    },
+  },
+} as const;
+
+export const FontTranscodeResponseSchema = {
+  type: "object",
+  description: "M54 Phase 1 — CP's reply to a FontTranscodeRequest.\n",
+  required: ["state"],
+  properties: {
+    state: {
+      type: "string",
+      enum: ["pending", "ready", "negative"],
+      description:
+        '"pending"  — a job is enqueued or in flight. `source_put_url` is\n             present on the first-enqueue response; absent on polls.\n"ready"    — WOFF2 is available. `woff2_get_url` and `woff2_key`\n             are present.\n"negative" — permanent failure; serve the original font forever.\n',
+    },
+    source_put_url: {
+      type: "string",
+      description:
+        'Presigned S3 PUT URL (15-min TTL) for the raw source font bytes.\nPresent ONLY when state=="pending" AND the job was just freshly\nenqueued. The agent MUST PUT the source bytes here (Content-Type:\napplication/octet-stream) before the encoder can run.\nAbsent on subsequent polls (source already uploaded).\n',
+    },
+    woff2_key: {
+      type: "string",
+      description:
+        'Server-derived object-storage key for the WOFF2 output.\nPresent only when state=="ready". Informational — the agent MUST\nNOT presign this key itself; use woff2_get_url instead.\n',
+    },
+    woff2_get_url: {
+      type: "string",
+      description:
+        'Short-TTL presigned GET URL for the WOFF2 object, minted by the\nCP using the server-derived, GuardStorageKey-validated,\ntenant-scoped key. Present ONLY when state=="ready". The agent\nfetches the WOFF2 bytes from this URL. The agent MUST NOT\npresign or construct any storage key itself — that would\nreintroduce the path-traversal risk this design prevents.\n',
+    },
+    error_detail: {
+      type: "string",
+      description:
+        'Short diagnostic string. Present only when state=="negative".',
+    },
+  },
+} as const;
+
 export const AgentMetadataSchema = {
   type: "object",
   properties: {
@@ -4342,6 +4406,11 @@ export const PerfConfigSchema = {
     fonts_preload: {
       type: "boolean",
     },
+    fonts_transcode_woff2: {
+      type: "boolean",
+      description:
+        "Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.\n",
+    },
     lazy_load: {
       type: "boolean",
     },
@@ -5389,6 +5458,11 @@ export const PerfConfigWritableSchema = {
     },
     fonts_preload: {
       type: "boolean",
+    },
+    fonts_transcode_woff2: {
+      type: "boolean",
+      description:
+        "Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.\n",
     },
     lazy_load: {
       type: "boolean",

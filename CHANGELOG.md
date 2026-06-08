@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-06-08
+
+### Added
+
+- Font transcoding to WOFF2. Per-site, opt-in, default OFF. When enabled, WPMgr transcodes self-hosted fonts (TTF, OTF, WOFF) to WOFF2 and serves the compressed variant with the original as a format() fallback. Typical savings are 50 to 65 percent for TTF and OTF, and 20 to 30 percent for WOFF. Transcoding runs in the background in the media-encoder service; the original font is served until the WOFF2 is ready, so pages never wait, and any transcoding failure falls back to the original so a font never renders broken.
+
+### Fixed
+
+- Google Fonts setting copy that incorrectly said "and combine": WPMgr self-hosts each Google Fonts stylesheet individually and does not combine them.
+
 ## [0.30.0] - 2026-06-08
 
 ### Added

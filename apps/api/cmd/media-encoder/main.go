@@ -33,10 +33,12 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
+	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/encoder"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
 	mediaworker "github.com/mosamlife/wpmgr/apps/api/internal/media/worker"
+	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
 )
 
@@ -135,8 +137,15 @@ func run() error {
 		enc, repo, store, eventsPub, siteLookup, applyClient, cpBaseURL, cfg.Backup.PresignTTL, logger,
 	)
 
+	// Font transcode worker (pure-Go, no CGO). Uses the same blobstore and the
+	// perf repo for recording results. The perf.Repo is wired here as the
+	// FontTranscodeRepo interface.
+	perfRepo := perf.NewRepo(pool)
+	fontTranscodeWorker := mediafont.NewTranscodeWorker(perfRepo, store, cfg.Backup.PresignTTL, logger)
+
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, encodeWorker)
+	river.AddWorker(riverWorkers, fontTranscodeWorker)
 
 	// encodeJobTimeout must match EncodeWorker.Timeout(). SoftStopTimeout gives
 	// in-flight jobs this long to finish after a SIGTERM before their contexts are
@@ -144,15 +153,20 @@ func run() error {
 	// and is cancelled immediately on signal, which cuts Work() mid-variant-loop
 	// (root cause of the "stuck at 25%" bug: 1 variant recorded, others lost).
 	const encodeJobTimeout = 5 * time.Minute
+	const fontTranscodeJobTimeout = 3 * time.Minute
 
 	client, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
-			model.MediaEncodeQueue: {MaxWorkers: workers},
+			model.MediaEncodeQueue:          {MaxWorkers: workers},
+			mediafont.FontTranscodeQueue:    {MaxWorkers: workers * 2}, // pure-Go, more concurrency is fine
 		},
-		Workers:         riverWorkers,
+		Workers: riverWorkers,
+		// SoftStopTimeout must be >= the longest in-flight job. encodeJobTimeout
+		// (5 min) > fontTranscodeJobTimeout (3 min) so it covers both.
 		SoftStopTimeout: encodeJobTimeout,
 	})
+	_ = fontTranscodeJobTimeout // documented above
 	if err != nil {
 		return err
 	}

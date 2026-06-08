@@ -402,6 +402,79 @@ export type AgentMediaSyncFinalize = {
   job_id: string;
 };
 
+/**
+ * M54 Phase 1 — body the agent POSTs to /agent/v1/fonts/transcode when
+ * it encounters a self-hosted font that needs WOFF2 encoding.
+ * The agent MUST NOT supply a storage key; the CP derives all keys
+ * server-side from the verified tenant identity + source_hash.
+ *
+ */
+export type FontTranscodeRequest = {
+  /**
+   * Hex-encoded BLAKE3 content hash of the raw source font bytes.
+   * Must be exactly 64 lowercase hex characters. The CP validates this
+   * strictly before deriving any storage keys — malformed values are
+   * rejected with 422.
+   *
+   */
+  source_hash: string;
+  /**
+   * Byte length of the source font. Must be > 0. Capped at 10 MiB.
+   */
+  source_size: number;
+  /**
+   * File extension hint: "ttf", "otf", or "woff". Informational only; the CP detects the real format from the magic bytes on the uploaded object. Omit for WOFF2 (transcoding is a no-op for WOFF2).
+   *
+   */
+  source_ext?: "ttf" | "otf" | "woff";
+};
+
+/**
+ * M54 Phase 1 — CP's reply to a FontTranscodeRequest.
+ *
+ */
+export type FontTranscodeResponse = {
+  /**
+   * "pending"  — a job is enqueued or in flight. `source_put_url` is
+   * present on the first-enqueue response; absent on polls.
+   * "ready"    — WOFF2 is available. `woff2_get_url` and `woff2_key`
+   * are present.
+   * "negative" — permanent failure; serve the original font forever.
+   *
+   */
+  state: "pending" | "ready" | "negative";
+  /**
+   * Presigned S3 PUT URL (15-min TTL) for the raw source font bytes.
+   * Present ONLY when state=="pending" AND the job was just freshly
+   * enqueued. The agent MUST PUT the source bytes here (Content-Type:
+   * application/octet-stream) before the encoder can run.
+   * Absent on subsequent polls (source already uploaded).
+   *
+   */
+  source_put_url?: string;
+  /**
+   * Server-derived object-storage key for the WOFF2 output.
+   * Present only when state=="ready". Informational — the agent MUST
+   * NOT presign this key itself; use woff2_get_url instead.
+   *
+   */
+  woff2_key?: string;
+  /**
+   * Short-TTL presigned GET URL for the WOFF2 object, minted by the
+   * CP using the server-derived, GuardStorageKey-validated,
+   * tenant-scoped key. Present ONLY when state=="ready". The agent
+   * fetches the WOFF2 bytes from this URL. The agent MUST NOT
+   * presign or construct any storage key itself — that would
+   * reintroduce the path-traversal risk this design prevents.
+   *
+   */
+  woff2_get_url?: string;
+  /**
+   * Short diagnostic string. Present only when state=="negative".
+   */
+  error_detail?: string;
+};
+
 export type AgentMetadata = {
   wp_version?: string;
   php_version?: string;
@@ -2255,6 +2328,11 @@ export type PerfConfig = {
   fonts_display_swap?: boolean;
   fonts_optimize_google?: boolean;
   fonts_preload?: boolean;
+  /**
+   * Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.
+   *
+   */
+  fonts_transcode_woff2?: boolean;
   lazy_load?: boolean;
   lazy_load_exclusions?: Array<string>;
   properly_size_images?: boolean;
@@ -2891,6 +2969,11 @@ export type PerfConfigWritable = {
   fonts_display_swap?: boolean;
   fonts_optimize_google?: boolean;
   fonts_preload?: boolean;
+  /**
+   * Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.
+   *
+   */
+  fonts_transcode_woff2?: boolean;
   lazy_load?: boolean;
   lazy_load_exclusions?: Array<string>;
   properly_size_images?: boolean;
@@ -4846,6 +4929,49 @@ export type AgentMediaSyncFinalizeResponses = {
 
 export type AgentMediaSyncFinalizeResponse =
   AgentMediaSyncFinalizeResponses[keyof AgentMediaSyncFinalizeResponses];
+
+export type AgentFontsTranscodeData = {
+  body: FontTranscodeRequest;
+  path?: never;
+  query?: never;
+  url: "/agent/v1/fonts/transcode";
+};
+
+export type AgentFontsTranscodeErrors = {
+  /**
+   * Invalid request (source_size <= 0)
+   */
+  400: Error;
+  /**
+   * Agent authentication failed
+   */
+  401: Error;
+  /**
+   * source_hash is not a valid 64-char lowercase hex BLAKE3 digest
+   */
+  422: Error;
+  /**
+   * Daily per-tenant font transcode enqueue cap exceeded
+   */
+  429: Error;
+  /**
+   * Font transcode enqueuer not available (degraded deployment)
+   */
+  503: Error;
+};
+
+export type AgentFontsTranscodeError =
+  AgentFontsTranscodeErrors[keyof AgentFontsTranscodeErrors];
+
+export type AgentFontsTranscodeResponses = {
+  /**
+   * Current transcode state for this hash
+   */
+  200: FontTranscodeResponse;
+};
+
+export type AgentFontsTranscodeResponse =
+  AgentFontsTranscodeResponses[keyof AgentFontsTranscodeResponses];
 
 export type DeleteSiteData = {
   body?: never;

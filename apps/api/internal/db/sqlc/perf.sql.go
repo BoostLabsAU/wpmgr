@@ -289,7 +289,7 @@ func (q *Queries) GetFleetDbHealth(ctx context.Context, arg GetFleetDbHealthPara
 const getPerfConfig = `-- name: GetPerfConfig :one
 
 
-SELECT site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, created_at, updated_at FROM site_perf_config
+SELECT site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, fonts_transcode_woff2, created_at, updated_at FROM site_perf_config
 WHERE site_id = $1
 `
 
@@ -372,6 +372,7 @@ func (q *Queries) GetPerfConfig(ctx context.Context, siteID uuid.UUID) (SitePerf
 		&i.ActiveDbScanStarted,
 		&i.WooCacheableSession,
 		&i.WooThemeFragmentsSupported,
+		&i.FontsTranscodeWoff2,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1206,7 +1207,7 @@ INSERT INTO site_perf_config (
     bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed,
     bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control,
     preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load,
-    config_version, woo_cacheable_session, updated_at
+    config_version, woo_cacheable_session, fonts_transcode_woff2, updated_at
 ) VALUES (
     $1, $2,
     $3, $4, $5, $6,
@@ -1226,7 +1227,7 @@ INSERT INTO site_perf_config (
     $47, $48, $49,
     $50, $51, $52,
     $53, $54, $55, $56,
-    $57, $58, now()
+    $57, $58, $59, now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
     cache_enabled                 = EXCLUDED.cache_enabled,
@@ -1285,8 +1286,9 @@ ON CONFLICT (site_id) DO UPDATE SET
     preload_max_load              = EXCLUDED.preload_max_load,
     config_version                = EXCLUDED.config_version,
     woo_cacheable_session         = EXCLUDED.woo_cacheable_session,
+    fonts_transcode_woff2         = EXCLUDED.fonts_transcode_woff2,
     updated_at                    = now()
-RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, created_at, updated_at
+RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, fonts_transcode_woff2, created_at, updated_at
 `
 
 type UpsertPerfConfigParams struct {
@@ -1349,6 +1351,8 @@ type UpsertPerfConfigParams struct {
 	ConfigVersion             int32     `json:"config_version"`
 	// M53 / #169 — WooCommerce cacheable-session flag (operator-writable).
 	WooCacheableSession bool `json:"woo_cacheable_session"`
+	// M54 — Font transcode to WOFF2 flag (operator-writable).
+	FontsTranscodeWoff2 bool `json:"fonts_transcode_woff2"`
 }
 
 // Insert-or-update the per-site performance config. The agent install-state
@@ -1415,6 +1419,7 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		arg.PreloadMaxLoad,
 		arg.ConfigVersion,
 		arg.WooCacheableSession,
+		arg.FontsTranscodeWoff2,
 	)
 	var i SitePerfConfig
 	err := row.Scan(
@@ -1486,6 +1491,7 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		&i.ActiveDbScanStarted,
 		&i.WooCacheableSession,
 		&i.WooThemeFragmentsSupported,
+		&i.FontsTranscodeWoff2,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)

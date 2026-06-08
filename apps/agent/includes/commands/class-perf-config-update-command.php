@@ -47,6 +47,7 @@ final class PerfConfigUpdateCommand implements CommandInterface
         'enabled', 'cache_logged_in', 'cache_mobile', 'auto_purge',
         'refresh_interval', 'include_queries', 'include_cookies',
         'bypass_urls', 'bypass_cookies', 'woo_cacheable_session',
+        'fonts_transcode_woff2',
     ];
 
     /** Hard ceiling on the refresh interval (30 days) to reject absurd values. */
