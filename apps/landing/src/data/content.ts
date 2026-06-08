@@ -30,7 +30,7 @@ export const NAV = {
 };
 
 export const HERO = {
-  badge: "v0.27.0 / open source",
+  badge: "v0.28.0 / open source",
   heading: "The open-source WordPress fleet manager you can run, read, and contribute to",
   subhead:
     "WPMgr is a self-hostable control plane for managing one WordPress site or a whole portfolio. Back up, restore, update, monitor uptime, optimize images with the Media Optimizer, clean the database, and lock down every site from a single dashboard, all on infrastructure you own, built from code you can read and improve.",
@@ -109,7 +109,7 @@ export const FEATURES = {
       icon: "Zap",
       title: "Performance and caching",
       desc:
-        "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. A failed optimization never breaks the page.",
+        "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. See cache hit-ratio trends over 7, 30, and 90 day windows so you know whether caching is working across your fleet. A failed optimization never breaks the page.",
     },
     {
       icon: "ImageOff",

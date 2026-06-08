@@ -6,6 +6,20 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-06-08
+
+### Added
+
+- Cache hit-ratio history (#162). Per-site page-cache hit and miss counts are now recorded as a time-series and shown on the performance dashboard as a trend chart with 7, 30, and 90 day windows. The agent tallies hits and misses to lightweight per-hour files so no database work is added on a cache hit; the control plane mirrors the rollup into its own time-series so you can track how cache effectiveness changes over time without slowing down cached responses.
+
+### Changed
+
+- Guided "Connect your site" onboarding. After signing up, the first-site flow now leads straight into the real connect step. It walks through downloading the agent plugin, opening the WPMgr menu in wp-admin, pasting the control-plane URL (shown inline for one-click copy), pasting the one-time pairing code, and clicking Enroll. The wording matches the labels in wp-admin so there is no guesswork. Earlier experimental auto-install options are hidden for now and will return once the agent is published on the WordPress.org plugin directory.
+
+### Fixed
+
+- Unused Image Cleaner quarantine path safety. If the WordPress content directory cannot be determined, the unused-image quarantine now refuses to run instead of falling back to a path at the filesystem root, which previously could cause permission failures or writes outside the wp-content directory. Normal sites are unaffected.
+
 ## [0.27.0] - 2026-06-08
 
 ### Changed
