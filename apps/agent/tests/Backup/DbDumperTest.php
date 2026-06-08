@@ -103,6 +103,136 @@ final class DbDumperTest extends TestCase
         $this->assertSame(0, $progressCalls, 'no-op replay must not emit progress');
     }
 
+    // -----------------------------------------------------------------------
+    // splitHostPort parser — unit coverage via reflection.
+    //
+    // The method is private (implementation detail), but the parsing contract
+    // is load-bearing (wrong parse → silent connection failure on every backup
+    // for affected hosts). Reflection is the right seam here: we test the
+    // behaviour, not the internal mechanism, and a rename would break these
+    // tests intentionally.
+    // -----------------------------------------------------------------------
+
+    /**
+     * Build a DbDumper and call its private splitHostPort() via reflection.
+     *
+     * @return array{0:string,1:int|null,2:string|null}
+     */
+    private function parseHostPort(string $input): array
+    {
+        $dumper = new DbDumper([
+            'host'     => $input,
+            'user'     => 'u',
+            'password' => 'p',
+            'name'     => 'db',
+            'prefix'   => 'wp_',
+        ]);
+
+        $ref = new \ReflectionMethod(DbDumper::class, 'splitHostPort');
+        $ref->setAccessible(true);
+        /** @var array{0:string,1:int|null,2:string|null} */
+        return $ref->invoke($dumper, $input);
+    }
+
+    /**
+     * Plain IPv4 address — no port, no socket.
+     */
+    public function test_split_plain_ipv4(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('127.0.0.1');
+        $this->assertSame('127.0.0.1', $host);
+        $this->assertNull($port);
+        $this->assertNull($socket);
+    }
+
+    /**
+     * IPv4 with explicit port.
+     */
+    public function test_split_ipv4_with_port(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('127.0.0.1:3307');
+        $this->assertSame('127.0.0.1', $host);
+        $this->assertSame(3307, $port);
+        $this->assertNull($socket);
+    }
+
+    /**
+     * Hostname with Unix socket path (no port).
+     * This is the form used by managed hosts that run MySQL on a Unix socket
+     * (e.g. GridPane sets DB_HOST = 'localhost:/var/run/mysqld/mysqld.sock').
+     * The OLD code left host as the full string and socket as null, causing
+     * every backup to fail with a connect error.
+     *
+     * THIS IS THE REGRESSION TEST — it MUST fail on the old implementation
+     * and pass on the new one.
+     */
+    public function test_split_localhost_with_socket_gridpane_form(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('localhost:/var/run/mysqld/mysqld.sock');
+        $this->assertSame('localhost', $host, 'host must be extracted before the colon');
+        $this->assertNull($port, 'no port in this form');
+        $this->assertSame('/var/run/mysqld/mysqld.sock', $socket, 'socket path must be captured');
+    }
+
+    /**
+     * Host + port + socket — all three components present.
+     */
+    public function test_split_host_port_and_socket(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('db.example.com:3306:/tmp/mysql.sock');
+        $this->assertSame('db.example.com', $host);
+        $this->assertSame(3306, $port);
+        $this->assertSame('/tmp/mysql.sock', $socket);
+    }
+
+    /**
+     * Socket-only form (empty host segment before the colon).
+     * DB_HOST = ':/tmp/mysql.sock' means "use the socket, no TCP host".
+     */
+    public function test_split_socket_only_empty_host(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort(':/tmp/mysql.sock');
+        // rawHost is '' — callers may treat '' as 'localhost'; we just ensure
+        // the socket is captured and port is null.
+        $this->assertSame('', $host);
+        $this->assertNull($port);
+        $this->assertSame('/tmp/mysql.sock', $socket);
+    }
+
+    /**
+     * Bracketed IPv6 address with port.
+     * Defensive: the parser must not mangle the address.
+     */
+    public function test_split_bracketed_ipv6_with_port(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('[::1]:3306');
+        $this->assertSame('[::1]', $host);
+        $this->assertSame(3306, $port);
+        $this->assertNull($socket);
+    }
+
+    /**
+     * Bracketed IPv6 with no port — address only.
+     */
+    public function test_split_bracketed_ipv6_no_port(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('[::1]');
+        $this->assertSame('[::1]', $host);
+        $this->assertNull($port);
+        $this->assertNull($socket);
+    }
+
+    /**
+     * Plain hostname with no colon — no port, no socket.
+     */
+    public function test_split_plain_hostname(): void
+    {
+        [$host, $port, $socket] = $this->parseHostPort('db.internal');
+        $this->assertSame('db.internal', $host);
+        $this->assertNull($port);
+        $this->assertNull($socket);
+    }
+
     /**
      * Live MySQL integration smoke. Skipped unless WPMGR_TEST_MYSQL_DSN-style
      * env vars are present — keeps CI green on hosts without a DB.

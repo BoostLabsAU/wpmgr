@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.28.1] - 2026-06-08
+
+### Fixed
+
+- Backups on hosts that expose MySQL over a Unix socket (for example a `DB_HOST` of `localhost:/var/run/mysqld/mysqld.sock`). The database dumper now parses the host, port, and socket path from `DB_HOST` the same way WordPress core does, and connects over the socket instead of dropping the path and failing the dump. Sites that connect over TCP are unaffected.
+
 ## [0.28.0] - 2026-06-08
 
 ### Added
