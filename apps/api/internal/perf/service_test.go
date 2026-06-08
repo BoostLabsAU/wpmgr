@@ -248,6 +248,44 @@ func (a *fakeAgent) DbSnapshot(_ context.Context, _ uuid.UUID, _ string, req age
 	}
 }
 
+func (a *fakeAgent) MediaClean(_ context.Context, _ uuid.UUID, _ string, req agentcmd.MediaCleanRequest) (agentcmd.MediaCleanResult, error) {
+	switch req.Action {
+	case "scan":
+		return agentcmd.MediaCleanResult{
+			OK:         true,
+			Total:      0,
+			Candidates: []agentcmd.MediaCleanCandidate{},
+			HasMore:    false,
+		}, nil
+	case "list":
+		return agentcmd.MediaCleanResult{
+			OK:        true,
+			Manifests: []agentcmd.MediaCleanManifest{},
+		}, nil
+	case "isolate":
+		return agentcmd.MediaCleanResult{
+			OK:         true,
+			JobID:      req.JobID,
+			Moved:      len(req.AttachmentIDs),
+			ManifestID: "test-manifest-id",
+		}, nil
+	case "restore":
+		return agentcmd.MediaCleanResult{
+			OK:       true,
+			JobID:    req.JobID,
+			Restored: len(req.QuarantineIDs),
+		}, nil
+	case "delete":
+		return agentcmd.MediaCleanResult{
+			OK:      true,
+			JobID:   req.JobID,
+			Deleted: len(req.QuarantineIDs),
+		}, nil
+	default:
+		return agentcmd.MediaCleanResult{OK: false, Detail: "unknown action"}, nil
+	}
+}
+
 type fakeSites struct{ url string }
 
 func (s *fakeSites) GetSiteURL(context.Context, uuid.UUID, uuid.UUID) (string, error) {
@@ -2226,4 +2264,116 @@ func TestSearchReplaceMinLengthBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatalf("3-byte search must be accepted, got: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// sanitizeEditURL
+// ---------------------------------------------------------------------------
+
+func ptr(s string) *string { return &s }
+
+func TestSanitizeEditURL(t *testing.T) {
+	tests := []struct {
+		name  string
+		input *string
+		want  *string // nil means expect nil output
+	}{
+		{name: "nil input", input: nil, want: nil},
+		{name: "https allowed", input: ptr("https://example.com/wp-admin/post.php?post=1&action=edit"), want: ptr("https://example.com/wp-admin/post.php?post=1&action=edit")},
+		{name: "http allowed", input: ptr("http://example.com/wp-admin/post.php?post=2&action=edit"), want: ptr("http://example.com/wp-admin/post.php?post=2&action=edit")},
+		{name: "javascript scheme blocked", input: ptr("javascript:alert(1)"), want: nil},
+		{name: "data scheme blocked", input: ptr("data:text/html,<h1>xss</h1>"), want: nil},
+		{name: "vbscript scheme blocked", input: ptr("vbscript:MsgBox(1)"), want: nil},
+		{name: "ftp scheme blocked", input: ptr("ftp://example.com/file"), want: nil},
+		{name: "relative path blocked", input: ptr("/wp-admin/post.php"), want: nil},
+		{name: "empty string blocked", input: ptr(""), want: nil},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sanitizeEditURL(tc.input)
+			if tc.want == nil {
+				if got != nil {
+					t.Errorf("expected nil, got %q", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Errorf("expected %q, got nil", *tc.want)
+				return
+			}
+			if *got != *tc.want {
+				t.Errorf("expected %q, got %q", *tc.want, *got)
+			}
+		})
+	}
+}
+
+// TestMediaCleanScanSanitizesEditURL verifies that MediaCleanScan strips
+// non-http(s) edit_url values from Referenced entries before returning.
+func TestMediaCleanScanSanitizesEditURL(t *testing.T) {
+	jsURL := "javascript:alert(1)"
+	goodURL := "https://example.com/wp-admin/post.php?post=7&action=edit"
+
+	svc := NewService(&fakeRepo{}, nil, &fakeEvents{}, nil)
+	agentSpy := &mediaCleanSanitizeAgent{
+		jsURL:   &jsURL,
+		goodURL: &goodURL,
+	}
+	svc.SetAgentClient(agentSpy, &fakeSites{url: "https://example.com"})
+
+	out, err := svc.MediaCleanScan(context.Background(), uuid.New(), uuid.New(), MediaCleanScanInput{
+		Limit: 10,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(out.Referenced) != 1 {
+		t.Fatalf("expected 1 referenced entry, got %d", len(out.Referenced))
+	}
+	usages := out.Referenced[0].Usages
+	if len(usages) != 2 {
+		t.Fatalf("expected 2 usages, got %d", len(usages))
+	}
+
+	// First usage had javascript: — must be nil after sanitization.
+	if usages[0].EditURL != nil {
+		t.Errorf("javascript: URL should have been sanitized to nil, got %q", *usages[0].EditURL)
+	}
+	// Second usage had a valid https URL — must be preserved.
+	if usages[1].EditURL == nil {
+		t.Error("https URL should have been preserved, got nil")
+	} else if *usages[1].EditURL != goodURL {
+		t.Errorf("https URL: got %q, want %q", *usages[1].EditURL, goodURL)
+	}
+}
+
+// mediaCleanSanitizeAgent is a minimal AgentPerfClient fake for the edit-URL
+// sanitization test. All methods except MediaClean are delegated to fakeAgent.
+type mediaCleanSanitizeAgent struct {
+	fakeAgent
+	jsURL   *string
+	goodURL *string
+}
+
+func (a *mediaCleanSanitizeAgent) MediaClean(_ context.Context, _ uuid.UUID, _ string, req agentcmd.MediaCleanRequest) (agentcmd.MediaCleanResult, error) {
+	if req.Action != "scan" {
+		return agentcmd.MediaCleanResult{OK: false, Detail: "unexpected action"}, nil
+	}
+	return agentcmd.MediaCleanResult{
+		OK:    true,
+		Total: 0,
+		Referenced: []agentcmd.MediaCleanReferenced{
+			{
+				ID:    42,
+				Title: "test-image.jpg",
+				URL:   "https://example.com/wp-content/uploads/test-image.jpg",
+				Usages: []agentcmd.MediaCleanUsage{
+					{Surface: "post_content", EditURL: a.jsURL},
+					{Surface: "thumbnail", EditURL: a.goodURL},
+				},
+			},
+		},
+	}, nil
 }

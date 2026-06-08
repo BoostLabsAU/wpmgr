@@ -132,6 +132,26 @@ const (
 	// create/revert/delete; PermSiteRead for list. Metadata carries action,
 	// snapshot_id (on revert/delete), safety_id (on revert).
 	ActionDbSnapshot = "site.db.snapshot"
+
+	// #190 — media library cleaner. Four audit events cover the lifecycle of
+	// the scan / isolate / restore / delete flow.
+	//
+	// ActionMediaCleanScan is recorded on every successful scan page (READ-ONLY;
+	// PermSiteRead). Metadata: candidate_count, next_cursor (empty = done).
+	ActionMediaCleanScan = "site.media.clean.scan"
+	// ActionMediaCleanIsolate is recorded when attachments are moved to quarantine
+	// (REVERSIBLE; PermSiteWrite). Metadata: quarantined_count, total_size.
+	ActionMediaCleanIsolate = "site.media.clean.isolate"
+	// ActionMediaCleanRestore is recorded when quarantined attachments are moved
+	// back to the uploads directory (PermSiteWrite). Metadata: restored_count.
+	ActionMediaCleanRestore = "site.media.clean.restore"
+	// ActionMediaCleanDelete is recorded when quarantined attachments are
+	// PERMANENTLY deleted (PermSiteWrite + confirm="DELETE"). This is the
+	// irreversible step. Metadata: deleted_count, total_size.
+	ActionMediaCleanDelete = "site.media.clean.delete"
+	// ActionMediaCleanQuarantine is recorded on every successful quarantine list
+	// read (READ-ONLY; PermMediaCleanScan). Metadata: manifest_count.
+	ActionMediaCleanQuarantine = "site.media.clean.quarantine"
 )
 
 // Entry is one audit record.

@@ -188,6 +188,16 @@ type Invoker interface {
 	//
 	// POST /api/v1/cache/bulk-purge
 	BulkPurgeCache(ctx context.Context, request *BulkPurgeRequest) (*BulkResultList, error)
+	// CancelBackup invokes cancelBackup operation.
+	//
+	// Stops an in-flight backup by marking the snapshot failed
+	// ("cancelled by operator"). After cancel the snapshot is deletable and a
+	// late agent manifest submit is rejected. A snapshot that is already
+	// terminal (completed/failed) is refused with 409 (snapshot_not_cancelable).
+	// Requires operator+.
+	//
+	// POST /api/v1/backups/{snapshotId}/cancel
+	CancelBackup(ctx context.Context, params CancelBackupParams) (CancelBackupRes, error)
 	// CancelMedia invokes cancelMedia operation.
 	//
 	// Cancel all in-flight media jobs for a site.
@@ -262,6 +272,17 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/backups
 	CreateBackup(ctx context.Context, request *BackupCreate, params CreateBackupParams) (CreateBackupRes, error)
+	// CreateDbSnapshot invokes createDbSnapshot operation.
+	//
+	// Dumps the site's database to a local `.sql.gz` file on the WP server
+	// filesystem and records it in the snapshot manifest. This is a fast
+	// local safety-net — not an encrypted off-site backup.
+	// After the operation the oldest snapshots are pruned so the total count
+	// does not exceed the configured retention (default 5, max 20).
+	// Requires the `site:write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/snapshots
+	CreateDbSnapshot(ctx context.Context, request OptDbSnapshotCreate, params CreateDbSnapshotParams) (*DbSnapshotCreateResult, error)
 	// CreateOrg invokes createOrg operation.
 	//
 	// Create a new organisation; the caller becomes the owner.
@@ -335,6 +356,38 @@ type Invoker interface {
 	//
 	// POST /api/v1/updates
 	CreateUpdateRun(ctx context.Context, request *UpdateRunCreate) (CreateUpdateRunRes, error)
+	// DeleteBackup invokes deleteBackup operation.
+	//
+	// Deletes a completed or failed snapshot and reclaims any now-unreferenced
+	// chunks via the reachability-based retention GC over the surviving
+	// snapshots — a chunk a surviving snapshot still needs is never deleted.
+	// CHAIN-SAFE: deleting a base or mid-chain increment that still has
+	// dependent later-generation increments is refused with 422
+	// (chain_has_dependents); delete the newer increments first. A
+	// running/pending snapshot is refused with 422 (snapshot_in_progress) —
+	// cancel it first. Requires operator+.
+	//
+	// DELETE /api/v1/backups/{snapshotId}
+	DeleteBackup(ctx context.Context, params DeleteBackupParams) (DeleteBackupRes, error)
+	// DeleteDbSnapshot invokes deleteDbSnapshot operation.
+	//
+	// Removes a snapshot from the WP server's local store. This is
+	// irreversible. Requires the `site:write` permission (operator+).
+	//
+	// DELETE /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}
+	DeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (*DeleteDbSnapshotOK, error)
+	// DeleteIsolatedMedia invokes deleteIsolatedMedia operation.
+	//
+	// Permanently removes quarantined attachment files from disk and deletes
+	// the corresponding WordPress attachment posts. **This cannot be undone.**
+	// Only items already in the quarantine directory (isolated via the isolate
+	// endpoint) can be deleted through this path. A `confirm` token of
+	// `"DELETE"` must be included in the request body; the agent enforces this
+	// independently.
+	// Requires the `site.media.clean.write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/media/clean/delete
+	DeleteIsolatedMedia(ctx context.Context, request *MediaCleanDeleteRequest, params DeleteIsolatedMediaParams) (*MediaCleanDeleteResult, error)
 	// DeleteMediaOriginals invokes deleteMediaOriginals operation.
 	//
 	// Gated on the media:delete_originals permission (RoleAdmin minimum).
@@ -405,12 +458,35 @@ type Invoker interface {
 	//
 	// GET /api/v1/backups/{snapshotId}
 	GetBackup(ctx context.Context, params GetBackupParams) (GetBackupRes, error)
+	// GetBackupEnvironment invokes getBackupEnvironment operation.
+	//
+	// Returns the raw JSON the agent shipped as the synthetic `environment.json`
+	// manifest entry for a snapshot (PHP version, WordPress version, active
+	// plugins, server software, etc.). Returns 404 with code `env_not_recorded`
+	// for snapshots that pre-date the environment-fingerprint feature (agent
+	// v0.9.10+). Returns 503 when the environment reader is not wired on this
+	// control plane. Requires viewer+.
+	//
+	// GET /api/v1/backups/{snapshotId}/environment
+	GetBackupEnvironment(ctx context.Context, params GetBackupEnvironmentParams) (GetBackupEnvironmentRes, error)
 	// GetBackupSchedule invokes getBackupSchedule operation.
 	//
 	// Get a site's backup schedule.
 	//
 	// GET /api/v1/sites/{siteId}/backup-schedule
 	GetBackupSchedule(ctx context.Context, params GetBackupScheduleParams) (GetBackupScheduleRes, error)
+	// GetBackupSettingsContents invokes getBackupSettingsContents operation.
+	//
+	// Get a site's backup content scope settings (Track-A, m50).
+	//
+	// GET /api/v1/sites/{siteId}/backup-settings/contents
+	GetBackupSettingsContents(ctx context.Context, params GetBackupSettingsContentsParams) (GetBackupSettingsContentsRes, error)
+	// GetBackupSettingsNotifications invokes getBackupSettingsNotifications operation.
+	//
+	// Get a site's backup notification settings (Track-B, m50).
+	//
+	// GET /api/v1/sites/{siteId}/backup-settings/notifications
+	GetBackupSettingsNotifications(ctx context.Context, params GetBackupSettingsNotificationsParams) (GetBackupSettingsNotificationsRes, error)
 	// GetBackupSqlInspection invokes getBackupSqlInspection operation.
 	//
 	// Returns a structured report on the SQL dump artifact of a backup
@@ -574,6 +650,18 @@ type Invoker interface {
 	//
 	// POST /api/v1/members
 	InviteMember(ctx context.Context, request *InviteRequest) (InviteMemberRes, error)
+	// IsolateUnusedMedia invokes isolateUnusedMedia operation.
+	//
+	// Instructs the agent to move the original file and all generated thumbnail
+	// sizes for the specified attachment IDs into the quarantine directory
+	// (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+	// intact so the Restore operation can undo the move cleanly.
+	// **This operation is reversible** — use the restore endpoint to undo.
+	// The attachment IDs must have appeared in a recent scan result.
+	// Requires the `site.media.clean.write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/media/clean/isolate
+	IsolateUnusedMedia(ctx context.Context, request *MediaCleanIsolateRequest, params IsolateUnusedMediaParams) (*MediaCleanIsolateResult, error)
 	// ListApiKeys invokes listApiKeys operation.
 	//
 	// List API keys for the active tenant (admin+).
@@ -592,6 +680,14 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListDbSnapshots invokes listDbSnapshots operation.
+	//
+	// Returns the manifest of local database snapshots stored on the WP server.
+	// Snapshots are a fast local safety-net (not encrypted off-site backups).
+	// Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/db/snapshots
+	ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (*DbSnapshotList, error)
 	// ListMediaAssets invokes listMediaAssets operation.
 	//
 	// Cursor-paginated media library mirror with a summary rollup. Gated on
@@ -687,6 +783,15 @@ type Invoker interface {
 	//
 	// GET /api/v1/updates
 	ListUpdateRuns(ctx context.Context, params ListUpdateRunsParams) (*UpdateRunList, error)
+	// LockBackup invokes lockBackup operation.
+	//
+	// Sets `locked=true` on a completed snapshot. Locked snapshots are never
+	// auto-pruned by the retention GC regardless of age or count rules.
+	// The operator must explicitly DELETE the lock before the GC can reclaim it.
+	// Track C (m49). Requires operator+.
+	//
+	// PATCH /api/v1/backups/{snapshotId}/lock
+	LockBackup(ctx context.Context, params LockBackupParams) (LockBackupRes, error)
 	// Login invokes login operation.
 	//
 	// Email + password login.
@@ -775,6 +880,18 @@ type Invoker interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-schedule
 	PutBackupSchedule(ctx context.Context, request *BackupScheduleUpdate, params PutBackupScheduleParams) (PutBackupScheduleRes, error)
+	// PutBackupSettingsContents invokes putBackupSettingsContents operation.
+	//
+	// Create or update a site's backup content scope settings.
+	//
+	// PUT /api/v1/sites/{siteId}/backup-settings/contents
+	PutBackupSettingsContents(ctx context.Context, request *SiteBackupSettingsContentsUpdate, params PutBackupSettingsContentsParams) (PutBackupSettingsContentsRes, error)
+	// PutBackupSettingsNotifications invokes putBackupSettingsNotifications operation.
+	//
+	// Create or update a site's backup notification settings.
+	//
+	// PUT /api/v1/sites/{siteId}/backup-settings/notifications
+	PutBackupSettingsNotifications(ctx context.Context, request *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error)
 	// PutPerfConfig invokes putPerfConfig operation.
 	//
 	// Stores the new performance config and pushes it to the agent. If the
@@ -844,6 +961,14 @@ type Invoker interface {
 	//
 	// POST /auth/register
 	Register(ctx context.Context, request *RegisterRequest) (RegisterRes, error)
+	// RestoreIsolatedMedia invokes restoreIsolatedMedia operation.
+	//
+	// Moves quarantined attachment files back to the WordPress uploads directory
+	// using the quarantine manifest. The attachment posts are already intact.
+	// Requires the `site.media.clean.write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/media/clean/restore
+	RestoreIsolatedMedia(ctx context.Context, request *MediaCleanRestoreRequest, params RestoreIsolatedMediaParams) (*MediaCleanRestoreResult, error)
 	// RestoreMedia invokes restoreMedia operation.
 	//
 	// Restore selected attachments to their pre-optimization state.
@@ -857,6 +982,19 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/restore
 	RestoreSite(ctx context.Context, params RestoreSiteParams) (RestoreSiteRes, error)
+	// RevertDbSnapshot invokes revertDbSnapshot operation.
+	//
+	// Replaces the entire live database with the SQL captured in a local
+	// snapshot. **This is irreversible without another backup.**
+	// An automatic safety snapshot is taken immediately before the import
+	// so the pre-revert state is preserved locally (returned as `safety_id`).
+	// The `confirm` field in the request body MUST equal `"REVERT"` exactly.
+	// The agent enforces this independently — a request without the token is
+	// rejected.
+	// Requires the `site:write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert
+	RevertDbSnapshot(ctx context.Context, request *DbSnapshotRevert, params RevertDbSnapshotParams) (*DbSnapshotRevertResult, error)
 	// RevokeApiKey invokes revokeApiKey operation.
 	//
 	// Revoke an API key (admin+).
@@ -876,6 +1014,37 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/revoke
 	RevokeSite(ctx context.Context, request OptSiteLifecycleReason, params RevokeSiteParams) (RevokeSiteRes, error)
+	// RunSearchReplace invokes runSearchReplace operation.
+	//
+	// Dispatches a serialization-safe search-replace command to the site's
+	// agent. The command handles PHP-serialized blobs correctly by
+	// unserializing, walking the data structure, replacing only string leaves,
+	// and re-serializing (so `s:NN:` length prefixes are always recomputed).
+	// **Always call with `dry_run: true` first** to get a preview of how many
+	// rows would change before committing. The UI enforces this flow.
+	// When `dry_run: false` and no recent backup is found, the response
+	// includes an `X-Backup-Warning` header.
+	// Requires the `site:write` permission (operator+).
+	//
+	// POST /api/v1/sites/{siteId}/perf/db/search-replace
+	RunSearchReplace(ctx context.Context, request *SearchReplaceRequest, params RunSearchReplaceParams) (*SearchReplaceResultHeaders, error)
+	// ScanUnusedMedia invokes scanUnusedMedia operation.
+	//
+	// Dispatches a read-only scan to the site's agent. The agent walks the
+	// WordPress media library and checks every attachment against an exhaustive
+	// set of reference surfaces (post_content, postmeta, options, termmeta,
+	// usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+	// nav menus, and more). Attachments for which no reference is found are
+	// returned as candidates.
+	// **Conservative rule**: when a check cannot run or the result is ambiguous
+	// the attachment is treated as referenced (safe). False negatives (calling a
+	// used image unused) are the dangerous failure; this implementation prefers
+	// false positives.
+	// Paginated by `offset`. Results are ordered by attachment ID ascending.
+	// Requires the `site.media.clean.scan` permission (viewer+).
+	//
+	// GET /api/v1/sites/{siteId}/media/clean/scan
+	ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (*MediaCleanScanResult, error)
 	// SetSiteTags invokes setSiteTags operation.
 	//
 	// Replace the tag set on a site.
@@ -936,6 +1105,13 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/security/unblock-ip
 	UnblockSiteIP(ctx context.Context, request *UnblockIPRequest, params UnblockSiteIPParams) (UnblockSiteIPRes, error)
+	// UnlockBackup invokes unlockBackup operation.
+	//
+	// Clears the `locked` flag, making the snapshot eligible for normal
+	// retention GC again. Track C (m49). Requires operator+.
+	//
+	// DELETE /api/v1/backups/{snapshotId}/lock
+	UnlockBackup(ctx context.Context, params UnlockBackupParams) (UnlockBackupRes, error)
 	// UpdateSiteDestination invokes updateSiteDestination operation.
 	//
 	// Update a configured destination (omit secret_key to keep it).
@@ -2782,6 +2958,103 @@ func (c *Client) sendBulkPurgeCache(ctx context.Context, request *BulkPurgeReque
 	return result, nil
 }
 
+// CancelBackup invokes cancelBackup operation.
+//
+// Stops an in-flight backup by marking the snapshot failed
+// ("cancelled by operator"). After cancel the snapshot is deletable and a
+// late agent manifest submit is rejected. A snapshot that is already
+// terminal (completed/failed) is refused with 409 (snapshot_not_cancelable).
+// Requires operator+.
+//
+// POST /api/v1/backups/{snapshotId}/cancel
+func (c *Client) CancelBackup(ctx context.Context, params CancelBackupParams) (CancelBackupRes, error) {
+	res, err := c.sendCancelBackup(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendCancelBackup(ctx context.Context, params CancelBackupParams) (res CancelBackupRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("cancelBackup"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/backups/{snapshotId}/cancel"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, CancelBackupOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/backups/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/cancel"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeCancelBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // CancelMedia invokes cancelMedia operation.
 //
 // Cancel all in-flight media jobs for a site.
@@ -3451,6 +3724,107 @@ func (c *Client) sendCreateBackup(ctx context.Context, request *BackupCreate, pa
 
 	stage = "DecodeResponse"
 	result, err := decodeCreateBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// CreateDbSnapshot invokes createDbSnapshot operation.
+//
+// Dumps the site's database to a local `.sql.gz` file on the WP server
+// filesystem and records it in the snapshot manifest. This is a fast
+// local safety-net — not an encrypted off-site backup.
+// After the operation the oldest snapshots are pruned so the total count
+// does not exceed the configured retention (default 5, max 20).
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/snapshots
+func (c *Client) CreateDbSnapshot(ctx context.Context, request OptDbSnapshotCreate, params CreateDbSnapshotParams) (*DbSnapshotCreateResult, error) {
+	res, err := c.sendCreateDbSnapshot(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendCreateDbSnapshot(ctx context.Context, request OptDbSnapshotCreate, params CreateDbSnapshotParams) (res *DbSnapshotCreateResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("createDbSnapshot"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/snapshots"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, CreateDbSnapshotOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/snapshots"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeCreateDbSnapshotRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeCreateDbSnapshotResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -4149,6 +4523,319 @@ func (c *Client) sendCreateUpdateRun(ctx context.Context, request *UpdateRunCrea
 
 	stage = "DecodeResponse"
 	result, err := decodeCreateUpdateRunResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteBackup invokes deleteBackup operation.
+//
+// Deletes a completed or failed snapshot and reclaims any now-unreferenced
+// chunks via the reachability-based retention GC over the surviving
+// snapshots — a chunk a surviving snapshot still needs is never deleted.
+// CHAIN-SAFE: deleting a base or mid-chain increment that still has
+// dependent later-generation increments is refused with 422
+// (chain_has_dependents); delete the newer increments first. A
+// running/pending snapshot is refused with 422 (snapshot_in_progress) —
+// cancel it first. Requires operator+.
+//
+// DELETE /api/v1/backups/{snapshotId}
+func (c *Client) DeleteBackup(ctx context.Context, params DeleteBackupParams) (DeleteBackupRes, error) {
+	res, err := c.sendDeleteBackup(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteBackup(ctx context.Context, params DeleteBackupParams) (res DeleteBackupRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteBackup"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/backups/{snapshotId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteBackupOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/backups/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteDbSnapshot invokes deleteDbSnapshot operation.
+//
+// Removes a snapshot from the WP server's local store. This is
+// irreversible. Requires the `site:write` permission (operator+).
+//
+// DELETE /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}
+func (c *Client) DeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (*DeleteDbSnapshotOK, error) {
+	res, err := c.sendDeleteDbSnapshot(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (res *DeleteDbSnapshotOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteDbSnapshot"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteDbSnapshotOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [4]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/snapshots/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteDbSnapshotResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteIsolatedMedia invokes deleteIsolatedMedia operation.
+//
+// Permanently removes quarantined attachment files from disk and deletes
+// the corresponding WordPress attachment posts. **This cannot be undone.**
+// Only items already in the quarantine directory (isolated via the isolate
+// endpoint) can be deleted through this path. A `confirm` token of
+// `"DELETE"` must be included in the request body; the agent enforces this
+// independently.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/delete
+func (c *Client) DeleteIsolatedMedia(ctx context.Context, request *MediaCleanDeleteRequest, params DeleteIsolatedMediaParams) (*MediaCleanDeleteResult, error) {
+	res, err := c.sendDeleteIsolatedMedia(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteIsolatedMedia(ctx context.Context, request *MediaCleanDeleteRequest, params DeleteIsolatedMediaParams) (res *MediaCleanDeleteResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteIsolatedMedia"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/media/clean/delete"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteIsolatedMediaOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/media/clean/delete"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeDeleteIsolatedMediaRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteIsolatedMediaResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -5097,6 +5784,104 @@ func (c *Client) sendGetBackup(ctx context.Context, params GetBackupParams) (res
 	return result, nil
 }
 
+// GetBackupEnvironment invokes getBackupEnvironment operation.
+//
+// Returns the raw JSON the agent shipped as the synthetic `environment.json`
+// manifest entry for a snapshot (PHP version, WordPress version, active
+// plugins, server software, etc.). Returns 404 with code `env_not_recorded`
+// for snapshots that pre-date the environment-fingerprint feature (agent
+// v0.9.10+). Returns 503 when the environment reader is not wired on this
+// control plane. Requires viewer+.
+//
+// GET /api/v1/backups/{snapshotId}/environment
+func (c *Client) GetBackupEnvironment(ctx context.Context, params GetBackupEnvironmentParams) (GetBackupEnvironmentRes, error) {
+	res, err := c.sendGetBackupEnvironment(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetBackupEnvironment(ctx context.Context, params GetBackupEnvironmentParams) (res GetBackupEnvironmentRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getBackupEnvironment"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/backups/{snapshotId}/environment"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetBackupEnvironmentOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/backups/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/environment"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetBackupEnvironmentResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetBackupSchedule invokes getBackupSchedule operation.
 //
 // Get a site's backup schedule.
@@ -5183,6 +5968,192 @@ func (c *Client) sendGetBackupSchedule(ctx context.Context, params GetBackupSche
 
 	stage = "DecodeResponse"
 	result, err := decodeGetBackupScheduleResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetBackupSettingsContents invokes getBackupSettingsContents operation.
+//
+// Get a site's backup content scope settings (Track-A, m50).
+//
+// GET /api/v1/sites/{siteId}/backup-settings/contents
+func (c *Client) GetBackupSettingsContents(ctx context.Context, params GetBackupSettingsContentsParams) (GetBackupSettingsContentsRes, error) {
+	res, err := c.sendGetBackupSettingsContents(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetBackupSettingsContents(ctx context.Context, params GetBackupSettingsContentsParams) (res GetBackupSettingsContentsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getBackupSettingsContents"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/backup-settings/contents"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetBackupSettingsContentsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/backup-settings/contents"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetBackupSettingsContentsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetBackupSettingsNotifications invokes getBackupSettingsNotifications operation.
+//
+// Get a site's backup notification settings (Track-B, m50).
+//
+// GET /api/v1/sites/{siteId}/backup-settings/notifications
+func (c *Client) GetBackupSettingsNotifications(ctx context.Context, params GetBackupSettingsNotificationsParams) (GetBackupSettingsNotificationsRes, error) {
+	res, err := c.sendGetBackupSettingsNotifications(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetBackupSettingsNotifications(ctx context.Context, params GetBackupSettingsNotificationsParams) (res GetBackupSettingsNotificationsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getBackupSettingsNotifications"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/backup-settings/notifications"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetBackupSettingsNotificationsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/backup-settings/notifications"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetBackupSettingsNotificationsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -7055,6 +8026,108 @@ func (c *Client) sendInviteMember(ctx context.Context, request *InviteRequest) (
 	return result, nil
 }
 
+// IsolateUnusedMedia invokes isolateUnusedMedia operation.
+//
+// Instructs the agent to move the original file and all generated thumbnail
+// sizes for the specified attachment IDs into the quarantine directory
+// (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+// intact so the Restore operation can undo the move cleanly.
+// **This operation is reversible** — use the restore endpoint to undo.
+// The attachment IDs must have appeared in a recent scan result.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/isolate
+func (c *Client) IsolateUnusedMedia(ctx context.Context, request *MediaCleanIsolateRequest, params IsolateUnusedMediaParams) (*MediaCleanIsolateResult, error) {
+	res, err := c.sendIsolateUnusedMedia(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendIsolateUnusedMedia(ctx context.Context, request *MediaCleanIsolateRequest, params IsolateUnusedMediaParams) (res *MediaCleanIsolateResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("isolateUnusedMedia"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/media/clean/isolate"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, IsolateUnusedMediaOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/media/clean/isolate"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeIsolateUnusedMediaRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeIsolateUnusedMediaResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // ListApiKeys invokes listApiKeys operation.
 //
 // List API keys for the active tenant (admin+).
@@ -7403,6 +8476,101 @@ func (c *Client) sendListBackups(ctx context.Context, params ListBackupsParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeListBackupsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListDbSnapshots invokes listDbSnapshots operation.
+//
+// Returns the manifest of local database snapshots stored on the WP server.
+// Snapshots are a fast local safety-net (not encrypted off-site backups).
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/db/snapshots
+func (c *Client) ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (*DbSnapshotList, error) {
+	res, err := c.sendListDbSnapshots(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (res *DbSnapshotList, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listDbSnapshots"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/snapshots"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListDbSnapshotsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/snapshots"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListDbSnapshotsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -9193,6 +10361,102 @@ func (c *Client) sendListUpdateRuns(ctx context.Context, params ListUpdateRunsPa
 	return result, nil
 }
 
+// LockBackup invokes lockBackup operation.
+//
+// Sets `locked=true` on a completed snapshot. Locked snapshots are never
+// auto-pruned by the retention GC regardless of age or count rules.
+// The operator must explicitly DELETE the lock before the GC can reclaim it.
+// Track C (m49). Requires operator+.
+//
+// PATCH /api/v1/backups/{snapshotId}/lock
+func (c *Client) LockBackup(ctx context.Context, params LockBackupParams) (LockBackupRes, error) {
+	res, err := c.sendLockBackup(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendLockBackup(ctx context.Context, params LockBackupParams) (res LockBackupRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("lockBackup"),
+		semconv.HTTPRequestMethodKey.String("PATCH"),
+		semconv.URLTemplateKey.String("/api/v1/backups/{snapshotId}/lock"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, LockBackupOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/backups/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/lock"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PATCH", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeLockBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // Login invokes login operation.
 //
 // Email + password login.
@@ -10201,6 +11465,198 @@ func (c *Client) sendPutBackupSchedule(ctx context.Context, request *BackupSched
 	return result, nil
 }
 
+// PutBackupSettingsContents invokes putBackupSettingsContents operation.
+//
+// Create or update a site's backup content scope settings.
+//
+// PUT /api/v1/sites/{siteId}/backup-settings/contents
+func (c *Client) PutBackupSettingsContents(ctx context.Context, request *SiteBackupSettingsContentsUpdate, params PutBackupSettingsContentsParams) (PutBackupSettingsContentsRes, error) {
+	res, err := c.sendPutBackupSettingsContents(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutBackupSettingsContents(ctx context.Context, request *SiteBackupSettingsContentsUpdate, params PutBackupSettingsContentsParams) (res PutBackupSettingsContentsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putBackupSettingsContents"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/backup-settings/contents"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutBackupSettingsContentsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/backup-settings/contents"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutBackupSettingsContentsRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutBackupSettingsContentsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PutBackupSettingsNotifications invokes putBackupSettingsNotifications operation.
+//
+// Create or update a site's backup notification settings.
+//
+// PUT /api/v1/sites/{siteId}/backup-settings/notifications
+func (c *Client) PutBackupSettingsNotifications(ctx context.Context, request *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error) {
+	res, err := c.sendPutBackupSettingsNotifications(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutBackupSettingsNotifications(ctx context.Context, request *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (res PutBackupSettingsNotificationsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putBackupSettingsNotifications"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/backup-settings/notifications"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutBackupSettingsNotificationsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/backup-settings/notifications"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutBackupSettingsNotificationsRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutBackupSettingsNotificationsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // PutPerfConfig invokes putPerfConfig operation.
 //
 // Stores the new performance config and pushes it to the agent. If the
@@ -10785,6 +12241,104 @@ func (c *Client) sendRegister(ctx context.Context, request *RegisterRequest) (re
 	return result, nil
 }
 
+// RestoreIsolatedMedia invokes restoreIsolatedMedia operation.
+//
+// Moves quarantined attachment files back to the WordPress uploads directory
+// using the quarantine manifest. The attachment posts are already intact.
+// Requires the `site.media.clean.write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/media/clean/restore
+func (c *Client) RestoreIsolatedMedia(ctx context.Context, request *MediaCleanRestoreRequest, params RestoreIsolatedMediaParams) (*MediaCleanRestoreResult, error) {
+	res, err := c.sendRestoreIsolatedMedia(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendRestoreIsolatedMedia(ctx context.Context, request *MediaCleanRestoreRequest, params RestoreIsolatedMediaParams) (res *MediaCleanRestoreResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("restoreIsolatedMedia"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/media/clean/restore"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, RestoreIsolatedMediaOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/media/clean/restore"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeRestoreIsolatedMediaRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeRestoreIsolatedMediaResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // RestoreMedia invokes restoreMedia operation.
 //
 // Restore selected attachments to their pre-optimization state.
@@ -10968,6 +12522,128 @@ func (c *Client) sendRestoreSite(ctx context.Context, params RestoreSiteParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeRestoreSiteResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// RevertDbSnapshot invokes revertDbSnapshot operation.
+//
+// Replaces the entire live database with the SQL captured in a local
+// snapshot. **This is irreversible without another backup.**
+// An automatic safety snapshot is taken immediately before the import
+// so the pre-revert state is preserved locally (returned as `safety_id`).
+// The `confirm` field in the request body MUST equal `"REVERT"` exactly.
+// The agent enforces this independently — a request without the token is
+// rejected.
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert
+func (c *Client) RevertDbSnapshot(ctx context.Context, request *DbSnapshotRevert, params RevertDbSnapshotParams) (*DbSnapshotRevertResult, error) {
+	res, err := c.sendRevertDbSnapshot(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendRevertDbSnapshot(ctx context.Context, request *DbSnapshotRevert, params RevertDbSnapshotParams) (res *DbSnapshotRevertResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("revertDbSnapshot"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}/revert"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, RevertDbSnapshotOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [5]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/snapshots/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.StringToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	pathParts[4] = "/revert"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeRevertDbSnapshotRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeRevertDbSnapshotResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11163,6 +12839,252 @@ func (c *Client) sendRevokeSite(ctx context.Context, request OptSiteLifecycleRea
 
 	stage = "DecodeResponse"
 	result, err := decodeRevokeSiteResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// RunSearchReplace invokes runSearchReplace operation.
+//
+// Dispatches a serialization-safe search-replace command to the site's
+// agent. The command handles PHP-serialized blobs correctly by
+// unserializing, walking the data structure, replacing only string leaves,
+// and re-serializing (so `s:NN:` length prefixes are always recomputed).
+// **Always call with `dry_run: true` first** to get a preview of how many
+// rows would change before committing. The UI enforces this flow.
+// When `dry_run: false` and no recent backup is found, the response
+// includes an `X-Backup-Warning` header.
+// Requires the `site:write` permission (operator+).
+//
+// POST /api/v1/sites/{siteId}/perf/db/search-replace
+func (c *Client) RunSearchReplace(ctx context.Context, request *SearchReplaceRequest, params RunSearchReplaceParams) (*SearchReplaceResultHeaders, error) {
+	res, err := c.sendRunSearchReplace(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendRunSearchReplace(ctx context.Context, request *SearchReplaceRequest, params RunSearchReplaceParams) (res *SearchReplaceResultHeaders, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("runSearchReplace"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/db/search-replace"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, RunSearchReplaceOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/db/search-replace"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeRunSearchReplaceRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeRunSearchReplaceResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ScanUnusedMedia invokes scanUnusedMedia operation.
+//
+// Dispatches a read-only scan to the site's agent. The agent walks the
+// WordPress media library and checks every attachment against an exhaustive
+// set of reference surfaces (post_content, postmeta, options, termmeta,
+// usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+// nav menus, and more). Attachments for which no reference is found are
+// returned as candidates.
+// **Conservative rule**: when a check cannot run or the result is ambiguous
+// the attachment is treated as referenced (safe). False negatives (calling a
+// used image unused) are the dangerous failure; this implementation prefers
+// false positives.
+// Paginated by `offset`. Results are ordered by attachment ID ascending.
+// Requires the `site.media.clean.scan` permission (viewer+).
+//
+// GET /api/v1/sites/{siteId}/media/clean/scan
+func (c *Client) ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (*MediaCleanScanResult, error) {
+	res, err := c.sendScanUnusedMedia(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (res *MediaCleanScanResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("scanUnusedMedia"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/media/clean/scan"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ScanUnusedMediaOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/media/clean/scan"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "offset" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "offset",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Offset.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeScanUnusedMediaResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11868,6 +13790,100 @@ func (c *Client) sendUnblockSiteIP(ctx context.Context, request *UnblockIPReques
 
 	stage = "DecodeResponse"
 	result, err := decodeUnblockSiteIPResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// UnlockBackup invokes unlockBackup operation.
+//
+// Clears the `locked` flag, making the snapshot eligible for normal
+// retention GC again. Track C (m49). Requires operator+.
+//
+// DELETE /api/v1/backups/{snapshotId}/lock
+func (c *Client) UnlockBackup(ctx context.Context, params UnlockBackupParams) (UnlockBackupRes, error) {
+	res, err := c.sendUnlockBackup(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendUnlockBackup(ctx context.Context, params UnlockBackupParams) (res UnlockBackupRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("unlockBackup"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/backups/{snapshotId}/lock"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, UnlockBackupOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/backups/"
+	{
+		// Encode "snapshotId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "snapshotId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SnapshotId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/lock"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeUnlockBackupResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

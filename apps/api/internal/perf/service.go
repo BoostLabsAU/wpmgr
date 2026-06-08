@@ -38,6 +38,8 @@ type AgentPerfClient interface {
 	SearchReplace(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.SearchReplaceRequest) (agentcmd.SearchReplaceResult, error)
 	// #189 — local database snapshot (create/list/revert/delete).
 	DbSnapshot(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.DbSnapshotRequest) (agentcmd.DbSnapshotResult, error)
+	// #190 — media library cleaner (scan/isolate/restore/delete).
+	MediaClean(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.MediaCleanRequest) (agentcmd.MediaCleanResult, error)
 }
 
 // BackupChecker reports whether a site has a successful backup within a given
@@ -1581,6 +1583,20 @@ func marshalJSONArray(v any) []byte {
 	return b
 }
 
+// sanitizeEditURL returns u unchanged when its scheme is http or https, and nil
+// otherwise. This guards the web client's anchor href sink against non-http(s)
+// schemes that a compromised agent could inject.
+func sanitizeEditURL(u *string) *string {
+	if u == nil {
+		return nil
+	}
+	p, err := url.Parse(*u)
+	if err != nil || (p.Scheme != "http" && p.Scheme != "https") {
+		return nil
+	}
+	return u
+}
+
 func (s *Service) publish(ctx context.Context, tenantID, siteID uuid.UUID, eventType string, data map[string]any) {
 	if s.events == nil {
 		return
@@ -1822,6 +1838,406 @@ type DbSnapshotOutput struct {
 	Detail string
 	// SafetyID is the auto-safety snapshot taken before a revert, may be "".
 	SafetyID string
+}
+
+// ---------------------------------------------------------------------------
+// #190 — media library cleaner
+// ---------------------------------------------------------------------------
+
+// MediaCleanScanInput is the validated operator input for a scan page.
+type MediaCleanScanInput struct {
+	// JobID is unused for scan but kept for contract uniformity.
+	JobID string
+	// Offset is the zero-based attachment offset for pagination.
+	Offset int
+	// Limit is the number of candidates per page (1–500, default 100).
+	Limit int
+}
+
+// MediaCleanScanOutput is returned by Service.MediaCleanScan.
+type MediaCleanScanOutput struct {
+	OK               bool
+	Total            int
+	Candidates       []agentcmd.MediaCleanCandidate
+	HasMore          bool
+	Truncated        bool
+	TotalAttachments int
+	ReferencedCount  int
+	UnusedCount      int
+	Referenced       []agentcmd.MediaCleanReferenced
+	Detail           string
+}
+
+// MediaCleanIsolateInput is the validated operator input for isolate.
+type MediaCleanIsolateInput struct {
+	// JobID is a CP-minted UUID v4 for idempotency. Required.
+	JobID         string
+	AttachmentIDs []int64
+}
+
+// MediaCleanIsolateOutput is returned by Service.MediaCleanIsolate.
+// ManifestID is the opaque quarantine manifest identifier returned by the
+// agent. The operator must store this and pass it back for restore/delete.
+type MediaCleanIsolateOutput struct {
+	OK              bool
+	JobID           string
+	Moved           int
+	ManifestID      string
+	EntriesRecorded int
+	PerAttachment   []agentcmd.MediaCleanIsolatePer
+	Detail          string
+}
+
+// MediaCleanRestoreInput is the validated operator input for restore.
+type MediaCleanRestoreInput struct {
+	// JobID is a CP-minted UUID v4 for idempotency.
+	JobID         string
+	// QuarantineIDs are the opaque manifest IDs returned by prior isolate calls.
+	QuarantineIDs []string
+}
+
+// MediaCleanRestoreOutput is returned by Service.MediaCleanRestore.
+type MediaCleanRestoreOutput struct {
+	OK       bool
+	JobID    string
+	Restored int
+	Detail   string
+}
+
+// MediaCleanDeleteInput is the validated operator input for the permanent delete.
+type MediaCleanDeleteInput struct {
+	// JobID is a CP-minted UUID v4 for idempotency.
+	JobID         string
+	// QuarantineIDs are the opaque manifest IDs to permanently remove.
+	QuarantineIDs []string
+	// Confirm MUST equal "DELETE" (case-sensitive). The agent enforces this
+	// independently via hash_equals so a mutated body cannot bypass the gate.
+	Confirm string
+}
+
+// MediaCleanDeleteOutput is returned by Service.MediaCleanDelete.
+type MediaCleanDeleteOutput struct {
+	OK               bool
+	JobID            string
+	Deleted          int
+	PostsDeleted     int
+	PostsFailed      int
+	FilesDeleted     int
+	EntriesProcessed int
+	Results          []agentcmd.MediaCleanDeleteResult
+	Detail           string
+}
+
+const mediaCleanDeleteConfirmToken = "DELETE"
+
+// MediaCleanScan dispatches a read-only scan page to the site's agent and
+// returns the candidate batch. The scan is stateless per request; the caller
+// paginates via offset/limit using the total returned in each response.
+func (s *Service) MediaCleanScan(ctx context.Context, tenantID, siteID uuid.UUID, in MediaCleanScanInput) (MediaCleanScanOutput, error) {
+	if s.agent == nil {
+		return MediaCleanScanOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return MediaCleanScanOutput{}, err
+	}
+
+	limit := in.Limit
+	if limit < 1 || limit > 500 {
+		limit = 100
+	}
+	offset := in.Offset
+	if offset < 0 {
+		offset = 0
+	}
+
+	res, agentErr := s.agent.MediaClean(ctx, siteID, siteURL, agentcmd.MediaCleanRequest{
+		Action: "scan",
+		Limit:  limit,
+		Offset: offset,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanScanFailed, map[string]any{
+			"error":  agentErr.Error(),
+			"offset": offset,
+			"limit":  limit,
+		})
+		return MediaCleanScanOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanScanFailed, map[string]any{
+			"detail": res.Detail,
+			"offset": offset,
+			"limit":  limit,
+		})
+		return MediaCleanScanOutput{}, fmt.Errorf("media_clean scan refused by agent: %s", res.Detail)
+	}
+
+	candidates := res.Candidates
+	if candidates == nil {
+		candidates = []agentcmd.MediaCleanCandidate{}
+	}
+
+	// Sanitize edit_url values: only http/https links are forwarded to the web
+	// client. Any other scheme (e.g. javascript:, data:) is set to nil here as
+	// a defense-in-depth guard; the agent is an untrusted boundary.
+	rawReferenced := res.Referenced
+	referenced := make([]agentcmd.MediaCleanReferenced, len(rawReferenced))
+	for i, ref := range rawReferenced {
+		sanitized := make([]agentcmd.MediaCleanUsage, len(ref.Usages))
+		for j, u := range ref.Usages {
+			u.EditURL = sanitizeEditURL(u.EditURL)
+			sanitized[j] = u
+		}
+		ref.Usages = sanitized
+		referenced[i] = ref
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventMediaCleanScanCompleted, map[string]any{
+		"candidate_count":   len(candidates),
+		"total":             res.Total,
+		"has_more":          res.HasMore,
+		"truncated":         res.Truncated,
+		"total_attachments": res.TotalAttachments,
+		"referenced_count":  res.ReferencedCount,
+		"offset":            offset,
+	})
+
+	return MediaCleanScanOutput{
+		OK:               res.OK,
+		Total:            res.Total,
+		Candidates:       candidates,
+		HasMore:          res.HasMore,
+		Truncated:        res.Truncated,
+		TotalAttachments: res.TotalAttachments,
+		ReferencedCount:  res.ReferencedCount,
+		UnusedCount:      res.UnusedCount,
+		Referenced:       referenced,
+		Detail:           res.Detail,
+	}, nil
+}
+
+// MediaCleanIsolate moves the given attachments to the agent-side quarantine
+// directory (reversible). The agent writes a manifest; the returned ManifestID
+// must be stored by the operator and passed to restore or delete.
+func (s *Service) MediaCleanIsolate(ctx context.Context, tenantID, siteID uuid.UUID, in MediaCleanIsolateInput) (MediaCleanIsolateOutput, error) {
+	if s.agent == nil {
+		return MediaCleanIsolateOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	if in.JobID == "" {
+		return MediaCleanIsolateOutput{}, domain.Validation("missing_job_id", "job_id is required for isolate")
+	}
+	if len(in.AttachmentIDs) == 0 {
+		return MediaCleanIsolateOutput{}, domain.Validation("no_attachment_ids", "at least one attachment_id is required")
+	}
+	if len(in.AttachmentIDs) > 200 {
+		return MediaCleanIsolateOutput{}, domain.Validation("too_many_attachments", "batch limit is 200 attachments per request")
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return MediaCleanIsolateOutput{}, err
+	}
+
+	res, agentErr := s.agent.MediaClean(ctx, siteID, siteURL, agentcmd.MediaCleanRequest{
+		Action:        "isolate",
+		JobID:         in.JobID,
+		AttachmentIDs: in.AttachmentIDs,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanIsolateFailed, map[string]any{
+			"error":         agentErr.Error(),
+			"requested_ids": len(in.AttachmentIDs),
+		})
+		return MediaCleanIsolateOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanIsolateFailed, map[string]any{
+			"detail":        res.Detail,
+			"requested_ids": len(in.AttachmentIDs),
+		})
+		return MediaCleanIsolateOutput{}, fmt.Errorf("media_clean isolate refused by agent: %s", res.Detail)
+	}
+
+	perAttachment := res.PerAttachment
+	if perAttachment == nil {
+		perAttachment = []agentcmd.MediaCleanIsolatePer{}
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventMediaCleanIsolateDone, map[string]any{
+		"moved":            res.Moved,
+		"manifest_id":      res.ManifestID,
+		"entries_recorded": res.EntriesRecorded,
+	})
+
+	return MediaCleanIsolateOutput{
+		OK:              res.OK,
+		JobID:           res.JobID,
+		Moved:           res.Moved,
+		ManifestID:      res.ManifestID,
+		EntriesRecorded: res.EntriesRecorded,
+		PerAttachment:   perAttachment,
+		Detail:          res.Detail,
+	}, nil
+}
+
+// MediaCleanRestore reverses an isolate — moves quarantined files back to
+// their original paths using the agent-side manifest records.
+func (s *Service) MediaCleanRestore(ctx context.Context, tenantID, siteID uuid.UUID, in MediaCleanRestoreInput) (MediaCleanRestoreOutput, error) {
+	if s.agent == nil {
+		return MediaCleanRestoreOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	if in.JobID == "" {
+		return MediaCleanRestoreOutput{}, domain.Validation("missing_job_id", "job_id is required for restore")
+	}
+	if len(in.QuarantineIDs) == 0 {
+		return MediaCleanRestoreOutput{}, domain.Validation("no_quarantine_ids", "at least one quarantine_id is required")
+	}
+	if len(in.QuarantineIDs) > 200 {
+		return MediaCleanRestoreOutput{}, domain.Validation("too_many_quarantine_ids", "batch limit is 200 quarantine IDs per request")
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return MediaCleanRestoreOutput{}, err
+	}
+
+	res, agentErr := s.agent.MediaClean(ctx, siteID, siteURL, agentcmd.MediaCleanRequest{
+		Action:        "restore",
+		JobID:         in.JobID,
+		QuarantineIDs: in.QuarantineIDs,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanRestoreFailed, map[string]any{
+			"error":                agentErr.Error(),
+			"requested_manifests": len(in.QuarantineIDs),
+		})
+		return MediaCleanRestoreOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanRestoreFailed, map[string]any{
+			"detail":              res.Detail,
+			"requested_manifests": len(in.QuarantineIDs),
+		})
+		return MediaCleanRestoreOutput{}, fmt.Errorf("media_clean restore refused by agent: %s", res.Detail)
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventMediaCleanRestoreDone, map[string]any{
+		"restored": res.Restored,
+	})
+
+	return MediaCleanRestoreOutput{
+		OK:       res.OK,
+		JobID:    res.JobID,
+		Restored: res.Restored,
+		Detail:   res.Detail,
+	}, nil
+}
+
+// MediaCleanDelete permanently removes quarantined attachments from the
+// filesystem and force-deletes their attachment posts. This action is
+// IRREVERSIBLE. The caller must supply confirm="DELETE"; the agent enforces
+// this independently via hash_equals.
+func (s *Service) MediaCleanDelete(ctx context.Context, tenantID, siteID uuid.UUID, in MediaCleanDeleteInput) (MediaCleanDeleteOutput, error) {
+	if s.agent == nil {
+		return MediaCleanDeleteOutput{}, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+	if in.JobID == "" {
+		return MediaCleanDeleteOutput{}, domain.Validation("missing_job_id", "job_id is required for delete")
+	}
+	if len(in.QuarantineIDs) == 0 {
+		return MediaCleanDeleteOutput{}, domain.Validation("no_quarantine_ids", "at least one quarantine_id is required")
+	}
+	if len(in.QuarantineIDs) > 200 {
+		return MediaCleanDeleteOutput{}, domain.Validation("too_many_quarantine_ids", "batch limit is 200 quarantine IDs per request")
+	}
+	if in.Confirm != mediaCleanDeleteConfirmToken {
+		return MediaCleanDeleteOutput{}, domain.Validation("confirm_required",
+			`confirm must equal "DELETE" to permanently remove quarantined attachments`)
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return MediaCleanDeleteOutput{}, err
+	}
+
+	res, agentErr := s.agent.MediaClean(ctx, siteID, siteURL, agentcmd.MediaCleanRequest{
+		Action:        "delete",
+		JobID:         in.JobID,
+		QuarantineIDs: in.QuarantineIDs,
+		Confirm:       in.Confirm,
+	})
+	if agentErr != nil {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanDeleteFailed, map[string]any{
+			"error":               agentErr.Error(),
+			"requested_manifests": len(in.QuarantineIDs),
+		})
+		return MediaCleanDeleteOutput{}, agentErr
+	}
+	if !res.OK {
+		s.publish(ctx, tenantID, siteID, site.EventMediaCleanDeleteFailed, map[string]any{
+			"detail":              res.Detail,
+			"requested_manifests": len(in.QuarantineIDs),
+		})
+		return MediaCleanDeleteOutput{}, fmt.Errorf("media_clean delete refused by agent: %s", res.Detail)
+	}
+
+	results := res.Results
+	if results == nil {
+		results = []agentcmd.MediaCleanDeleteResult{}
+	}
+
+	s.publish(ctx, tenantID, siteID, site.EventMediaCleanDeleteDone, map[string]any{
+		"deleted":           res.Deleted,
+		"posts_deleted":     res.PostsDeleted,
+		"posts_failed":      res.PostsFailed,
+		"files_deleted":     res.FilesDeleted,
+		"entries_processed": res.EntriesProcessed,
+	})
+
+	return MediaCleanDeleteOutput{
+		OK:               res.OK,
+		JobID:            res.JobID,
+		Deleted:          res.Deleted,
+		PostsDeleted:     res.PostsDeleted,
+		PostsFailed:      res.PostsFailed,
+		FilesDeleted:     res.FilesDeleted,
+		EntriesProcessed: res.EntriesProcessed,
+		Results:          results,
+		Detail:           res.Detail,
+	}, nil
+}
+
+// MediaCleanQuarantineList fetches all quarantine manifests currently present
+// on the site's agent. The action is read-only (no files are moved).
+// A nil manifests slice from the agent is normalised to an empty slice so the
+// caller always receives a valid JSON array.
+func (s *Service) MediaCleanQuarantineList(ctx context.Context, tenantID, siteID uuid.UUID) ([]agentcmd.MediaCleanManifest, error) {
+	if s.agent == nil {
+		return nil, domain.ServiceUnavailable("agent_unwired", "agent client not configured")
+	}
+
+	siteURL, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return nil, err
+	}
+
+	res, agentErr := s.agent.MediaClean(ctx, siteID, siteURL, agentcmd.MediaCleanRequest{
+		Action: "list",
+	})
+	if agentErr != nil {
+		return nil, agentErr
+	}
+	if !res.OK {
+		return nil, fmt.Errorf("media_clean list refused by agent: %s", res.Detail)
+	}
+
+	manifests := res.Manifests
+	if manifests == nil {
+		manifests = []agentcmd.MediaCleanManifest{}
+	}
+	return manifests, nil
 }
 
 // DbSnapshot dispatches the db_snapshot command to the site's agent.

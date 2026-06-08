@@ -159,6 +159,24 @@ const (
 	// db.search.replace.failed    is emitted on transport error or ok=false.
 	EventDbSearchReplaceCompleted = "db.search.replace.completed"
 	EventDbSearchReplaceFailed    = "db.search.replace.failed"
+
+	// Media Cleaner tool events (#190). Four lifecycle events:
+	// media.clean.scan.completed  — scan page returned ok=true; includes candidate count.
+	// media.clean.scan.failed     — transport error or ok=false on a scan request.
+	// media.clean.isolate.done    — isolate completed ok=true; includes quarantined IDs.
+	// media.clean.isolate.failed  — transport error or ok=false on an isolate request.
+	// media.clean.restore.done    — restore completed ok=true; includes restored IDs.
+	// media.clean.restore.failed  — transport error or ok=false on a restore request.
+	// media.clean.delete.done     — delete completed ok=true; includes deleted IDs.
+	// media.clean.delete.failed   — transport error or ok=false on a delete request.
+	EventMediaCleanScanCompleted    = "media.clean.scan.completed"
+	EventMediaCleanScanFailed       = "media.clean.scan.failed"
+	EventMediaCleanIsolateDone      = "media.clean.isolate.done"
+	EventMediaCleanIsolateFailed    = "media.clean.isolate.failed"
+	EventMediaCleanRestoreDone      = "media.clean.restore.done"
+	EventMediaCleanRestoreFailed    = "media.clean.restore.failed"
+	EventMediaCleanDeleteDone       = "media.clean.delete.done"
+	EventMediaCleanDeleteFailed     = "media.clean.delete.failed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

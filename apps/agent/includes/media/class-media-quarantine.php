@@ -1,0 +1,740 @@
+<?php
+/**
+ * MediaQuarantine: manages the wp-content/wpmgr-quarantine/ directory
+ * where isolated (unused) attachment files are temporarily stored.
+ *
+ * Layout:
+ *   wp-content/wpmgr-quarantine/
+ *     .htaccess              — deny all web access (Apache/LiteSpeed)
+ *     index.php              — empty PHP guard
+ *     manifests/             — manifest JSONs; NEVER web-reachable (outside media/)
+ *       <manifest_id>.json   — reversible quarantine manifest
+ *     media/
+ *       <manifest_id>/       — 128-bit random hex directory
+ *         files/             — the moved attachment files (preserving sub-path)
+ *                              (only image files here; no path-disclosing JSON)
+ *
+ * Nginx-safety: manifest.json (which contains absolute server paths) is stored
+ * in the manifests/ sub-directory alongside — not inside — the media/ tree.
+ * The media/ sub-tree contains ONLY the quarantined image files (already public
+ * at their uploads URL). The unguessable 128-bit random manifest_id directory
+ * name is a defence-in-depth layer; the primary guard is that path-disclosing
+ * manifests are outside the served subtree entirely.
+ *
+ * manifest.json schema:
+ *   {
+ *     "v":      1,
+ *     "id":     "<manifest_id>",
+ *     "job_id": "<job_id>",
+ *     "ts":     <unix timestamp>,
+ *     "entries": [
+ *       {
+ *         "attachment_id": <int>,
+ *         "rel_path":      "<uploads-relative main file path>",
+ *         "files": [
+ *           {
+ *             "orig": "<unresolved-absolute-path>",  // restore destination
+ *             "frag": "<resolved-uploads-relative-fragment>"  // quarantine location key
+ *           }, ...
+ *         ]
+ *       }, ...
+ *     ]
+ *   }
+ *
+ * Schema note: "files" entries are {"orig","frag"} objects (v1 since agent 0.25.9).
+ * Older manifests stored plain strings; restore/delete fall back gracefully.
+ *
+ * Security:
+ *   - The quarantine root is inside wp-content but outside wp-content/uploads,
+ *     so no attachment URLs point into it. Web access is blocked by .htaccess
+ *     and an index.php guard.
+ *   - manifest_id values are 128-bit random hex strings. Callers treat them as
+ *     opaque; the class never accepts a manifest_id from untrusted input —
+ *     callers receive IDs from beginManifest() or from the manifest list, and
+ *     all file operations are contained via realpath checks to the quarantine root.
+ *   - normalisePath() rejects any path containing "/.." as belt-and-braces
+ *     against directory traversal in the stored original-path list.
+ *
+ * @package WPMgr\Agent\Media
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Media;
+
+/**
+ * Manages the quarantine directory lifecycle.
+ */
+final class MediaQuarantine
+{
+    /** Directory name under wp-content. */
+    public const QUARANTINE_DIR = 'wpmgr-quarantine';
+
+    /** Sub-directory under QUARANTINE_DIR for quarantined image files. */
+    public const MEDIA_SUBDIR = 'media';
+
+    /**
+     * Sub-directory under QUARANTINE_DIR for manifest JSON files.
+     * Kept OUTSIDE the media/ tree so path-disclosing JSON is not
+     * web-reachable on nginx/Caddy/LiteSpeed (which ignore .htaccess).
+     */
+    public const MANIFESTS_SUBDIR = 'manifests';
+
+    /** Manifest schema version. */
+    private const MANIFEST_VERSION = 1;
+
+    /** Absolute path to the quarantine root (wp-content/wpmgr-quarantine). */
+    private string $quarantineRoot;
+
+    /** Absolute path to the media quarantine dir (wpmgr-quarantine/media). */
+    private string $mediaRoot;
+
+    /** Absolute path to the manifests dir (wpmgr-quarantine/manifests). */
+    private string $manifestsRoot;
+
+    /** In-progress manifest data keyed by manifest_id. */
+    private array $openManifests = [];
+
+    /**
+     * @param string|null $contentDir Override for WP_CONTENT_DIR (testing only).
+     *                                Pass null (default) to use the runtime constant.
+     */
+    public function __construct(?string $contentDir = null)
+    {
+        $base                  = $contentDir ?? WP_CONTENT_DIR;
+        $this->quarantineRoot  = $base . '/' . self::QUARANTINE_DIR;
+        $this->mediaRoot       = $this->quarantineRoot . '/' . self::MEDIA_SUBDIR;
+        $this->manifestsRoot   = $this->quarantineRoot . '/' . self::MANIFESTS_SUBDIR;
+    }
+
+    // =========================================================================
+    // Public API
+    // =========================================================================
+
+    /**
+     * Create a fresh manifest and return its ID. Call quarantineAttachment()
+     * for each attachment, then finaliseManifest() to flush the JSON.
+     *
+     * @param string $jobId CP-side job UUID (stored for audit).
+     * @return string manifest_id (128-bit random hex string)
+     */
+    public function beginManifest(string $jobId): string
+    {
+        $this->ensureQuarantineRoot();
+
+        $manifestId = $this->generateId();
+
+        $this->openManifests[$manifestId] = [
+            'v'       => self::MANIFEST_VERSION,
+            'id'      => $manifestId,
+            'job_id'  => $jobId,
+            'ts'      => time(),
+            'entries' => [],
+        ];
+
+        // Create the media files directory only (no manifest.json here).
+        // manifest.json is written to manifests/<id>.json (outside media/).
+        $filesDir = $this->mediaRoot . '/' . $manifestId . '/files';
+        if (!is_dir($filesDir)) {
+            mkdir($filesDir, 0755, true);
+        }
+
+        return $manifestId;
+    }
+
+    /**
+     * Move the given attachment's files into the quarantine directory and append
+     * an entry to the open manifest.
+     *
+     * @param string   $manifestId    ID returned by beginManifest().
+     * @param int      $attachmentId  Attachment post ID.
+     * @param string   $relPath       Upload-relative main file path.
+     * @param string[] $absPaths      Absolute paths of ALL files to move (main + sizes).
+     * @return int Number of files successfully moved.
+     */
+    public function quarantineAttachment(
+        string $manifestId,
+        int $attachmentId,
+        string $relPath,
+        array $absPaths
+    ): int {
+        if (!isset($this->openManifests[$manifestId])) {
+            return 0;
+        }
+
+        $filesRoot   = $this->mediaRoot . '/' . $manifestId . '/files';
+        $uploadsBase = $this->uploadsBase();
+        $movedPaths  = [];
+        $moved       = 0;
+
+        foreach ($absPaths as $src) {
+            // Containment: only move files that are inside the uploads dir.
+            $real = realpath($src);
+            if ($real === false) {
+                continue;
+            }
+            $uploadsReal = realpath($uploadsBase);
+            if ($uploadsReal === false || strpos($real, $uploadsReal . DIRECTORY_SEPARATOR) !== 0) {
+                continue;
+            }
+
+            // Derive the relative path within uploads to preserve sub-structure.
+            $fragment = ltrim(str_replace($uploadsReal, '', $real), '/\\');
+            $dest     = $filesRoot . '/' . $fragment;
+
+            // Ensure destination directory exists.
+            $destDir = dirname($dest);
+            if (!is_dir($destDir)) {
+                mkdir($destDir, 0755, true);
+            }
+
+            if (rename($src, $dest)) {
+                // Store both the unresolved original path (restore destination) and
+                // the resolved fragment (quarantine location). The fragment is derived
+                // from the realpath-resolved source, so it always matches the actual
+                // placement under filesRoot/ regardless of whether the uploads base or
+                // any path component is reached via a symlink.
+                $movedPaths[] = ['orig' => $src, 'frag' => $fragment];
+                $moved++;
+            }
+        }
+
+        // Record the manifest entry for every attachment, even when no files were
+        // physically moved (e.g. already-broken attachment, files already absent,
+        // or an optimized attachment whose on-disk paths were not found). An empty
+        // "files" array is valid: restore has nothing to move back, and delete will
+        // still call wp_delete_attachment() to remove the WP post record.
+        $this->openManifests[$manifestId]['entries'][] = [
+            'attachment_id' => $attachmentId,
+            'rel_path'      => $relPath,
+            'files'         => $movedPaths,
+        ];
+
+        return $moved;
+    }
+
+    /**
+     * Write the manifest JSON to disk and close the in-progress manifest.
+     *
+     * The manifest is written to manifests/<manifest_id>.json — outside the
+     * media/ directory tree — so that path-disclosing JSON is not web-reachable
+     * on nginx/Caddy/LiteSpeed sites (which do not honour .htaccess).
+     *
+     * @param string $manifestId
+     * @return void
+     */
+    public function finaliseManifest(string $manifestId): void
+    {
+        if (!isset($this->openManifests[$manifestId])) {
+            return;
+        }
+
+        $data         = $this->openManifests[$manifestId];
+        // Write to manifests/ (outside media/), NOT inside the served media tree.
+        $manifestPath = $this->manifestsRoot . '/' . $manifestId . '.json';
+
+        $json = wp_json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+        if ($json !== false) {
+            file_put_contents($manifestPath, $json, LOCK_EX);
+        }
+
+        unset($this->openManifests[$manifestId]);
+    }
+
+    /**
+     * Move all files in a manifest back to their original paths.
+     *
+     * @param string $manifestId
+     * @return int Number of files successfully restored.
+     */
+    public function restoreManifest(string $manifestId): int
+    {
+        $manifest = $this->loadManifest($manifestId);
+        if ($manifest === null) {
+            return 0;
+        }
+
+        $filesRoot   = $this->mediaRoot . '/' . $manifestId . '/files';
+        $uploadsBase = $this->uploadsBase();
+        $restored    = 0;
+
+        foreach ($manifest['entries'] as $entry) {
+            $files = is_array($entry['files']) ? $entry['files'] : [];
+
+            foreach ($files as $fileRecord) {
+                // Support both the current {"orig","frag"} object format and the
+                // legacy plain-string format written by agent versions < 0.25.9.
+                if (is_array($fileRecord)) {
+                    $originalAbsPath = (string)($fileRecord['orig'] ?? '');
+                    $fragment        = (string)($fileRecord['frag'] ?? '');
+                } else {
+                    $originalAbsPath = (string)$fileRecord;
+                    $fragment        = '';
+                }
+
+                // Containment: restore target must be inside uploads.
+                $normalised = $this->normalisePath($originalAbsPath, $uploadsBase);
+                if ($normalised === '') {
+                    continue;
+                }
+
+                // Resolve the quarantined-file location.
+                // For current manifests the fragment was recorded at quarantine time from
+                // the realpath-resolved source, so it matches the actual placement even
+                // when the uploads base or any path component is a symlink.
+                // For legacy manifests (plain string entries) we fall back to re-deriving
+                // the fragment from the stored unresolved path.
+                if ($fragment === '') {
+                    $uploadsReal = realpath($uploadsBase);
+                    if ($uploadsReal === false) {
+                        continue;
+                    }
+                    $uploadsBaseNorm = rtrim(str_replace('\\', '/', $uploadsBase), '/');
+                    $normalisedFwd   = str_replace('\\', '/', $normalised);
+                    if (strpos($normalisedFwd, $uploadsBaseNorm . '/') === 0) {
+                        $fragment = substr($normalisedFwd, strlen($uploadsBaseNorm) + 1);
+                    } else {
+                        $fragment = ltrim(str_replace($uploadsReal, '', $normalisedFwd), '/');
+                    }
+                }
+
+                $src = $filesRoot . '/' . $fragment;
+
+                if (!file_exists($src)) {
+                    continue;
+                }
+
+                // Ensure destination directory exists.
+                $destDir = dirname($normalised);
+                if (!is_dir($destDir)) {
+                    mkdir($destDir, 0755, true);
+                }
+
+                if (rename($src, $normalised)) {
+                    $restored++;
+                }
+            }
+        }
+
+        // Remove the (now-empty) manifest directory if everything was restored.
+        if ($restored > 0) {
+            $this->removeManifestDir($manifestId);
+        }
+
+        return $restored;
+    }
+
+    /**
+     * Permanently delete all quarantined files for a manifest and delete the
+     * attachment posts via wp_delete_attachment().
+     *
+     * Returns a detailed result array so callers can surface per-attachment
+     * outcomes and build instrumented ACK payloads:
+     *
+     *   [
+     *     'posts_deleted'      => int,  // wp_delete_attachment returned truthy
+     *     'posts_failed'       => int,  // attachment_id>0 but wp_delete_attachment returned false/null
+     *     'files_deleted'      => int,  // quarantined files successfully unlinked
+     *     'entries_processed'  => int,  // total manifest entries seen
+     *     'results'            => list<array{attachment_id:int,post_deleted:bool,files_deleted:int}>,
+     *   ]
+     *
+     * wp_delete_attachment($id, true) also removes any WP-tracked sub-sizes that
+     * were not in quarantine (e.g. if isolate missed some) — this is the correct
+     * cleanup behaviour.
+     *
+     * @param string $manifestId
+     * @return array{posts_deleted:int,posts_failed:int,files_deleted:int,entries_processed:int,results:list<array{attachment_id:int,post_deleted:bool,files_deleted:int}>}
+     */
+    public function deleteManifest(string $manifestId): array
+    {
+        $manifest = $this->loadManifest($manifestId);
+        if ($manifest === null) {
+            return [
+                'posts_deleted'     => 0,
+                'posts_failed'      => 0,
+                'files_deleted'     => 0,
+                'entries_processed' => 0,
+                'results'           => [],
+            ];
+        }
+
+        $filesRoot   = $this->mediaRoot . '/' . $manifestId . '/files';
+        $uploadsBase = $this->uploadsBase();
+
+        $postsDeleted     = 0;
+        $postsFailed      = 0;
+        $totalFilesDeleted = 0;
+        $results          = [];
+
+        foreach ($manifest['entries'] as $entry) {
+            $attachmentId    = (int)($entry['attachment_id'] ?? 0);
+            $files           = is_array($entry['files']) ? $entry['files'] : [];
+            $entryFilesCount = 0;
+
+            // Delete the quarantined files for this entry.
+            foreach ($files as $fileRecord) {
+                // Support both the current {"orig","frag"} object format and the
+                // legacy plain-string format written by agent versions < 0.25.9.
+                if (is_array($fileRecord)) {
+                    $originalAbsPath = (string)($fileRecord['orig'] ?? '');
+                    $fragment        = (string)($fileRecord['frag'] ?? '');
+                } else {
+                    $originalAbsPath = (string)$fileRecord;
+                    $fragment        = '';
+                }
+
+                if ($fragment === '') {
+                    // Legacy path: re-derive the fragment from the stored unresolved path.
+                    $uploadsReal = realpath($uploadsBase);
+                    if ($uploadsReal === false) {
+                        continue;
+                    }
+                    $uploadsBaseNorm = rtrim(str_replace('\\', '/', $uploadsBase), '/');
+                    $origFwd         = str_replace('\\', '/', $originalAbsPath);
+                    if (strpos($origFwd, $uploadsBaseNorm . '/') === 0) {
+                        $fragment = substr($origFwd, strlen($uploadsBaseNorm) + 1);
+                    } else {
+                        $fragment = ltrim(str_replace($uploadsReal, '', $origFwd), '/');
+                    }
+                }
+
+                $quarantinedPath = $filesRoot . '/' . $fragment;
+                if ($quarantinedPath !== $filesRoot . '/' && file_exists($quarantinedPath)) {
+                    wp_delete_file($quarantinedPath);
+                    $entryFilesCount++;
+                }
+            }
+
+            $totalFilesDeleted += $entryFilesCount;
+
+            // Delete the attachment post + its remaining WP-tracked sub-sizes.
+            // This runs for every entry with a valid attachment_id, regardless of
+            // whether any quarantined files existed (handles broken/zero-file entries).
+            $postDeleted = false;
+            if ($attachmentId > 0) {
+                $wpResult    = wp_delete_attachment($attachmentId, true);
+                $postDeleted = ($wpResult !== false && $wpResult !== null);
+                if ($postDeleted) {
+                    $postsDeleted++;
+                } else {
+                    $postsFailed++;
+                }
+            }
+
+            $results[] = [
+                'attachment_id' => $attachmentId,
+                'post_deleted'  => $postDeleted,
+                'files_deleted' => $entryFilesCount,
+            ];
+        }
+
+        $this->removeManifestDir($manifestId);
+
+        return [
+            'posts_deleted'     => $postsDeleted,
+            'posts_failed'      => $postsFailed,
+            'files_deleted'     => $totalFilesDeleted,
+            'entries_processed' => count($results),
+            'results'           => $results,
+        ];
+    }
+
+    /**
+     * Return a list of all manifests in the quarantine manifests directory.
+     *
+     * @return list<array{id:string,ts:int,entries_count:int}>
+     */
+    public function listManifests(): array
+    {
+        if (!is_dir($this->manifestsRoot)) {
+            return [];
+        }
+
+        $manifests = [];
+        $entries   = @scandir($this->manifestsRoot);
+        if ($entries === false) {
+            return [];
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            // Entry is "<manifest_id>.json"; strip the .json suffix to get the ID.
+            if (!str_ends_with($entry, '.json')) {
+                continue;
+            }
+            $manifestId = substr($entry, 0, -5);
+            $manifest   = $this->loadManifest($manifestId);
+            if ($manifest !== null) {
+                $manifests[] = [
+                    'id'            => (string)($manifest['id']  ?? $manifestId),
+                    'job_id'        => (string)($manifest['job_id'] ?? ''),
+                    'ts'            => (int)($manifest['ts'] ?? 0),
+                    'entries_count' => count((array)($manifest['entries'] ?? [])),
+                ];
+            }
+        }
+
+        usort($manifests, fn ($a, $b) => $b['ts'] - $a['ts']);
+
+        return $manifests;
+    }
+
+    /**
+     * Return a detailed list of all quarantine manifests, including per-entry
+     * attachment titles and file counts. Sorted newest-first by isolated_at.
+     *
+     * Each manifest record in the returned array has:
+     *   - manifest_id  (string)
+     *   - job_id       (string)
+     *   - isolated_at  (int, unix seconds — the manifest's "ts" field)
+     *   - total_files  (int, sum of each entry's file count across the manifest)
+     *   - entries      (list of {attachment_id, title, file_count})
+     *
+     * File-count is format-agnostic: both the current {"orig","frag"} object
+     * format and the legacy plain-string format are counted the same way — we
+     * simply count the elements of each entry's "files" array.
+     *
+     * The attachment title is resolved via get_the_title() when the function is
+     * available (i.e. WordPress is loaded). If the attachment post no longer
+     * exists, or if get_the_title() is not available, an empty string is used.
+     *
+     * @return list<array{manifest_id:string,job_id:string,isolated_at:int,total_files:int,entries:list<array{attachment_id:int,title:string,file_count:int}>}>
+     */
+    public function listManifestsDetailed(): array
+    {
+        if (!is_dir($this->manifestsRoot)) {
+            return [];
+        }
+
+        $dirEntries = @scandir($this->manifestsRoot);
+        if ($dirEntries === false) {
+            return [];
+        }
+
+        $result = [];
+
+        foreach ($dirEntries as $dirEntry) {
+            if ($dirEntry === '.' || $dirEntry === '..') {
+                continue;
+            }
+            if (!str_ends_with($dirEntry, '.json')) {
+                continue;
+            }
+
+            $manifestId = substr($dirEntry, 0, -5);
+            $manifest   = $this->loadManifest($manifestId);
+            if ($manifest === null) {
+                continue;
+            }
+
+            $rawEntries = is_array($manifest['entries'] ?? null) ? $manifest['entries'] : [];
+            $entries    = [];
+            $totalFiles = 0;
+
+            foreach ($rawEntries as $rawEntry) {
+                $attachmentId = (int)($rawEntry['attachment_id'] ?? 0);
+
+                // Count files format-agnostically: each element of the "files"
+                // array is one file regardless of whether it is the current
+                // {"orig","frag"} object or the legacy plain-string form.
+                $files     = is_array($rawEntry['files'] ?? null) ? $rawEntry['files'] : [];
+                $fileCount = count($files);
+                $totalFiles += $fileCount;
+
+                // Resolve the attachment title; guard against WP not being loaded.
+                $title = '';
+                if ($attachmentId > 0 && function_exists('get_the_title')) {
+                    $fetched = get_the_title($attachmentId);
+                    $title   = is_string($fetched) ? $fetched : '';
+                }
+
+                $entries[] = [
+                    'attachment_id' => $attachmentId,
+                    'title'         => $title,
+                    'file_count'    => $fileCount,
+                ];
+            }
+
+            $result[] = [
+                'manifest_id' => (string)($manifest['id'] ?? $manifestId),
+                'job_id'      => (string)($manifest['job_id'] ?? ''),
+                'isolated_at' => (int)($manifest['ts'] ?? 0),
+                'total_files' => $totalFiles,
+                'entries'     => $entries,
+            ];
+        }
+
+        // Sort newest-first by isolated_at.
+        usort($result, fn ($a, $b) => $b['isolated_at'] - $a['isolated_at']);
+
+        return $result;
+    }
+
+    // =========================================================================
+    // Private helpers
+    // =========================================================================
+
+    /**
+     * Ensure the quarantine root + .htaccess + index.php guards exist, and
+     * create the manifests/ and media/ sub-directories.
+     *
+     * The .htaccess blocks Apache/LiteSpeed. On nginx/Caddy, the .htaccess is
+     * ineffective; the primary protection for manifests is that they live in
+     * the manifests/ directory (outside the media/ web tree), not inside a
+     * directory that is ever served.
+     */
+    private function ensureQuarantineRoot(): void
+    {
+        if (!is_dir($this->quarantineRoot)) {
+            mkdir($this->quarantineRoot, 0755, true);
+        }
+        if (!is_dir($this->mediaRoot)) {
+            mkdir($this->mediaRoot, 0755, true);
+        }
+        // Manifests directory: outside media/, holds the path-disclosing JSON files.
+        if (!is_dir($this->manifestsRoot)) {
+            mkdir($this->manifestsRoot, 0755, true);
+        }
+
+        // Web-access guard (.htaccess) — effective on Apache/LiteSpeed.
+        $htaccess = $this->quarantineRoot . '/.htaccess';
+        if (!file_exists($htaccess)) {
+            file_put_contents($htaccess, "Order Deny,Allow\nDeny from all\n", LOCK_EX);
+        }
+
+        // PHP silence guard.
+        $index = $this->quarantineRoot . '/index.php';
+        if (!file_exists($index)) {
+            file_put_contents($index, "<?php // Silence is golden.\n", LOCK_EX);
+        }
+    }
+
+    /**
+     * Load and decode a manifest JSON file. Returns null on failure.
+     *
+     * Manifests are read from manifests/<manifest_id>.json (outside media/).
+     *
+     * @param string $manifestId
+     * @return array|null
+     */
+    private function loadManifest(string $manifestId): ?array
+    {
+        // Validate manifest ID to prevent path traversal.
+        if (!preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $manifestId)) {
+            return null;
+        }
+
+        $path = $this->manifestsRoot . '/' . $manifestId . '.json';
+
+        // Containment: the manifest file must be inside the manifests root.
+        $real = realpath($path);
+        if ($real === false) {
+            return null;
+        }
+        $rootReal = realpath($this->manifestsRoot);
+        if ($rootReal === false || strpos($real, $rootReal . DIRECTORY_SEPARATOR) !== 0) {
+            return null;
+        }
+
+        $json = @file_get_contents($real);
+        if ($json === false || $json === '') {
+            return null;
+        }
+
+        $data = json_decode($json, true);
+        if (!is_array($data)) {
+            return null;
+        }
+
+        return $data;
+    }
+
+    /**
+     * Remove the media directory and the manifest JSON for a given manifest.
+     * Cleans up both the media/<manifest_id>/ tree and manifests/<manifest_id>.json.
+     */
+    private function removeManifestDir(string $manifestId): void
+    {
+        if (!preg_match('/^[a-zA-Z0-9_-]{1,64}$/', $manifestId)) {
+            return;
+        }
+        // Remove the media files directory.
+        $dir = $this->mediaRoot . '/' . $manifestId;
+        $this->rmdirRecursive($dir);
+
+        // Remove the manifest JSON from manifests/.
+        $jsonPath = $this->manifestsRoot . '/' . $manifestId . '.json';
+        if (file_exists($jsonPath)) {
+            @unlink($jsonPath);
+        }
+    }
+
+    private function rmdirRecursive(string $dir): void
+    {
+        if (!is_dir($dir)) {
+            return;
+        }
+        $entries = @scandir($dir);
+        if ($entries === false) {
+            return;
+        }
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+            $path = $dir . '/' . $entry;
+            if (is_dir($path)) {
+                $this->rmdirRecursive($path);
+            } else {
+                @unlink($path);
+            }
+        }
+        @rmdir($dir);
+    }
+
+    /**
+     * Validate and return the absolute path, confirming it is inside the uploads
+     * directory. Returns '' if the path fails containment.
+     *
+     * Belt-and-braces: also rejects any path containing "/.." (directory
+     * traversal) before the prefix check, guarding against crafted entries in
+     * a tampered manifest file.
+     */
+    private function normalisePath(string $absPath, string $uploadsBase): string
+    {
+        // We cannot realpath() a path that doesn't exist (file was moved to
+        // quarantine). Instead, normalise manually and check the prefix.
+        $normalised = str_replace(['\\', '//'], ['/', '/'], $absPath);
+
+        // Reject directory traversal sequences regardless of platform encoding.
+        if (strpos($normalised, '/..') !== false) {
+            return '';
+        }
+
+        $uploadsNorm = rtrim(str_replace('\\', '/', $uploadsBase), '/') . '/';
+        if (strpos($normalised, $uploadsNorm) !== 0) {
+            return '';
+        }
+        return $normalised;
+    }
+
+    /**
+     * Absolute filesystem path to the uploads root.
+     */
+    private function uploadsBase(): string
+    {
+        $dir = wp_upload_dir();
+        return rtrim((string)($dir['basedir'] ?? ''), '/\\');
+    }
+
+    /**
+     * Generate a random manifest ID (16 hex bytes = 32 chars, URL-safe).
+     */
+    private function generateId(): string
+    {
+        return bin2hex(random_bytes(16));
+    }
+}

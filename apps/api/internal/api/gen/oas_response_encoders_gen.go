@@ -659,6 +659,52 @@ func encodeBulkPurgeCacheResponse(response *BulkResultList, w http.ResponseWrite
 	return nil
 }
 
+func encodeCancelBackupResponse(response CancelBackupRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *BackupSnapshot:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *CancelBackupNotFound:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *CancelBackupConflict:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(409)
+		span.SetStatus(codes.Error, http.StatusText(409))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
 func encodeCancelMediaResponse(response *CancelMediaOK, w http.ResponseWriter, span trace.Span) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
@@ -892,6 +938,20 @@ func encodeCreateBackupResponse(response CreateBackupRes, w http.ResponseWriter,
 	}
 }
 
+func encodeCreateDbSnapshotResponse(response *DbSnapshotCreateResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
 func encodeCreateOrgResponse(response CreateOrgRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *Org:
@@ -986,7 +1046,7 @@ func encodeCreatePairingCodeResponse(response CreatePairingCodeRes, w http.Respo
 
 func encodeCreateRestoreResponse(response CreateRestoreRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
-	case *BackupSnapshot:
+	case *CreateRestoreAccepted:
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(202)
 		span.SetStatus(codes.Ok, http.StatusText(202))
@@ -1271,6 +1331,73 @@ func encodeCreateUpdateRunResponse(response CreateUpdateRunRes, w http.ResponseW
 	default:
 		return errors.Errorf("unexpected response type: %T", response)
 	}
+}
+
+func encodeDeleteBackupResponse(response DeleteBackupRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *DeleteBackupNoContent:
+		w.WriteHeader(204)
+		span.SetStatus(codes.Ok, http.StatusText(204))
+
+		return nil
+
+	case *DeleteBackupNotFound:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *DeleteBackupUnprocessableEntity:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(422)
+		span.SetStatus(codes.Error, http.StatusText(422))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
+func encodeDeleteDbSnapshotResponse(response *DeleteDbSnapshotOK, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
+func encodeDeleteIsolatedMediaResponse(response *MediaCleanDeleteResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
 }
 
 func encodeDeleteMediaOriginalsResponse(response *DeleteMediaOriginalsAccepted, w http.ResponseWriter, span trace.Span) error {
@@ -1590,9 +1717,121 @@ func encodeGetBackupResponse(response GetBackupRes, w http.ResponseWriter, span 
 	}
 }
 
+func encodeGetBackupEnvironmentResponse(response GetBackupEnvironmentRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *GetBackupEnvironmentOK:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *GetBackupEnvironmentNotFound:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *GetBackupEnvironmentServiceUnavailable:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(503)
+		span.SetStatus(codes.Error, http.StatusText(503))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
 func encodeGetBackupScheduleResponse(response GetBackupScheduleRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *BackupSchedule:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *Error:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
+func encodeGetBackupSettingsContentsResponse(response GetBackupSettingsContentsRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *SiteBackupSettingsContents:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *Error:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
+func encodeGetBackupSettingsNotificationsResponse(response GetBackupSettingsNotificationsRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *SiteBackupSettingsNotifications:
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(200)
 		span.SetStatus(codes.Ok, http.StatusText(200))
@@ -2209,6 +2448,20 @@ func encodeInviteMemberResponse(response InviteMemberRes, w http.ResponseWriter,
 	}
 }
 
+func encodeIsolateUnusedMediaResponse(response *MediaCleanIsolateResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
 func encodeListApiKeysResponse(response ListApiKeysRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *ApiKeyList:
@@ -2302,6 +2555,20 @@ func encodeListAuditResponse(response ListAuditRes, w http.ResponseWriter, span 
 }
 
 func encodeListBackupsResponse(response *BackupSnapshotList, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
+func encodeListDbSnapshotsResponse(response *DbSnapshotList, w http.ResponseWriter, span trace.Span) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 	span.SetStatus(codes.Ok, http.StatusText(200))
@@ -2623,6 +2890,52 @@ func encodeListUpdateRunsResponse(response *UpdateRunList, w http.ResponseWriter
 	}
 
 	return nil
+}
+
+func encodeLockBackupResponse(response LockBackupRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *BackupSnapshot:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *LockBackupNotFound:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *LockBackupConflict:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(409)
+		span.SetStatus(codes.Error, http.StatusText(409))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
 }
 
 func encodeLoginResponse(response LoginRes, w http.ResponseWriter, span trace.Span) error {
@@ -3014,6 +3327,72 @@ func encodePutBackupScheduleResponse(response PutBackupScheduleRes, w http.Respo
 	}
 }
 
+func encodePutBackupSettingsContentsResponse(response PutBackupSettingsContentsRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *SiteBackupSettingsContents:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *Error:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(422)
+		span.SetStatus(codes.Error, http.StatusText(422))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
+func encodePutBackupSettingsNotificationsResponse(response PutBackupSettingsNotificationsRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *SiteBackupSettingsNotifications:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *Error:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(422)
+		span.SetStatus(codes.Error, http.StatusText(422))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
 func encodePutPerfConfigResponse(response PutPerfConfigRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *PerfConfig:
@@ -3237,6 +3616,20 @@ func encodeRegisterResponse(response RegisterRes, w http.ResponseWriter, span tr
 	}
 }
 
+func encodeRestoreIsolatedMediaResponse(response *MediaCleanRestoreResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
 func encodeRestoreMediaResponse(response *MediaBatchResult, w http.ResponseWriter, span trace.Span) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(202)
@@ -3282,6 +3675,20 @@ func encodeRestoreSiteResponse(response RestoreSiteRes, w http.ResponseWriter, s
 	default:
 		return errors.Errorf("unexpected response type: %T", response)
 	}
+}
+
+func encodeRevertDbSnapshotResponse(response *DbSnapshotRevertResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
 }
 
 func encodeRevokeApiKeyResponse(response RevokeApiKeyRes, w http.ResponseWriter, span trace.Span) error {
@@ -3367,6 +3774,54 @@ func encodeRevokeSiteResponse(response RevokeSiteRes, w http.ResponseWriter, spa
 	default:
 		return errors.Errorf("unexpected response type: %T", response)
 	}
+}
+
+func encodeRunSearchReplaceResponse(response *SearchReplaceResultHeaders, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Access-Control-Expose-Headers", "X-Backup-Warning")
+	// Encoding response headers.
+	{
+		h := uri.NewHeaderEncoder(w.Header())
+		// Encode "X-Backup-Warning" header.
+		{
+			cfg := uri.HeaderParameterEncodingConfig{
+				Name:    "X-Backup-Warning",
+				Explode: false,
+			}
+			if err := h.EncodeParam(cfg, func(e uri.Encoder) error {
+				if val, ok := response.XBackupWarning.Get(); ok {
+					return e.EncodeValue(conv.StringToString(val))
+				}
+				return nil
+			}); err != nil {
+				return errors.Wrap(err, "encode X-Backup-Warning header")
+			}
+		}
+	}
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
+func encodeScanUnusedMediaResponse(response *MediaCleanScanResult, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
 }
 
 func encodeSetSiteTagsResponse(response SetSiteTagsRes, w http.ResponseWriter, span trace.Span) error {
@@ -3550,6 +4005,39 @@ func encodeUnblockSiteIPResponse(response UnblockSiteIPRes, w http.ResponseWrite
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.WriteHeader(503)
 		span.SetStatus(codes.Error, http.StatusText(503))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	default:
+		return errors.Errorf("unexpected response type: %T", response)
+	}
+}
+
+func encodeUnlockBackupResponse(response UnlockBackupRes, w http.ResponseWriter, span trace.Span) error {
+	switch response := response.(type) {
+	case *BackupSnapshot:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(200)
+		span.SetStatus(codes.Ok, http.StatusText(200))
+
+		e := new(jx.Encoder)
+		response.Encode(e)
+		if _, err := e.WriteTo(w); err != nil {
+			return errors.Wrap(err, "write")
+		}
+
+		return nil
+
+	case *Error:
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(404)
+		span.SetStatus(codes.Error, http.StatusText(404))
 
 		e := new(jx.Encoder)
 		response.Encode(e)

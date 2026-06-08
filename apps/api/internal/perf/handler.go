@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -107,6 +108,17 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
 	g.POST("/perf/rucss/compute", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssCompute)
+
+	// #190 — Media Cleaner tool.
+	// Scan is read-only (PermMediaCleanScan = viewer+); isolate/restore are
+	// reversible mutations (PermMediaCleanWrite = operator+); permanent delete
+	// requires PermMediaCleanWrite at route level and PermMediaCleanDelete in
+	// the handler body (admin+), mirroring the dbTableAction drop/empty pattern.
+	g.GET("/media/clean/scan", authz.RequirePermission(authz.PermMediaCleanScan), h.mediaCleanScan)
+	g.GET("/media/clean/quarantine", authz.RequirePermission(authz.PermMediaCleanScan), h.mediaCleanQuarantine)
+	g.POST("/media/clean/isolate", authz.RequirePermission(authz.PermMediaCleanWrite), h.mediaCleanIsolate)
+	g.POST("/media/clean/restore", authz.RequirePermission(authz.PermMediaCleanWrite), h.mediaCleanRestore)
+	g.POST("/media/clean/delete", authz.RequirePermission(authz.PermMediaCleanWrite), h.mediaCleanDelete)
 
 	// Portfolio bulk routes. RequireSiteAccess is enforced PER-SITE inside the
 	// handlers (each site_id is checked against the principal's allowlist) since
@@ -1124,6 +1136,281 @@ func (h *Handler) dbSnapshotDelete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"ok":     out.OK,
 		"detail": out.Detail,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// #190 — Media Cleaner handlers (scan / isolate / restore / delete)
+// ---------------------------------------------------------------------------
+
+// mediaCleanScan handles GET /sites/:siteId/media/clean/scan.
+// Returns a paginated page of unused attachment candidates (READ-ONLY).
+// Query params: offset (zero-based, default 0), limit (1–500, default 100).
+func (h *Handler) mediaCleanScan(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	limit := 100
+	if s := c.Query("limit"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 1 && n <= 500 {
+			limit = n
+		}
+	}
+	offset := 0
+	if s := c.Query("offset"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n >= 0 {
+			offset = n
+		}
+	}
+
+	out, err := h.svc.MediaCleanScan(c.Request.Context(), p.TenantID, siteID, MediaCleanScanInput{
+		Offset: offset,
+		Limit:  limit,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	h.record(c, p, audit.ActionMediaCleanScan, siteID, map[string]any{
+		"candidate_count":   len(out.Candidates),
+		"total":             out.Total,
+		"has_more":          out.HasMore,
+		"truncated":         out.Truncated,
+		"total_attachments": out.TotalAttachments,
+		"referenced_count":  out.ReferencedCount,
+		"offset":            offset,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"total":            out.Total,
+		"candidates":       out.Candidates,
+		"has_more":         out.HasMore,
+		"truncated":        out.Truncated,
+		"total_attachments": out.TotalAttachments,
+		"referenced_count": out.ReferencedCount,
+		"unused_count":     out.UnusedCount,
+		"referenced":       out.Referenced,
+	})
+}
+
+// mediaCleanQuarantine handles GET /sites/:siteId/media/clean/quarantine.
+// Returns all quarantine manifests currently held on the site (READ-ONLY).
+// The response is forwarded verbatim from the agent; field names are frozen.
+func (h *Handler) mediaCleanQuarantine(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	out, err := h.svc.MediaCleanQuarantineList(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	h.record(c, p, audit.ActionMediaCleanQuarantine, siteID, map[string]any{
+		"manifest_count": len(out),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":        true,
+		"manifests": out,
+	})
+}
+
+// mediaCleanIsolateBody is the JSON body for POST /media/clean/isolate.
+type mediaCleanIsolateBody struct {
+	// JobID is a CP-minted UUID v4. Required; used by the agent for idempotency.
+	JobID         string  `json:"job_id"`
+	AttachmentIDs []int64 `json:"attachment_ids"`
+}
+
+// mediaCleanIsolate handles POST /sites/:siteId/media/clean/isolate.
+// Moves the given attachments to the quarantine directory (REVERSIBLE).
+// Emits X-Backup-Warning when no recent backup is found.
+// Returns manifest_id which the client must store for restore/delete.
+func (h *Handler) mediaCleanIsolate(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body mediaCleanIsolateBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Advisory backup warning — non-blocking, mirrors search-replace/db-table-action.
+	if h.svc.backupChecker != nil {
+		if hasBackup, bErr := h.svc.backupChecker.HasRecentBackup(c.Request.Context(), p.TenantID, siteID, 24*time.Hour*7); bErr == nil && !hasBackup {
+			c.Header("X-Backup-Warning", "no backup found in the last 7 days; a backup before isolating media is strongly recommended")
+		}
+	}
+
+	out, err := h.svc.MediaCleanIsolate(c.Request.Context(), p.TenantID, siteID, MediaCleanIsolateInput{
+		JobID:         body.JobID,
+		AttachmentIDs: body.AttachmentIDs,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	h.record(c, p, audit.ActionMediaCleanIsolate, siteID, map[string]any{
+		"moved":            out.Moved,
+		"manifest_id":      out.ManifestID,
+		"entries_recorded": out.EntriesRecorded,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":               true,
+		"job_id":           out.JobID,
+		"moved":            out.Moved,
+		"manifest_id":      out.ManifestID,
+		"entries_recorded": out.EntriesRecorded,
+		"per_attachment":   out.PerAttachment,
+		"detail":           out.Detail,
+	})
+}
+
+// mediaCleanRestoreBody is the JSON body for POST /media/clean/restore.
+type mediaCleanRestoreBody struct {
+	// JobID is a CP-minted UUID v4. Required.
+	JobID         string   `json:"job_id"`
+	// QuarantineIDs are the manifest IDs returned by prior isolate calls.
+	QuarantineIDs []string `json:"quarantine_ids"`
+}
+
+// mediaCleanRestore handles POST /sites/:siteId/media/clean/restore.
+// Reverses a prior isolate using the agent-side manifest records.
+func (h *Handler) mediaCleanRestore(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body mediaCleanRestoreBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	out, err := h.svc.MediaCleanRestore(c.Request.Context(), p.TenantID, siteID, MediaCleanRestoreInput{
+		JobID:         body.JobID,
+		QuarantineIDs: body.QuarantineIDs,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	h.record(c, p, audit.ActionMediaCleanRestore, siteID, map[string]any{
+		"restored": out.Restored,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":       true,
+		"job_id":   out.JobID,
+		"restored": out.Restored,
+		"detail":   out.Detail,
+	})
+}
+
+// mediaCleanDeleteBody is the JSON body for POST /media/clean/delete.
+type mediaCleanDeleteBody struct {
+	// JobID is a CP-minted UUID v4. Required.
+	JobID         string   `json:"job_id"`
+	// QuarantineIDs are the manifest IDs to permanently remove.
+	QuarantineIDs []string `json:"quarantine_ids"`
+	// Confirm MUST be the exact string "DELETE". The agent enforces this
+	// independently via hash_equals. The CP validates here for belt-and-braces.
+	Confirm string `json:"confirm"`
+}
+
+// mediaCleanDelete handles POST /sites/:siteId/media/clean/delete.
+// PERMANENTLY removes quarantined attachments from the filesystem and
+// force-deletes the attachment posts. IRREVERSIBLE.
+// Permission model:
+//   - Route-level gate: PermMediaCleanWrite (operator+) — applied by Register.
+//   - Handler-body gate: PermMediaCleanDelete (admin+) — checked below.
+//   - Confirm token: must equal "DELETE" (enforced on CP and agent).
+func (h *Handler) mediaCleanDelete(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	// Inner admin-level gate (mirrors dbTableAction drop/empty pattern).
+	if !h.allows(c, authz.PermMediaCleanDelete) {
+		httpx.Error(c, domain.Forbidden("insufficient_permission",
+			"permanent media deletion requires admin or higher permission"))
+		return
+	}
+
+	var body mediaCleanDeleteBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	out, err := h.svc.MediaCleanDelete(c.Request.Context(), p.TenantID, siteID, MediaCleanDeleteInput{
+		JobID:         body.JobID,
+		QuarantineIDs: body.QuarantineIDs,
+		Confirm:       body.Confirm,
+	})
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"ok": false, "detail": err.Error()})
+		return
+	}
+
+	h.record(c, p, audit.ActionMediaCleanDelete, siteID, map[string]any{
+		"deleted":           out.Deleted,
+		"posts_deleted":     out.PostsDeleted,
+		"posts_failed":      out.PostsFailed,
+		"files_deleted":     out.FilesDeleted,
+		"entries_processed": out.EntriesProcessed,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":                true,
+		"job_id":            out.JobID,
+		"deleted":           out.Deleted,
+		"posts_deleted":     out.PostsDeleted,
+		"posts_failed":      out.PostsFailed,
+		"files_deleted":     out.FilesDeleted,
+		"entries_processed": out.EntriesProcessed,
+		"results":           out.Results,
+		"detail":            out.Detail,
 	})
 }
 

@@ -23,6 +23,16 @@ final class MetadataCommandTest extends TestCase
     {
         parent::set_up();
         Monkey\setUp();
+
+        // MetadataCommand calls wp_upload_dir() under a function_exists() guard.
+        // Once any test in the suite defines wp_upload_dir as a Brain Monkey stub,
+        // function_exists('wp_upload_dir') returns true for all subsequent tests in
+        // the PHP process. Stub it here unconditionally so the guard triggers a
+        // predictable result rather than an "unmocked function" error.
+        Functions\when('wp_upload_dir')->justReturn([
+            'basedir' => '/var/www/html/wp-content/uploads',
+            'baseurl' => 'https://example.com/wp-content/uploads',
+        ]);
     }
 
     protected function tear_down(): void

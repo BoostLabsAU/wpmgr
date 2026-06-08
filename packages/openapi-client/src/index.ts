@@ -112,6 +112,12 @@ export {
   createDbSnapshot,
   revertDbSnapshot,
   deleteDbSnapshot,
+  // media cleaner (#190)
+  scanUnusedMedia,
+  isolateUnusedMedia,
+  restoreIsolatedMedia,
+  deleteIsolatedMedia,
+  listQuarantinedMedia,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -357,4 +363,26 @@ export type {
   RevertDbSnapshotResponse,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponse,
+  // media cleaner (#190)
+  MediaCleanCandidate,
+  MediaCleanScanResult,
+  MediaCleanIsolateRequest,
+  MediaCleanIsolateResult,
+  MediaCleanRestoreRequest,
+  MediaCleanRestoreResult,
+  MediaCleanDeleteRequest,
+  MediaCleanDeleteResult,
+  MediaCleanQuarantineEntry,
+  MediaCleanQuarantineManifest,
+  MediaCleanQuarantineList,
+  ScanUnusedMediaData,
+  ScanUnusedMediaResponse,
+  IsolateUnusedMediaData,
+  IsolateUnusedMediaResponse,
+  RestoreIsolatedMediaData,
+  RestoreIsolatedMediaResponse,
+  DeleteIsolatedMediaData,
+  DeleteIsolatedMediaResponse,
+  ListQuarantinedMediaData,
+  ListQuarantinedMediaResponse,
 } from "./generated/types.gen";

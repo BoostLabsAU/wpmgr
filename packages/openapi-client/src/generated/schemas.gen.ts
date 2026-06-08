@@ -4704,6 +4704,209 @@ export const BulkResultListSchema = {
   },
 } as const;
 
+export const MediaCleanCandidateSchema = {
+  type: "object",
+  description: "One attachment candidate identified as potentially unused.",
+  required: ["id", "title", "url", "file_size", "sizes_count"],
+  properties: {
+    id: {
+      type: "integer",
+      format: "int64",
+      description: "WordPress attachment post ID.",
+    },
+    title: {
+      type: "string",
+      description:
+        "Attachment post title (may be the filename when no title is set).",
+    },
+    url: {
+      type: "string",
+      description: "Public URL of the original (largest) file (guid).",
+    },
+    thumb: {
+      type: "string",
+      nullable: true,
+      description: "URL of the thumbnail-size variant; null when unavailable.",
+    },
+    file_size: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Size of the original file in bytes. 0 when the file is missing from disk.",
+    },
+    sizes_count: {
+      type: "integer",
+      description:
+        "Number of generated thumbnail/resize variants registered in attachment metadata.",
+    },
+  },
+} as const;
+
+export const MediaCleanScanResultSchema = {
+  type: "object",
+  required: ["ok", "total", "candidates", "truncated"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    total: {
+      type: "integer",
+      description:
+        "Full unused-candidate count (capped at SCAN_MAX=500). Use this value to drive client-side pagination of the candidates array.",
+    },
+    candidates: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/MediaCleanCandidate",
+      },
+      description:
+        "Unused attachment candidates sliced by the requested offset/limit. The client should fetch once with offset=0 and limit=SCAN_MAX and paginate the returned array client-side.",
+    },
+    truncated: {
+      type: "boolean",
+      description:
+        "True when the library has more unused attachments than SCAN_MAX. The returned candidates and total are capped at SCAN_MAX.",
+    },
+    detail: {
+      type: "string",
+      description: "Human-readable error message when ok=false.",
+    },
+  },
+} as const;
+
+export const MediaCleanIsolateRequestSchema = {
+  type: "object",
+  required: ["job_id", "attachment_ids"],
+  properties: {
+    job_id: {
+      type: "string",
+      description:
+        "Client-minted UUID v4 for idempotency. The agent echoes it in the response for correlation. Generate a new UUID per request.\n",
+    },
+    attachment_ids: {
+      type: "array",
+      items: {
+        type: "integer",
+        format: "int64",
+      },
+      description:
+        "Attachment IDs to move to quarantine. Maximum 200 per call. Must be attachments that appeared in a recent scan result.\n",
+    },
+  },
+} as const;
+
+export const MediaCleanIsolateResultSchema = {
+  type: "object",
+  required: ["ok", "job_id", "moved", "manifest_id"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    job_id: {
+      type: "string",
+      description: "Echoed from the request for correlation.",
+    },
+    moved: {
+      type: "integer",
+      description: "Number of attachment file sets moved to quarantine.",
+    },
+    manifest_id: {
+      type: "string",
+      description:
+        "Opaque quarantine manifest identifier. Store this value and pass it back in quarantine_ids for restore or delete calls.\n",
+    },
+    detail: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const MediaCleanRestoreRequestSchema = {
+  type: "object",
+  required: ["job_id", "quarantine_ids"],
+  properties: {
+    job_id: {
+      type: "string",
+      description: "Client-minted UUID v4 for idempotency.",
+    },
+    quarantine_ids: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description:
+        "Quarantine manifest IDs to restore. Each ID was returned by a prior isolate call as manifest_id. Maximum 200 per call.\n",
+    },
+  },
+} as const;
+
+export const MediaCleanRestoreResultSchema = {
+  type: "object",
+  required: ["ok", "job_id", "restored"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    job_id: {
+      type: "string",
+      description: "Echoed from the request.",
+    },
+    restored: {
+      type: "integer",
+      description:
+        "Number of manifest entries successfully restored to the uploads directory.",
+    },
+    detail: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const MediaCleanDeleteRequestSchema = {
+  type: "object",
+  required: ["job_id", "quarantine_ids", "confirm"],
+  properties: {
+    job_id: {
+      type: "string",
+      description: "Client-minted UUID v4 for idempotency.",
+    },
+    quarantine_ids: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description:
+        "Quarantine manifest IDs to permanently delete. Maximum 200 per call.\n",
+    },
+    confirm: {
+      type: "string",
+      description:
+        'Must equal "DELETE" exactly. The agent enforces this independently via hash_equals.',
+    },
+  },
+} as const;
+
+export const MediaCleanDeleteResultSchema = {
+  type: "object",
+  required: ["ok", "job_id", "deleted"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    job_id: {
+      type: "string",
+      description: "Echoed from the request.",
+    },
+    deleted: {
+      type: "integer",
+      description: "Number of manifest entries permanently removed from disk.",
+    },
+    detail: {
+      type: "string",
+    },
+  },
+} as const;
+
 export const PerfConfigWritableSchema = {
   type: "object",
   description:

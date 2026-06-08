@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 
 import { SearchReplacePanel } from "@/features/tools/SearchReplacePanel";
 import { DbSnapshotPanel } from "@/features/tools/DbSnapshotPanel";
+import { MediaCleanerPanel } from "@/features/tools/MediaCleanerPanel";
 import { useSite } from "@/features/sites/use-sites";
 import { useMe, canOperate } from "@/features/auth/use-auth";
 
@@ -11,10 +12,11 @@ import { useMe, canOperate } from "@/features/auth/use-auth";
 // monitoring/cache workflow:
 //   #188 — serialization-safe database search-replace.
 //   #189 — local database snapshots (fast local safety-net before risky changes).
+//   #190 — unused image cleaner (scan + isolate + restore + delete).
 //
 // Authorization: `canOperate` mirrors PermSiteWrite (operator+), which the
-// server enforces at the route level. Viewers can see the snapshot list but
-// cannot take, revert, or delete snapshots.
+// server enforces at the route level. Viewers can see the snapshot list and
+// scan results but cannot perform write operations.
 
 export const Route = createFileRoute("/_authed/sites/$siteId/tools")({
   component: ToolsTabRoute,
@@ -39,6 +41,12 @@ function ToolsTabRoute() {
 
       {/* #188 — Serialization-safe database search-replace. */}
       <SearchReplacePanel siteId={siteId} canOperate={operable} />
+
+      {/* Divider */}
+      <div aria-hidden="true" className="border-t border-border" />
+
+      {/* #190 — Unused image cleaner: scan + isolate + restore + delete. */}
+      <MediaCleanerPanel siteId={siteId} canOperate={operable} />
     </section>
   );
 }

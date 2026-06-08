@@ -3546,6 +3546,130 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DbCleanResult"
+  /api/v1/sites/{siteId}/media/clean/scan:
+    get:
+      operationId: scanUnusedMedia
+      summary: Scan a site's media library for unreferenced attachments
+      description: |
+        Dispatches a read-only scan to the site's agent. The agent walks the
+        WordPress media library and checks every attachment against an exhaustive
+        set of reference surfaces (post_content, postmeta, options, termmeta,
+        usermeta, page-builder JSON blobs, ACF fields, WooCommerce galleries,
+        nav menus, and more). Attachments for which no reference is found are
+        returned as candidates.
+
+        **Conservative rule**: when a check cannot run or the result is ambiguous
+        the attachment is treated as referenced (safe). False negatives (calling a
+        used image unused) are the dangerous failure; this implementation prefers
+        false positives.
+
+        Paginated by `offset`. Results are ordered by attachment ID ascending.
+        Requires the `site.media.clean.scan` permission (viewer+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: offset
+          in: query
+          required: false
+          schema: { type: integer, minimum: 0, default: 0 }
+          description: Pagination offset (attachment scan cursor).
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+          description: Maximum number of candidates to return per page.
+      responses:
+        "200":
+          description: Scan page result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanScanResult"
+  /api/v1/sites/{siteId}/media/clean/isolate:
+    post:
+      operationId: isolateUnusedMedia
+      summary: Move selected attachments to quarantine (reversible)
+      description: |
+        Instructs the agent to move the original file and all generated thumbnail
+        sizes for the specified attachment IDs into the quarantine directory
+        (`wp-content/wpmgr-quarantine/media/`). The attachment post rows are left
+        intact so the Restore operation can undo the move cleanly.
+
+        **This operation is reversible** — use the restore endpoint to undo.
+        The attachment IDs must have appeared in a recent scan result.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanIsolateRequest"
+      responses:
+        "200":
+          description: Isolate result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanIsolateResult"
+  /api/v1/sites/{siteId}/media/clean/restore:
+    post:
+      operationId: restoreIsolatedMedia
+      summary: Restore quarantined attachments to their original locations
+      description: |
+        Moves quarantined attachment files back to the WordPress uploads directory
+        using the quarantine manifest. The attachment posts are already intact.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanRestoreRequest"
+      responses:
+        "200":
+          description: Restore result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanRestoreResult"
+  /api/v1/sites/{siteId}/media/clean/delete:
+    post:
+      operationId: deleteIsolatedMedia
+      summary: Permanently delete quarantined attachments (IRREVERSIBLE)
+      description: |
+        Permanently removes quarantined attachment files from disk and deletes
+        the corresponding WordPress attachment posts. **This cannot be undone.**
+
+        Only items already in the quarantine directory (isolated via the isolate
+        endpoint) can be deleted through this path. A `confirm` token of
+        `"DELETE"` must be included in the request body; the agent enforces this
+        independently.
+
+        Requires the `site.media.clean.write` permission (operator+).
+      tags: [media]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MediaCleanDeleteRequest"
+      responses:
+        "200":
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MediaCleanDeleteResult"
   /api/v1/sites/{siteId}/perf/rucss/results:
     get:
       operationId: listRucssResults
@@ -6898,3 +7022,145 @@ components:
         results:
           type: array
           items: { $ref: "#/components/schemas/BulkResult" }
+    MediaCleanCandidate:
+      type: object
+      description: One attachment candidate identified as potentially unused.
+      required: [id, title, url, file_size, sizes_count]
+      properties:
+        id:
+          type: integer
+          format: int64
+          description: WordPress attachment post ID.
+        title:
+          type: string
+          description: Attachment post title (may be the filename when no title is set).
+        url:
+          type: string
+          description: Public URL of the original (largest) file (guid).
+        thumb:
+          type: string
+          nullable: true
+          description: URL of the thumbnail-size variant; null when unavailable.
+        file_size:
+          type: integer
+          format: int64
+          description: Size of the original file in bytes. 0 when the file is missing from disk.
+        sizes_count:
+          type: integer
+          description: Number of generated thumbnail/resize variants registered in attachment metadata.
+    MediaCleanScanResult:
+      type: object
+      required: [ok, total, candidates, truncated]
+      properties:
+        ok:
+          type: boolean
+        total:
+          type: integer
+          description: >
+            Full unused-candidate count (capped at SCAN_MAX=500). Use this value
+            to drive client-side pagination of the candidates array.
+        candidates:
+          type: array
+          items: { $ref: "#/components/schemas/MediaCleanCandidate" }
+          description: >
+            Unused attachment candidates sliced by the requested offset/limit.
+            The client should fetch once with offset=0 and limit=SCAN_MAX and
+            paginate the returned array client-side.
+        truncated:
+          type: boolean
+          description: >
+            True when the library has more unused attachments than SCAN_MAX.
+            The returned candidates and total are capped at SCAN_MAX.
+        detail:
+          type: string
+          description: Human-readable error message when ok=false.
+    MediaCleanIsolateRequest:
+      type: object
+      required: [job_id, attachment_ids]
+      properties:
+        job_id:
+          type: string
+          description: >
+            Client-minted UUID v4 for idempotency. The agent echoes it in the
+            response for correlation. Generate a new UUID per request.
+        attachment_ids:
+          type: array
+          items: { type: integer, format: int64 }
+          description: >
+            Attachment IDs to move to quarantine. Maximum 200 per call.
+            Must be attachments that appeared in a recent scan result.
+    MediaCleanIsolateResult:
+      type: object
+      required: [ok, job_id, moved, manifest_id]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request for correlation.
+        moved:
+          type: integer
+          description: Number of attachment file sets moved to quarantine.
+        manifest_id:
+          type: string
+          description: >
+            Opaque quarantine manifest identifier. Store this value and pass it
+            back in quarantine_ids for restore or delete calls.
+        detail:
+          type: string
+    MediaCleanRestoreRequest:
+      type: object
+      required: [job_id, quarantine_ids]
+      properties:
+        job_id:
+          type: string
+          description: Client-minted UUID v4 for idempotency.
+        quarantine_ids:
+          type: array
+          items: { type: string }
+          description: >
+            Quarantine manifest IDs to restore. Each ID was returned by a prior
+            isolate call as manifest_id. Maximum 200 per call.
+    MediaCleanRestoreResult:
+      type: object
+      required: [ok, job_id, restored]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request.
+        restored:
+          type: integer
+          description: Number of manifest entries successfully restored to the uploads directory.
+        detail:
+          type: string
+    MediaCleanDeleteRequest:
+      type: object
+      required: [job_id, quarantine_ids, confirm]
+      properties:
+        job_id:
+          type: string
+          description: Client-minted UUID v4 for idempotency.
+        quarantine_ids:
+          type: array
+          items: { type: string }
+          description: >
+            Quarantine manifest IDs to permanently delete. Maximum 200 per call.
+        confirm:
+          type: string
+          description: Must equal "DELETE" exactly. The agent enforces this independently via hash_equals.
+    MediaCleanDeleteResult:
+      type: object
+      required: [ok, job_id, deleted]
+      properties:
+        ok:
+          type: boolean
+        job_id:
+          type: string
+          description: Echoed from the request.
+        deleted:
+          type: integer
+          description: Number of manifest entries permanently removed from disk.
+        detail:
+          type: string
