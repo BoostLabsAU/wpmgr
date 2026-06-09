@@ -199,6 +199,14 @@ const (
 	EventMediaCleanRestoreFailed    = "media.clean.restore.failed"
 	EventMediaCleanDeleteDone       = "media.clean.delete.done"
 	EventMediaCleanDeleteFailed     = "media.clean.delete.failed"
+
+	// RUM events (M56). Emitted by the RUM rollup worker after a site's hourly
+	// rollups have been updated. The payload carries the site_id and the
+	// bucket_hour that was folded so the dashboard can refetch only the
+	// affected time window.
+	// rum.rollup_updated — throttled emit (at most once per 30s per site) after
+	//                      the rollup worker folds raw events into hourly buckets.
+	EventRumRollupUpdated = "rum.rollup_updated"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

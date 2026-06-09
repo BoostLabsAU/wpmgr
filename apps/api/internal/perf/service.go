@@ -14,6 +14,7 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 )
 
@@ -131,6 +132,14 @@ type Service struct {
 	cdn           CDNPurger
 	backupChecker BackupChecker
 	logger        *slog.Logger
+	// beaconKeyRepo is the RUM beacon-key persistence layer. Used during
+	// UpdateConfig to generate/rotate the key when RUM is first enabled.
+	// nil = RUM beacon-key management disabled (tests/degraded mode).
+	beaconKeyRepo *rum.BeaconKeyRepo
+	// cpBaseURL is the control-plane public base URL (e.g.
+	// "https://manage.example.com"). Used to derive the RUM ingest URL that is
+	// pushed to the agent as rum_ingest_url.
+	cpBaseURL string
 }
 
 // NewService builds the perf service. agent/sites/events/decryptor/cdn may be nil
@@ -154,6 +163,15 @@ func (s *Service) SetCDNPurger(p CDNPurger) { s.cdn = p }
 // SetBackupChecker wires the backup recency checker for the drop/empty advisory
 // backup-warning nudge (non-blocking).
 func (s *Service) SetBackupChecker(b BackupChecker) { s.backupChecker = b }
+
+// SetBeaconKeyRepo wires the RUM beacon-key repository and the CP public base
+// URL used to derive rum_ingest_url in the agent push payload.
+// Call this from main after creating the service; nil disables RUM beacon
+// provisioning (the endpoint still works but keys are never generated).
+func (s *Service) SetBeaconKeyRepo(repo *rum.BeaconKeyRepo, cpBaseURL string) {
+	s.beaconKeyRepo = repo
+	s.cpBaseURL = cpBaseURL
+}
 
 // ---------------------------------------------------------------------------
 // config
@@ -233,11 +251,34 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 		"cache_enabled":  saved.CacheEnabled,
 	})
 
+	// M56 — RUM beacon-key provisioning (best-effort, config already persisted).
+	// When RUM is enabled and no beacon key exists for the site, generate one now
+	// and capture the plaintext so it can be sent to the agent in this push.
+	// On subsequent pushes the CP stores only the hash; the plaintext is never
+	// re-derivable, so we send an empty string and the agent retains its copy.
+	var freshBeaconKey string // non-empty only when freshly generated/rotated
+	if saved.RumEnabled && s.beaconKeyRepo != nil && !saved.BeaconKeySet {
+		pt, keyHash, genErr := rum.GenerateBeaconKey()
+		if genErr == nil {
+			if rotErr := s.beaconKeyRepo.RotateBeaconKey(ctx, tenantID, siteID, keyHash); rotErr == nil {
+				freshBeaconKey = pt
+				// Mark BeaconKeySet true so toPerfConfigRequest can reflect the correct
+				// state without an extra DB round-trip.
+				saved.BeaconKeySet = true
+			} else {
+				s.logger.Warn("rum: beacon key rotation failed", slog.Any("error", rotErr))
+			}
+		} else {
+			s.logger.Warn("rum: beacon key generation failed", slog.Any("error", genErr))
+		}
+	}
+
 	// Push to the agent (best-effort, config already persisted).
 	if s.agent != nil && s.sites != nil {
 		siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
 		if lookupErr == nil {
-			res, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(saved))
+			req := toPerfConfigRequest(saved, freshBeaconKey, s.cpBaseURL)
+			res, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, req)
 			if pushErr != nil {
 				return saved, fmt.Errorf("config stored but agent push failed: %w", pushErr)
 			}
@@ -479,7 +520,9 @@ func (s *Service) EnableCache(ctx context.Context, tenantID, siteID uuid.UUID) (
 		// cache_enable alone only writes WP_CACHE + the drop-in/.htaccess; without
 		// this push the request-path optimizer stays inert (no minify) because its
 		// flags default off. Best-effort: caching is already on if this fails.
-		if _, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(cfg)); pushErr != nil {
+		// Note: no fresh beacon key is generated here — beacon-key provisioning
+		// only happens in UpdateConfig where the operator explicitly enables RUM.
+		if _, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(cfg, "", s.cpBaseURL)); pushErr != nil {
 			s.logger.Warn("cache enabled but optimize-config push failed",
 				slog.String("site_id", siteID.String()), slog.Any("error", pushErr))
 		}
@@ -1704,7 +1747,17 @@ func normalize(in []string) []string {
 
 // toPerfConfigRequest maps a stored Config to the agent command body. CDN
 // credentials are deliberately omitted (the CP holds them).
-func toPerfConfigRequest(c Config) agentcmd.PerfConfigRequest {
+//
+// freshBeaconKey is the PLAINTEXT beacon key, non-empty only when freshly
+// generated or rotated in this push. On subsequent pushes where the key is
+// unchanged, pass "" — the CP stores only the hash and cannot resend the
+// plaintext. cpBaseURL is used to derive rum_ingest_url (e.g.
+// "https://manage.example.com" → "https://manage.example.com/rum/ingest").
+func toPerfConfigRequest(c Config, freshBeaconKey, cpBaseURL string) agentcmd.PerfConfigRequest {
+	var ingestURL string
+	if c.RumEnabled && cpBaseURL != "" {
+		ingestURL = strings.TrimRight(cpBaseURL, "/") + "/rum/ingest"
+	}
 	return agentcmd.PerfConfigRequest{
 		ConfigVersion:            c.ConfigVersion,
 		CacheEnabled:             c.CacheEnabled,
@@ -1762,6 +1815,11 @@ func toPerfConfigRequest(c Config) agentcmd.PerfConfigRequest {
 		BloatPostRevisionControl: c.BloatPostRevisionControl,
 		// M53 / #169 — WooCommerce cacheable-session flag.
 		WooCacheableSession: c.WooCacheableSession,
+		// M56 / RUM — Real User Monitoring fields.
+		RumEnabled:    c.RumEnabled,
+		RumSampleRate: c.RumSampleRate,
+		RumBeaconKey:  freshBeaconKey, // non-empty only on first-enable/rotation
+		RumIngestURL:  ingestURL,
 	}
 }
 

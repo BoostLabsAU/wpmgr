@@ -41,6 +41,52 @@ func (q *Queries) ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) er
 	return err
 }
 
+const getCacheHitRatioHistory = `-- name: GetCacheHitRatioHistory :many
+SELECT id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at FROM site_cache_hit_ratio_history
+WHERE site_id   = $1
+  AND tenant_id = $2
+  AND sampled_at >= $3
+ORDER BY sampled_at ASC
+LIMIT 366
+`
+
+type GetCacheHitRatioHistoryParams struct {
+	SiteID   uuid.UUID `json:"site_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	Since    time.Time `json:"since"`
+}
+
+// Returns up to 366 hit-ratio data points for a site since @since, ordered
+// oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+func (q *Queries) GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error) {
+	rows, err := q.db.Query(ctx, getCacheHitRatioHistory, arg.SiteID, arg.TenantID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SiteCacheHitRatioHistory
+	for rows.Next() {
+		var i SiteCacheHitRatioHistory
+		if err := rows.Scan(
+			&i.ID,
+			&i.SiteID,
+			&i.TenantID,
+			&i.HitCount,
+			&i.MissCount,
+			&i.RatioPct,
+			&i.SampledAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getCacheStats = `-- name: GetCacheStats :one
 
 SELECT site_id, tenant_id, cached_pages_count, cache_size_bytes, last_purged_at, last_purge_kind, last_preload_at, preload_pending, preload_total, reported_at FROM site_cache_stats
@@ -289,7 +335,7 @@ func (q *Queries) GetFleetDbHealth(ctx context.Context, arg GetFleetDbHealthPara
 const getPerfConfig = `-- name: GetPerfConfig :one
 
 
-SELECT site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, fonts_transcode_woff2, fonts_subset, fonts_subset_mode, fonts_subset_range, created_at, updated_at FROM site_perf_config
+SELECT site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, active_orphan_delete_job_id, active_orphan_delete_started, fonts_transcode_woff2, fonts_subset, fonts_subset_mode, fonts_subset_range, woo_cacheable_session, woo_theme_fragments_supported, rum_enabled, rum_sample_rate, max_distinct_countries, min_sample_count, beacon_key_hash, beacon_key_hash_prev, created_at, updated_at FROM site_perf_config
 WHERE site_id = $1
 `
 
@@ -370,12 +416,20 @@ func (q *Queries) GetPerfConfig(ctx context.Context, siteID uuid.UUID) (SitePerf
 		&i.ActiveDbCleanStarted,
 		&i.ActiveDbScanJobID,
 		&i.ActiveDbScanStarted,
-		&i.WooCacheableSession,
-		&i.WooThemeFragmentsSupported,
+		&i.ActiveOrphanDeleteJobID,
+		&i.ActiveOrphanDeleteStarted,
 		&i.FontsTranscodeWoff2,
 		&i.FontsSubset,
 		&i.FontsSubsetMode,
 		&i.FontsSubsetRange,
+		&i.WooCacheableSession,
+		&i.WooThemeFragmentsSupported,
+		&i.RumEnabled,
+		&i.RumSampleRate,
+		&i.MaxDistinctCountries,
+		&i.MinSampleCount,
+		&i.BeaconKeyHash,
+		&i.BeaconKeyHashPrev,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -515,6 +569,55 @@ func (q *Queries) GetStalledDBScanJobs(ctx context.Context, scanThreshold pgtype
 		return nil, err
 	}
 	return items, nil
+}
+
+const insertCacheHitRatioHistory = `-- name: InsertCacheHitRatioHistory :one
+
+INSERT INTO site_cache_hit_ratio_history (
+    site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6
+)
+ON CONFLICT DO NOTHING
+RETURNING id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at
+`
+
+type InsertCacheHitRatioHistoryParams struct {
+	SiteID    uuid.UUID      `json:"site_id"`
+	TenantID  uuid.UUID      `json:"tenant_id"`
+	HitCount  int64          `json:"hit_count"`
+	MissCount int64          `json:"miss_count"`
+	RatioPct  pgtype.Numeric `json:"ratio_pct"`
+	SampledAt time.Time      `json:"sampled_at"`
+}
+
+// ---------------------------------------------------------------------------
+// site_cache_hit_ratio_history (M52 / #162)
+// ---------------------------------------------------------------------------
+// Appends one hit-ratio data point. ON CONFLICT DO NOTHING on (site_id,
+// sampled_at) makes it idempotent within the same second. Operator write path
+// (InTenantTx).
+func (q *Queries) InsertCacheHitRatioHistory(ctx context.Context, arg InsertCacheHitRatioHistoryParams) (SiteCacheHitRatioHistory, error) {
+	row := q.db.QueryRow(ctx, insertCacheHitRatioHistory,
+		arg.SiteID,
+		arg.TenantID,
+		arg.HitCount,
+		arg.MissCount,
+		arg.RatioPct,
+		arg.SampledAt,
+	)
+	var i SiteCacheHitRatioHistory
+	err := row.Scan(
+		&i.ID,
+		&i.SiteID,
+		&i.TenantID,
+		&i.HitCount,
+		&i.MissCount,
+		&i.RatioPct,
+		&i.SampledAt,
+		&i.CreatedAt,
+	)
+	return i, err
 }
 
 const insertCachePurgeAudit = `-- name: InsertCachePurgeAudit :one
@@ -702,6 +805,65 @@ func (q *Queries) ListCachePurgeAuditForSite(ctx context.Context, arg ListCacheP
 	return items, nil
 }
 
+const listFontResultsForSite = `-- name: ListFontResultsForSite :many
+SELECT id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at FROM font_results
+WHERE tenant_id = $1 AND site_id = $2
+ORDER BY updated_at DESC, id DESC
+LIMIT $4 OFFSET $3
+`
+
+type ListFontResultsForSiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	SiteID    uuid.UUID `json:"site_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+// Dashboard list: ordered by updated_at DESC, id DESC (standing `, id` tiebreaker
+// convention; batch inserts share updated_at so id breaks ties deterministically).
+// Runs under InTenantTx (operator path).
+func (q *Queries) ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error) {
+	rows, err := q.db.Query(ctx, listFontResultsForSite,
+		arg.TenantID,
+		arg.SiteID,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FontResult
+	for rows.Next() {
+		var i FontResult
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.SiteID,
+			&i.SourceHash,
+			&i.Family,
+			&i.SourceFile,
+			&i.OriginalExt,
+			&i.OriginalSize,
+			&i.Woff2Size,
+			&i.SubsetSize,
+			&i.UnicodeRange,
+			&i.State,
+			&i.ErrorDetail,
+			&i.SavingsPct,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRucssResultsForSite = `-- name: ListRucssResultsForSite :many
 SELECT id, tenant_id, site_id, structure_hash, url, original_css_bytes, used_css_bytes, reduction_pct, used_css_s3_key, selectors_total, selectors_kept, selectors_dropped, compute_ms, created_at, last_used_at FROM rucss_results
 WHERE tenant_id = $1 AND site_id = $2
@@ -784,6 +946,25 @@ type MarkCachePurgedParams struct {
 func (q *Queries) MarkCachePurged(ctx context.Context, arg MarkCachePurgedParams) error {
 	_, err := q.db.Exec(ctx, markCachePurged, arg.SiteID, arg.TenantID, arg.LastPurgeKind)
 	return err
+}
+
+const pruneCacheHitRatioHistory = `-- name: PruneCacheHitRatioHistory :execrows
+DELETE FROM site_cache_hit_ratio_history
+WHERE id IN (
+    SELECT h.id FROM site_cache_hit_ratio_history h
+    WHERE h.created_at < $1
+    LIMIT 2000
+)
+`
+
+// Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
+// LIMIT 2000 keeps each GC transaction short.
+func (q *Queries) PruneCacheHitRatioHistory(ctx context.Context, cutoff time.Time) (int64, error) {
+	result, err := q.db.Exec(ctx, pruneCacheHitRatioHistory, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const pruneDBSizeHistory = `-- name: PruneDBSizeHistory :execrows
@@ -890,7 +1071,7 @@ SET server_software       = $1,
     htaccess_managed      = $4,
     updated_at            = now()
 WHERE site_id = $5
-RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, created_at, updated_at
+RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, active_orphan_delete_job_id, active_orphan_delete_started, fonts_transcode_woff2, fonts_subset, fonts_subset_mode, fonts_subset_range, woo_cacheable_session, woo_theme_fragments_supported, rum_enabled, rum_sample_rate, max_distinct_countries, min_sample_count, beacon_key_hash, beacon_key_hash_prev, created_at, updated_at
 `
 
 type UpdatePerfInstallStateParams struct {
@@ -980,6 +1161,20 @@ func (q *Queries) UpdatePerfInstallState(ctx context.Context, arg UpdatePerfInst
 		&i.ActiveDbCleanStarted,
 		&i.ActiveDbScanJobID,
 		&i.ActiveDbScanStarted,
+		&i.ActiveOrphanDeleteJobID,
+		&i.ActiveOrphanDeleteStarted,
+		&i.FontsTranscodeWoff2,
+		&i.FontsSubset,
+		&i.FontsSubsetMode,
+		&i.FontsSubsetRange,
+		&i.WooCacheableSession,
+		&i.WooThemeFragmentsSupported,
+		&i.RumEnabled,
+		&i.RumSampleRate,
+		&i.MaxDistinctCountries,
+		&i.MinSampleCount,
+		&i.BeaconKeyHash,
+		&i.BeaconKeyHashPrev,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1031,6 +1226,25 @@ func (q *Queries) UpdateRucssJobState(ctx context.Context, arg UpdateRucssJobSta
 		&i.CompletedAt,
 	)
 	return i, err
+}
+
+const updateWooThemeFragmentsSupported = `-- name: UpdateWooThemeFragmentsSupported :exec
+UPDATE site_perf_config
+SET woo_theme_fragments_supported = $1,
+    updated_at                    = now()
+WHERE site_id = $2
+`
+
+type UpdateWooThemeFragmentsSupportedParams struct {
+	WooThemeFragmentsSupported bool      `json:"woo_theme_fragments_supported"`
+	SiteID                     uuid.UUID `json:"site_id"`
+}
+
+// Stamps the agent-reported woo_theme_fragments_supported flag. Agent write path
+// (InAgentTx) — the agent is the sole writer; operators can never set this.
+func (q *Queries) UpdateWooThemeFragmentsSupported(ctx context.Context, arg UpdateWooThemeFragmentsSupportedParams) error {
+	_, err := q.db.Exec(ctx, updateWooThemeFragmentsSupported, arg.WooThemeFragmentsSupported, arg.SiteID)
+	return err
 }
 
 const upsertCacheStats = `-- name: UpsertCacheStats :one
@@ -1190,6 +1404,109 @@ func (q *Queries) UpsertDBScanResult(ctx context.Context, arg UpsertDBScanResult
 	return i, err
 }
 
+const upsertFontResult = `-- name: UpsertFontResult :one
+
+INSERT INTO font_results (
+    tenant_id, site_id, source_hash,
+    family, source_file, original_ext, original_size,
+    woff2_size, subset_size, unicode_range,
+    state, error_detail, savings_pct,
+    updated_at
+) VALUES (
+    $1, $2, $3,
+    $4, $5, $6, $7,
+    $8, $9, $10,
+    $11, $12,
+    -- savings_pct: CP-derived from best output size vs original.
+    -- Uses LEAST(woff2_size, subset_size) ignoring NULLs. NULL when original unknown.
+    CASE
+        WHEN $7::integer > 0 AND (
+             $8::integer IS NOT NULL OR $9::integer IS NOT NULL
+        ) THEN ROUND(
+            (1.0 - LEAST(
+                COALESCE($8::integer, $7::integer),
+                COALESCE($9::integer, $7::integer)
+            )::numeric / GREATEST($7::integer, 1)),
+            4
+        ) * 100
+        ELSE NULL
+    END,
+    now()
+)
+ON CONFLICT (site_id, source_hash) DO UPDATE SET
+    family        = COALESCE(EXCLUDED.family,       font_results.family),
+    source_file   = COALESCE(EXCLUDED.source_file,  font_results.source_file),
+    original_ext  = COALESCE(EXCLUDED.original_ext, font_results.original_ext),
+    original_size = COALESCE(EXCLUDED.original_size, font_results.original_size),
+    woff2_size    = COALESCE(EXCLUDED.woff2_size,   font_results.woff2_size),
+    subset_size   = COALESCE(EXCLUDED.subset_size,  font_results.subset_size),
+    unicode_range = COALESCE(EXCLUDED.unicode_range, font_results.unicode_range),
+    state         = EXCLUDED.state,
+    error_detail  = EXCLUDED.error_detail,
+    savings_pct   = EXCLUDED.savings_pct,
+    updated_at    = now()
+RETURNING id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at
+`
+
+type UpsertFontResultParams struct {
+	TenantID     uuid.UUID `json:"tenant_id"`
+	SiteID       uuid.UUID `json:"site_id"`
+	SourceHash   string    `json:"source_hash"`
+	Family       *string   `json:"family"`
+	SourceFile   *string   `json:"source_file"`
+	OriginalExt  *string   `json:"original_ext"`
+	OriginalSize *int32    `json:"original_size"`
+	Woff2Size    *int32    `json:"woff2_size"`
+	SubsetSize   *int32    `json:"subset_size"`
+	UnicodeRange *string   `json:"unicode_range"`
+	State        string    `json:"state"`
+	ErrorDetail  *string   `json:"error_detail"`
+}
+
+// ---------------------------------------------------------------------------
+// font_results (m55 — per-site dashboard catalog)
+// ---------------------------------------------------------------------------
+// Agent -> CP results push. Inserts or updates the per-(site,source_hash)
+// catalog row. savings_pct is CP-derived: 1 - min(woff2_size, subset_size) / original_size.
+// Runs under app.agent (InAgentTx). tenant_id + site_id ALWAYS come from the
+// VERIFIED agent identity, never from the body.
+func (q *Queries) UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error) {
+	row := q.db.QueryRow(ctx, upsertFontResult,
+		arg.TenantID,
+		arg.SiteID,
+		arg.SourceHash,
+		arg.Family,
+		arg.SourceFile,
+		arg.OriginalExt,
+		arg.OriginalSize,
+		arg.Woff2Size,
+		arg.SubsetSize,
+		arg.UnicodeRange,
+		arg.State,
+		arg.ErrorDetail,
+	)
+	var i FontResult
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.SiteID,
+		&i.SourceHash,
+		&i.Family,
+		&i.SourceFile,
+		&i.OriginalExt,
+		&i.OriginalSize,
+		&i.Woff2Size,
+		&i.SubsetSize,
+		&i.UnicodeRange,
+		&i.State,
+		&i.ErrorDetail,
+		&i.SavingsPct,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertPerfConfig = `-- name: UpsertPerfConfig :one
 INSERT INTO site_perf_config (
     site_id, tenant_id,
@@ -1211,7 +1528,9 @@ INSERT INTO site_perf_config (
     bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control,
     preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load,
     config_version, woo_cacheable_session, fonts_transcode_woff2,
-    fonts_subset, fonts_subset_mode, fonts_subset_range, updated_at
+    fonts_subset, fonts_subset_mode, fonts_subset_range,
+    rum_enabled, rum_sample_rate, max_distinct_countries, min_sample_count,
+    updated_at
 ) VALUES (
     $1, $2,
     $3, $4, $5, $6,
@@ -1231,7 +1550,10 @@ INSERT INTO site_perf_config (
     $47, $48, $49,
     $50, $51, $52,
     $53, $54, $55, $56,
-    $57, $58, $59, $60, $61, $62, now()
+    $57, $58, $59,
+    $60, $61, $62,
+    $63, $64, $65, $66,
+    now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
     cache_enabled                 = EXCLUDED.cache_enabled,
@@ -1294,8 +1616,12 @@ ON CONFLICT (site_id) DO UPDATE SET
     fonts_subset                  = EXCLUDED.fonts_subset,
     fonts_subset_mode             = EXCLUDED.fonts_subset_mode,
     fonts_subset_range            = EXCLUDED.fonts_subset_range,
+    rum_enabled                   = EXCLUDED.rum_enabled,
+    rum_sample_rate               = EXCLUDED.rum_sample_rate,
+    max_distinct_countries        = EXCLUDED.max_distinct_countries,
+    min_sample_count              = EXCLUDED.min_sample_count,
     updated_at                    = now()
-RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, woo_cacheable_session, woo_theme_fragments_supported, fonts_transcode_woff2, fonts_subset, fonts_subset_mode, fonts_subset_range, created_at, updated_at
+RETURNING site_id, tenant_id, cache_enabled, cache_logged_in, cache_mobile, cache_refresh, cache_refresh_interval, cache_link_prefetch, cache_bypass_urls, cache_bypass_cookies, cache_include_queries, cache_include_cookies, css_js_minify, css_rucss, css_rucss_include_selectors, css_js_self_host_third_party, js_delay, js_delay_method, js_delay_excludes, js_delay_third_party, js_delay_third_party_excludes, fonts_display_swap, fonts_optimize_google, fonts_preload, lazy_load, lazy_load_exclusions, properly_size_images, youtube_placeholder, self_host_gravatars, cdn_enabled, cdn_url, cdn_file_types, cdn_provider, cdn_credentials_encrypted, db_auto_clean, db_auto_clean_interval, db_post_revisions, db_post_auto_drafts, db_post_trashed, db_comments_spam, db_comments_trashed, db_transients_expired, db_optimize_tables, next_db_clean_at, bloat_disable_block_css, bloat_disable_dashicons, bloat_disable_emojis, bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed, bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control, preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load, server_software, dropin_installed, wp_cache_constant_set, htaccess_managed, config_version, active_db_clean_job_id, active_db_clean_started, active_db_scan_job_id, active_db_scan_started, active_orphan_delete_job_id, active_orphan_delete_started, fonts_transcode_woff2, fonts_subset, fonts_subset_mode, fonts_subset_range, woo_cacheable_session, woo_theme_fragments_supported, rum_enabled, rum_sample_rate, max_distinct_countries, min_sample_count, beacon_key_hash, beacon_key_hash_prev, created_at, updated_at
 `
 
 type UpsertPerfConfigParams struct {
@@ -1356,14 +1682,15 @@ type UpsertPerfConfigParams struct {
 	PreloadBatchSize          int32     `json:"preload_batch_size"`
 	PreloadMaxLoad            float32   `json:"preload_max_load"`
 	ConfigVersion             int32     `json:"config_version"`
-	// M53 / #169 — WooCommerce cacheable-session flag (operator-writable).
-	WooCacheableSession bool `json:"woo_cacheable_session"`
-	// M54 — Font transcode to WOFF2 flag (operator-writable).
-	FontsTranscodeWoff2 bool `json:"fonts_transcode_woff2"`
-	// M55 — Font subsetting flags (experimental, default OFF).
-	FontsSubset      bool   `json:"fonts_subset"`
-	FontsSubsetMode  string `json:"fonts_subset_mode"`
-	FontsSubsetRange string `json:"fonts_subset_range"`
+	WooCacheableSession       bool      `json:"woo_cacheable_session"`
+	FontsTranscodeWoff2       bool      `json:"fonts_transcode_woff2"`
+	FontsSubset               bool      `json:"fonts_subset"`
+	FontsSubsetMode           string    `json:"fonts_subset_mode"`
+	FontsSubsetRange          string    `json:"fonts_subset_range"`
+	RumEnabled                bool      `json:"rum_enabled"`
+	RumSampleRate             float32   `json:"rum_sample_rate"`
+	MaxDistinctCountries      int32     `json:"max_distinct_countries"`
+	MinSampleCount            int32     `json:"min_sample_count"`
 }
 
 // Insert-or-update the per-site performance config. The agent install-state
@@ -1434,6 +1761,10 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		arg.FontsSubset,
 		arg.FontsSubsetMode,
 		arg.FontsSubsetRange,
+		arg.RumEnabled,
+		arg.RumSampleRate,
+		arg.MaxDistinctCountries,
+		arg.MinSampleCount,
 	)
 	var i SitePerfConfig
 	err := row.Scan(
@@ -1503,38 +1834,24 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		&i.ActiveDbCleanStarted,
 		&i.ActiveDbScanJobID,
 		&i.ActiveDbScanStarted,
-		&i.WooCacheableSession,
-		&i.WooThemeFragmentsSupported,
+		&i.ActiveOrphanDeleteJobID,
+		&i.ActiveOrphanDeleteStarted,
 		&i.FontsTranscodeWoff2,
 		&i.FontsSubset,
 		&i.FontsSubsetMode,
 		&i.FontsSubsetRange,
+		&i.WooCacheableSession,
+		&i.WooThemeFragmentsSupported,
+		&i.RumEnabled,
+		&i.RumSampleRate,
+		&i.MaxDistinctCountries,
+		&i.MinSampleCount,
+		&i.BeaconKeyHash,
+		&i.BeaconKeyHashPrev,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
 	return i, err
-}
-
-// UpdateWooThemeFragmentsSupported stamps the agent-reported woo_theme_fragments_supported
-// flag on the site_perf_config row. This is the ONLY write path for this column
-// (agent-reported via perf/config-ack; never operator-settable). Runs under
-// InAgentTx (app.agent GUC). The caller supplies the siteID from the verified
-// agent identity.
-const updateWooThemeFragmentsSupported = `-- name: UpdateWooThemeFragmentsSupported :exec
-UPDATE site_perf_config
-   SET woo_theme_fragments_supported = $1,
-       updated_at                    = now()
- WHERE site_id = $2
-`
-
-type UpdateWooThemeFragmentsSupportedParams struct {
-	WooThemeFragmentsSupported bool      `json:"woo_theme_fragments_supported"`
-	SiteID                     uuid.UUID `json:"site_id"`
-}
-
-func (q *Queries) UpdateWooThemeFragmentsSupported(ctx context.Context, arg UpdateWooThemeFragmentsSupportedParams) error {
-	_, err := q.db.Exec(ctx, updateWooThemeFragmentsSupported, arg.WooThemeFragmentsSupported, arg.SiteID)
-	return err
 }
 
 const upsertRucssResult = `-- name: UpsertRucssResult :one
@@ -1612,284 +1929,4 @@ func (q *Queries) UpsertRucssResult(ctx context.Context, arg UpsertRucssResultPa
 		&i.LastUsedAt,
 	)
 	return i, err
-}
-
-// ---------------------------------------------------------------------------
-// site_cache_hit_ratio_history (M52 / #162)
-// ---------------------------------------------------------------------------
-
-const insertCacheHitRatioHistory = `-- name: InsertCacheHitRatioHistory :one
-INSERT INTO site_cache_hit_ratio_history (
-    site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at
-) VALUES (
-    $1, $2, $3, $4, $5, $6
-)
-ON CONFLICT DO NOTHING
-RETURNING id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at
-`
-
-// InsertCacheHitRatioHistoryParams holds the input for one cache hit-ratio
-// history data point. RatioPct is passed as a *float64 so the caller can
-// supply NULL when counts are zero (defensive; the ingest guard prevents that
-// in practice).
-type InsertCacheHitRatioHistoryParams struct {
-	SiteID    uuid.UUID `json:"site_id"`
-	TenantID  uuid.UUID `json:"tenant_id"`
-	HitCount  int64     `json:"hit_count"`
-	MissCount int64     `json:"miss_count"`
-	RatioPct  *float64  `json:"ratio_pct"`
-	SampledAt time.Time `json:"sampled_at"`
-}
-
-// InsertCacheHitRatioHistory appends one hit-ratio data point. ON CONFLICT DO
-// NOTHING on (site_id, sampled_at) makes this idempotent if the agent emits
-// twice within the same second.
-func (q *Queries) InsertCacheHitRatioHistory(ctx context.Context, arg InsertCacheHitRatioHistoryParams) (SiteCacheHitRatioHistory, error) {
-	row := q.db.QueryRow(ctx, insertCacheHitRatioHistory,
-		arg.SiteID,
-		arg.TenantID,
-		arg.HitCount,
-		arg.MissCount,
-		arg.RatioPct,
-		arg.SampledAt,
-	)
-	var i SiteCacheHitRatioHistory
-	err := row.Scan(
-		&i.ID,
-		&i.SiteID,
-		&i.TenantID,
-		&i.HitCount,
-		&i.MissCount,
-		&i.RatioPct,
-		&i.SampledAt,
-		&i.CreatedAt,
-	)
-	return i, err
-}
-
-const getCacheHitRatioHistory = `-- name: GetCacheHitRatioHistory :many
-SELECT id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at
-FROM site_cache_hit_ratio_history
-WHERE site_id   = $1
-  AND tenant_id = $2
-  AND sampled_at >= $3
-ORDER BY sampled_at ASC
-LIMIT 366
-`
-
-// GetCacheHitRatioHistoryParams holds the filter parameters for the trend query.
-type GetCacheHitRatioHistoryParams struct {
-	SiteID   uuid.UUID `json:"site_id"`
-	TenantID uuid.UUID `json:"tenant_id"`
-	Since    time.Time `json:"since"`
-}
-
-// GetCacheHitRatioHistory returns up to 366 data points for the cache hit-ratio
-// trend chart, ordered oldest-first. Tenant-scoped via RLS (InTenantTx sets
-// app.tenant_id).
-func (q *Queries) GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error) {
-	rows, err := q.db.Query(ctx, getCacheHitRatioHistory, arg.SiteID, arg.TenantID, arg.Since)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []SiteCacheHitRatioHistory
-	for rows.Next() {
-		var i SiteCacheHitRatioHistory
-		if err := rows.Scan(
-			&i.ID,
-			&i.SiteID,
-			&i.TenantID,
-			&i.HitCount,
-			&i.MissCount,
-			&i.RatioPct,
-			&i.SampledAt,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-const pruneCacheHitRatioHistory = `-- name: PruneCacheHitRatioHistory :execrows
-DELETE FROM site_cache_hit_ratio_history
-WHERE id IN (
-    SELECT h.id FROM site_cache_hit_ratio_history h
-    WHERE h.created_at < $1
-    LIMIT 2000
-)
-`
-
-// PruneCacheHitRatioHistory deletes rows older than the cutoff across ALL
-// tenants (InAgentTx / app.agent). LIMIT 2000 keeps each GC transaction short;
-// the periodic job runs daily so at typical reporting frequency the cap is
-// never hit in practice.
-func (q *Queries) PruneCacheHitRatioHistory(ctx context.Context, cutoff time.Time) (int64, error) {
-	result, err := q.db.Exec(ctx, pruneCacheHitRatioHistory, cutoff)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-// ---------------------------------------------------------------------------
-// font_results (m55)
-// ---------------------------------------------------------------------------
-
-const upsertFontResult = `-- name: UpsertFontResult :one
-INSERT INTO font_results (
-    tenant_id, site_id, source_hash,
-    family, source_file, original_ext, original_size,
-    woff2_size, subset_size, unicode_range,
-    state, error_detail, savings_pct,
-    updated_at
-) VALUES (
-    $1, $2, $3,
-    $4, $5, $6, $7,
-    $8, $9, $10,
-    $11, $12,
-    CASE
-        WHEN $7::integer > 0 AND (
-             $8::integer IS NOT NULL OR $9::integer IS NOT NULL
-        ) THEN ROUND(
-            (1.0 - LEAST(
-                COALESCE($8::integer, $7::integer),
-                COALESCE($9::integer, $7::integer)
-            )::numeric / GREATEST($7::integer, 1)),
-            4
-        ) * 100
-        ELSE NULL
-    END,
-    now()
-)
-ON CONFLICT (site_id, source_hash) DO UPDATE SET
-    family        = COALESCE(EXCLUDED.family,       font_results.family),
-    source_file   = COALESCE(EXCLUDED.source_file,  font_results.source_file),
-    original_ext  = COALESCE(EXCLUDED.original_ext, font_results.original_ext),
-    original_size = COALESCE(EXCLUDED.original_size, font_results.original_size),
-    woff2_size    = COALESCE(EXCLUDED.woff2_size,   font_results.woff2_size),
-    subset_size   = COALESCE(EXCLUDED.subset_size,  font_results.subset_size),
-    unicode_range = COALESCE(EXCLUDED.unicode_range, font_results.unicode_range),
-    state         = EXCLUDED.state,
-    error_detail  = EXCLUDED.error_detail,
-    savings_pct   = EXCLUDED.savings_pct,
-    updated_at    = now()
-RETURNING id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at
-`
-
-// UpsertFontResultParams are the parameters for UpsertFontResult.
-// tenant_id + site_id ALWAYS come from the verified agent identity.
-type UpsertFontResultParams struct {
-	TenantID     uuid.UUID `json:"tenant_id"`
-	SiteID       uuid.UUID `json:"site_id"`
-	SourceHash   string    `json:"source_hash"`
-	Family       *string   `json:"family"`
-	SourceFile   *string   `json:"source_file"`
-	OriginalExt  *string   `json:"original_ext"`
-	OriginalSize *int32    `json:"original_size"`
-	Woff2Size    *int32    `json:"woff2_size"`
-	SubsetSize   *int32    `json:"subset_size"`
-	UnicodeRange *string   `json:"unicode_range"`
-	State        string    `json:"state"`
-	ErrorDetail  *string   `json:"error_detail"`
-}
-
-// UpsertFontResult inserts or updates a per-(site,source_hash) font result row.
-// savings_pct is CP-derived from best output size vs original_size.
-// Runs under InAgentTx. tenant_id + site_id come from the verified agent identity.
-func (q *Queries) UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error) {
-	row := q.db.QueryRow(ctx, upsertFontResult,
-		arg.TenantID,
-		arg.SiteID,
-		arg.SourceHash,
-		arg.Family,
-		arg.SourceFile,
-		arg.OriginalExt,
-		arg.OriginalSize,
-		arg.Woff2Size,
-		arg.SubsetSize,
-		arg.UnicodeRange,
-		arg.State,
-		arg.ErrorDetail,
-	)
-	var i FontResult
-	err := row.Scan(
-		&i.ID,
-		&i.TenantID,
-		&i.SiteID,
-		&i.SourceHash,
-		&i.Family,
-		&i.SourceFile,
-		&i.OriginalExt,
-		&i.OriginalSize,
-		&i.Woff2Size,
-		&i.SubsetSize,
-		&i.UnicodeRange,
-		&i.State,
-		&i.ErrorDetail,
-		&i.SavingsPct,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const listFontResultsForSite = `-- name: ListFontResultsForSite :many
-SELECT id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at FROM font_results
-WHERE tenant_id = $1 AND site_id = $2
-ORDER BY updated_at DESC, id DESC
-LIMIT $3 OFFSET $4
-`
-
-// ListFontResultsForSiteParams are the parameters for ListFontResultsForSite.
-type ListFontResultsForSiteParams struct {
-	TenantID  uuid.UUID `json:"tenant_id"`
-	SiteID    uuid.UUID `json:"site_id"`
-	RowLimit  int32     `json:"row_limit"`
-	RowOffset int32     `json:"row_offset"`
-}
-
-// ListFontResultsForSite returns a page of font catalog rows for the dashboard.
-// Ordered by updated_at DESC, id DESC (standing tiebreaker convention).
-// Runs under InTenantTx (operator path).
-func (q *Queries) ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error) {
-	rows, err := q.db.Query(ctx, listFontResultsForSite, arg.TenantID, arg.SiteID, arg.RowLimit, arg.RowOffset)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []FontResult
-	for rows.Next() {
-		var i FontResult
-		if err := rows.Scan(
-			&i.ID,
-			&i.TenantID,
-			&i.SiteID,
-			&i.SourceHash,
-			&i.Family,
-			&i.SourceFile,
-			&i.OriginalExt,
-			&i.OriginalSize,
-			&i.Woff2Size,
-			&i.SubsetSize,
-			&i.UnicodeRange,
-			&i.State,
-			&i.ErrorDetail,
-			&i.SavingsPct,
-			&i.CreatedAt,
-			&i.UpdatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }

@@ -2286,6 +2286,20 @@ func encodeGetRestoreRunResponse(response GetRestoreRunRes, w http.ResponseWrite
 	}
 }
 
+func encodeGetRumSummaryResponse(response *RumSummary, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
 func encodeGetScheduleRunResponse(response GetScheduleRunRes, w http.ResponseWriter, span trace.Span) error {
 	switch response := response.(type) {
 	case *ScheduleRun:
@@ -3039,6 +3053,20 @@ func encodeListRestoreRunsResponse(response ListRestoreRunsRes, w http.ResponseW
 }
 
 func encodeListRucssResultsResponse(response *RucssResultList, w http.ResponseWriter, span trace.Span) error {
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.WriteHeader(200)
+	span.SetStatus(codes.Ok, http.StatusText(200))
+
+	e := new(jx.Encoder)
+	response.Encode(e)
+	if _, err := e.WriteTo(w); err != nil {
+		return errors.Wrap(err, "write")
+	}
+
+	return nil
+}
+
+func encodeListRumResultsResponse(response *RumResultList, w http.ResponseWriter, span trace.Span) error {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(200)
 	span.SetStatus(codes.Ok, http.StatusText(200))

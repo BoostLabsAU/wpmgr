@@ -2729,6 +2729,92 @@ export type RucssResultList = {
 };
 
 /**
+ * p75 summary for one (metric, device, country) slice over the requested window. suppressed=true when the sample count is below the site's min_sample_count floor; p75_ms is 0 in that case and the dashboard must render "insufficient samples (sample_count of min_sample_count)".
+ *
+ */
+export type RumMetricSummary = {
+  /**
+   * The Core Web Vital metric name.
+   */
+  metric?: "lcp" | "inp" | "cls" | "ttfb" | "fcp";
+  /**
+   * Device class derived from the user agent.
+   */
+  device?: "desktop" | "mobile" | "tablet";
+  /**
+   * ISO-3166-1 alpha-2 country code or "__other__".
+   */
+  country?: string;
+  /**
+   * Interpolated 75th-percentile value in milliseconds (0 when suppressed).
+   */
+  p75_ms?: number;
+  /**
+   * Raw (pre-scale) sample count used for this estimate.
+   */
+  sample_count?: number;
+  /**
+   * CWV standard rating band per the official web-vitals thresholds. Empty when suppressed=true or when the metric has no threshold.
+   *
+   */
+  rating?: "good" | "needs_improvement" | "poor";
+  /**
+   * True when sample_count < min_sample_count. Dashboard must render "insufficient samples" rather than a p75.
+   *
+   */
+  suppressed?: boolean;
+};
+
+/**
+ * Site-level Core Web Vitals p75 summary over a configurable window.
+ */
+export type RumSummary = {
+  /**
+   * Number of days covered by this summary.
+   */
+  window_days?: number;
+  /**
+   * The site's configured min_sample_count floor.
+   */
+  min_sample_count?: number;
+  /**
+   * Flat list of p75 results by (metric, device, country).
+   */
+  metrics?: Array<RumMetricSummary>;
+};
+
+/**
+ * One per-URL/metric/device/country p75 breakdown row for the dashboard table. suppressed=true when sample_count < min_sample_count.
+ *
+ */
+export type RumResult = {
+  /**
+   * Normalized page URL pattern (query string stripped, IDs templated).
+   */
+  url_pattern?: string;
+  metric?: "lcp" | "inp" | "cls" | "ttfb" | "fcp";
+  device?: "desktop" | "mobile" | "tablet";
+  /**
+   * ISO-3166-1 alpha-2 country code or "__other__".
+   */
+  country?: string;
+  /**
+   * Interpolated 75th-percentile value in milliseconds (0 when suppressed).
+   */
+  p75_ms?: number;
+  sample_count?: number;
+  rating?: "good" | "needs_improvement" | "poor";
+  /**
+   * True when sample_count < min_sample_count.
+   */
+  suppressed?: boolean;
+};
+
+export type RumResultList = {
+  items?: Array<RumResult>;
+};
+
+/**
  * One font_results catalog row — the dashboard view of a processed self-hosted font.
  */
 export type FontResult = {
@@ -7032,6 +7118,54 @@ export type ListFontResultsResponses = {
 
 export type ListFontResultsResponse =
   ListFontResultsResponses[keyof ListFontResultsResponses];
+
+export type GetRumSummaryData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Number of days to include in the summary window (default 28).
+     */
+    window_days?: number;
+  };
+  url: "/api/v1/sites/{siteId}/perf/rum/summary";
+};
+
+export type GetRumSummaryResponses = {
+  /**
+   * RUM Core Web Vitals summary
+   */
+  200: RumSummary;
+};
+
+export type GetRumSummaryResponse =
+  GetRumSummaryResponses[keyof GetRumSummaryResponses];
+
+export type ListRumResultsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Number of days to include in the window (default 28).
+     */
+    window_days?: number;
+  };
+  url: "/api/v1/sites/{siteId}/perf/rum";
+};
+
+export type ListRumResultsResponses = {
+  /**
+   * List of per-URL RUM breakdown rows
+   */
+  200: RumResultList;
+};
+
+export type ListRumResultsResponse =
+  ListRumResultsResponses[keyof ListRumResultsResponses];
 
 export type ListRucssResultsData = {
   body?: never;

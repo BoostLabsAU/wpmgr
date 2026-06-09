@@ -160,6 +160,10 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 			FontsSubset:               c.FontsSubset,
 			FontsSubsetMode:           c.FontsSubsetMode,
 			FontsSubsetRange:          c.FontsSubsetRange,
+			RumEnabled:                c.RumEnabled,
+			RumSampleRate:             float32(c.RumSampleRate),
+			MaxDistinctCountries:      int32(c.MaxDistinctCountries),
+			MinSampleCount:            int32(c.MinSampleCount),
 		})
 		if qerr != nil {
 			return qerr
@@ -703,14 +707,17 @@ func (r *Repo) PruneDBSizeHistory(ctx context.Context, retention time.Duration) 
 // pre-computed by the caller: round(100*hit/(hit+miss), 2).
 // ON CONFLICT DO NOTHING on (site_id, sampled_at) ensures idempotency.
 func (r *Repo) InsertCacheHitRatioHistoryTx(ctx context.Context, tenantID, siteID uuid.UUID, hitCount, missCount int64, ratioPct float64, sampledAt time.Time) error {
-	rp := &ratioPct
+	// pgtype.Numeric for nullable numeric(5,2): encode the float64 as a big.Int
+	// mantissa with the decimal exponent so pgx transmits it correctly.
+	rpNum := pgtype.Numeric{}
+	_ = rpNum.Scan(ratioPct)
 	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		_, err := sqlc.New(tx).InsertCacheHitRatioHistory(ctx, sqlc.InsertCacheHitRatioHistoryParams{
 			SiteID:    siteID,
 			TenantID:  tenantID,
 			HitCount:  hitCount,
 			MissCount: missCount,
-			RatioPct:  rp,
+			RatioPct:  rpNum,
 			SampledAt: sampledAt,
 		})
 		return err
@@ -734,8 +741,9 @@ func (r *Repo) GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uui
 		out = make([]CacheHitRatioPoint, 0, len(rows))
 		for _, row := range rows {
 			rp := 0.0
-			if row.RatioPct != nil {
-				rp = *row.RatioPct
+			if row.RatioPct.Valid {
+				f, _ := row.RatioPct.Float64Value()
+				rp = f.Float64
 			}
 			out = append(out, CacheHitRatioPoint{
 				ID:        row.ID,
@@ -913,6 +921,11 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		FontsSubset:                row.FontsSubset,
 		FontsSubsetMode:            row.FontsSubsetMode,
 		FontsSubsetRange:           row.FontsSubsetRange,
+		RumEnabled:                 row.RumEnabled,
+		RumSampleRate:              float64(row.RumSampleRate),
+		MaxDistinctCountries:       int(row.MaxDistinctCountries),
+		MinSampleCount:             int(row.MinSampleCount),
+		BeaconKeySet:               row.BeaconKeyHash != nil,
 		ConfigVersion:              int(row.ConfigVersion),
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,

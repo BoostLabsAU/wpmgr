@@ -630,6 +630,19 @@ type Invoker interface {
 	//
 	// GET /api/v1/restores/{restoreId}
 	GetRestoreRun(ctx context.Context, params GetRestoreRunParams) (GetRestoreRunRes, error)
+	// GetRumSummary invokes getRumSummary operation.
+	//
+	// Returns site-level Core Web Vitals p75 estimates (LCP, INP, CLS, FCP,
+	// TTFB) over a configurable window (default 28 days, matching CrUX/GSC),
+	// with good/needs-improvement/poor ratings per the official web-vitals
+	// thresholds. Any (metric, device, country) slice whose scaled sample
+	// count is below the site's min_sample_count floor is returned with
+	// suppressed=true and p75_ms=0; the dashboard must render
+	// "insufficient samples (N of M needed)" for those rows.
+	// Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/rum/summary
+	GetRumSummary(ctx context.Context, params GetRumSummaryParams) (*RumSummary, error)
 	// GetScheduleRun invokes getScheduleRun operation.
 	//
 	// Returns the schedule run record by its UUID. Authorization is enforced
@@ -840,6 +853,17 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/rucss/results
 	ListRucssResults(ctx context.Context, params ListRucssResultsParams) (*RucssResultList, error)
+	// ListRumResults invokes listRumResults operation.
+	//
+	// Returns per-URL/metric/device/country p75 breakdown rows for the
+	// dashboard table. Each row includes the url_pattern, metric, device,
+	// country, p75_ms, sample_count, the CWV rating band, and a suppressed
+	// flag. Rows below the site's min_sample_count floor have suppressed=true
+	// and p75_ms=0; the dashboard renders "insufficient samples" for those.
+	// Requires the `site:read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/rum
+	ListRumResults(ctx context.Context, params ListRumResultsParams) (*RumResultList, error)
 	// ListScheduleRuns invokes listScheduleRuns operation.
 	//
 	// Returns a split view of schedule runs for the site: `upcoming`
@@ -7477,6 +7501,127 @@ func (c *Client) sendGetRestoreRun(ctx context.Context, params GetRestoreRunPara
 	return result, nil
 }
 
+// GetRumSummary invokes getRumSummary operation.
+//
+// Returns site-level Core Web Vitals p75 estimates (LCP, INP, CLS, FCP,
+// TTFB) over a configurable window (default 28 days, matching CrUX/GSC),
+// with good/needs-improvement/poor ratings per the official web-vitals
+// thresholds. Any (metric, device, country) slice whose scaled sample
+// count is below the site's min_sample_count floor is returned with
+// suppressed=true and p75_ms=0; the dashboard must render
+// "insufficient samples (N of M needed)" for those rows.
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/rum/summary
+func (c *Client) GetRumSummary(ctx context.Context, params GetRumSummaryParams) (*RumSummary, error) {
+	res, err := c.sendGetRumSummary(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetRumSummary(ctx context.Context, params GetRumSummaryParams) (res *RumSummary, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getRumSummary"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/rum/summary"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetRumSummaryOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/rum/summary"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "window_days" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "window_days",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.WindowDays.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetRumSummaryResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetScheduleRun invokes getScheduleRun operation.
 //
 // Returns the schedule run record by its UUID. Authorization is enforced
@@ -10319,6 +10464,125 @@ func (c *Client) sendListRucssResults(ctx context.Context, params ListRucssResul
 
 	stage = "DecodeResponse"
 	result, err := decodeListRucssResultsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListRumResults invokes listRumResults operation.
+//
+// Returns per-URL/metric/device/country p75 breakdown rows for the
+// dashboard table. Each row includes the url_pattern, metric, device,
+// country, p75_ms, sample_count, the CWV rating band, and a suppressed
+// flag. Rows below the site's min_sample_count floor have suppressed=true
+// and p75_ms=0; the dashboard renders "insufficient samples" for those.
+// Requires the `site:read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/rum
+func (c *Client) ListRumResults(ctx context.Context, params ListRumResultsParams) (*RumResultList, error) {
+	res, err := c.sendListRumResults(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListRumResults(ctx context.Context, params ListRumResultsParams) (res *RumResultList, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listRumResults"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/rum"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListRumResultsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/rum"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "window_days" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "window_days",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.WindowDays.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListRumResultsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

@@ -37,6 +37,7 @@ INSERT INTO site_perf_config (
     preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load,
     config_version, woo_cacheable_session, fonts_transcode_woff2,
     fonts_subset, fonts_subset_mode, fonts_subset_range,
+    rum_enabled, rum_sample_rate, max_distinct_countries, min_sample_count,
     updated_at
 ) VALUES (
     @site_id, @tenant_id,
@@ -59,6 +60,7 @@ INSERT INTO site_perf_config (
     @preload_concurrency, @preload_delay_ms, @preload_batch_size, @preload_max_load,
     @config_version, @woo_cacheable_session, @fonts_transcode_woff2,
     @fonts_subset, @fonts_subset_mode, @fonts_subset_range,
+    @rum_enabled, @rum_sample_rate, @max_distinct_countries, @min_sample_count,
     now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
@@ -122,6 +124,10 @@ ON CONFLICT (site_id) DO UPDATE SET
     fonts_subset                  = EXCLUDED.fonts_subset,
     fonts_subset_mode             = EXCLUDED.fonts_subset_mode,
     fonts_subset_range            = EXCLUDED.fonts_subset_range,
+    rum_enabled                   = EXCLUDED.rum_enabled,
+    rum_sample_rate               = EXCLUDED.rum_sample_rate,
+    max_distinct_countries        = EXCLUDED.max_distinct_countries,
+    min_sample_count              = EXCLUDED.min_sample_count,
     updated_at                    = now()
 RETURNING *;
 
@@ -531,6 +537,50 @@ ON CONFLICT (site_id, source_hash) DO UPDATE SET
     savings_pct   = EXCLUDED.savings_pct,
     updated_at    = now()
 RETURNING *;
+
+-- name: UpdateWooThemeFragmentsSupported :exec
+-- Stamps the agent-reported woo_theme_fragments_supported flag. Agent write path
+-- (InAgentTx) — the agent is the sole writer; operators can never set this.
+UPDATE site_perf_config
+SET woo_theme_fragments_supported = @woo_theme_fragments_supported,
+    updated_at                    = now()
+WHERE site_id = @site_id;
+
+-- ---------------------------------------------------------------------------
+-- site_cache_hit_ratio_history (M52 / #162)
+-- ---------------------------------------------------------------------------
+
+-- name: InsertCacheHitRatioHistory :one
+-- Appends one hit-ratio data point. ON CONFLICT DO NOTHING on (site_id,
+-- sampled_at) makes it idempotent within the same second. Operator write path
+-- (InTenantTx).
+INSERT INTO site_cache_hit_ratio_history (
+    site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at
+) VALUES (
+    @site_id, @tenant_id, @hit_count, @miss_count, @ratio_pct, @sampled_at
+)
+ON CONFLICT DO NOTHING
+RETURNING *;
+
+-- name: GetCacheHitRatioHistory :many
+-- Returns up to 366 hit-ratio data points for a site since @since, ordered
+-- oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+SELECT * FROM site_cache_hit_ratio_history
+WHERE site_id   = @site_id
+  AND tenant_id = @tenant_id
+  AND sampled_at >= @since
+ORDER BY sampled_at ASC
+LIMIT 366;
+
+-- name: PruneCacheHitRatioHistory :execrows
+-- Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
+-- LIMIT 2000 keeps each GC transaction short.
+DELETE FROM site_cache_hit_ratio_history
+WHERE id IN (
+    SELECT h.id FROM site_cache_hit_ratio_history h
+    WHERE h.created_at < @cutoff
+    LIMIT 2000
+);
 
 -- name: ListFontResultsForSite :many
 -- Dashboard list: ordered by updated_at DESC, id DESC (standing `, id` tiebreaker

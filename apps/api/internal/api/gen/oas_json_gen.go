@@ -23109,6 +23109,204 @@ func (s *OptRole) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes RumMetricSummaryDevice as json.
+func (o OptRumMetricSummaryDevice) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumMetricSummaryDevice from json.
+func (o *OptRumMetricSummaryDevice) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumMetricSummaryDevice to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumMetricSummaryDevice) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumMetricSummaryDevice) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumMetricSummaryMetric as json.
+func (o OptRumMetricSummaryMetric) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumMetricSummaryMetric from json.
+func (o *OptRumMetricSummaryMetric) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumMetricSummaryMetric to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumMetricSummaryMetric) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumMetricSummaryMetric) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumMetricSummaryRating as json.
+func (o OptRumMetricSummaryRating) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumMetricSummaryRating from json.
+func (o *OptRumMetricSummaryRating) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumMetricSummaryRating to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumMetricSummaryRating) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumMetricSummaryRating) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultDevice as json.
+func (o OptRumResultDevice) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumResultDevice from json.
+func (o *OptRumResultDevice) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumResultDevice to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumResultDevice) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumResultDevice) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultMetric as json.
+func (o OptRumResultMetric) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumResultMetric from json.
+func (o *OptRumResultMetric) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumResultMetric to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumResultMetric) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumResultMetric) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultRating as json.
+func (o OptRumResultRating) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes RumResultRating from json.
+func (o *OptRumResultRating) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptRumResultRating to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptRumResultRating) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptRumResultRating) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes SiteBackupSettingsNotificationsUpdateNotifyOnCompletion as json.
 func (o OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -28627,6 +28825,795 @@ func (s *RucssResultList) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *RucssResultList) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RumMetricSummary) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RumMetricSummary) encodeFields(e *jx.Encoder) {
+	{
+		if s.Metric.Set {
+			e.FieldStart("metric")
+			s.Metric.Encode(e)
+		}
+	}
+	{
+		if s.Device.Set {
+			e.FieldStart("device")
+			s.Device.Encode(e)
+		}
+	}
+	{
+		if s.Country.Set {
+			e.FieldStart("country")
+			s.Country.Encode(e)
+		}
+	}
+	{
+		if s.P75Ms.Set {
+			e.FieldStart("p75_ms")
+			s.P75Ms.Encode(e)
+		}
+	}
+	{
+		if s.SampleCount.Set {
+			e.FieldStart("sample_count")
+			s.SampleCount.Encode(e)
+		}
+	}
+	{
+		if s.Rating.Set {
+			e.FieldStart("rating")
+			s.Rating.Encode(e)
+		}
+	}
+	{
+		if s.Suppressed.Set {
+			e.FieldStart("suppressed")
+			s.Suppressed.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfRumMetricSummary = [7]string{
+	0: "metric",
+	1: "device",
+	2: "country",
+	3: "p75_ms",
+	4: "sample_count",
+	5: "rating",
+	6: "suppressed",
+}
+
+// Decode decodes RumMetricSummary from json.
+func (s *RumMetricSummary) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumMetricSummary to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "metric":
+			if err := func() error {
+				s.Metric.Reset()
+				if err := s.Metric.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"metric\"")
+			}
+		case "device":
+			if err := func() error {
+				s.Device.Reset()
+				if err := s.Device.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"device\"")
+			}
+		case "country":
+			if err := func() error {
+				s.Country.Reset()
+				if err := s.Country.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"country\"")
+			}
+		case "p75_ms":
+			if err := func() error {
+				s.P75Ms.Reset()
+				if err := s.P75Ms.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"p75_ms\"")
+			}
+		case "sample_count":
+			if err := func() error {
+				s.SampleCount.Reset()
+				if err := s.SampleCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sample_count\"")
+			}
+		case "rating":
+			if err := func() error {
+				s.Rating.Reset()
+				if err := s.Rating.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rating\"")
+			}
+		case "suppressed":
+			if err := func() error {
+				s.Suppressed.Reset()
+				if err := s.Suppressed.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"suppressed\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RumMetricSummary")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RumMetricSummary) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumMetricSummary) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumMetricSummaryDevice as json.
+func (s RumMetricSummaryDevice) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumMetricSummaryDevice from json.
+func (s *RumMetricSummaryDevice) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumMetricSummaryDevice to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumMetricSummaryDevice(v) {
+	case RumMetricSummaryDeviceDesktop:
+		*s = RumMetricSummaryDeviceDesktop
+	case RumMetricSummaryDeviceMobile:
+		*s = RumMetricSummaryDeviceMobile
+	case RumMetricSummaryDeviceTablet:
+		*s = RumMetricSummaryDeviceTablet
+	default:
+		*s = RumMetricSummaryDevice(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumMetricSummaryDevice) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumMetricSummaryDevice) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumMetricSummaryMetric as json.
+func (s RumMetricSummaryMetric) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumMetricSummaryMetric from json.
+func (s *RumMetricSummaryMetric) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumMetricSummaryMetric to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumMetricSummaryMetric(v) {
+	case RumMetricSummaryMetricLcp:
+		*s = RumMetricSummaryMetricLcp
+	case RumMetricSummaryMetricInp:
+		*s = RumMetricSummaryMetricInp
+	case RumMetricSummaryMetricCls:
+		*s = RumMetricSummaryMetricCls
+	case RumMetricSummaryMetricTtfb:
+		*s = RumMetricSummaryMetricTtfb
+	case RumMetricSummaryMetricFcp:
+		*s = RumMetricSummaryMetricFcp
+	default:
+		*s = RumMetricSummaryMetric(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumMetricSummaryMetric) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumMetricSummaryMetric) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumMetricSummaryRating as json.
+func (s RumMetricSummaryRating) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumMetricSummaryRating from json.
+func (s *RumMetricSummaryRating) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumMetricSummaryRating to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumMetricSummaryRating(v) {
+	case RumMetricSummaryRatingGood:
+		*s = RumMetricSummaryRatingGood
+	case RumMetricSummaryRatingNeedsImprovement:
+		*s = RumMetricSummaryRatingNeedsImprovement
+	case RumMetricSummaryRatingPoor:
+		*s = RumMetricSummaryRatingPoor
+	default:
+		*s = RumMetricSummaryRating(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumMetricSummaryRating) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumMetricSummaryRating) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RumResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RumResult) encodeFields(e *jx.Encoder) {
+	{
+		if s.URLPattern.Set {
+			e.FieldStart("url_pattern")
+			s.URLPattern.Encode(e)
+		}
+	}
+	{
+		if s.Metric.Set {
+			e.FieldStart("metric")
+			s.Metric.Encode(e)
+		}
+	}
+	{
+		if s.Device.Set {
+			e.FieldStart("device")
+			s.Device.Encode(e)
+		}
+	}
+	{
+		if s.Country.Set {
+			e.FieldStart("country")
+			s.Country.Encode(e)
+		}
+	}
+	{
+		if s.P75Ms.Set {
+			e.FieldStart("p75_ms")
+			s.P75Ms.Encode(e)
+		}
+	}
+	{
+		if s.SampleCount.Set {
+			e.FieldStart("sample_count")
+			s.SampleCount.Encode(e)
+		}
+	}
+	{
+		if s.Rating.Set {
+			e.FieldStart("rating")
+			s.Rating.Encode(e)
+		}
+	}
+	{
+		if s.Suppressed.Set {
+			e.FieldStart("suppressed")
+			s.Suppressed.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfRumResult = [8]string{
+	0: "url_pattern",
+	1: "metric",
+	2: "device",
+	3: "country",
+	4: "p75_ms",
+	5: "sample_count",
+	6: "rating",
+	7: "suppressed",
+}
+
+// Decode decodes RumResult from json.
+func (s *RumResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumResult to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "url_pattern":
+			if err := func() error {
+				s.URLPattern.Reset()
+				if err := s.URLPattern.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"url_pattern\"")
+			}
+		case "metric":
+			if err := func() error {
+				s.Metric.Reset()
+				if err := s.Metric.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"metric\"")
+			}
+		case "device":
+			if err := func() error {
+				s.Device.Reset()
+				if err := s.Device.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"device\"")
+			}
+		case "country":
+			if err := func() error {
+				s.Country.Reset()
+				if err := s.Country.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"country\"")
+			}
+		case "p75_ms":
+			if err := func() error {
+				s.P75Ms.Reset()
+				if err := s.P75Ms.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"p75_ms\"")
+			}
+		case "sample_count":
+			if err := func() error {
+				s.SampleCount.Reset()
+				if err := s.SampleCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sample_count\"")
+			}
+		case "rating":
+			if err := func() error {
+				s.Rating.Reset()
+				if err := s.Rating.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rating\"")
+			}
+		case "suppressed":
+			if err := func() error {
+				s.Suppressed.Reset()
+				if err := s.Suppressed.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"suppressed\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RumResult")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RumResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultDevice as json.
+func (s RumResultDevice) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumResultDevice from json.
+func (s *RumResultDevice) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumResultDevice to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumResultDevice(v) {
+	case RumResultDeviceDesktop:
+		*s = RumResultDeviceDesktop
+	case RumResultDeviceMobile:
+		*s = RumResultDeviceMobile
+	case RumResultDeviceTablet:
+		*s = RumResultDeviceTablet
+	default:
+		*s = RumResultDevice(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumResultDevice) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumResultDevice) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RumResultList) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RumResultList) encodeFields(e *jx.Encoder) {
+	{
+		if s.Items != nil {
+			e.FieldStart("items")
+			e.ArrStart()
+			for _, elem := range s.Items {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+}
+
+var jsonFieldsNameOfRumResultList = [1]string{
+	0: "items",
+}
+
+// Decode decodes RumResultList from json.
+func (s *RumResultList) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumResultList to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "items":
+			if err := func() error {
+				s.Items = make([]RumResult, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem RumResult
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Items = append(s.Items, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"items\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RumResultList")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RumResultList) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumResultList) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultMetric as json.
+func (s RumResultMetric) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumResultMetric from json.
+func (s *RumResultMetric) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumResultMetric to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumResultMetric(v) {
+	case RumResultMetricLcp:
+		*s = RumResultMetricLcp
+	case RumResultMetricInp:
+		*s = RumResultMetricInp
+	case RumResultMetricCls:
+		*s = RumResultMetricCls
+	case RumResultMetricTtfb:
+		*s = RumResultMetricTtfb
+	case RumResultMetricFcp:
+		*s = RumResultMetricFcp
+	default:
+		*s = RumResultMetric(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumResultMetric) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumResultMetric) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RumResultRating as json.
+func (s RumResultRating) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RumResultRating from json.
+func (s *RumResultRating) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumResultRating to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RumResultRating(v) {
+	case RumResultRatingGood:
+		*s = RumResultRatingGood
+	case RumResultRatingNeedsImprovement:
+		*s = RumResultRatingNeedsImprovement
+	case RumResultRatingPoor:
+		*s = RumResultRatingPoor
+	default:
+		*s = RumResultRating(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RumResultRating) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumResultRating) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *RumSummary) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RumSummary) encodeFields(e *jx.Encoder) {
+	{
+		if s.WindowDays.Set {
+			e.FieldStart("window_days")
+			s.WindowDays.Encode(e)
+		}
+	}
+	{
+		if s.MinSampleCount.Set {
+			e.FieldStart("min_sample_count")
+			s.MinSampleCount.Encode(e)
+		}
+	}
+	{
+		if s.Metrics != nil {
+			e.FieldStart("metrics")
+			e.ArrStart()
+			for _, elem := range s.Metrics {
+				elem.Encode(e)
+			}
+			e.ArrEnd()
+		}
+	}
+}
+
+var jsonFieldsNameOfRumSummary = [3]string{
+	0: "window_days",
+	1: "min_sample_count",
+	2: "metrics",
+}
+
+// Decode decodes RumSummary from json.
+func (s *RumSummary) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RumSummary to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "window_days":
+			if err := func() error {
+				s.WindowDays.Reset()
+				if err := s.WindowDays.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"window_days\"")
+			}
+		case "min_sample_count":
+			if err := func() error {
+				s.MinSampleCount.Reset()
+				if err := s.MinSampleCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"min_sample_count\"")
+			}
+		case "metrics":
+			if err := func() error {
+				s.Metrics = make([]RumMetricSummary, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem RumMetricSummary
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Metrics = append(s.Metrics, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"metrics\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RumSummary")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RumSummary) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RumSummary) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

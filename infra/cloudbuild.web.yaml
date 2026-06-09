@@ -1,0 +1,34 @@
+# Reusable Cloud Build config for the WPMgr web (SPA) image.
+#
+# Vite reads BUILD_VERSION at build time and exposes it as __BUILD_VERSION__
+# (see infra/Dockerfile.web ARG BUILD_VERSION). Pass the image ref and version
+# as substitutions so this file carries no environment-specific values:
+#
+#   gcloud builds submit --config infra/cloudbuild.web.yaml \
+#     --substitutions=_IMAGE=<registry>/web,_VERSION=<x.y.z> \
+#     --region <cloud-build-region> .
+#
+# Then deploy the built tag (image-only update preserves env/scaling/config):
+#   gcloud run deploy wpmgr-web --image <registry>/web:<x.y.z> --region <run-region>
+substitutions:
+  _IMAGE: 'web'
+  _VERSION: '0.0.0-dev'
+steps:
+  # DOCKER_BUILDKIT=1 is required: the Dockerfiles use BuildKit cache mounts
+  # (RUN --mount=type=cache), which the legacy builder rejects.
+  - name: 'gcr.io/cloud-builders/docker'
+    env:
+      - 'DOCKER_BUILDKIT=1'
+    args:
+      - 'build'
+      - '-f'
+      - 'infra/Dockerfile.web'
+      - '--build-arg'
+      - 'BUILD_VERSION=${_VERSION}'
+      - '-t'
+      - '${_IMAGE}:${_VERSION}'
+      - '.'
+images:
+  - '${_IMAGE}:${_VERSION}'
+options:
+  machineType: 'E2_HIGHCPU_8'

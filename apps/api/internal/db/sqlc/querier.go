@@ -66,6 +66,8 @@ type Querier interface {
 	ClearActiveDBCleanJob(ctx context.Context, siteID uuid.UUID) error
 	// Clear the in-flight db_scan watchdog columns on completion or failure.
 	ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
+	// Clears the grace-window previous hash once the rotation grace period expires.
+	ClearBeaconKeyHashPrev(ctx context.Context, siteID uuid.UUID) error
 	CompleteBackupSnapshot(ctx context.Context, arg CompleteBackupSnapshotParams) (BackupSnapshot, error)
 	// Consume path (app.agent). Atomic single-shot UPDATE that wins exactly once
 	// across concurrent agent callbacks: the (consumed_at IS NULL) predicate makes
@@ -134,19 +136,36 @@ type Querier interface {
 	CreateUpdateRun(ctx context.Context, arg CreateUpdateRunParams) (UpdateRun, error)
 	CreateUpdateTask(ctx context.Context, arg CreateUpdateTaskParams) (UpdateTask, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
-	// Decrements but never below zero. Returns the new refcount + s3_key so the GC
-	// job can delete the object from storage when the count reaches zero.
+	// DEPRECATED (ADR-050): refcount is observability-only post-mark-and-sweep and
+	// is NEVER consulted for a delete. Retained only so the generated querier keeps
+	// compiling; the GC delete path no longer calls it.
 	DecrementChunkRefcount(ctx context.Context, arg DecrementChunkRefcountParams) (DecrementChunkRefcountRow, error)
 	DeleteBackupSnapshot(ctx context.Context, arg DeleteBackupSnapshotParams) (int64, error)
-	// Hard-delete a site that has never connected. The delete is conditional on
-	// all three never-connected predicates (connection_state='pending_enrollment',
-	// enrolled_at IS NULL, agent_public_key empty) so the guard and delete are
-	// atomic in the same tenant tx. rowsAffected==0 means the site raced to
-	// connected and must be treated as not_cancellable by the service layer.
+	// Hard-delete a site that has NEVER connected: the delete is conditional on
+	// all three never-connected predicates so the check and the delete are atomic
+	// in the same tenant-scoped tx. A concurrent AttachAgentAndConnect (enroll)
+	// that lands between a hypothetical separate-tx load and this DELETE cannot
+	// slip through because this single statement either matches and deletes the
+	// row (predicates still hold) or returns 0 rows (the agent already enrolled).
+	// rowsAffected==0 must be treated as not_cancellable by the service layer.
 	DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error)
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) (int64, error)
-	// Deletes a chunk row only if its refcount is zero (the object was already
-	// removed from storage by the GC job). Tenant-scoped.
+	// Prunes daily rollup rows older than @since_day across ALL tenants.
+	DeleteOldRumDailyRollups(ctx context.Context, sinceDay pgtype.Date) (int64, error)
+	// ---------------------------------------------------------------------------
+	// Retention GC (InAgentTx — cross-tenant)
+	// ---------------------------------------------------------------------------
+	// Deletes raw RUM events older than @cutoff across ALL tenants.
+	// LIMIT 5000 keeps each GC transaction short; the job runs frequently enough
+	// that this cap is never hit at typical ingest rates.
+	DeleteOldRumEvents(ctx context.Context, cutoff time.Time) (int64, error)
+	// Prunes hourly rollup rows older than @cutoff across ALL tenants.
+	DeleteOldRumHourlyRollups(ctx context.Context, cutoff time.Time) (int64, error)
+	// DEPRECATED (ADR-050): the refcount==0 gate is unsound for incremental dedup
+	// (refcount counts ORIGIN refs, not live refs). The mark-and-sweep pass deletes
+	// chunks by reachability + grace floor instead (see ListChunksForSweep /
+	// DeleteSweptChunk below, implemented as raw SQL in repo.go). Retained only so
+	// the generated querier keeps compiling.
 	DeleteOrphanChunk(ctx context.Context, arg DeleteOrphanChunkParams) (int64, error)
 	DeleteShare(ctx context.Context, arg DeleteShareParams) (int64, error)
 	DeleteSite(ctx context.Context, arg DeleteSiteParams) (int64, error)
@@ -179,6 +198,43 @@ type Querier interface {
 	// backup_chunks  (content-addressed dedup + refcount GC)
 	// ---------------------------------------------------------------------------
 	GetBackupChunk(ctx context.Context, arg GetBackupChunkParams) (BackupChunk, error)
+	// ADR-050 MARK-AND-SWEEP retention GC. These are implemented as raw tx.Query /
+	// tx.Exec in repo.go (matching the m44/m46 raw-SQL precedent) rather than
+	// regenerating sqlc; the canonical statements are documented here.
+	//
+	// m47 data-loss fix: a chunk's deletion boundary is GREATEST(created_at,
+	// last_referenced_at), not created_at alone. The dedup oracle (the
+	// ExistingChunkHashes path PresignChunks relies on) bumps last_referenced_at =
+	// now() for every chunk it reports as already-stored, so an OLD chunk an
+	// in-flight backup re-references via tenant-global dedup is protected even
+	// though its created_at is ancient and its last completed referrer expired this
+	// run.
+	//
+	// TouchExistingChunks (dedup oracle — read + touch in ONE statement):
+	//   UPDATE backup_chunks
+	//      SET last_referenced_at = now(), updated_at = now()
+	//    WHERE tenant_id = $1 AND blake3 = ANY($2::text[])
+	//   RETURNING id, tenant_id, blake3, s3_key, size, refcount,
+	//             created_at, updated_at;
+	//
+	// ListChunksForSweep (keyset-paged by (created_at, blake3)):
+	//   SELECT blake3, s3_key, created_at, last_referenced_at FROM backup_chunks
+	//    WHERE tenant_id = $1 AND (created_at, blake3) > ($2, $3)
+	//    ORDER BY created_at ASC, blake3 ASC LIMIT $4;
+	//
+	// DeleteSweptChunk (object deleted first; row only when STILL below the floor by
+	// the GREATEST boundary, so a chunk re-referenced after the read survives):
+	//   DELETE FROM backup_chunks
+	//    WHERE tenant_id = $1 AND blake3 = $2
+	//      AND GREATEST(created_at, last_referenced_at) < $3;
+	//
+	// The per-tenant sweep takes a SESSION-level advisory lock (released via
+	// pg_advisory_unlock) spanning SHORT per-page transactions, so no pooled
+	// connection is pinned across object-store I/O (avoiding Cloud SQL's
+	// idle_in_transaction_session_timeout):
+	//   SELECT pg_try_advisory_lock(hashtext('backup_gc'), hashtext($1));   -- acquire
+	//   SELECT pg_advisory_unlock(hashtext('backup_gc'), hashtext($1));     -- release
+	// so two GC passes never sweep the same tenant concurrently.
 	// ---------------------------------------------------------------------------
 	// backup_schedules
 	// ---------------------------------------------------------------------------
@@ -189,6 +245,9 @@ type Querier interface {
 	// Runs tenant-scoped (the caller sets app.tenant_id before this query).
 	GetBackupSiteInfo(ctx context.Context, arg GetBackupSiteInfoParams) (GetBackupSiteInfoRow, error)
 	GetBackupSnapshot(ctx context.Context, arg GetBackupSnapshotParams) (BackupSnapshot, error)
+	// Returns up to 366 hit-ratio data points for a site since @since, ordered
+	// oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+	GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error)
 	// ---------------------------------------------------------------------------
 	// site_cache_stats
 	// ---------------------------------------------------------------------------
@@ -245,6 +304,16 @@ type Querier interface {
 	// rucss_results
 	// ---------------------------------------------------------------------------
 	GetRucssResultByHash(ctx context.Context, arg GetRucssResultByHashParams) (RucssResult, error)
+	// Returns daily rollup rows for a site within a date range, ordered by
+	// bucket_day ascending. Used for longer-window trend reads.
+	GetRumRollupDaily(ctx context.Context, arg GetRumRollupDailyParams) ([]RumRollupDaily, error)
+	// ---------------------------------------------------------------------------
+	// rum_rollup_hourly reads (InTenantTx — dashboard)
+	// ---------------------------------------------------------------------------
+	// Returns hourly rollup rows for a site within a time window, ordered by
+	// bucket_hour ascending. Used by the read-time p75 interpolation. The caller
+	// sums bucket_counts across the result set.
+	GetRumRollupHourly(ctx context.Context, arg GetRumRollupHourlyParams) ([]RumRollupHourly, error)
 	// Fetch the single instance SMTP row. Run under Pool.InAgentTx (app.agent='on').
 	GetSMTPSettings(ctx context.Context) (SmtpSetting, error)
 	GetScheduleRun(ctx context.Context, arg GetScheduleRunParams) (BackupScheduleRun, error)
@@ -259,6 +328,11 @@ type Querier interface {
 	// Enrollment path (app.enroll GUC). These run before any tenant scope exists.
 	// ---------------------------------------------------------------------------
 	GetSiteByURLForEnroll(ctx context.Context, arg GetSiteByURLForEnrollParams) (Site, error)
+	// URL-dedup check before MintEnrollmentCode. Tenant-scoped; includes ALL states
+	// (archived, pending, etc.) so that a tombstone from a previously-cancelled or
+	// archived site is visible and the caller can return a structured 409 with
+	// site_id + connection_state instead of hitting the unique-index violation.
+	GetSiteByURLForMint(ctx context.Context, arg GetSiteByURLForMintParams) (GetSiteByURLForMintRow, error)
 	// Loads one event under the tenant scope (the LISTEN listener uses this after a
 	// NOTIFY to fetch the body it must fan out).
 	GetSiteEvent(ctx context.Context, arg GetSiteEventParams) (SiteEvent, error)
@@ -271,10 +345,6 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	// Site load for a read-modify-write transition (tenant-scoped, FOR UPDATE).
 	// ---------------------------------------------------------------------------
-	// URL-dedup check before MintEnrollmentCode. Tenant-scoped; includes ALL states
-	// (archived, pending, etc.) so that a tombstone is visible and the caller can
-	// return a structured 409 with site_id + connection_state.
-	GetSiteByURLForMint(ctx context.Context, arg GetSiteByURLForMintParams) (GetSiteByURLForMintRow, error)
 	// Loads a site under the tenant scope with a row lock so the load → validate →
 	// write sequence is serialized against concurrent transitions on the same row.
 	GetSiteForTransition(ctx context.Context, arg GetSiteForTransitionParams) (Site, error)
@@ -326,6 +396,13 @@ type Querier interface {
 	// Mint path (app.tenant_id). The id is the JWT jti (base64url 32B random).
 	InsertAutologinToken(ctx context.Context, arg InsertAutologinTokenParams) (AutologinToken, error)
 	// ---------------------------------------------------------------------------
+	// site_cache_hit_ratio_history (M52 / #162)
+	// ---------------------------------------------------------------------------
+	// Appends one hit-ratio data point. ON CONFLICT DO NOTHING on (site_id,
+	// sampled_at) makes it idempotent within the same second. Operator write path
+	// (InTenantTx).
+	InsertCacheHitRatioHistory(ctx context.Context, arg InsertCacheHitRatioHistoryParams) (SiteCacheHitRatioHistory, error)
+	// ---------------------------------------------------------------------------
 	// cache_purge_audit
 	// ---------------------------------------------------------------------------
 	InsertCachePurgeAudit(ctx context.Context, arg InsertCachePurgeAuditParams) (CachePurgeAudit, error)
@@ -353,6 +430,13 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	InsertRucssJob(ctx context.Context, arg InsertRucssJobParams) (RucssJob, error)
 	// ---------------------------------------------------------------------------
+	// rum_events_raw writes (InRumIngestTx)
+	// ---------------------------------------------------------------------------
+	// Inserts one raw RUM beacon event. tenant_id and site_id come from the
+	// RESOLVED beacon key — never from the request body. received_at is always
+	// set server-side (now()).
+	InsertRumEvent(ctx context.Context, arg InsertRumEventParams) error
+	// ---------------------------------------------------------------------------
 	// site_events — durable SSE journal (tenant-scoped insert/replay, cross-tenant
 	// prune). The app mints the ULID event_id; NOTIFY carries only the id.
 	// ---------------------------------------------------------------------------
@@ -376,7 +460,10 @@ type Querier interface {
 	ListBackupSnapshotsForSite(ctx context.Context, arg ListBackupSnapshotsForSiteParams) ([]BackupSnapshot, error)
 	ListCachePurgeAuditForSite(ctx context.Context, arg ListCachePurgeAuditForSiteParams) ([]CachePurgeAudit, error)
 	// Completed snapshots for a site, newest first, used to compute the retention
-	// archive set (newest per calendar month).
+	// archive set (newest per calendar month). ADR-050 widened the projection to
+	// carry the chain columns so the mark-and-sweep GC can do chain-aware
+	// expansion (pin a carry-forward chunk's old origin generation under a live
+	// tip) without a second round-trip.
 	ListCompletedSnapshotsForSite(ctx context.Context, arg ListCompletedSnapshotsForSiteParams) ([]ListCompletedSnapshotsForSiteRow, error)
 	// Newest first; used by the per-site lifecycle timeline.
 	ListConnectionHistory(ctx context.Context, arg ListConnectionHistoryParams) ([]SiteConnectionHistory, error)
@@ -397,6 +484,17 @@ type Querier interface {
 	// single tenant scope. The GC job decrements chunk refcounts for each then
 	// deletes the snapshot (manifest entries cascade).
 	ListExpiredBackupSnapshots(ctx context.Context, arg ListExpiredBackupSnapshotsParams) ([]BackupSnapshot, error)
+	// Dashboard list: ordered by updated_at DESC, id DESC (standing `, id` tiebreaker
+	// convention; batch inserts share updated_at so id breaks ties deterministically).
+	// Runs under InTenantTx (operator path).
+	ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error)
+	// ADR-050 mark-and-sweep grace floor: the oldest created_at among snapshots
+	// that are still pending or running for the tenant. A chunk created before this
+	// floor cannot be re-referenced by an in-flight backup (its manifest/file_index
+	// rows are not yet visible at mark time), so the sweep uses
+	// min(markStart, inflightFloor) as the deletion horizon. Returns NULL when no
+	// in-flight snapshot exists (the caller then uses markStart alone).
+	ListInFlightSnapshotFloor(ctx context.Context, tenantID uuid.UUID) (time.Time, error)
 	// Link history for one site: pending + accepted + expired + revoked, newest
 	// first. Tenant-scoped by RLS; site-bound + scope-bound here. The caller derives
 	// the display status (pending/accepted/expired/revoked) from the columns.
@@ -463,6 +561,19 @@ type Querier interface {
 	ListUpcomingScheduleRuns(ctx context.Context, arg ListUpcomingScheduleRunsParams) ([]BackupScheduleRun, error)
 	ListUpdateRuns(ctx context.Context, arg ListUpdateRunsParams) ([]UpdateRun, error)
 	ListUpdateTasksForRun(ctx context.Context, arg ListUpdateTasksForRunParams) ([]UpdateTask, error)
+	// M56 Real User Monitoring (RUM) queries.
+	// All writes run under InRumIngestTx (app.rum_ingest='on').
+	// Dashboard reads run under InTenantTx (app.tenant_id set).
+	// Beacon-key lookup runs under InRumIngestLookupTx (app.rum_lookup='on').
+	// ---------------------------------------------------------------------------
+	// Beacon-key resolution (InRumIngestLookupTx)
+	// ---------------------------------------------------------------------------
+	// Resolves a sha256(beacon_key) to site_id, tenant_id, rum_enabled, and
+	// rum_sample_rate. Runs under app.rum_lookup='on' (SELECT-only policy).
+	// The caller computes sha256(presented_plaintext_key) before calling this.
+	// Also returns beacon_key_hash_prev so the handler can accept the grace-window
+	// previous key during rotation.
+	LookupRumBeaconKey(ctx context.Context, beaconKeyHash []byte) (LookupRumBeaconKeyRow, error)
 	// Used on the Redis-hot-path success: Redis already produced the payload, but
 	// we still UPDATE the PG row so the audit/observability story is complete.
 	// Idempotent: returns 0 if another path already marked it (safe).
@@ -513,6 +624,9 @@ type Querier interface {
 	// Drops nonces older than the freshness window; called opportunistically.
 	PruneAgentNonces(ctx context.Context, createdAt time.Time) (int64, error)
 	// Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
+	// LIMIT 2000 keeps each GC transaction short.
+	PruneCacheHitRatioHistory(ctx context.Context, cutoff time.Time) (int64, error)
+	// Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
 	// LIMIT 2000 keeps each GC transaction short; the periodic job runs daily so
 	// at typical scan frequency the cap is never hit in practice.
 	PruneDBSizeHistory(ctx context.Context, cutoff time.Time) (int64, error)
@@ -540,6 +654,12 @@ type Querier interface {
 	// Stamp the in-flight db_scan job id + start time for the watchdog.
 	SetActiveDBScanJob(ctx context.Context, arg SetActiveDBScanJobParams) error
 	SetBackupSnapshotArchived(ctx context.Context, arg SetBackupSnapshotArchivedParams) error
+	// ---------------------------------------------------------------------------
+	// Beacon-key generation / rotation (InTenantTx)
+	// ---------------------------------------------------------------------------
+	// Writes a new beacon_key_hash, rotating the previous one into beacon_key_hash_prev
+	// for the grace window. Operator write path (InTenantTx).
+	SetBeaconKeyHash(ctx context.Context, arg SetBeaconKeyHashParams) error
 	// Links the pending snapshot_id to a run and advances its status to 'queued'.
 	SetScheduleRunSnapshot(ctx context.Context, arg SetScheduleRunSnapshotParams) (BackupScheduleRun, error)
 	// Advances a run to a terminal or intermediate status by its primary key.
@@ -600,6 +720,9 @@ type Querier interface {
 	// UpdateTenantName renames a tenant. tenants has no RLS, so the handler verifies
 	// the caller's membership + admin/owner role before calling this.
 	UpdateTenantName(ctx context.Context, arg UpdateTenantNameParams) (Tenant, error)
+	// Stamps the agent-reported woo_theme_fragments_supported flag. Agent write path
+	// (InAgentTx) — the agent is the sole writer; operators can never set this.
+	UpdateWooThemeFragmentsSupported(ctx context.Context, arg UpdateWooThemeFragmentsSupportedParams) error
 	// Tenant-scoped create-or-update of the tenant's default alert channel.
 	UpsertAlertConfig(ctx context.Context, arg UpsertAlertConfigParams) (AlertConfig, error)
 	// Mint path (app.tenant_id). Idempotent insert-or-return: the first call seeds
@@ -628,6 +751,14 @@ type Querier interface {
 	//   carry the orphan-enumeration output from agents >= 0.16.0. Agents < 0.16.0
 	//   omit these fields; the caller passes '[]' for backward compat.
 	UpsertDBScanResult(ctx context.Context, arg UpsertDBScanResultParams) (SiteDbScanResult, error)
+	// ---------------------------------------------------------------------------
+	// font_results (m55 — per-site dashboard catalog)
+	// ---------------------------------------------------------------------------
+	// Agent -> CP results push. Inserts or updates the per-(site,source_hash)
+	// catalog row. savings_pct is CP-derived: 1 - min(woff2_size, subset_size) / original_size.
+	// Runs under app.agent (InAgentTx). tenant_id + site_id ALWAYS come from the
+	// VERIFIED agent identity, never from the body.
+	UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error)
 	// Tenant-create helper: insert an owner membership for the creator; on conflict
 	// (e.g. migration replay or second create attempt) update role to 'owner'.
 	UpsertOwnerMembership(ctx context.Context, arg UpsertOwnerMembershipParams) (Membership, error)
@@ -636,9 +767,19 @@ type Querier interface {
 	// htaccess_managed) are NOT touched here — those are reported by the agent via
 	// UpdatePerfInstallState — so an operator config save never clobbers them.
 	UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigParams) (SitePerfConfig, error)
-	UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error)
-	ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error)
 	UpsertRucssResult(ctx context.Context, arg UpsertRucssResultParams) (RucssResult, error)
+	// ---------------------------------------------------------------------------
+	// rum_rollup_daily writes (InRumIngestTx — idempotent additive upsert)
+	// ---------------------------------------------------------------------------
+	// Same additive-upsert pattern as hourly but bucket_day is a date.
+	UpsertRumRollupDaily(ctx context.Context, arg UpsertRumRollupDailyParams) error
+	// ---------------------------------------------------------------------------
+	// rum_rollup_hourly writes (InRumIngestTx — idempotent additive upsert)
+	// ---------------------------------------------------------------------------
+	// Additive, idempotent upsert: on conflict, element-wise add bucket_counts and
+	// accumulate sample_count/sum/min/max. Re-running within the raw-retention window
+	// self-heals. The bucket_hour is truncated to the start of the hour by the caller.
+	UpsertRumRollupHourly(ctx context.Context, arg UpsertRumRollupHourlyParams) error
 	// Insert-or-update the singleton row. password_enc uses a nil-sentinel:
 	// when @set_password is false the existing ciphertext is preserved, so editing
 	// other fields without re-entering the password keeps the stored secret.

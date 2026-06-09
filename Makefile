@@ -112,6 +112,7 @@ agent-zip: agent-vendor ## Package the WordPress agent plugin as a zip (with ifs
 		--exclude 'tests/' --exclude '*.dist' --exclude '.phpunit.cache/' \
 		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
 		--exclude '.DS_Store' --exclude '*.zip' \
+		--exclude 'patchwork.json' \
 		apps/agent/ release/wpmgr-agent/
 	# VERSION override: when VERSION is provided (e.g. from the release tag),
 	# strip any leading 'v' and stamp ONLY the staged copy — the source file is
@@ -146,6 +147,7 @@ agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fl
 		--exclude '.DS_Store' --exclude '*.zip' \
 		--exclude 'phpstan.neon' --exclude 'phpstan-baseline.neon' \
 		--exclude 'NOTICE.md' --exclude 'README.md' \
+		--exclude 'patchwork.json' \
 		--exclude 'includes/support/class-update-checker.php' \
 		apps/agent/ release/fleet-agent-for-wpmgr/
 	# Rename the main plugin file to match the wp.org slug. WordPress derives the

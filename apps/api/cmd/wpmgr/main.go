@@ -52,6 +52,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	rucssrepo "github.com/mosamlife/wpmgr/apps/api/internal/rucss/repo"
 	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
 	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
@@ -891,6 +892,19 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// Always wired (no signing key required).
 	cacheHitRatioHistoryGCWorker := perf.NewCacheHitRatioHistoryGCWorker(perfRepo, logger)
 
+	// M56 — Real User Monitoring (RUM).
+	// The Postgres store is always wired; ClickHouse is a Phase 2+ opt-in
+	// (mirroring the internal/metrics dual-backend pattern).
+	rumStore := rum.NewStorePostgres(pool)
+	rumBeaconRepo := rum.NewBeaconKeyRepo(pool)
+	rumRetention := rum.DefaultRetention(cfg)
+	rumGCWorker := rum.NewRumGCWorker(rumStore, rumRetention, logger)
+	rumRollupWorker := rum.NewRumRollupWorker(rumStore, logger)
+	// Wire the site event publisher so the ingest handler can emit the throttled
+	// rum.rollup_updated SSE after each beacon commit. siteEventsPub is wired
+	// before this point (line ~701) and satisfies rum.EventPublisher.
+	rumH := rum.NewHandlerWithPublisher(rumStore, rumBeaconRepo, siteEventsPub, logger)
+
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
 		healthInterval:         cfg.Agent.HealthInterval,
@@ -931,6 +945,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		dbSizeHistoryGCWorker: dbSizeHistoryGCWorker,
 		// M52 / #162 — cache hit-ratio history GC (always wired).
 		cacheHitRatioHistoryGCWorker: cacheHitRatioHistoryGCWorker,
+		// M56 — RUM GC + rollup workers (always wired).
+		rumGCWorker:     rumGCWorker,
+		rumRollupWorker: rumRollupWorker,
 	})
 	if err != nil {
 		return err
@@ -1047,6 +1064,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		},
 	}
 	perfH.SetFontResultsReader(perfFontResultsReader)
+	// M56 — Wire the RUM results reader for GET /perf/rum, /perf/rum/summary,
+	// and /perf/rum/trend (dashboard redesign: distribution + 28-day trend).
+	perfRumResultsReader := &perf.RumResultsReader{
+		GetHourlyRollups: rumStore.GetHourlyRollups,
+		ComputeP75:       rumStore.ComputeP75,
+		GetDailyRollups:  rumStore.GetDailyRollups,
+	}
+	perfH.SetRumResultsReader(perfRumResultsReader)
+	// M56 — Wire the RUM beacon key repo so UpdateConfig generates keys on first enable.
+	perfSvc.SetBeaconKeyRepo(rumBeaconRepo, os.Getenv("WPMGR_PUBLIC_BASE_URL"))
 	fontResultsAgentH := perf.NewFontResultsAgentHandler(perfRepo)
 	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc)
 
@@ -1352,7 +1379,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		PerfAgentH:        perfAgentH,
 		FontResultsAgentH: fontResultsAgentH,
 		// m33 — superadmin instance-management area.
-		AdminH:      adminH,
+		AdminH: adminH,
+		// M56 — RUM ingest endpoint (public, no auth).
+		RumH:        rumH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})
@@ -1677,6 +1706,9 @@ type riverDeps struct {
 	dbSizeHistoryGCWorker *perf.DBSizeHistoryGCWorker
 	// M52 / #162 — cache hit-ratio history GC (always wired).
 	cacheHitRatioHistoryGCWorker *perf.CacheHitRatioHistoryGCWorker
+	// M56 — RUM retention-GC + rollup workers (always wired).
+	rumGCWorker     *rum.RumGCWorker
+	rumRollupWorker *rum.RumRollupWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -1946,6 +1978,23 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
+	}
+
+	// M56 — RUM retention GC (always wired): sweeps raw events (every 30m),
+	// hourly rollups (daily), and daily rollups (daily). Cross-tenant InAgentTx.
+	// RunOnStart: false — tables are empty on fresh deploy.
+	if d.rumGCWorker != nil {
+		river.AddWorker(workers, d.rumGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(30*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return rum.RumGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+	// M56 — RUM rollup worker (always wired): folds raw events into hourly/daily
+	// rollup tables. Jobs are enqueued by the ingest handler (one per site per hour).
+	if d.rumRollupWorker != nil {
+		river.AddWorker(workers, d.rumRollupWorker)
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

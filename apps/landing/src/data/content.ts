@@ -112,6 +112,12 @@ export const FEATURES = {
           "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. Self-hosted fonts are transcoded to WOFF2 and optionally subsetted to the latin-ext range for a further 60 to 90 percent reduction on top of WOFF2 savings. A per-font processing table shows each font's original size, WOFF2 size, subset size, and state so you can see exactly what shipped and what was skipped. See cache hit-ratio trends over 7, 30, and 90 day windows so you know whether caching is working across your fleet. On WooCommerce stores, opt-in cart-session caching serves catalog pages from the cache even for shoppers who have items in their cart, while cart totals stay live via cart fragments. A failed optimization never breaks the page.",
     },
     {
+      icon: "BarChart2",
+      title: "Real User Monitoring",
+      desc:
+        "See real visitors' Core Web Vitals (LCP, INP, CLS, FCP, TTFB) at the p75 percentile. Each metric shows a PageSpeed Insights-style distribution bar (good, needs improvement, poor) built from the same histogram buckets Google uses, plus a 28-day p75 trend with the passing threshold lines drawn on it so you can see at a glance whether a change moved the needle. Per-URL and per-device breakdowns, live over SSE, and a minimum-sample floor so you never see a confident number built on a handful of beacons. Off by default, anonymous, no cookies, no cross-site identifier, and no stored IP. On a self-hosted control plane, every measurement stays on your own infrastructure.",
+    },
+    {
       icon: "ImageOff",
       title: "Unused Image Cleaner",
       desc:

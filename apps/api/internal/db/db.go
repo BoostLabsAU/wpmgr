@@ -341,6 +341,67 @@ func (p *Pool) InScopedTenantTx(ctx context.Context, tenantID, userID uuid.UUID,
 	return nil
 }
 
+// InRumIngestLookupTx runs fn inside a transaction with the app.rum_lookup GUC
+// set to 'on', enabling the site_perf_config_rum_lookup SELECT-only policy.
+// This is the one place a beacon key hash may be resolved before its tenant is
+// known: the public ingest endpoint presents only a hash, and this tx resolves
+// it to (site_id, tenant_id, rum_enabled, rum_sample_rate). fn must do nothing
+// but the beacon-key lookup.
+func (p *Pool) InRumIngestLookupTx(ctx context.Context, fn func(tx pgx.Tx) error) error {
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.rum_lookup', 'on', true)"); err != nil {
+		return fmt.Errorf("set app.rum_lookup: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
+// InRumIngestTx runs fn inside a transaction with three GUCs set:
+//   - app.rum_ingest = 'on'    — enables the rum_*_rum_ingest INSERT-only policies.
+//   - app.tenant_id = tenantID — pins which tenant row the INSERT belongs to.
+//   - app.site_id   = siteID   — pins which site row the INSERT belongs to.
+//
+// This is the anonymous browser write path: the beacon has already been
+// validated (key resolved → tenantID+siteID known, rum_enabled=true, sampling
+// applied) by the time this tx is opened. The RLS WITH CHECK clause on each
+// rum_ingest policy asserts all three GUCs, so a bug that passes the wrong IDs
+// will be caught by the DB rather than silently writing to the wrong tenant/site.
+// fn must do nothing but write RUM rows.
+func (p *Pool) InRumIngestTx(ctx context.Context, tenantID, siteID uuid.UUID, fn func(tx pgx.Tx) error) error {
+	tx, err := p.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.rum_ingest', 'on', true)"); err != nil {
+		return fmt.Errorf("set app.rum_ingest: %w", err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.tenant_id', $1, true)", tenantID.String()); err != nil {
+		return fmt.Errorf("set app.tenant_id (rum ingest): %w", err)
+	}
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.site_id', $1, true)", siteID.String()); err != nil {
+		return fmt.Errorf("set app.site_id (rum ingest): %w", err)
+	}
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("commit tx: %w", err)
+	}
+	return nil
+}
+
 // InInviteLookupTx runs fn inside a transaction with app.invite_lookup set to
 // 'on', enabling the invitations_token_lookup SELECT-only policy. This mirrors
 // InAPIKeyLookupTx: it is the one place an invitation may be read before any

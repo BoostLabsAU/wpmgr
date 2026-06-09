@@ -17,7 +17,8 @@
  *   7. Gravatar      self-host avatars
  *   8. JS delay      data-src rewrite + inject the delay runtime
  *   9. Speculation   prefetch rules
- *  10. CDN rewrite   asset URLs -> CDN host (LAST so it catches the new URLs)
+ *  10. CDN rewrite   asset URLs -> CDN host
+ *  11. RUM beacon    inject config snippet + collector <script> before </body>
  *
  * Every transform is config-gated and a no-op when its flag is off. The whole
  * run() is wrapped so a transform failure can never corrupt or drop the page —
@@ -185,9 +186,16 @@ final class Optimizer
             $html = $this->stage($html, fn (string $h): string => (new SpeculationRules($this->config))->process($h));
         }
 
-        // 10. CDN rewrite (last — catches the new local asset URLs).
+        // 10. CDN rewrite (last in the asset pipeline — catches the new local asset URLs).
         if ($this->config->cdn && $this->config->cdnUrl !== '') {
             $html = $this->stage($html, fn (string $h): string => (new CdnRewrite($this->config))->process($h));
+        }
+
+        // 11. RUM beacon injection — MUST be last so the snippet is never
+        //     processed by any earlier transform (minify, CDN rewrite, etc.).
+        //     The stage() guard ensures a failure here can never break the page.
+        if ($this->config->rumEnabled) {
+            $html = $this->stage($html, fn (string $h): string => (new RumInjector($this->config))->process($h));
         }
 
         return $html;

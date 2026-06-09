@@ -104,6 +104,27 @@ export interface PerfConfig {
   bloat_heartbeat_control: boolean;
   bloat_post_revisions_control: boolean;
 
+  // Real User Monitoring (Phase 3b — off by default, visitor data flow)
+  /**
+   * Enable RUM beacon injection. When true the agent injects a small
+   * first-party collector script into cached pages; visitor Core Web Vitals
+   * are sent from the browser to the CP ingest endpoint. Default false (opt-in)
+   * because this turns on a visitor data flow.
+   */
+  rum_enabled?: boolean;
+  /**
+   * Fraction of pageviews to beacon (0.0 to 1.0). Default 1.0 (100%).
+   * Lowering this value reduces storage and ingest load on high-traffic sites
+   * while keeping the retained sample statistically representative.
+   */
+  rum_sample_rate?: number;
+  /**
+   * Minimum number of real-visitor samples required before a per-metric p75 is
+   * shown in the RUM dashboard. Below this threshold the dashboard renders
+   * "Insufficient samples". Default 30. Range 1..1000.
+   */
+  min_sample_count?: number;
+
   // WooCommerce cart-session caching (#169)
   //   woo_cacheable_session       — operator toggle (READ+WRITE).
   //   woo_theme_fragments_supported — agent-reported capability flag (READ-ONLY;
@@ -142,6 +163,72 @@ export interface CacheStats {
  * overlaid from fonts-store.
  */
 export type { FontResult } from "@wpmgr/api";
+
+/**
+ * Core Web Vitals p75 summary for one site (GET /perf/rum/summary).
+ * Re-exported from @wpmgr/api. Contains a flat list of RumMetricSummary rows
+ * keyed by (metric, device, country). When suppressed=true on a row, render
+ * "insufficient samples" rather than a p75 number.
+ */
+export type { RumSummary, RumResult } from "@wpmgr/api";
+
+/**
+ * Distribution of pageviews across the three CWV rating bands for one metric
+ * slice (metric + device + country). Added to the summary endpoint response.
+ * Absent when the slice is suppressed (sample_count < min_sample_count).
+ */
+export interface RumDistribution {
+  /** Raw count of pageviews in the good band. */
+  good: number;
+  /** Raw count of pageviews in the needs-improvement band. */
+  needs_improvement: number;
+  /** Raw count of pageviews in the poor band. */
+  poor: number;
+  /** Percentage of pageviews in the good band (0..100, integer, sums to 100). */
+  good_pct: number;
+  /** Percentage of pageviews in the needs-improvement band. */
+  needs_improvement_pct: number;
+  /** Percentage of pageviews in the poor band. */
+  poor_pct: number;
+}
+
+/**
+ * One daily p75 point in the trend series for a single metric.
+ * p75_ms is 0 when suppressed=true; consumers must map suppressed points to
+ * null for the Y axis so Recharts renders a gap (connectNulls={false}).
+ * CLS p75_ms is in milli-units (value * 1000); divide by 1000 for display.
+ */
+export interface RumTrendPoint {
+  /** Date of this sample in "YYYY-MM-DD" format. */
+  day: string;
+  /** p75 value in milliseconds (0 when suppressed). CLS is milli-units. */
+  p75_ms: number;
+  /** Raw sample count used to compute p75 for this day. */
+  sample_count: number;
+  /** CWV rating band for this day's p75, or "" when suppressed. */
+  rating: "good" | "needs_improvement" | "poor" | "";
+  /** True when sample_count < min_sample_count; p75_ms must not be displayed. */
+  suppressed: boolean;
+}
+
+/**
+ * Response shape from GET /api/v1/sites/:siteId/perf/rum/trend.
+ * All five metric keys are always present; each is [] when no data.
+ */
+export interface RumTrendResponse {
+  /** Number of days covered by the window. */
+  window_days: number;
+  /** The min sample floor applied to suppress individual days. */
+  min_sample_count: number;
+  /** Per-metric daily p75 series. */
+  metrics: {
+    lcp: RumTrendPoint[];
+    inp: RumTrendPoint[];
+    cls: RumTrendPoint[];
+    fcp: RumTrendPoint[];
+    ttfb: RumTrendPoint[];
+  };
+}
 
 /** One cached RUCSS result row (GET /rucss/results). */
 export interface RucssResult {

@@ -6,6 +6,51 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.4] - 2026-06-09
+
+### Added
+
+- Core Web Vitals distribution bars on the Real User Monitoring dashboard. Under each p75 metric card (LCP, INP, CLS, and the secondary FCP and TTFB) a single stacked bar now shows the share of real pageviews in the good, needs-improvement, and poor bands, the way PageSpeed Insights and Search Console present field data. The bands are folded server-side from the histogram rollups already stored, at the standard Core Web Vitals thresholds, and respect the same minimum-sample floor that suppresses the p75 (a low-sample slice shows "insufficient samples", never a misleading bar).
+- A 28-day p75 trend chart per metric on the Real User Monitoring dashboard, with the good and needs-improvement threshold lines drawn on it, so the operator can see where each metric sits relative to passing over time. Days below the sample floor render as a gap rather than a zero. A new read endpoint, `GET /api/v1/sites/:siteId/perf/rum/trend`, serves the daily series from the existing rollups, with no new tables and no agent change. Both the distribution and the trend follow the selected device tab and update live over SSE.
+
+### Fixed
+
+- The Real User Monitoring collector script is now served from a versioned URL, so a CDN or browser cache refetches it whenever the agent updates. The collector was served from a static, unversioned filename, so a long-lived edge cache (for example a one-year CDN TTL) could keep serving the previous collector build after a plugin update until the cache was manually purged, masking collector fixes. Versioning the URL changes it on every update, so the edge and the browser pick up the new bytes automatically.
+
+## [0.33.3] - 2026-06-09
+
+### Fixed
+
+- Real User Monitoring now reliably collects CLS (Cumulative Layout Shift) on cached pages. In web-vitals, the CLS reporter is armed inside the First Contentful Paint callback; the browser collector was registering CLS before FCP, which on an already-cached page widened the timing window in which a load-and-leave visitor could hide the page before the CLS reporter was armed, dropping the measurement. The collectors are now registered in the canonical web-vitals order (TTFB, FCP, LCP, CLS, INP) so the CLS reporter is armed in the same delivery task as FCP, before any page-hide can interrupt it. Verified with a headless-Chromium repro test that induces a guaranteed layout shift then forces page-hide. Agent-only; no server or data change.
+
+### Fixed
+
+- Real User Monitoring now collects CLS (Cumulative Layout Shift), completing Core Web Vitals coverage. In web-vitals, the CLS reporter is armed only after First Contentful Paint resolves, and the collector was loaded as a deferred script at the end of the page, so on a load-and-leave visit the page could be hidden before the CLS reporter was ever armed and no CLS measurement was sent. The collector is upgraded to web-vitals 5 (which resolves the paint gate correctly on briefly-hidden pages) and is now loaded early and asynchronously from the page head, so CLS is captured on every visit. Loading the collector earlier also slightly improves LCP and FCP accuracy. No server or data change.
+
+## [0.33.1] - 2026-06-09
+
+### Fixed
+
+- Real User Monitoring now collects CLS and INP. The browser collector queued metrics and sent them in one batch when the page was hidden, but CLS and INP only finalize at page-hide and could be dropped by that flush, so only LCP, FCP, and TTFB were reported. The collector now sends each metric the moment it is finalized, so all Core Web Vitals are captured. INP still requires a real visitor interaction to exist, and CLS reports 0 on pages with no layout shift.
+
+## [0.33.0] - 2026-06-09
+
+### Added
+
+- Real User Monitoring (RUM). Per-site, opt-in, off by default. When enabled, a
+  tiny first-party collector script is injected into cached pages by the agent at
+  cache-write time. The site visitor's browser beacons Core Web Vitals (LCP, INP,
+  CLS, FCP, TTFB) plus page-load timing directly to the control plane. Data is
+  anonymous: the page path is stored with the query string stripped, the IP is
+  used only transiently for coarse country lookup then discarded, and no cookies
+  or cross-site identifiers are set. Measurements are stored in Postgres histogram
+  rollups (hourly and daily, with ClickHouse available as an opt-in scale backend
+  via the same boot-selection pattern as the existing metrics store). The operator
+  dashboard shows p75 per metric with per-URL and per-device breakdowns, live
+  updates over SSE, and a minimum-sample floor that suppresses any slice below the
+  configured count so noise is never presented as a metric. On a self-hosted
+  control plane, all RUM data stays on the operator's own infrastructure.
+
 ## [0.32.1] - 2026-06-09
 
 ### Fixed

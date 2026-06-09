@@ -135,6 +135,27 @@ type Config struct {
 	// compatibility. The CP stores it but NEVER lets an operator PUT overwrite it.
 	WooThemeFragmentsSupported bool
 
+	// M56 / RUM — Real User Monitoring settings.
+	// RumEnabled enables the RUM ingest endpoint for this site. When false the
+	// ingest handler rejects beacons even when the beacon_key_hash resolves.
+	RumEnabled bool
+	// RumSampleRate is the fraction of eligible events to store (0.0–1.0).
+	// 1.0 means accept all; the ingest handler applies unbiased random sampling
+	// server-side so stored distributions remain statistically representative.
+	RumSampleRate float64
+	// MaxDistinctCountries caps how many distinct country values are stored per
+	// site per rollup bucket. Excess countries collapse to "__other__".
+	// Default 8; operator-tunable.
+	MaxDistinctCountries int
+	// MinSampleCount is the minimum sample count required before a p75 estimate
+	// is surfaced to the dashboard. Results below this threshold are suppressed to
+	// avoid misleading low-N medians. Default 100.
+	MinSampleCount int
+	// BeaconKeySet reports whether a beacon_key_hash is stored for this site.
+	// The plaintext key is NEVER returned via the API; this flag lets the UI
+	// show whether RUM is fully provisioned without exposing the key.
+	BeaconKeySet bool
+
 	ConfigVersion int
 	CreatedAt     time.Time
 	UpdatedAt     time.Time

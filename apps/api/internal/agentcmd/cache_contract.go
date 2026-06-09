@@ -114,6 +114,25 @@ type PerfConfigRequest struct {
 	// (woo_theme_fragments_supported) before acting; this flag is a CP-side
 	// permission level only.
 	WooCacheableSession bool `json:"woo_cacheable_session"`
+
+	// M56 / RUM — Real User Monitoring settings.
+	// RumEnabled tells the agent whether to inject the beacon collector snippet.
+	RumEnabled bool `json:"rum_enabled"`
+	// RumSampleRate is the server-side sampling rate (0.0–1.0). The agent also
+	// applies this client-side so over-quota traffic is dropped before transmission.
+	RumSampleRate float64 `json:"rum_sample_rate"`
+	// RumBeaconKey is the PLAINTEXT beacon key, included ONLY when freshly
+	// generated or rotated (i.e. the CP just minted a new key for this push).
+	// On subsequent pushes where the key is unchanged, this field is omitted
+	// (empty string) because the CP stores only the hash and cannot resend the
+	// plaintext. The agent MUST persist the key locally and re-bake it into
+	// cached HTML; it MUST NOT discard a non-empty value.
+	RumBeaconKey string `json:"rum_beacon_key,omitempty"`
+	// RumIngestURL is the full ingest endpoint URL (e.g.
+	// "https://manage.example.com/rum/ingest"). Included whenever RumEnabled is
+	// true so the agent can inject the correct endpoint into cached HTML.
+	// Empty when RumEnabled is false.
+	RumIngestURL string `json:"rum_ingest_url,omitempty"`
 }
 
 // PerfConfigResult is the agent's response to `perf_config_update`. The agent

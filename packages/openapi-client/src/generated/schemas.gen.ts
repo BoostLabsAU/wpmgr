@@ -5004,6 +5004,128 @@ export const RucssResultListSchema = {
   },
 } as const;
 
+export const RumMetricSummarySchema = {
+  type: "object",
+  description:
+    'p75 summary for one (metric, device, country) slice over the requested window. suppressed=true when the sample count is below the site\'s min_sample_count floor; p75_ms is 0 in that case and the dashboard must render "insufficient samples (sample_count of min_sample_count)".\n',
+  properties: {
+    metric: {
+      type: "string",
+      enum: ["lcp", "inp", "cls", "ttfb", "fcp"],
+      description: "The Core Web Vital metric name.",
+    },
+    device: {
+      type: "string",
+      enum: ["desktop", "mobile", "tablet"],
+      description: "Device class derived from the user agent.",
+    },
+    country: {
+      type: "string",
+      description: 'ISO-3166-1 alpha-2 country code or "__other__".',
+    },
+    p75_ms: {
+      type: "number",
+      format: "double",
+      description:
+        "Interpolated 75th-percentile value in milliseconds (0 when suppressed).",
+    },
+    sample_count: {
+      type: "integer",
+      format: "int64",
+      description: "Raw (pre-scale) sample count used for this estimate.",
+    },
+    rating: {
+      type: "string",
+      enum: ["good", "needs_improvement", "poor"],
+      description:
+        "CWV standard rating band per the official web-vitals thresholds. Empty when suppressed=true or when the metric has no threshold.\n",
+    },
+    suppressed: {
+      type: "boolean",
+      description:
+        'True when sample_count < min_sample_count. Dashboard must render "insufficient samples" rather than a p75.\n',
+    },
+  },
+} as const;
+
+export const RumSummarySchema = {
+  type: "object",
+  description:
+    "Site-level Core Web Vitals p75 summary over a configurable window.",
+  properties: {
+    window_days: {
+      type: "integer",
+      description: "Number of days covered by this summary.",
+    },
+    min_sample_count: {
+      type: "integer",
+      description: "The site's configured min_sample_count floor.",
+    },
+    metrics: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/RumMetricSummary",
+      },
+      description: "Flat list of p75 results by (metric, device, country).",
+    },
+  },
+} as const;
+
+export const RumResultSchema = {
+  type: "object",
+  description:
+    "One per-URL/metric/device/country p75 breakdown row for the dashboard table. suppressed=true when sample_count < min_sample_count.\n",
+  properties: {
+    url_pattern: {
+      type: "string",
+      description:
+        "Normalized page URL pattern (query string stripped, IDs templated).",
+    },
+    metric: {
+      type: "string",
+      enum: ["lcp", "inp", "cls", "ttfb", "fcp"],
+    },
+    device: {
+      type: "string",
+      enum: ["desktop", "mobile", "tablet"],
+    },
+    country: {
+      type: "string",
+      description: 'ISO-3166-1 alpha-2 country code or "__other__".',
+    },
+    p75_ms: {
+      type: "number",
+      format: "double",
+      description:
+        "Interpolated 75th-percentile value in milliseconds (0 when suppressed).",
+    },
+    sample_count: {
+      type: "integer",
+      format: "int64",
+    },
+    rating: {
+      type: "string",
+      enum: ["good", "needs_improvement", "poor"],
+    },
+    suppressed: {
+      type: "boolean",
+      description: "True when sample_count < min_sample_count.",
+    },
+  },
+} as const;
+
+export const RumResultListSchema = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/RumResult",
+      },
+    },
+  },
+} as const;
+
 export const FontResultSchema = {
   type: "object",
   description:
