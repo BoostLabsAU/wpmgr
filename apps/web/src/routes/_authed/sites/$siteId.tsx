@@ -27,6 +27,8 @@ import { ShareSiteDialog } from "@/features/sharing/share-site-dialog";
 import { AddSiteDialog } from "@/features/sites/add-site-dialog";
 import { useSite, NotFoundError } from "@/features/sites/use-sites";
 import { useSitesLiveSync } from "@/features/sites/use-sites-live";
+import { AutoLoginButton } from "@/features/sites/auto-login-button";
+import { canAutoLogin } from "@/features/sites/use-autologin";
 import {
   connectionStateOf,
   isReconnectable,
@@ -317,12 +319,19 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
               Share
             </Button>
           ) : null}
-          <Button asChild size="sm" aria-label="Open in wp-admin">
-            <a href={adminUrl} target="_blank" rel="noopener noreferrer">
-              <Zap aria-hidden="true" className="size-4" />
-              Open wp-admin
-            </a>
-          </Button>
+          {canAutoLogin(me) ? (
+            // Admins and owners get one-click auto-login (signed, single-use
+            // token minted by the agent) so the new tab lands inside wp-admin
+            // already authenticated, instead of at the WP login form.
+            <AutoLoginButton siteId={site.id} siteName={site.name} size="sm" />
+          ) : (
+            <Button asChild size="sm" aria-label="Open in wp-admin">
+              <a href={adminUrl} target="_blank" rel="noopener noreferrer">
+                <Zap aria-hidden="true" className="size-4" />
+                Open wp-admin
+              </a>
+            </Button>
+          )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
