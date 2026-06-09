@@ -115,7 +115,7 @@ export const FEATURES = {
       icon: "BarChart2",
       title: "Real User Monitoring",
       desc:
-        "See real visitors' Core Web Vitals (LCP, INP, CLS, FCP, TTFB) at the p75 percentile, the same way Google Search Console measures them. Per-URL and per-device breakdowns, live dashboard updates, and a minimum-sample floor so you never see a confident number built on a handful of beacons. Off by default, anonymous, no cookies, no cross-site identifier, and no stored IP. On a self-hosted control plane, every measurement stays on your own infrastructure.",
+        "See real visitors' Core Web Vitals (LCP, INP, CLS, FCP, TTFB) at the p75 percentile. Each metric shows a PageSpeed Insights-style distribution bar (good, needs improvement, poor) built from the same histogram buckets Google uses, plus a 28-day p75 trend with the passing threshold lines drawn on it so you can see at a glance whether a change moved the needle. Per-URL and per-device breakdowns, live over SSE, and a minimum-sample floor so you never see a confident number built on a handful of beacons. Off by default, anonymous, no cookies, no cross-site identifier, and no stored IP. On a self-hosted control plane, every measurement stays on your own infrastructure.",
     },
     {
       icon: "ImageOff",

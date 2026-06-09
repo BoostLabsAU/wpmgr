@@ -36,7 +36,7 @@ allowlist (belt-and-braces in front of the m36 RLS). Bulk routes check each
 | Route group | Permission | Min role |
 |-------------|-----------|----------|
 | `GET .../perf/config`, `PUT .../perf/config`, `POST .../rucss/clear`, `POST .../perf/rucss/compute`, `PUT /cache/bulk-config` | `site.perf.config` | operator |
-| `GET .../cache/stats`, `GET .../rucss/results` | `site:read` | viewer |
+| `GET .../cache/stats`, `GET .../rucss/results`, `GET .../perf/rum/summary`, `GET .../perf/rum/trend` | `site:read` | viewer |
 | `POST .../cache/purge`, `/cache/preload`, `POST /cache/bulk-purge` | `site.cache.purge` | operator |
 | `POST .../cache/enable`, `/cache/disable`, `POST .../db/clean` | `site.cache.manage` | operator |
 | `POST .../cache/purge` with `delete_everything: true` | `site.cache.delete-everything` | **admin** |
@@ -437,6 +437,107 @@ An agent semantic rejection is returned as `{ "ok": false, "detail": "…" }`.
 
 ---
 
+## Real User Monitoring (RUM) endpoints
+
+These routes are hand-written Gin (ADR-047 governance). The web layer calls them
+via the raw `client.get` transport from `@wpmgr/api`. Source:
+`apps/api/internal/perf/rum_results_handler.go`, `apps/api/internal/perf/dto.go`.
+
+### GET /api/v1/sites/{siteId}/perf/rum/summary
+
+**Permission:** `site:read` (viewer+). **Auth:** session cookie or API key.
+
+Returns the p75 headline per metric for the site, with a PageSpeed-Insights-style
+`distribution` breakdown (good / needs-improvement / poor) folded from the stored
+CrUX-aligned 24-bucket histogram. Slices below `min_sample_count` return `null`
+for `p75_ms` and omit `distribution` rather than surfacing a misleading number.
+
+**Query parameters:**
+
+| Name | Type | Default | Notes |
+|------|------|---------|-------|
+| `device` | string | `all` | Filter by `mobile`, `tablet`, `desktop`, or `all`. |
+| `window_hours` | integer | 168 | Lookback window in hours (7 days). |
+
+**Response** `200 OK`
+
+```json
+{
+  "window_hours": 168,
+  "min_sample_count": 30,
+  "metrics": {
+    "lcp": {
+      "p75_ms": 2310,
+      "rating": "good",
+      "sample_count": 812,
+      "distribution": {
+        "good": 650,
+        "needs_improvement": 120,
+        "poor": 42,
+        "good_pct": 80,
+        "needs_improvement_pct": 15,
+        "poor_pct": 5
+      }
+    },
+    "inp": { "p75_ms": 180, "rating": "good", "sample_count": 810, "distribution": { "good": 720, "needs_improvement": 70, "poor": 20, "good_pct": 89, "needs_improvement_pct": 9, "poor_pct": 2 } },
+    "cls": { "p75_ms": 45,  "rating": "good", "sample_count": 790, "distribution": { "good": 760, "needs_improvement": 20, "poor": 10, "good_pct": 96, "needs_improvement_pct": 3, "poor_pct": 1 } },
+    "fcp": { "p75_ms": 1620, "rating": "good", "sample_count": 812, "distribution": { "good": 710, "needs_improvement": 80, "poor": 22, "good_pct": 87, "needs_improvement_pct": 10, "poor_pct": 3 } },
+    "ttfb": { "p75_ms": 620, "rating": "good", "sample_count": 812, "distribution": { "good": 780, "needs_improvement": 22, "poor": 10, "good_pct": 96, "needs_improvement_pct": 3, "poor_pct": 1 } }
+  }
+}
+```
+
+**CLS note:** `p75_ms` for CLS is in milli-units (the stored value multiplied by 1000). The
+web layer divides by 1000 for display. The good threshold is 100 milli-units (CLS 0.1) and
+the needs-improvement threshold is 250 milli-units (CLS 0.25).
+
+**Source:** `perf.Service.GetRumSummary` + `perf.RumSummaryResponse` +
+`perf.RumMetricSummary` + `perf.RumDistribution`.
+
+---
+
+### GET /api/v1/sites/{siteId}/perf/rum/trend
+
+**Permission:** `site:read` (viewer+). **Auth:** session cookie or API key.
+
+Returns a per-metric daily p75 series over the requested window, built from
+`rum_rollup_daily`. Used by the 28-day trend chart in the RUM dashboard (one
+`ReferenceLine` at the good threshold, one at needs-improvement, matching
+PageSpeed Insights presentation). Days below `min_sample_count` are suppressed
+(`p75_ms: 0`, `suppressed: true`) so the chart renders gaps instead of
+misleading zeros.
+
+**Query parameters:**
+
+| Name | Type | Default | Notes |
+|------|------|---------|-------|
+| `window_days` | integer | 28 | Lookback window in days. Server clamps to [7, 90]. |
+| `device` | string | `all` | Filter by `mobile`, `tablet`, `desktop`, or `all`. |
+
+**Response** `200 OK`
+
+```json
+{
+  "window_days": 28,
+  "min_sample_count": 30,
+  "metrics": {
+    "lcp": [
+      { "day": "2026-05-13", "p75_ms": 2310, "sample_count": 812, "rating": "good", "suppressed": false },
+      { "day": "2026-05-14", "p75_ms": 0,    "sample_count": 12,  "rating": "",     "suppressed": true  }
+    ],
+    "inp":  [ { "day": "2026-05-13", "p75_ms": 180,  "sample_count": 810, "rating": "good", "suppressed": false } ],
+    "cls":  [ { "day": "2026-05-13", "p75_ms": 45,   "sample_count": 790, "rating": "good", "suppressed": false } ],
+    "fcp":  [ { "day": "2026-05-13", "p75_ms": 1620, "sample_count": 812, "rating": "good", "suppressed": false } ],
+    "ttfb": [ { "day": "2026-05-13", "p75_ms": 620,  "sample_count": 812, "rating": "good", "suppressed": false } ]
+  }
+}
+```
+
+**Source:** `perf.Service.GetRumTrend` + `perf.RumTrendResponse` + `perf.RumTrendPoint`.
+`ComputeP75` in `apps/api/internal/rum/p75.go` is called once per day per metric.
+
+---
+
 ## Portfolio / tenant-level endpoints
 
 ### GET /api/v1/perf/db/fleet-health
@@ -718,4 +819,7 @@ The perf service publishes on the shared tenant SSE bus
 `cache.enabled`, `cache.disabled`, `cache.purge.started`, `cache.purge.completed`,
 `cache.preload.started`, `cache.preload.progress`, `cache.preload.completed`,
 `cache.stats.updated`, `perf.config.updated`, `db.clean.completed`,
-`rucss.queued`, `rucss.computing`, `rucss.completed`, `rucss.failed`.
+`rucss.queued`, `rucss.computing`, `rucss.completed`, `rucss.failed`,
+`rum.rollup_updated` (throttled aggregate frame, at most one per few seconds for
+the currently-open site; the dashboard invalidates and refreshes the RUM p75 and
+distribution panels on receipt).
