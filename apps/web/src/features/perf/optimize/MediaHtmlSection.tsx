@@ -10,14 +10,14 @@ export interface MediaHtmlSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
 export function MediaHtmlSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
 }: MediaHtmlSectionProps) {
   return (
     <SettingsCard
@@ -29,8 +29,8 @@ export function MediaHtmlSection({
         description="Load offscreen images and iframes only as they scroll into view."
         checked={config.lazy_load}
         onChange={(v) => save({ lazy_load: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("lazy_load")}
+        saving={isSaving("lazy_load")}
       >
         <ChipInput
           label="Lazy-load exclusions"
@@ -46,24 +46,24 @@ export function MediaHtmlSection({
         description="Set width and height on images to reserve space and reduce layout shift."
         checked={config.properly_size_images}
         onChange={(v) => save({ properly_size_images: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("properly_size_images")}
+        saving={isSaving("properly_size_images")}
       />
       <SettingRow
         label="YouTube facade"
         description="Replace embedded YouTube players with a lightweight preview until clicked."
         checked={config.youtube_placeholder}
         onChange={(v) => save({ youtube_placeholder: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("youtube_placeholder")}
+        saving={isSaving("youtube_placeholder")}
       />
       <SettingRow
         label="Self-host gravatars"
         description="Cache Gravatar avatars locally to avoid the extra third-party request."
         checked={config.self_host_gravatars}
         onChange={(v) => save({ self_host_gravatars: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("self_host_gravatars")}
+        saving={isSaving("self_host_gravatars")}
       />
     </SettingsCard>
   );

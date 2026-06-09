@@ -9,14 +9,14 @@ export interface FontsSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
 export function FontsSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
 }: FontsSectionProps) {
   // fonts_subset requires fonts_transcode_woff2 to be on. The API accepts it
   // independently (per the woo_cacheable_session precedent), but the toggle is
@@ -33,32 +33,32 @@ export function FontsSection({
         description="Show fallback text immediately and swap in the web font when ready (font-display: swap)."
         checked={config.fonts_display_swap}
         onChange={(v) => save({ fonts_display_swap: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("fonts_display_swap")}
+        saving={isSaving("fonts_display_swap")}
       />
       <SettingRow
         label="Self-host Google Fonts"
         description="Download and serve Google Fonts from your own server to remove the extra third-party connection."
         checked={config.fonts_optimize_google}
         onChange={(v) => save({ fonts_optimize_google: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("fonts_optimize_google")}
+        saving={isSaving("fonts_optimize_google")}
       />
       <SettingRow
         label="Preload fonts"
         description="Preload the fonts used above the fold so headings don't reflow."
         checked={config.fonts_preload}
         onChange={(v) => save({ fonts_preload: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("fonts_preload")}
+        saving={isSaving("fonts_preload")}
       />
       <SettingRow
         label="Convert fonts to WOFF2"
         description="Transcode self-hosted fonts (TTF, OTF, WOFF) to WOFF2, the modern compressed format, and serve them with the original as a fallback. Typically 50 to 65 percent smaller for TTF and OTF fonts. Conversion happens in the background; the original font is served until the WOFF2 is ready, so pages never wait."
         checked={config.fonts_transcode_woff2}
         onChange={(v) => save({ fonts_transcode_woff2: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("fonts_transcode_woff2")}
+        saving={isSaving("fonts_transcode_woff2")}
       />
       <SettingRow
         label="Subset fonts (experimental)"
@@ -69,8 +69,8 @@ export function FontsSection({
         }
         checked={config.fonts_subset ?? false}
         onChange={(v) => save({ fonts_subset: v })}
-        disabled={disabled || subsetGated}
-        saving={saving}
+        disabled={disabled || subsetGated || isSaving("fonts_subset")}
+        saving={isSaving("fonts_subset")}
       />
     </SettingsCard>
   );

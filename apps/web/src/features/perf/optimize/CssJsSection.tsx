@@ -13,14 +13,14 @@ export interface CssJsSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
 export function CssJsSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
 }: CssJsSectionProps) {
   return (
     <SettingsCard
@@ -42,17 +42,17 @@ export function CssJsSection({
         description="Strip whitespace and comments from served CSS and JS."
         checked={config.css_js_minify}
         onChange={(v) => save({ css_js_minify: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("css_js_minify")}
+        saving={isSaving("css_js_minify")}
       />
       <SettingRow
         label="Remove unused CSS"
         description="Compute the used CSS per page structure and inline only what's needed (RUCSS)."
         checked={config.css_rucss}
         onChange={(v) => save({ css_rucss: v })}
-        disabled={disabled}
-        saving={saving}
-        applying={config.css_rucss && saving}
+        disabled={disabled || isSaving("css_rucss")}
+        saving={isSaving("css_rucss")}
+        applying={config.css_rucss && isSaving("css_rucss")}
       >
         <ChipInput
           label="Safelist selectors"
@@ -68,16 +68,16 @@ export function CssJsSection({
         description="Copy known third-party scripts (e.g. analytics) locally to cut extra connections."
         checked={config.css_js_self_host_third_party}
         onChange={(v) => save({ css_js_self_host_third_party: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("css_js_self_host_third_party")}
+        saving={isSaving("css_js_self_host_third_party")}
       />
       <SettingRow
         label="Delay JavaScript"
         description="Hold non-critical scripts until the page is interactive or the user interacts."
         checked={config.js_delay}
         onChange={(v) => save({ js_delay: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("js_delay")}
+        saving={isSaving("js_delay")}
       >
         <div className="space-y-4">
           <SelectField
@@ -101,8 +101,8 @@ export function CssJsSection({
               description="Also delay externally hosted scripts (analytics, chat widgets)."
               checked={config.js_delay_third_party}
               onChange={(v) => save({ js_delay_third_party: v })}
-              disabled={disabled}
-              saving={saving}
+              disabled={disabled || isSaving("js_delay_third_party")}
+              saving={isSaving("js_delay_third_party")}
             >
               <ChipInput
                 label="Exclude third-party scripts"

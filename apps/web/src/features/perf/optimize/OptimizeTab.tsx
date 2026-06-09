@@ -1,3 +1,5 @@
+import { useCallback, useRef, useState } from "react";
+
 import { PageError } from "@/components/feedback";
 import { Skeleton } from "@/components/ui/skeleton";
 
@@ -34,10 +36,39 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
   const config = usePerfConfig(siteId);
   const update = useUpdatePerfConfig(siteId);
 
+  // Per-key saving state: track which config keys are currently in-flight.
+  // Use a ref for the Set (mutated imperatively) and a counter to force
+  // re-renders when membership changes.
+  const inFlightKeys = useRef<Set<string>>(new Set());
+  const [, setRenderTick] = useState(0);
+  const forceUpdate = useCallback(() => setRenderTick((n) => n + 1), []);
+
   function save(patch: Partial<PerfConfig>) {
     if (!config.data) return;
-    update.mutate({ ...config.data, ...patch });
+    const keys = Object.keys(patch);
+    // Register keys as in-flight before the mutation fires.
+    for (const k of keys) inFlightKeys.current.add(k);
+    forceUpdate();
+    update.mutate(
+      { ...config.data, ...patch },
+      {
+        onSettled: () => {
+          // Remove these keys from the in-flight set once the PUT completes
+          // (success or error). onSettled fires after onSuccess/onError.
+          for (const k of keys) inFlightKeys.current.delete(k);
+          forceUpdate();
+        },
+      },
+    );
   }
+
+  // Per-row saving predicate: true only for the row whose key is currently
+  // in-flight. The ref is stable so [] deps is correct; forceUpdate re-renders
+  // this component so every call reads the latest Set contents.
+  const isSaving = useCallback(
+    (key: string) => inFlightKeys.current.has(key),
+    [],
+  );
 
   if (config.isPending) {
     return <OptimizeTabSkeleton />;
@@ -55,27 +86,28 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
   }
 
   const cfg = config.data;
-  const disabled = !canOperate || update.isPending;
-  const saving = update.isPending;
+  // Only gate on operator permission — per-key saving handles row-level
+  // disabled state so one save no longer disables all other rows.
+  const disabled = !canOperate;
 
   return (
     <div className="space-y-4">
-      <CssJsSection config={cfg} save={save} disabled={disabled} saving={saving} />
-      <FontsSection config={cfg} save={save} disabled={disabled} saving={saving} />
+      <CssJsSection config={cfg} save={save} disabled={disabled} isSaving={isSaving} />
+      <FontsSection config={cfg} save={save} disabled={disabled} isSaving={isSaving} />
       <MediaHtmlSection
         config={cfg}
         save={save}
         disabled={disabled}
-        saving={saving}
+        isSaving={isSaving}
       />
-      <CdnSection config={cfg} save={save} disabled={disabled} saving={saving} />
-      <BloatSection config={cfg} save={save} disabled={disabled} saving={saving} />
+      <CdnSection config={cfg} save={save} disabled={disabled} isSaving={isSaving} />
+      <BloatSection config={cfg} save={save} disabled={disabled} isSaving={isSaving} />
       <DatabaseSection
         siteId={siteId}
         config={cfg}
         save={save}
         disabled={disabled}
-        saving={saving}
+        isSaving={isSaving}
         canOperate={canOperate}
       />
       <RucssResultsTable
@@ -92,7 +124,7 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
         config={cfg}
         save={save}
         disabled={disabled}
-        saving={saving}
+        isSaving={isSaving}
       />
       <RumResultsTable siteId={siteId} perSite />
     </div>

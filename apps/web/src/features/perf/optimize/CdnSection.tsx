@@ -20,10 +20,10 @@ export interface CdnSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
-export function CdnSection({ config, save, disabled, saving }: CdnSectionProps) {
+export function CdnSection({ config, save, disabled, isSaving }: CdnSectionProps) {
   // Local-only draft of the NEW credential value. Never seeded from the config
   // (the config never contains it). Cleared after a successful send.
   const [apiToken, setApiToken] = useState("");
@@ -57,8 +57,8 @@ export function CdnSection({ config, save, disabled, saving }: CdnSectionProps) 
         description="Rewrite static asset URLs to your CDN host."
         checked={config.cdn_enabled}
         onChange={(v) => save({ cdn_enabled: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("cdn_enabled")}
+        saving={isSaving("cdn_enabled")}
       >
         <div className="space-y-4">
           <TextField

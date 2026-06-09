@@ -127,7 +127,7 @@ export interface DatabaseSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
   /** operator+ — can run scan and clean. */
   canOperate: boolean;
 }
@@ -137,7 +137,7 @@ export function DatabaseSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
   canOperate,
 }: DatabaseSectionProps) {
   // Top-level section tab: "cleanup" (existing flow) | "health" (P3.6)
@@ -414,8 +414,8 @@ export function DatabaseSection({
                 description="Automatically run the selected cleanups on a schedule."
                 checked={config.db_auto_clean}
                 onChange={(v) => save({ db_auto_clean: v })}
-                disabled={disabled}
-                saving={saving}
+                disabled={disabled || isSaving("db_auto_clean")}
+                saving={isSaving("db_auto_clean")}
               >
                 <SelectField
                   label="Cleanup interval"
@@ -432,8 +432,8 @@ export function DatabaseSection({
                   description={t.description}
                   checked={Boolean(config[t.key])}
                   onChange={(v) => save({ [t.key]: v })}
-                  disabled={disabled}
-                  saving={saving}
+                  disabled={disabled || isSaving(t.key)}
+                  saving={isSaving(t.key)}
                 />
               ))}
             </div>
