@@ -1,0 +1,27 @@
+# Throwaway WordPress + WP-CLI harness for the AUTHORITATIVE `wp plugin check`.
+# Driven by ../../tools/plugincheck/run.sh (via `make agent-plugincheck`).
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: wp
+      MARIADB_DATABASE: wp
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+  wpcli:
+    image: wordpress:cli-php8.3
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_USER: root
+      WORDPRESS_DB_PASSWORD: wp
+      WORDPRESS_DB_NAME: wp
+    volumes:
+      - ./wp:/var/www/html
+      - ${PLUGIN_ZIP:-/dev/null}:/tmp/plugin.zip:ro
+    entrypoint: ["tail", "-f", "/dev/null"]

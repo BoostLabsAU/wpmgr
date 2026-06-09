@@ -1,0 +1,68 @@
+<?xml version="1.0"?>
+<ruleset name="WPMgr Agent Coding Standards">
+	<description>Fast local approximation of the WordPress.org Plugin Check (PCP) curated ruleset for the WPMgr agent plugin. Scopes to the SECURITY + CORRECTNESS sniff families PCP actually reports, NOT the full WordPress style standard (which floods with doc/whitespace nits PCP never flags). `make agent-plugincheck` (`wp plugin check` on real WordPress) remains the authoritative gate.</description>
+
+	<!-- ============ What to scan ============ -->
+	<file>.</file>
+	<exclude-pattern>/vendor/*</exclude-pattern>
+	<exclude-pattern>/node_modules/*</exclude-pattern>
+	<exclude-pattern>/tests/*</exclude-pattern>
+	<exclude-pattern>/release/*</exclude-pattern>
+	<exclude-pattern>*.asset.php</exclude-pattern>
+	<!-- The control-plane self-updater is EXCLUDED from the wp.org build
+	     (agent-zip-wporg) per Guideline 8, so it is never seen by Plugin Check.
+	     Its update-diagnostic error_log() and atomic file ops are intentional for
+	     the self-hosted self-update path; do not lint it against the .org ruleset. -->
+	<exclude-pattern>*/includes/support/class-update-checker.php</exclude-pattern>
+
+	<!-- ============ How to scan ============ -->
+	<arg name="extensions" value="php"/>
+	<arg name="basepath" value="."/>
+	<arg name="parallel" value="8"/>
+	<arg name="cache"/>
+	<arg name="colors"/>
+	<arg value="sp"/> <!-- show sniff codes (s) + progress (p) -->
+
+	<!-- ============ Version targets ============ -->
+	<config name="testVersion" value="8.1-"/>
+	<config name="minimum_wp_version" value="6.0"/>
+
+	<!--
+	  ============ PCP-relevant correctness/security families ONLY ============
+	  These are the families that produced real Plugin Check findings. Referencing
+	  the full `WordPress`/`WordPress-Extra` standard instead would report thousands
+	  of doc-comment/whitespace/yoda nits that `wp plugin check` does NOT report,
+	  drowning the signal. Keep this list aligned with what PCP actually flags.
+	-->
+	<rule ref="WordPress.Security"/>
+	<rule ref="WordPress.DB"/>
+	<rule ref="WordPress.PHP.DevelopmentFunctions"/>
+	<rule ref="WordPress.WP.GlobalVariablesOverride"/>
+
+	<!-- AlternativeFunctions, minus the three PCP explicitly ALLOWS (bare WPCS
+	     over-reports these; do not "fix" them or add pointless ignores). -->
+	<rule ref="WordPress.WP.AlternativeFunctions">
+		<exclude name="WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents"/>
+		<exclude name="WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents"/>
+		<exclude name="WordPress.WP.AlternativeFunctions.json_encode_json_encode"/>
+	</rule>
+
+	<!-- Plugin identity: stop I18n + PrefixAllGlobals false positives. -->
+	<rule ref="WordPress.WP.I18n">
+		<properties>
+			<property name="text_domain" type="array">
+				<element value="wpmgr-agent"/>
+				<element value="fleet-agent-for-wpmgr"/>
+			</property>
+		</properties>
+	</rule>
+	<rule ref="WordPress.NamingConventions.PrefixAllGlobals">
+		<properties>
+			<property name="prefixes" type="array">
+				<element value="WPMgr"/>
+				<element value="wpmgr_"/>
+				<element value="WPMGR_"/>
+			</property>
+		</properties>
+	</rule>
+</ruleset>
