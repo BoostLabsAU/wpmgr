@@ -5,7 +5,7 @@
  * WordPress loads this file VERY early (from wp-content/advanced-cache.php) when
  * the WP_CACHE constant is true — before plugins, before the theme, before most
  * of WordPress. It therefore runs with almost nothing loaded and must be fully
- * self-contained: the live cache config is inlined into $config below at install
+ * self-contained: the live cache config is inlined into $wpmgr_config below at install
  * time (the CacheManager var_export()s it over the CONFIG_TO_REPLACE token), so
  * this file makes zero DB/plugin calls on a cache hit.
  *
@@ -20,16 +20,26 @@
  *
  * Standard WordPress disk-cache serving technique.
  *
- * NOTE: this file runs pre-WordPress, so it intentionally has NO ABSPATH guard
- * (WordPress includes it directly; it is never web-accessible on its own).
+ * Direct access is blocked by the ABSPATH guard below. WordPress includes this
+ * drop-in from wp-settings.php, by which point ABSPATH is already defined, so
+ * the guard never fires during a normal cache hit; it only stops a direct web
+ * request to the file.
  *
  * @package WPMgr\Agent\Cache
  */
 
-// The live config is inlined here at install time.
-$config = CONFIG_TO_REPLACE;
+if (!defined('ABSPATH')) {
+    exit; // No direct access.
+}
 
-if (!is_array($config)) {
+if (!defined('WP_CACHE')) {
+    return;
+}
+
+// The live config is inlined here at install time.
+$wpmgr_config = CONFIG_TO_REPLACE; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+
+if (!is_array($wpmgr_config)) {
     return false;
 }
 
@@ -52,6 +62,7 @@ if (isset($_SERVER['HTTP_X_WPMGR_PRELOAD'])) {
 }
 
 // Only GET / HEAD are cacheable.
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value key-filtered by string comparison
 $wpmgr_method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
 if ($wpmgr_method !== 'GET' && $wpmgr_method !== 'HEAD') {
     return false;
@@ -63,10 +74,10 @@ if ($wpmgr_method !== 'GET' && $wpmgr_method !== 'HEAD') {
 // neither bypass nor key the cache — the anonymous visitor maps to the same
 // shared shell as a no-cookie visitor. When the flag is OFF this array is empty
 // and the bypass set is byte-identical to the pre-feature behaviour.
-$wpmgr_bypass_cookies = isset($config['bypass_cookies']) && is_array($config['bypass_cookies'])
-    ? $config['bypass_cookies'] : array();
-$wpmgr_woo_ignore = isset($config['woo_ignore_cookies']) && is_array($config['woo_ignore_cookies'])
-    ? array_map('strtolower', $config['woo_ignore_cookies']) : array();
+$wpmgr_bypass_cookies = isset($wpmgr_config['bypass_cookies']) && is_array($wpmgr_config['bypass_cookies'])
+    ? $wpmgr_config['bypass_cookies'] : array();
+$wpmgr_woo_ignore = isset($wpmgr_config['woo_ignore_cookies']) && is_array($wpmgr_config['woo_ignore_cookies'])
+    ? array_map('strtolower', $wpmgr_config['woo_ignore_cookies']) : array();
 if (!empty($_COOKIE) && $wpmgr_bypass_cookies) {
     $wpmgr_cookie_names = array_keys($_COOKIE);
     foreach ($wpmgr_bypass_cookies as $wpmgr_bypass) {
@@ -101,13 +112,14 @@ if (!empty($_COOKIE)) {
     }
 }
 if ($wpmgr_logged_in) {
-    if (empty($config['cache_logged_in'])) {
+    if (empty($wpmgr_config['cache_logged_in'])) {
         return false; // logged-in caching disabled — serve via PHP
     }
     $wpmgr_name .= '-logged-in';
 
     // 2. role segment (from the non-HTTPOnly role cookie).
     if (isset($_COOKIE['wpmgr_logged_in_roles'])) {
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value regex-filtered below
         $wpmgr_role = strtolower((string) $_COOKIE['wpmgr_logged_in_roles']);
         $wpmgr_role = preg_replace('/[^a-z0-9\-_]/', '', $wpmgr_role);
         if ($wpmgr_role !== '' && $wpmgr_role !== null) {
@@ -117,10 +129,11 @@ if ($wpmgr_logged_in) {
 }
 
 // 3. include-cookie segments, in configured order.
-$wpmgr_include_cookies = isset($config['include_cookies']) && is_array($config['include_cookies'])
-    ? $config['include_cookies'] : array();
+$wpmgr_include_cookies = isset($wpmgr_config['include_cookies']) && is_array($wpmgr_config['include_cookies'])
+    ? $wpmgr_config['include_cookies'] : array();
 foreach ($wpmgr_include_cookies as $wpmgr_inc) {
     if ($wpmgr_inc !== '' && isset($_COOKIE[$wpmgr_inc]) && is_scalar($_COOKIE[$wpmgr_inc])) {
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value regex-filtered below
         $wpmgr_val = strtolower((string) $_COOKIE[$wpmgr_inc]);
         $wpmgr_val = preg_replace('/[^a-z0-9\-_]/', '', $wpmgr_val);
         if ($wpmgr_val !== '' && $wpmgr_val !== null) {
@@ -130,10 +143,11 @@ foreach ($wpmgr_include_cookies as $wpmgr_inc) {
 }
 
 // 4. mobile segment.
-if (!empty($config['cache_mobile'])
+if (!empty($wpmgr_config['cache_mobile'])
     && isset($_SERVER['HTTP_USER_AGENT'])
     && preg_match(
         '/Mobile|Android|Silk\/|Kindle|BlackBerry|Opera (Mini|Mobi)|iPhone|iPad|iPod|IEMobile/i',
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value matched against a fixed allowlist regex
         (string) $_SERVER['HTTP_USER_AGENT']
     ) === 1
 ) {
@@ -144,10 +158,12 @@ if (!empty($config['cache_mobile'])
 // MUST stay byte-identical to WPMgr\Agent\Cache\CacheKey, including the
 // 12-distinct-key cap: over the cap the request is non-cacheable (return false)
 // so an attacker cannot mint unbounded cache files via arbitrary distinct params.
-$wpmgr_ignore = isset($config['ignore_queries']) && is_array($config['ignore_queries'])
-    ? array_map('strtolower', $config['ignore_queries']) : array();
+$wpmgr_ignore = isset($wpmgr_config['ignore_queries']) && is_array($wpmgr_config['ignore_queries'])
+    ? array_map('strtolower', $wpmgr_config['ignore_queries']) : array();
+// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- advanced-cache drop-in runs pre-WP; nonce verification unavailable; query keys are key-hashed for cache routing only (read-only, no state change)
 if (!empty($_GET)) {
     $wpmgr_kept = array();
+    // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- advanced-cache drop-in runs pre-WP; nonce verification unavailable; query keys are key-hashed for cache routing only
     foreach ($_GET as $wpmgr_qk => $wpmgr_qv) {
         if (in_array(strtolower((string) $wpmgr_qk), $wpmgr_ignore, true)) {
             continue;
@@ -165,6 +181,7 @@ if (!empty($_GET)) {
 
 // --- Locate the cache file ----------------------------------------------------
 
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value filtered via regex allowlist + path-traversal stripping below
 $wpmgr_host = isset($_SERVER['HTTP_HOST']) ? strtolower((string) $_SERVER['HTTP_HOST']) : '';
 $wpmgr_host = preg_replace('/[^a-z0-9\.\-:]/', '', $wpmgr_host);
 $wpmgr_host = str_replace(array(':', '..'), array('_', ''), (string) $wpmgr_host);
@@ -172,6 +189,7 @@ if ($wpmgr_host === '') {
     $wpmgr_host = 'unknown-host';
 }
 
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value filtered via regex allowlist + path-traversal stripping below
 $wpmgr_uri  = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
 $wpmgr_qpos = strpos($wpmgr_uri, '?');
 if ($wpmgr_qpos !== false) {
@@ -199,16 +217,16 @@ if (!is_file($wpmgr_file)) {
     // The mkdir guard runs only when the bucket file is new (first miss of the hour).
     $wpmgr_miss_file = $wpmgr_metrics_dir . '/miss-' . $wpmgr_tally_hour;
     if (!@file_exists($wpmgr_miss_file)) {
-        @mkdir($wpmgr_metrics_dir, 0755, true);
+        @mkdir($wpmgr_metrics_dir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir,WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite -- advanced-cache drop-in runs pre-WP; wp_mkdir_p unavailable; writes to wp-content/cache/wpmgr, a persistent location outside the plugin folder
     }
-    @file_put_contents($wpmgr_miss_file, "\n", FILE_APPEND);
+    @file_put_contents($wpmgr_miss_file, "\n", FILE_APPEND); // phpcs:ignore PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/cache, a persistent install target outside the plugin folder
     return false; // MISS — boot WordPress
 }
 
 // --- Serve the cache hit ------------------------------------------------------
 
 if (function_exists('ini_set')) {
-    @ini_set('zlib.output_compression', '0');
+    @ini_set('zlib.output_compression', '0'); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required runtime ini tweak; @-guarded
 }
 
 if (!headers_sent()) {
@@ -224,9 +242,11 @@ if (!headers_sent()) {
         header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $wpmgr_mtime) . ' GMT');
 
         $wpmgr_ims = isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value passed to strtotime() for numeric comparison only
             ? strtotime((string) $_SERVER['HTTP_IF_MODIFIED_SINCE'])
             : 0;
         if ($wpmgr_ims !== false && $wpmgr_ims >= $wpmgr_mtime) {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value used only as the HTTP protocol string in a header
             $wpmgr_proto = isset($_SERVER['SERVER_PROTOCOL']) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
             header($wpmgr_proto . ' 304 Not Modified', true, 304);
             exit();
@@ -246,9 +266,9 @@ if ($wpmgr_method === 'HEAD') {
 // The mkdir guard runs only when the bucket file is new (first hit of the hour).
 $wpmgr_hit_file = $wpmgr_metrics_dir . '/hit-' . $wpmgr_tally_hour;
 if (!@file_exists($wpmgr_hit_file)) {
-    @mkdir($wpmgr_metrics_dir, 0755, true);
+    @mkdir($wpmgr_metrics_dir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir,WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite -- advanced-cache drop-in runs pre-WP; wp_mkdir_p unavailable; writes to wp-content/cache/wpmgr, a persistent location outside the plugin folder
 }
-@file_put_contents($wpmgr_hit_file, "\n", FILE_APPEND);
+@file_put_contents($wpmgr_hit_file, "\n", FILE_APPEND); // phpcs:ignore PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/cache, a persistent install target outside the plugin folder
 
-readfile($wpmgr_file);
+readfile($wpmgr_file); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- advanced-cache drop-in streams the cached body before WordPress is loaded; readfile is the canonical low-memory emit
 exit();

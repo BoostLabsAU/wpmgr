@@ -106,14 +106,14 @@ class SnapshotManager
         $asideName = $live . '.wpmgr-old-' . $snapshotId;
 
         // Move the current live dir aside (if present).
-        if (is_dir($live) && !@rename($live, $asideName)) {
+        if (is_dir($live) && !@rename($live, $asideName)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
             return ['ok' => false, 'log' => 'Could not stage live directory aside.'];
         }
 
         if (!$this->copyDir($payload, $live)) {
             // Roll back the move so we don't leave the site without the dir.
             if (is_dir($asideName) && !is_dir($live)) {
-                @rename($asideName, $live);
+                @rename($asideName, $live); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
             }
 
             return ['ok' => false, 'log' => 'Restore copy failed; original retained.'];
@@ -231,9 +231,7 @@ class SnapshotManager
 
         $base = rtrim($uploads, '/\\') . '/' . self::DIR;
         if (!is_dir($base)) {
-            if (function_exists('wp_mkdir_p')) {
-                wp_mkdir_p($base);
-            } elseif (!@mkdir($base, 0755, true) && !is_dir($base)) {
+            if (!wp_mkdir_p($base) && !is_dir($base)) {
                 return '';
             }
         }
@@ -376,11 +374,7 @@ class SnapshotManager
     private function writeMeta(string $dir, string $type, string $slug, string $fromVersion): void
     {
         if (!is_dir($dir)) {
-            if (function_exists('wp_mkdir_p')) {
-                wp_mkdir_p($dir);
-            } else {
-                @mkdir($dir, 0755, true);
-            }
+            wp_mkdir_p($dir);
         }
         $meta = [
             'type'         => $type,
@@ -403,7 +397,7 @@ class SnapshotManager
         if (!is_dir($src)) {
             return false;
         }
-        if (!is_dir($dst) && !@mkdir($dst, 0755, true) && !is_dir($dst)) {
+        if (!is_dir($dst) && !wp_mkdir_p($dst) && !is_dir($dst)) {
             return false;
         }
 
@@ -459,10 +453,10 @@ class SnapshotManager
             if (is_dir($path) && !is_link($path)) {
                 $this->deleteDir($path);
             } else {
-                @unlink($path);
+                wp_delete_file($path);
             }
         }
 
-        return @rmdir($dir);
+        return @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch/snapshot dir; WP_Filesystem not initialized
     }
 }

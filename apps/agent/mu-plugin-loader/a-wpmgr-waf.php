@@ -242,9 +242,9 @@ function wpmgr_waf_gate(): void
 
     try {
         $optionTable = $wpdb->prefix . 'options';
-        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        $raw = $wpdb->get_var(
+        $raw = $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- mu-plugin pre-boot read of options table; no WP caching available yet; value is the output of $wpdb->prepare()
             $wpdb->prepare(
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + 'options' (trusted core table); value bound via %s placeholder
                 "SELECT option_value FROM {$optionTable} WHERE option_name = %s LIMIT 1",
                 'wpmgr_security_config'
             )

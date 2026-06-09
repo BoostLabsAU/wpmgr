@@ -69,11 +69,13 @@ class ReplayCache
         // $table is built from a class constant + the trusted wpdb prefix
         // (no user input), so interpolating it ahead of prepare() is safe.
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
         $sql = $wpdb->prepare("SELECT 1 FROM {$table} WHERE jti_hash = %s AND expires_at >= %d LIMIT 1", $hash, $now);
         if (!is_string($sql)) {
             return false;
         }
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned table; already prepared on the preceding line; adding wp_cache_* is an active regression (defeats anti-replay shield); value is the output of $wpdb->prepare()
         return $wpdb->get_var($sql) !== null;
     }
 
@@ -105,6 +107,7 @@ class ReplayCache
         $now   = $now ?? time();
         $table = $this->tableName();
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct query on plugin-owned table; no core $wpdb helper exists
         $result = $wpdb->insert(
             $table,
             [
@@ -155,9 +158,8 @@ class ReplayCache
             $missingTable ? ' hint=run-Schema::ensureCurrent-to-recreate' : ''
         );
 
-        // error_log() is the standard WP debug.log channel when WP_DEBUG_LOG
-        // is enabled; outside that it lands in the SAPI's error stream.
-        error_log($message);
+        // Route through the debug-gated helper (only writes under WP_DEBUG_LOG or WPMGR_DEBUG).
+        \WPMgr\Agent\Support\DebugLog::write($message);
     }
 
     /**
@@ -178,11 +180,13 @@ class ReplayCache
         $table = $this->tableName();
 
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
         $sql = $wpdb->prepare("DELETE FROM {$table} WHERE expires_at < %d", $now);
         if (!is_string($sql)) {
             return 0;
         }
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned table; already prepared on the preceding line; no caching appropriate for a prune operation; value is the output of $wpdb->prepare()
         $result = $wpdb->query($sql);
 
         return is_int($result) ? $result : 0;

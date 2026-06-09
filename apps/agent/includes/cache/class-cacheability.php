@@ -236,7 +236,7 @@ final class Cacheability
             return false;
         }
 
-        $path  = (string) (parse_url($url, PHP_URL_PATH) ?? '');
+        $path  = (string) (wp_parse_url($url, PHP_URL_PATH) ?? '');
         if ($path !== '' && preg_match(self::UNCACHEABLE_PATH_PATTERN, $path) === 1) {
             return false;
         }
@@ -246,7 +246,7 @@ final class Cacheability
         }
 
         // Unknown query params make the URL uncacheable.
-        $queryStr = (string) (parse_url($url, PHP_URL_QUERY) ?? '');
+        $queryStr = (string) (wp_parse_url($url, PHP_URL_QUERY) ?? '');
         if ($queryStr !== '') {
             parse_str($queryStr, $params);
             foreach (array_keys($params) as $key) {

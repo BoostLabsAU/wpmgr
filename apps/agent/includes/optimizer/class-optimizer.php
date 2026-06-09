@@ -40,6 +40,7 @@ use WPMgr\Agent\Cache\WooFragmentsRuntime;
 use WPMgr\Agent\Keystore;
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
+use WPMgr\Agent\Support\DebugLog;
 
 /**
  * Orchestrates the request-path HTML optimization pipeline.
@@ -207,9 +208,7 @@ final class Optimizer
             $out = $stage($html);
             return is_string($out) && $out !== '' ? $out : $html;
         } catch (\Throwable $e) {
-            if (function_exists('error_log')) {
-                error_log('wpmgr-agent: optimizer stage degraded (' . $e->getMessage() . ')');
-            }
+            DebugLog::write('wpmgr-agent: optimizer stage degraded (' . $e->getMessage() . ')');
             return $html;
         }
     }

@@ -296,6 +296,7 @@ final class MediaCleanCommand implements CommandInterface
         $walkBatch        = 200; // rows per DB round-trip
 
         while (count($allUnused) < $scanCap) {
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- batched attachment scan on core posts table; caching the full result set would OOM on large media libraries
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT ID, post_title, guid
                  FROM {$wpdb->posts}

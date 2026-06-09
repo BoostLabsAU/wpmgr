@@ -130,6 +130,85 @@ agent-zip: agent-vendor ## Package the WordPress agent plugin as a zip (with ifs
 	rm -rf release/wpmgr-agent
 	@echo "agent zip: $$(du -sh release/wpmgr-agent.zip | cut -f1)"
 
+.PHONY: agent-zip-wporg
+agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fleet-agent-for-wpmgr identity; self-hosted identity untouched)
+	mkdir -p release
+	rm -f release/fleet-agent-for-wpmgr.zip
+	rm -rf release/fleet-agent-for-wpmgr
+	# Stage under fleet-agent-for-wpmgr/ — the permanent wp.org slug. The self-updater
+	# (class-update-checker.php) is physically excluded so PCP cannot match the
+	# site_transient_update_plugins hook (B2 / G8). NOTICE.md and README.md are
+	# excluded because wp.org rejects unexpected Markdown files (B4 / C8).
+	# Dev-only files mirror the existing agent-zip excludes.
+	rsync -a --delete \
+		--exclude 'tests/' --exclude '*.dist' --exclude '.phpunit.cache/' \
+		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
+		--exclude '.DS_Store' --exclude '*.zip' \
+		--exclude 'phpstan.neon' --exclude 'phpstan-baseline.neon' \
+		--exclude 'NOTICE.md' --exclude 'README.md' \
+		--exclude 'includes/support/class-update-checker.php' \
+		apps/agent/ release/fleet-agent-for-wpmgr/
+	# Rename the main plugin file to match the wp.org slug. WordPress derives the
+	# plugin's displayed name, slug, and update identity from the top-level .php
+	# filename inside the archive folder — renaming is mandatory for the wp.org slug.
+	mv release/fleet-agent-for-wpmgr/wpmgr-agent.php \
+		release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php
+	# VERSION override: same mechanism as agent-zip — stamp ONLY the staged copy.
+	# Two lines: the plugin header "Version:" and the WPMGR_AGENT_VERSION constant.
+	@if [ -n "$(VERSION)" ]; then \
+		_v=$$(echo "$(VERSION)" | sed 's/^v//'); \
+		echo "agent-zip-wporg: stamping staged copy with version $$_v"; \
+		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
+		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v\2/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
+		rm -f release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php.bak; \
+	fi
+	# Stamp readme.txt Stable tag to match the plugin header Version. Mirrors the
+	# VERSION block above; reads the stamped Version from the staged main file so
+	# the two values always agree regardless of the VERSION variable.
+	@_stamped_v=$$(grep -E '^ \* Version:' release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php | sed -E 's/.*Version:[ \t]+//'); \
+	echo "agent-zip-wporg: stamping readme.txt Stable tag: $$_stamped_v"; \
+	sed -i.bak -E "s/^(Stable tag:[ \t]+).*/\1$$_stamped_v/" release/fleet-agent-for-wpmgr/readme.txt; \
+	rm -f release/fleet-agent-for-wpmgr/readme.txt.bak
+	# Rewrite plugin-identity header fields in the staged main file:
+	#   Plugin Name  -> Fleet Agent for WPMgr   (B1 slug compliance)
+	#   License      -> GPLv2 or later           (§3 recommended posture)
+	#   License URI  -> gnu.org GPL-2.0 URL      (§3)
+	#   Text Domain  -> fleet-agent-for-wpmgr    (matches new slug)
+	sed -i.bak \
+		-e "s|^ \* Plugin Name:.*| * Plugin Name:       Fleet Agent for WPMgr|" \
+		-e "s|^ \* License:.*| * License:           GPLv2 or later|" \
+		-e "s|^ \* License URI:.*| * License URI:       https://www.gnu.org/licenses/gpl-2.0.html|" \
+		-e "s|^ \* Text Domain:.*| * Text Domain:       fleet-agent-for-wpmgr|" \
+		release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php
+	rm -f release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php.bak
+	# Inject the WPMGR_WPORG_BUILD constant immediately after the WPMGR_AGENT_VERSION
+	# define line. This guards the self-updater boot hook (class-plugin.php:522) so
+	# it never binds in the wp.org build, satisfying G8 / B2 (the file exclusion
+	# above satisfies PCP static-analysis; the constant satisfies the runtime guard).
+	# Use awk to insert the line immediately after the WPMGR_AGENT_VERSION define,
+	# avoiding the multi-line sed /a\ syntax which is non-portable across BSD/GNU sed.
+	awk "/^define\('WPMGR_AGENT_VERSION',/{print; print \"define('WPMGR_WPORG_BUILD', true);\"; next}1" \
+		release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php \
+		> release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php.tmp
+	mv release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php.tmp \
+		release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php
+	# Rewrite the text-domain literal 'wpmgr-agent' -> 'fleet-agent-for-wpmgr' across
+	# all staged PHP files. This covers both __()/__e() text-domain args AND the
+	# plugin-identity constants (PAGE_SLUG, exclude-dir lists) that reference the
+	# plugin folder name — in the wp.org install the folder IS fleet-agent-for-wpmgr,
+	# so all references must agree. class-update-checker.php is already excluded above
+	# and is never present in the staged tree.
+	# GREP FIRST — surface every occurrence so the caller can audit non-text-domain hits.
+	@echo "--- grep of 'wpmgr-agent' in staged tree (before rewrite) ---"; \
+	grep -rn "'wpmgr-agent'" release/fleet-agent-for-wpmgr/ --include="*.php" || true; \
+	echo "--- end grep ---"
+	find release/fleet-agent-for-wpmgr -name "*.php" -print0 | \
+		xargs -0 sed -i.bak "s/'wpmgr-agent'/'fleet-agent-for-wpmgr'/g"
+	find release/fleet-agent-for-wpmgr -name "*.php.bak" -delete
+	cd release && zip -r fleet-agent-for-wpmgr.zip fleet-agent-for-wpmgr
+	rm -rf release/fleet-agent-for-wpmgr
+	@echo "agent wporg zip: $$(du -sh release/fleet-agent-for-wpmgr.zip | cut -f1)"
+
 .PHONY: agent-release
 agent-release: agent-zip ## Publish the agent release (zip + latest.json) to object storage for CP-driven self-update (ADR-042)
 	# Uploads the versioned package FIRST, then latest.json LAST, so the CP

@@ -335,7 +335,7 @@ class MediaUploader
      */
     private function pathOf(string $url): string
     {
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         if (!is_array($parts) || !isset($parts['path']) || !is_string($parts['path']) || $parts['path'] === '') {
             return '';
         }

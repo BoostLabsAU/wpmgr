@@ -213,7 +213,7 @@ final class LoginBrand
             // here because the login page loads styles differently depending on
             // the WP version and the login_head hook fires after wp_enqueue is
             // no longer reliable. A direct <style> echo is safe for login_head.
-            echo '<style>.login h1 a { background-image: url(\'' . $safeUrl . '\'); background-size: contain; width: auto; }</style>' . "\n";
+            echo '<style>.login h1 a { background-image: url(\'' . esc_url($safeUrl) . '\'); background-size: contain; width: auto; }</style>' . "\n";
         } catch (\Throwable $e) {
             // Never fatal the login page.
         }
@@ -392,7 +392,7 @@ final class LoginBrand
 
         if (!function_exists('wp_kses')) {
             // WP not available — strip all tags as a conservative fallback.
-            return strip_tags($message);
+            return wp_strip_all_tags($message);
         }
 
         return wp_kses($message, self::MESSAGE_KSES_TAGS);
@@ -415,7 +415,7 @@ final class LoginBrand
         }
 
         try {
-            $parts  = parse_url($url);
+            $parts  = wp_parse_url($url);
             $scheme = isset($parts['scheme']) && is_string($parts['scheme'])
                 ? strtolower($parts['scheme'])
                 : '';

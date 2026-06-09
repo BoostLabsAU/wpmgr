@@ -95,17 +95,18 @@ final class Admin
 
     private Lifecycle $lifecycle;
 
-    private UpdateChecker $updateChecker;
+    private ?UpdateChecker $updateChecker;
 
     /**
-     * @param Settings      $settings      Config/enrollment state.
-     * @param Enrollment    $enrollment    Reporting/enrollment client.
-     * @param Keystore      $keystore      Key store (cleared on Disconnect/Re-enroll).
-     * @param Lifecycle     $lifecycle     Connection lifecycle (immediate post-enroll
-     *                                     heartbeat + revoked-marker accessors).
-     * @param UpdateChecker $updateChecker CP self-update checker (ADR-042).
+     * @param Settings           $settings      Config/enrollment state.
+     * @param Enrollment         $enrollment    Reporting/enrollment client.
+     * @param Keystore           $keystore      Key store (cleared on Disconnect/Re-enroll).
+     * @param Lifecycle          $lifecycle     Connection lifecycle (immediate post-enroll
+     *                                          heartbeat + revoked-marker accessors).
+     * @param UpdateChecker|null $updateChecker CP self-update checker (ADR-042).
+     *                                          Null in the wp.org distribution build.
      */
-    public function __construct(Settings $settings, Enrollment $enrollment, Keystore $keystore, Lifecycle $lifecycle, UpdateChecker $updateChecker)
+    public function __construct(Settings $settings, Enrollment $enrollment, Keystore $keystore, Lifecycle $lifecycle, ?UpdateChecker $updateChecker)
     {
         $this->settings       = $settings;
         $this->enrollment     = $enrollment;
@@ -195,7 +196,7 @@ final class Admin
 
         // --- Control-plane URL form ---
         echo '<h2>' . esc_html('Control plane') . '</h2>';
-        echo '<form method="post" action="' . $actionUrl . '">';
+        echo '<form method="post" action="' . esc_url($actionUrl) . '">';
         wp_nonce_field(self::ACTION_SAVE_URL);
         echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_SAVE_URL) . '" />';
         echo '<table class="form-table"><tbody><tr><th><label for="wpmgr_cp_url">'
@@ -210,7 +211,7 @@ final class Admin
         // --- Enrollment form ---
         if (!$enrolled) {
             echo '<h2>' . esc_html('Enroll') . '</h2>';
-            echo '<form method="post" action="' . $actionUrl . '">';
+            echo '<form method="post" action="' . esc_url($actionUrl) . '">';
             wp_nonce_field(self::ACTION_ENROLL);
             echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_ENROLL) . '" />';
             echo '<table class="form-table"><tbody><tr><th><label for="wpmgr_pairing_code">'
@@ -223,22 +224,25 @@ final class Admin
         } else {
             // --- Sync now ---
             echo '<h2>' . esc_html('Sync') . '</h2>';
-            echo '<form method="post" action="' . $actionUrl . '">';
+            echo '<form method="post" action="' . esc_url($actionUrl) . '">';
             wp_nonce_field(self::ACTION_SYNC);
             echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_SYNC) . '" />';
             submit_button('Sync now', 'secondary');
             echo '</form>';
 
             // --- Check for updates (ADR-042) ---
-            echo '<h2>' . esc_html('Agent update') . '</h2>';
-            echo '<p class="description">'
-                . esc_html('Force an immediate check for a new WPMgr agent version. The result appears in Plugins > Updates.')
-                . '</p>';
-            echo '<form method="post" action="' . $actionUrl . '">';
-            wp_nonce_field(self::ACTION_CHECK_UPDATE);
-            echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_CHECK_UPDATE) . '" />';
-            submit_button('Check for updates', 'secondary');
-            echo '</form>';
+            // Hidden when the updater is unavailable (wp.org distribution build).
+            if ($this->updateChecker !== null) {
+                echo '<h2>' . esc_html('Agent update') . '</h2>';
+                echo '<p class="description">'
+                    . esc_html('Force an immediate check for a new WPMgr agent version. The result appears in Plugins > Updates.')
+                    . '</p>';
+                echo '<form method="post" action="' . esc_url($actionUrl) . '">';
+                wp_nonce_field(self::ACTION_CHECK_UPDATE);
+                echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_CHECK_UPDATE) . '" />';
+                submit_button('Check for updates', 'secondary');
+                echo '</form>';
+            }
 
             // --- Re-enroll (ADR-041) ---
             // An explicit, deliberate action: wipes the current keys + pairing
@@ -252,7 +256,7 @@ final class Admin
             echo '<p class="description">'
                 . esc_html('Wipes this site\'s current pairing and re-enrolls with a fresh identity using a new pairing code (mint one from your dashboard). Prior backups remain decryptable.')
                 . '</p>';
-            echo '<form method="post" action="' . $actionUrl . '" onsubmit="return confirm(\''
+            echo '<form method="post" action="' . esc_url($actionUrl) . '" onsubmit="return confirm(\''
                 . esc_js('Re-enroll this site? The current pairing and keys will be wiped, then re-enrolled with the new code.')
                 . '\');">';
             wp_nonce_field(self::ACTION_REENROLL);
@@ -272,7 +276,7 @@ final class Admin
             echo '<p class="description">'
                 . esc_html('Clears this site\'s pairing with the current control plane without re-enrolling. Prior backups remain decryptable.')
                 . '</p>';
-            echo '<form method="post" action="' . $actionUrl . '" onsubmit="return confirm(\''
+            echo '<form method="post" action="' . esc_url($actionUrl) . '" onsubmit="return confirm(\''
                 . esc_js('Disconnect from the current control plane? You will need to paste a new pairing code to re-enroll.')
                 . '\');">';
             wp_nonce_field(self::ACTION_DISCONNECT);
@@ -341,7 +345,7 @@ final class Admin
             echo '</div>';
 
             // Revoke form — clears the key immediately.
-            echo '<form method="post" action="' . $actionUrl . '" style="display:inline-block;">';
+            echo '<form method="post" action="' . esc_url($actionUrl) . '" style="display:inline-block;">';
             wp_nonce_field(self::ACTION_REVOKE_CONNECTION_KEY);
             echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_REVOKE_CONNECTION_KEY) . '" />';
             submit_button('Revoke', 'delete', 'submit', false);
@@ -354,7 +358,7 @@ final class Admin
                 echo '<p>' . esc_html('Previous key has expired.') . '</p>';
             }
 
-            echo '<form method="post" action="' . $actionUrl . '">';
+            echo '<form method="post" action="' . esc_url($actionUrl) . '">';
             wp_nonce_field(self::ACTION_MINT_CONNECTION_KEY);
             echo '<input type="hidden" name="action" value="' . esc_attr(self::ACTION_MINT_CONNECTION_KEY) . '" />';
             submit_button('Mint key', 'secondary');
@@ -416,7 +420,7 @@ final class Admin
     {
         $this->guard(self::ACTION_SAVE_URL);
 
-        $raw = isset($_POST['wpmgr_cp_url']) ? (string) wp_unslash($_POST['wpmgr_cp_url']) : '';
+        $raw = isset($_POST['wpmgr_cp_url']) ? sanitize_text_field((string) wp_unslash($_POST['wpmgr_cp_url'])) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- nonce + capability verified in guard()/check_admin_referer(); sanitized via sanitize_text_field(wp_unslash())
         $stored = $this->settings->setControlPlaneUrl($raw);
 
         if ($stored === '' && $raw !== '') {
@@ -440,8 +444,9 @@ final class Admin
         // Pairing code: sanitize lightly, trim whitespace, consume in-request,
         // never store/log. Trimming guards the common paste-with-trailing-space
         // case the CP would otherwise reject with a 403/invalid-signature.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce + capability verified in guard()/check_admin_referer() at top of handler
         $code = isset($_POST['wpmgr_pairing_code'])
-            ? trim(sanitize_text_field((string) wp_unslash($_POST['wpmgr_pairing_code'])))
+            ? trim(sanitize_text_field((string) wp_unslash($_POST['wpmgr_pairing_code']))) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in guard()
             : '';
 
         if ($code === '') {
@@ -606,8 +611,9 @@ final class Admin
     {
         $this->guard(self::ACTION_REENROLL);
 
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce + capability verified in guard()/check_admin_referer() at top of handler
         $code = isset($_POST['wpmgr_pairing_code'])
-            ? trim(sanitize_text_field((string) wp_unslash($_POST['wpmgr_pairing_code'])))
+            ? trim(sanitize_text_field((string) wp_unslash($_POST['wpmgr_pairing_code']))) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce verified in guard()
             : '';
 
         if ($code === '') {
@@ -709,11 +715,19 @@ final class Admin
      * which flushes both transients and re-fetches a fresh manifest from the CP.
      * The operator can then see the update status in Plugins > Updates.
      *
+     * No-ops when the updater is unavailable (wp.org distribution build).
+     *
      * @return void
      */
     public function handleCheckUpdate(): void
     {
         $this->guard(self::ACTION_CHECK_UPDATE);
+
+        if ($this->updateChecker === null) {
+            $this->notice('error', 'Update checking is not available in this build.');
+            $this->redirectBack();
+            return;
+        }
 
         if (!$this->settings->isEnrolled()) {
             $this->notice('error', 'Enroll before checking for updates.');

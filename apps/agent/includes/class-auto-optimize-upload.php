@@ -307,7 +307,7 @@ final class AutoOptimizeUpload
 
         // Lift the PHP execution ceiling — we are in a dedicated cron worker.
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         }
         if (function_exists('ignore_user_abort')) {
             ignore_user_abort(true);

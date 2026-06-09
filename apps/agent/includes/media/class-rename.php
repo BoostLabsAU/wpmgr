@@ -50,7 +50,7 @@ final class Rename
         $archive = $this->changeExtension($path, self::SUFFIX . '.' . $ext);
 
         if ($path !== '' && @is_file($path)) {
-            @rename($path, $archive);
+            @rename($path, $archive); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-resume safety
         }
 
         return $archive;
@@ -69,7 +69,7 @@ final class Rename
         $restored = str_replace('.' . self::SUFFIX, '', $archived);
 
         if ($archived !== '' && $archived !== $restored && @is_file($archived)) {
-            @rename($archived, $restored);
+            @rename($archived, $restored); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-resume safety
         }
 
         return $restored;

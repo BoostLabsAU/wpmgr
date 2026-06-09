@@ -288,7 +288,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
 
                 // Expand execution budget — delete loops can be slow on large sites.
                 if (function_exists('set_time_limit')) {
-                    @set_time_limit(0);
+                    @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running orphan-delete loop must not hit max_execution_time; @-guarded, no-op when disabled
                 }
 
                 self::runAsync(
@@ -521,7 +521,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
             return self::itemError('option', $name, 'prepare failed');
         }
 
-        $wpdb->query($sql);
+        $wpdb->query($sql); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- direct query on core options table; $sql is already $wpdb->prepare()-produced on the preceding line
         // rows_affected = 0 means already gone — treat as done (idempotent).
 
         return ['kind' => 'option', 'name' => $name, 'status' => 'done', 'detail' => ''];
@@ -618,7 +618,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $validatedName) . '`';
-        $result  = $wpdb->query('DROP TABLE IF EXISTS ' . $escaped);
+        $result  = $wpdb->query('DROP TABLE IF EXISTS ' . $escaped); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.NotPrepared,PluginCheck.Security.DirectDB.UnescapedDBParameter -- intentional DROP of an orphaned non-core table; identifier validated via information_schema and backtick-escaped; value is an information_schema-validated identifier; not attacker-controlled
 
         if ($result === false) {
             $lastError = isset($wpdb->last_error)
@@ -657,7 +657,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
             return null;
         }
 
-        $result = $wpdb->get_var($prepared);
+        $result = $wpdb->get_var($prepared); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- direct information_schema catalog query; $prepared is already $wpdb->prepare()-produced; no caching (live catalog read required)
         return is_string($result) && $result !== '' ? $result : null;
     }
 
@@ -951,7 +951,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
 
         if ($keystore !== null) {
             try {
-                $parsed = parse_url($endpoint);
+                $parsed = wp_parse_url($endpoint);
                 $path   = isset($parsed['path']) && is_string($parsed['path'])
                     ? $parsed['path']
                     : '/agent/v1/db-orphan-delete/progress';
@@ -962,7 +962,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
                 $auth    = $signer->signHeaders('POST', $path, $body);
                 $headers = array_merge($headers, $auth);
             } catch (\Throwable $e) {
-                error_log(sprintf(
+                \WPMgr\Agent\Support\DebugLog::write(sprintf(
                     '[wpmgr] db_orphan_delete progress signing failed for job %s: %s',
                     $jobId,
                     $e->getMessage()
@@ -975,7 +975,7 @@ final class DbOrphanDeleteCommand implements CommandInterface
         if (strlen($body) > self::MAX_BODY) {
             // Log and skip; the final done=true push will still arrive when the
             // next batch is smaller (or at termination with done=true always sent).
-            error_log(sprintf(
+            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                 '[wpmgr] db_orphan_delete job %s: progress payload too large (%d bytes), skipping batch push',
                 $jobId,
                 strlen($body)

@@ -110,7 +110,7 @@ final class CoreFilesArchiver
 
         $real = realpath($absPath);
         if ($real === false || !is_dir($real)) {
-            throw new \RuntimeException('CoreFilesArchiver: absPath is not a readable directory: ' . $absPath);
+            throw new \RuntimeException('CoreFilesArchiver: absPath is not a readable directory: ' . esc_html($absPath)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         $this->absPath    = rtrim($real, DIRECTORY_SEPARATOR);
         $this->generation = max(0, $generation);
@@ -144,11 +144,11 @@ final class CoreFilesArchiver
      */
     public function archive(string $outDir, callable $progress): array
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         @ignore_user_abort(true);
 
-        if (!is_dir($outDir) && !@mkdir($outDir, 0755, true) && !is_dir($outDir)) {
-            throw new \RuntimeException('CoreFilesArchiver: cannot create outDir: ' . $outDir);
+        if (!is_dir($outDir) && !wp_mkdir_p($outDir) && !is_dir($outDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- converted to wp_mkdir_p
+            throw new \RuntimeException('CoreFilesArchiver: cannot create outDir: ' . esc_html($outDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         $outDir = rtrim((string) realpath($outDir), DIRECTORY_SEPARATOR);
 
@@ -175,9 +175,9 @@ final class CoreFilesArchiver
         $zip              = null;
         $currentPartPath  = '';
 
-        $cacheHandle = @fopen($cachePath, 'r');
+        $cacheHandle = @fopen($cachePath, 'r'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked line-by-line reads over a large path-cache file; WP_Filesystem exposes only whole-file get/put which would OOM
         if ($cacheHandle === false) {
-            throw new \RuntimeException('CoreFilesArchiver: cannot read path cache: ' . $cachePath);
+            throw new \RuntimeException('CoreFilesArchiver: cannot read path cache: ' . esc_html($cachePath)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         while (($line = fgets($cacheHandle)) !== false) {
@@ -197,7 +197,7 @@ final class CoreFilesArchiver
             }
 
             if ($zip->addFile($abs, $rel) === false) {
-                throw new \RuntimeException('CoreFilesArchiver: addFile failed for ' . $rel);
+                throw new \RuntimeException('CoreFilesArchiver: addFile failed for ' . esc_html($rel)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
             }
             $partEntries++;
             $partEstBytes += (int) @filesize($abs);
@@ -231,7 +231,7 @@ final class CoreFilesArchiver
                 $filesSinceProgress = 0;
             }
         }
-        fclose($cacheHandle);
+        fclose($cacheHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over a large path-cache file; WP_Filesystem has no streaming API
 
         // Close the final open part.
         if ($zip !== null) {
@@ -243,7 +243,7 @@ final class CoreFilesArchiver
             }
         }
 
-        @unlink($cachePath);
+        wp_delete_file($cachePath);
 
         $result = [
             'done'          => true,
@@ -274,9 +274,9 @@ final class CoreFilesArchiver
      */
     private function buildPathCache(string $cachePath): int
     {
-        $handle = @fopen($cachePath, 'w');
+        $handle = @fopen($cachePath, 'w'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for incremental line-by-line writes to a large path-cache file; WP_Filesystem exposes only whole-file put_contents which would OOM
         if ($handle === false) {
-            throw new \RuntimeException('CoreFilesArchiver: cannot write path cache: ' . $cachePath);
+            throw new \RuntimeException('CoreFilesArchiver: cannot write path cache: ' . esc_html($cachePath)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         $count   = 0;
@@ -290,7 +290,7 @@ final class CoreFilesArchiver
                     continue;
                 }
                 $rel = str_replace(DIRECTORY_SEPARATOR, '/', substr($abs, $srcLen));
-                fwrite($handle, $rel . "\n");
+                fwrite($handle, $rel . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
                 $count++;
             }
         }
@@ -322,12 +322,12 @@ final class CoreFilesArchiver
                     continue;
                 }
                 $rel = str_replace(DIRECTORY_SEPARATOR, '/', substr((string) $info->getPathname(), $srcLen));
-                fwrite($handle, $rel . "\n");
+                fwrite($handle, $rel . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
                 $count++;
             }
         }
 
-        fclose($handle);
+        fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over a large path-cache file; WP_Filesystem has no streaming API
         return $count;
     }
 
@@ -342,7 +342,7 @@ final class CoreFilesArchiver
         $path = $outDir . DIRECTORY_SEPARATOR . $name;
         $zip  = new \ZipArchive();
         if ($zip->open($path, \ZipArchive::CREATE | \ZipArchive::OVERWRITE) !== true) {
-            throw new \RuntimeException('CoreFilesArchiver: cannot open zip part: ' . $path);
+            throw new \RuntimeException('CoreFilesArchiver: cannot open zip part: ' . esc_html($path)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         return [$zip, $path];
     }
@@ -358,12 +358,12 @@ final class CoreFilesArchiver
         if ($entries === 0) {
             $zip->close();
             if (is_file($partPath)) {
-                @unlink($partPath);
+                wp_delete_file($partPath);
             }
             return ['name' => '', 'size' => 0];
         }
         if (!$zip->close()) {
-            throw new \RuntimeException('CoreFilesArchiver: zip close failed for ' . $partPath);
+            throw new \RuntimeException('CoreFilesArchiver: zip close failed for ' . esc_html($partPath)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         $size = (int) @filesize($partPath);
         return ['name' => basename($partPath), 'size' => $size];

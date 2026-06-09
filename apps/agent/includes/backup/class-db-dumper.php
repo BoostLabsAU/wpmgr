@@ -112,7 +112,7 @@ final class DbDumper
      */
     public function dump(string $outPath, array $resume, callable $progress): array
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running DB dump must not hit max_execution_time; @-guarded
         @ignore_user_abort(true);
 
         if (!empty($resume['done'])) {
@@ -121,7 +121,7 @@ final class DbDumper
         if ($resume !== []) {
             // V0: no mid-dump resume (see file header). A partial run is
             // unrecoverable; discard the half-written gzip and restart.
-            @unlink($outPath);
+            wp_delete_file($outPath);
         }
         if (!function_exists('gzopen')) {
             throw new \RuntimeException('WPMgr Agent: ext-zlib required for DB dump (gzopen missing).');
@@ -167,18 +167,18 @@ final class DbDumper
             // Ensure no half-written file lingers — TaskRunner's retry logic
             // assumes a missing file means "fresh start".
             @gzclose($gz);
-            @unlink($outPath);
+            wp_delete_file($outPath);
             throw new \RuntimeException(
-                'WPMgr Agent: DB dump failed (' . $this->scrubMessage($e->getMessage()) . ').',
+                'WPMgr Agent: DB dump failed (' . $this->scrubMessage($e->getMessage()) . ').', // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
                 0,
-                $e
+                $e // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; previous exception object, not browser output
             );
         }
 
         // gzclose is critical — without it the gzip footer is missing and
         // the file is corrupt. Do NOT put this in the catch above.
         if (!@gzclose($gz)) {
-            throw new \RuntimeException('WPMgr Agent: failed to finalize gzip stream.');
+            throw new \RuntimeException('WPMgr Agent: failed to finalize gzip stream.'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         @$mysqli->close();
 
@@ -197,12 +197,12 @@ final class DbDumper
             $exists  = @file_exists($outPath) ? 'yes' : 'no';
             $readable= @is_readable($outPath) ? 'yes' : 'no';
             $diskSpace = @disk_free_space(dirname($outPath));
-            throw new \RuntimeException(sprintf(
+            throw new \RuntimeException(sprintf( // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
                 'WPMgr Agent: DB dump produced empty output (path=%s exists=%s readable=%s free_disk=%s)',
-                $outPath,
-                $exists,
-                $readable,
-                is_numeric($diskSpace) ? (string) (int) $diskSpace : 'unknown'
+                esc_html($outPath),
+                esc_html($exists),
+                esc_html($readable),
+                is_numeric($diskSpace) ? (string) (int) $diskSpace : 'unknown' // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
             ));
         }
 
@@ -230,7 +230,7 @@ final class DbDumper
         // mysqli_report controls how mysqli surfaces errors. Be explicit:
         // throw exceptions (introduced default in PHP 8.1+ but worth pinning)
         // so we can catch and translate.
-        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+        mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT); // phpcs:ignore WordPress.DB.RestrictedFunctions.mysql_mysqli_report -- error mode for the dedicated streaming dump connection
 
         try {
             // mysqli constructor: ($host, $user, $pass, $db, $port, $socket).
@@ -238,7 +238,7 @@ final class DbDumper
             // connection (the $host value is effectively ignored by the driver
             // in that case, but we still pass whatever the caller gave us so
             // MySQL grant scoping against 'localhost' is preserved).
-            $mysqli = new \mysqli(
+            $mysqli = new \mysqli( // phpcs:ignore WordPress.DB.RestrictedClasses.mysql__mysqli -- dedicated streaming connection for backup DB dump; $wpdb buffers the full result set (OOM risk)
                 $host,
                 $this->db['user'],
                 $this->db['password'],
@@ -247,13 +247,13 @@ final class DbDumper
                 $socket ?? ''
             );
         } catch (\Throwable $e) {
-            throw new \RuntimeException('connect failed');
+            throw new \RuntimeException('connect failed'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         if ($mysqli->connect_errno) {
-            throw new \RuntimeException('connect failed (' . $mysqli->connect_errno . ')');
+            throw new \RuntimeException('connect failed (' . $mysqli->connect_errno . ')'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         if (!$mysqli->set_charset('utf8mb4')) {
-            throw new \RuntimeException('set_charset utf8mb4 failed');
+            throw new \RuntimeException('set_charset utf8mb4 failed'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
 
         // Consistent snapshot — same property as ifsnop's --single-transaction.
@@ -275,7 +275,7 @@ final class DbDumper
         if ($gz === false) {
             @$mysqli->rollback();
             @$mysqli->close();
-            throw new \RuntimeException('cannot open output path for write');
+            throw new \RuntimeException('cannot open output path for write'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         return $gz;
     }
@@ -362,12 +362,12 @@ final class DbDumper
 
         $result = $mysqli->query("SHOW CREATE TABLE {$safe}");
         if (!$result) {
-            throw new \RuntimeException("SHOW CREATE TABLE {$table} failed");
+            throw new \RuntimeException('SHOW CREATE TABLE ' . esc_html($table) . ' failed'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         $row = $result->fetch_array(MYSQLI_NUM);
         $result->free();
         if (!is_array($row) || !isset($row[1])) {
-            throw new \RuntimeException("SHOW CREATE TABLE {$table} returned no row");
+            throw new \RuntimeException('SHOW CREATE TABLE ' . esc_html($table) . ' returned no row'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         gzwrite($gz, $row[1] . ";\n\n");
     }
@@ -396,7 +396,7 @@ final class DbDumper
         // SELECT, so this is fine.
         $result = $mysqli->query("SELECT * FROM " . $this->backtick($table), MYSQLI_USE_RESULT);
         if (!$result) {
-            throw new \RuntimeException("SELECT from {$table} failed");
+            throw new \RuntimeException('SELECT from ' . esc_html($table) . ' failed'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
 
         $totalRows  = 0;
@@ -440,7 +440,7 @@ final class DbDumper
     {
         $result = $mysqli->query("SHOW COLUMNS FROM " . $this->backtick($table));
         if (!$result) {
-            throw new \RuntimeException("SHOW COLUMNS for {$table} failed");
+            throw new \RuntimeException('SHOW COLUMNS for ' . esc_html($table) . ' failed'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         $out = [];
         while ($row = $result->fetch_assoc()) {

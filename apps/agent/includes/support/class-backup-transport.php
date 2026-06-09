@@ -189,6 +189,7 @@ class BackupTransport
         }
 
         $concurrency = max(1, $concurrency);
+        // phpcs:disable WordPress.WP.AlternativeFunctions.curl_curl_multi_init, WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt, WordPress.WP.AlternativeFunctions.curl_curl_multi_add_handle, WordPress.WP.AlternativeFunctions.curl_curl_multi_exec, WordPress.WP.AlternativeFunctions.curl_curl_multi_select, WordPress.WP.AlternativeFunctions.curl_curl_multi_info_read, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_multi_remove_handle, WordPress.WP.AlternativeFunctions.curl_curl_close, WordPress.WP.AlternativeFunctions.curl_curl_multi_close -- concurrent presigned-PUT chunk uploader; WP_Http has no multi-handle concurrency for streamed multi-GB uploads
         $multi       = curl_multi_init();
 
         // Map of curl handle (int resource id) => hash, plus the bytes we must
@@ -286,6 +287,7 @@ class BackupTransport
         } while ($running > 0 || $inFlight > 0);
 
         curl_multi_close($multi);
+        // phpcs:enable WordPress.WP.AlternativeFunctions.curl_curl_multi_init, WordPress.WP.AlternativeFunctions.curl_curl_init, WordPress.WP.AlternativeFunctions.curl_curl_setopt, WordPress.WP.AlternativeFunctions.curl_curl_multi_add_handle, WordPress.WP.AlternativeFunctions.curl_curl_multi_exec, WordPress.WP.AlternativeFunctions.curl_curl_multi_select, WordPress.WP.AlternativeFunctions.curl_curl_multi_info_read, WordPress.WP.AlternativeFunctions.curl_curl_getinfo, WordPress.WP.AlternativeFunctions.curl_curl_multi_remove_handle, WordPress.WP.AlternativeFunctions.curl_curl_close, WordPress.WP.AlternativeFunctions.curl_curl_multi_close
 
         // Defensive: any hash we never recorded a result for is a failure.
         foreach ($pending as $hash => $_url) {
@@ -409,7 +411,7 @@ class BackupTransport
      */
     private function hostOf(string $url): string
     {
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         if (!is_array($parts) || !isset($parts['host']) || !is_string($parts['host'])) {
             return '';
         }
@@ -459,7 +461,7 @@ class BackupTransport
      */
     private function pathOf(string $url): string
     {
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         if (!is_array($parts) || !isset($parts['path']) || !is_string($parts['path']) || $parts['path'] === '') {
             return '';
         }

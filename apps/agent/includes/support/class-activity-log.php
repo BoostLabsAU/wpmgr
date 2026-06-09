@@ -812,6 +812,7 @@ final class ActivityLog
             // CP can re-derive the same preimage from the persisted/shipped row.
             $metaJson = self::encodeMeta($meta);
 
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct insert on plugin-owned table; no core helper exists
             $wpdb->insert(
                 $table,
                 [
@@ -917,15 +918,16 @@ final class ActivityLog
             if (get_option($name, null) === null && function_exists('add_option')) {
                 add_option($name, '0', '', 'no');
             }
-            $updated = $wpdb->query(
+            $updated = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct atomic-increment on core options table; $optTable is $wpdb->options (trusted property); correctness requires a live write
                 $wpdb->prepare(
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                     "UPDATE {$optTable} SET option_value = option_value + 1 WHERE option_name = %s",
                     $name
                 )
             );
             if (is_int($updated) && $updated > 0) {
-                $val = $wpdb->get_var(
-                    $wpdb->prepare("SELECT option_value FROM {$optTable} WHERE option_name = %s", $name)
+                $val = $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct read of the incremented value; $optTable is $wpdb->options; no caching (stale value would break sequencing)
+                    $wpdb->prepare("SELECT option_value FROM {$optTable} WHERE option_name = %s", $name) // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                 );
                 // Bust the option cache so subsequent get_option sees the new value.
                 if (function_exists('wp_cache_delete')) {
@@ -957,6 +959,7 @@ final class ActivityLog
             return self::GENESIS_HASH;
         }
         $table = $wpdb->prefix . self::TABLE;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct read on plugin-owned table; identifier is prefix+constant; no caching (live chain-head needed)
         $hash = $wpdb->get_var("SELECT this_hash FROM {$table} ORDER BY seq DESC LIMIT 1");
         if (is_string($hash) && strlen($hash) === 64) {
             return $hash;
@@ -978,6 +981,7 @@ final class ActivityLog
             return;
         }
         $table = $wpdb->prefix . self::TABLE;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct count on plugin-owned table; identifier is prefix+constant; live read needed
         $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
         if ($count <= self::ROW_CAP) {
             return;
@@ -988,15 +992,17 @@ final class ActivityLog
         // rows are unshipped and we are over cap, fall back to oldest overall
         // to bound table growth (rare; means the CP has been unreachable a
         // very long time).
-        $deleted = $wpdb->query(
+        $deleted = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; row-cap enforcement requires a live write
             $wpdb->prepare(
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                 "DELETE FROM {$table} WHERE shipped = 1 ORDER BY id ASC LIMIT %d",
                 $batch
             )
         );
         if ((!is_int($deleted) || $deleted === 0)) {
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete fallback on plugin-owned table; row-cap enforcement
                 $wpdb->prepare(
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                     "DELETE FROM {$table} ORDER BY id ASC LIMIT %d",
                     $batch
                 )
@@ -1023,6 +1029,7 @@ final class ActivityLog
             return [];
         }
         $table = $wpdb->prefix . self::TABLE;
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned table; identifier is prefix+constant; no caching (live unshipped rows needed)
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT seq, event_type, object_type, object_id, object_label,
@@ -1036,6 +1043,7 @@ final class ActivityLog
             ),
             ARRAY_A
         );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         if (!is_array($rows)) {
             return [];
         }
@@ -1085,7 +1093,8 @@ final class ActivityLog
         $table = $wpdb->prefix . self::TABLE;
         $ints = array_map('intval', $seqs);
         $placeholders = implode(',', array_fill(0, count($ints), '%d'));
-        $sql = "UPDATE {$table} SET shipped = 1 WHERE seq IN ({$placeholders})";
+        $sql = "UPDATE {$table} SET shipped = 1 WHERE seq IN ({$placeholders})"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- identifier is prefix+constant; placeholders are in the dynamically-built IN() list, filled via argument spread
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- direct update on plugin-owned table; $sql is prepared on the next line; no caching needed
         $wpdb->query($wpdb->prepare($sql, ...$ints));
     }
 
@@ -1139,14 +1148,14 @@ final class ActivityLog
 
         if (isset($_SERVER['HTTP_X_FORWARDED_FOR']) && is_string($_SERVER['HTTP_X_FORWARDED_FOR'])) {
             // First hop is the original client; the rest are proxies.
-            $parts = explode(',', (string) $_SERVER['HTTP_X_FORWARDED_FOR']);
+            $parts = explode(',', sanitize_text_field(wp_unslash($_SERVER['HTTP_X_FORWARDED_FOR'])));
             $candidates[] = trim((string) ($parts[0] ?? ''));
         }
         if (isset($_SERVER['HTTP_X_REAL_IP']) && is_string($_SERVER['HTTP_X_REAL_IP'])) {
-            $candidates[] = trim((string) $_SERVER['HTTP_X_REAL_IP']);
+            $candidates[] = trim(sanitize_text_field(wp_unslash($_SERVER['HTTP_X_REAL_IP'])));
         }
         if (isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR'])) {
-            $candidates[] = trim((string) $_SERVER['REMOTE_ADDR']);
+            $candidates[] = trim(sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR'])));
         }
 
         foreach ($candidates as $ip) {

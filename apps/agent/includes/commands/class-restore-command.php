@@ -292,8 +292,9 @@ final class RestoreCommand implements CommandInterface
         $cutoff = $now - self::DEDUP_WINDOW_SECONDS;
 
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read (anti-replay/locking)
         $existing = $wpdb->get_row($wpdb->prepare(
-            "SELECT pid, started_at FROM {$table} WHERE snapshot_id = %s AND restore_id = %s",
+            "SELECT pid, started_at FROM {$table} WHERE snapshot_id = %s AND restore_id = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             $snapshotId,
             $restoreId
         ));
@@ -302,6 +303,7 @@ final class RestoreCommand implements CommandInterface
         }
         if (is_object($existing)) {
             // @phpstan-ignore-next-line
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists
             $wpdb->update(
                 $table,
                 ['pid' => getmypid() ?: 0, 'started_at' => $now],
@@ -312,6 +314,7 @@ final class RestoreCommand implements CommandInterface
             return true;
         }
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct query on plugin-owned table; no core $wpdb helper exists
         $inserted = $wpdb->insert(
             $table,
             [
@@ -333,6 +336,7 @@ final class RestoreCommand implements CommandInterface
         }
         $table = $wpdb->prefix . Schema::BACKUP_RESTORE_RUNS_TABLE;
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists
         @$wpdb->delete($table, ['snapshot_id' => $snapshotId, 'restore_id' => $restoreId], ['%s', '%s']);
     }
 
@@ -362,16 +366,16 @@ final class RestoreCommand implements CommandInterface
     {
         $base = WP_CONTENT_DIR . '/wpmgr-agent/restores';
         if (!is_dir($base) && !wp_mkdir_p($base) && !is_dir($base)) {
-            throw new \RuntimeException('cannot create restore scratch base: ' . $base);
+            throw new \RuntimeException('cannot create restore scratch base: ' . esc_html($base));
         }
         // Short-id to keep the dir name reasonable.
         $clean = preg_replace('/[^a-f0-9]/i', '', $restoreId) ?? '';
         $short = substr($clean, 0, 12);
         $dir   = $base . DIRECTORY_SEPARATOR . $snapshotId . '-' . $short;
-        if (!is_dir($dir) && !@mkdir($dir, 0700) && !is_dir($dir)) {
+        if (!is_dir($dir) && !@mkdir($dir, 0700) && !is_dir($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on restore scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
             throw new \RuntimeException('cannot create restore scratch dir');
         }
-        @chmod($dir, 0700);
+        @chmod($dir, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
         return $dir;
     }
 
@@ -392,7 +396,8 @@ final class RestoreCommand implements CommandInterface
         $subState = (string) wp_json_encode(['params' => $runnerParams]);
 
         // @phpstan-ignore-next-line
-        $wpdb->query($wpdb->prepare(
+        $wpdb->query($wpdb->prepare( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core helper exists
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             "INSERT IGNORE INTO {$table}
              (snapshot_id, restore_id, kind, phase, sub_state, started_at, last_progress_at, resume_count, max_resumes)
              VALUES (%s, %s, %s, %s, %s, %d, %d, %d, %d)",
@@ -474,6 +479,7 @@ final class RestoreCommand implements CommandInterface
         if (is_object($wpdb)) {
             try {
                 // @phpstan-ignore-next-line — runtime wpdb seam.
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- connectivity probe on core WP connection; no core helper exists; adding cache would defeat the purpose
                 $probe = $wpdb->get_var('SELECT 1');
                 if ((string) $probe !== '1') {
                     $failures[] = 'DB ping (SELECT 1) returned unexpected: ' . substr((string) $probe, 0, 80);
@@ -499,9 +505,9 @@ final class RestoreCommand implements CommandInterface
             $failures[] = 'WP_CONTENT_DIR is undefined; cannot resolve scratch base';
         } else {
             $parent = dirname($scratchBase);
-            if (!is_dir($scratchBase) && is_dir($parent) && !is_writable($parent)) {
+            if (!is_dir($scratchBase) && is_dir($parent) && !is_writable($parent)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                 $failures[] = 'scratch base parent not writable: ' . $parent;
-            } elseif (is_dir($scratchBase) && !is_writable($scratchBase)) {
+            } elseif (is_dir($scratchBase) && !is_writable($scratchBase)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                 $failures[] = 'scratch base not writable: ' . $scratchBase;
             }
 
@@ -540,6 +546,7 @@ final class RestoreCommand implements CommandInterface
         }
         try {
             // @phpstan-ignore-next-line
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- reads a MySQL system variable; no caching applicable; no core $wpdb helper exists
             $value = $wpdb->get_var('SELECT @@max_allowed_packet');
         } catch (\Throwable $e) {
             return null;
@@ -569,7 +576,8 @@ final class RestoreCommand implements CommandInterface
         ]);
         try {
             // @phpstan-ignore-next-line
-            $wpdb->query($wpdb->prepare(
+            $wpdb->query($wpdb->prepare( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core helper exists
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
                 "INSERT IGNORE INTO {$table}
                  (snapshot_id, restore_id, kind, phase, sub_state, started_at, last_progress_at, resume_count, max_resumes)
                  VALUES (%s, %s, %s, %s, %s, %d, %d, %d, %d)",

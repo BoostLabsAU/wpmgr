@@ -86,7 +86,7 @@ final class Purge
     private function fire(string $hook, array $args = []): void
     {
         if (function_exists('do_action')) {
-            \do_action($hook, ...$args);
+            \do_action($hook, ...$args); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.DynamicHooknameFound -- $hook is always a literal wpmgr_-prefixed action passed by in-class callers
         }
     }
 
@@ -101,9 +101,9 @@ final class Purge
         $urls = [$url];
         $this->fire('wpmgr_purge_urls:before', [$urls]);
 
-        $host = (string) (parse_url($url, PHP_URL_HOST) ?? '');
+        $host = (string) (wp_parse_url($url, PHP_URL_HOST) ?? '');
 
-        // Derive the path component. parse_url() returns NULL for the path when
+        // Derive the path component. wp_parse_url() returns NULL for the path when
         // the URL is just scheme://host with no path (e.g. "https://example.com"
         // or "https://example.com?x=1"). The old "?? $url" fallback then fed the
         // ENTIRE URL in as the path, which normalizePath() mangled into a phantom
@@ -113,7 +113,7 @@ final class Purge
         // nginx/Apache static-fast-path setups). Resolve a host-present-but-
         // path-less URL to the site root ("/"); only fall back to the raw string
         // for a genuinely path-only input like "/blog/".
-        $rawPath = parse_url($url, PHP_URL_PATH);
+        $rawPath = wp_parse_url($url, PHP_URL_PATH);
         if (is_string($rawPath) && $rawPath !== '') {
             $path = $rawPath;
         } elseif ($host !== '') {
@@ -134,7 +134,7 @@ final class Purge
         $glob = @glob($dir . '/*' . CacheKey::EXTENSION);
         if (is_array($glob)) {
             foreach ($glob as $file) {
-                if (@is_file($file) && @unlink($file)) {
+                if (@is_file($file) && wp_delete_file($file)) {
                     $removed++;
                 }
             }
@@ -156,7 +156,7 @@ final class Purge
     public function purgeSite(string $host): int
     {
         if (str_contains($host, '://') || str_contains($host, '/')) {
-            $parsed = (string) (parse_url($host, PHP_URL_HOST) ?? '');
+            $parsed = (string) (wp_parse_url($host, PHP_URL_HOST) ?? '');
             if ($parsed !== '') {
                 $host = $parsed;
             }
@@ -200,7 +200,7 @@ final class Purge
             $this->recursiveRemoveDir($this->cacheRoot);
         }
 
-        $ok = @mkdir($this->cacheRoot, 0o755, true) || @is_dir($this->cacheRoot);
+        $ok = wp_mkdir_p($this->cacheRoot) || @is_dir($this->cacheRoot);
 
         $this->fire('wpmgr_purge_everything:after');
 
@@ -244,7 +244,8 @@ final class Purge
                 $removed += $this->recursiveUnlinkHtml($full);
                 $this->removeIfEmpty($full);
             } elseif (substr($entry, -strlen(CacheKey::EXTENSION)) === CacheKey::EXTENSION) {
-                if (@unlink($full)) {
+                wp_delete_file($full);
+                if (!@is_file($full)) {
                     $removed++;
                 }
             }
@@ -273,10 +274,10 @@ final class Purge
             if (@is_dir($full) && !@is_link($full)) {
                 $this->recursiveRemoveDir($full);
             } else {
-                @unlink($full);
+                wp_delete_file($full);
             }
         }
-        @rmdir($dir);
+        @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived cache dir; WP_Filesystem not initialized
     }
 
     /**
@@ -292,7 +293,7 @@ final class Purge
         }
         $entries = @scandir($dir);
         if (is_array($entries) && count($entries) <= 2) {
-            @rmdir($dir);
+            @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived cache dir; WP_Filesystem not initialized
         }
     }
 

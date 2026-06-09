@@ -126,7 +126,7 @@ final class SizeProbe
         // killed by the push request's max_execution_time (same guard the
         // dedicated cron handler applies in Plugin::runSizeProbe).
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running dirsize walk must not hit max_execution_time; @-guarded, no-op when disabled
         }
 
         try {
@@ -447,7 +447,7 @@ final class SizeProbe
         // Ensure there is no time ceiling on this call (caller has already
         // called set_time_limit(0) in the cron handler, but be explicit).
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running recurse_dirsize walk must not hit max_execution_time; @-guarded, no-op when disabled
         }
 
         $exclude = $this->excludeList();
@@ -479,7 +479,7 @@ final class SizeProbe
             return null;
         }
         try {
-            $bytes = $wpdb->get_var(
+            $bytes = $wpdb->get_var( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- information_schema aggregate size query; no caching (live read required for accurate size probe)
                 "SELECT SUM(data_length + index_length)
                  FROM information_schema.TABLES
                  WHERE table_schema = DATABASE()"

@@ -86,7 +86,7 @@ final class HtaccessInstaller
         // Writability guard: if the directory is not writable AND the file exists
         // AND the file itself is also not writable, we cannot proceed.
         $dir = dirname($path);
-        if (!@is_writable($dir) && @is_file($path) && !@is_writable($path)) {
+        if (!@is_writable($dir) && @is_file($path) && !@is_writable($path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             if (function_exists('update_option')) {
                 update_option(self::OPTION_NGINX_NOTICE, 0, false);
             }
@@ -187,7 +187,7 @@ NGINX;
         if (!isset($_SERVER['SERVER_SOFTWARE']) || !is_string($_SERVER['SERVER_SOFTWARE'])) {
             return false;
         }
-        return str_contains(strtolower($_SERVER['SERVER_SOFTWARE']), 'nginx');
+        return str_contains(strtolower(sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE']))), 'nginx');
     }
 
     // -------------------------------------------------------------------------

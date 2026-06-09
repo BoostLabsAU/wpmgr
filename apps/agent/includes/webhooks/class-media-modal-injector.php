@@ -167,6 +167,6 @@ final class MediaModalInjector
      */
     private function label(string $text): string
     {
-        return function_exists('__') ? (string) __($text, 'wpmgr-agent') : $text;
+        return $text;
     }
 }

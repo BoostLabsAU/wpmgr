@@ -162,11 +162,12 @@ final class Plugin
 
     /**
      * ADR-042 Phase 2 — CP-driven agent self-update. Hooks into the WordPress
-     * plugin-update machinery (site_transient_update_plugins, plugins_api,
-     * upgrader_pre_download, upgrader_source_selection) and enforces the full
-     * security verification chain before any bytes are swapped to disk.
+     * plugin-update machinery and enforces the full security verification chain
+     * before any bytes are swapped to disk. Self-hosted/SaaS builds only.
+     * Null when WPMGR_WPORG_BUILD is true (wp.org distribution build, where
+     * this whole subsystem is excluded and updates come from WordPress.org).
      */
-    private UpdateChecker $updateChecker;
+    private ?UpdateChecker $updateChecker = null;
 
     /**
      * ADR-044 — Auto-optimize on upload. Owns the wp_generate_attachment_metadata
@@ -237,12 +238,15 @@ final class Plugin
         // same jti table is used for manifest replay prevention, which is safe
         // because both use the same single-use semantics and non-overlapping jti
         // namespaces via different issuers).
-        $this->updateChecker = new UpdateChecker(
-            $this->signer,
-            $this->settings,
-            $this->keystore,
-            new ReplayCache()
-        );
+        // Skipped for the wp.org distribution build (WPMGR_WPORG_BUILD constant).
+        if (!defined('WPMGR_WPORG_BUILD') || !WPMGR_WPORG_BUILD) {
+            $this->updateChecker = new UpdateChecker(
+                $this->signer,
+                $this->settings,
+                $this->keystore,
+                new ReplayCache()
+            );
+        }
 
         // ADR-044 — Auto-optimize on upload. The AutoOptimizeUpload instance is
         // constructed BEFORE commands() so the hooks can reference it. The
@@ -519,7 +523,10 @@ final class Plugin
 
         // ADR-042 Phase 2 — bind the CP self-update hooks. Self-gates on
         // isEnrolled() inside UpdateChecker::install(); idempotent (static guard).
-        $this->updateChecker->install();
+        // Skipped for the wp.org distribution build (WPMGR_WPORG_BUILD constant).
+        if ($this->updateChecker !== null) {
+            $this->updateChecker->install();
+        }
 
         // Admin-bar cache purge controls — register on EVERY request, not just
         // admin ones, so the "Purge this page" node can appear on the front-end
@@ -1134,7 +1141,7 @@ final class Plugin
             fastcgi_finish_request();
         }
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         }
         (new SizeProbe())->compute();
     }
@@ -1157,7 +1164,7 @@ final class Plugin
     public function runSizeProbe(): void
     {
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         }
         (new SizeProbe())->compute();
     }
@@ -1544,10 +1551,11 @@ final class Plugin
 
     /**
      * Expose the UpdateChecker so Admin can call checkNow().
+     * Returns null in the wp.org distribution build (WPMGR_WPORG_BUILD).
      *
-     * @return UpdateChecker
+     * @return UpdateChecker|null
      */
-    public function updateChecker(): UpdateChecker
+    public function updateChecker(): ?UpdateChecker
     {
         return $this->updateChecker;
     }

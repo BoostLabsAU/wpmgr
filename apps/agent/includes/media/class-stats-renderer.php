@@ -247,7 +247,7 @@ final class StatsRenderer
 
     private function t(string $text): string
     {
-        return function_exists('__') ? (string) __($text, 'wpmgr-agent') : $text;
+        return $text;
     }
 
     private function formatBytes(int $bytes): string

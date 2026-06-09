@@ -171,7 +171,7 @@ final class DbCleanCommand implements CommandInterface
 
                 // Expand execution budget — cleanup can be slow on large sites.
                 if (function_exists('set_time_limit')) {
-                    @set_time_limit(0);
+                    @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running cleanup loop must not hit max_execution_time; @-guarded, no-op when disabled
                 }
 
                 self::runAsync(
@@ -352,7 +352,7 @@ final class DbCleanCommand implements CommandInterface
             // Warn in the error log when we are approaching the memory limit.
             $memLimit = self::memoryLimitBytes();
             if ($memLimit > 0 && memory_get_usage(true) > (int) ($memLimit * 0.80)) {
-                error_log(sprintf(
+                \WPMgr\Agent\Support\DebugLog::write(sprintf(
                     '[wpmgr] db_clean job %s: memory at %.0f%% after category %s',
                     $jobId,
                     memory_get_usage(true) / $memLimit * 100,
@@ -457,7 +457,7 @@ final class DbCleanCommand implements CommandInterface
 
         if ($keystore !== null) {
             try {
-                $parsed = parse_url($endpoint);
+                $parsed = wp_parse_url($endpoint);
                 $path   = isset($parsed['path']) && is_string($parsed['path']) ? $parsed['path'] : '/agent/v1/db-clean/progress';
                 if (isset($parsed['query']) && is_string($parsed['query']) && $parsed['query'] !== '') {
                     $path .= '?' . $parsed['query'];
@@ -470,7 +470,7 @@ final class DbCleanCommand implements CommandInterface
                 // Sending an unsigned progress push would produce a CP 401 anyway, and
                 // exposes the payload without authentication — skip the POST entirely
                 // and surface the failure in the agent error log for diagnostics.
-                error_log(sprintf(
+                \WPMgr\Agent\Support\DebugLog::write(sprintf(
                     '[wpmgr] db_clean progress signing failed for job %s category %s: %s',
                     $jobId,
                     $category,

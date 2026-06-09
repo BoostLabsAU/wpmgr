@@ -47,6 +47,7 @@ declare(strict_types=1);
 namespace WPMgr\Agent\Commands;
 
 use WPMgr\Agent\Backup\UrlRewriter;
+use WPMgr\Agent\Support\DebugLog;
 
 /**
  * Generic serialization-safe database search-replace with dry-run preview mode.
@@ -149,7 +150,7 @@ final class SearchReplaceCommand implements CommandInterface
         try {
             $result = $this->runReplace($replacements, $dryRun, $tablesAllowlist);
         } catch (\Throwable $e) {
-            error_log('WPMgr SearchReplaceCommand: ' . $e->getMessage());
+            DebugLog::write('WPMgr SearchReplaceCommand: ' . $e->getMessage());
             return ['ok' => false, 'detail' => 'internal error'];
         }
 
@@ -481,10 +482,10 @@ final class SearchReplaceCommand implements CommandInterface
             }
         }
 
-        $mysqli = @new \mysqli($host, $user, $pass, $name, $port, $sock ?? '');
+        $mysqli = @new \mysqli($host, $user, $pass, $name, $port, $sock ?? ''); // phpcs:ignore WordPress.DB.RestrictedClasses.mysql__mysqli -- dedicated streaming connection for search-replace; $wpdb buffers the full result set (OOM risk)
 
         if ($mysqli->connect_errno !== 0) {
-            throw new \RuntimeException('SearchReplaceCommand: DB connect failed: ' . $mysqli->connect_error);
+            throw new \RuntimeException('SearchReplaceCommand: DB connect failed: ' . esc_html((string) $mysqli->connect_error)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
 
         @$mysqli->query("SET SESSION sql_mode = 'ALLOW_INVALID_DATES,NO_AUTO_VALUE_ON_ZERO'");

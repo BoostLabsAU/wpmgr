@@ -93,7 +93,7 @@ final class WpConfigEditor
         if ($path === '' || !@is_file($path)) {
             return false;
         }
-        return @is_writable($path) && @is_writable(dirname($path));
+        return @is_writable($path) && @is_writable(dirname($path)); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
     }
 
     /**
@@ -251,18 +251,18 @@ final class WpConfigEditor
 
         $bytes = @file_put_contents($tmp, $content, LOCK_EX);
         if ($bytes === false) {
-            @unlink($tmp);
+            wp_delete_file($tmp);
             return false;
         }
 
         // Preserve the original file's permissions on the temp file before swap.
         $perms = @fileperms($path);
         if ($perms !== false) {
-            @chmod($tmp, $perms & 0o777);
+            @chmod($tmp, $perms & 0o777); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms; WP_Filesystem would coerce to wider FS_CHMOD_FILE
         }
 
-        if (!@rename($tmp, $path)) {
-            @unlink($tmp);
+        if (!@rename($tmp, $path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
+            wp_delete_file($tmp);
             return false;
         }
 

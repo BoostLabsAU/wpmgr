@@ -317,7 +317,7 @@ final class MediaReferenceIndex
         $batch  = 200;
 
         while (true) {
-            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT ID, post_title, post_content, post_excerpt
                  FROM {$wpdb->posts}
@@ -327,7 +327,7 @@ final class MediaReferenceIndex
                 $batch,
                 $offset
             ), ARRAY_A);
-            // phpcs:enable
+            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 
             if (empty($rows)) {
                 break;
@@ -383,7 +383,7 @@ final class MediaReferenceIndex
         $batch  = 200;
 
         while (true) {
-            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+            // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT ID, post_parent, post_title, post_content, post_excerpt
                  FROM {$wpdb->posts}
@@ -392,7 +392,7 @@ final class MediaReferenceIndex
                 $batch,
                 $offset
             ), ARRAY_A);
-            // phpcs:enable
+            // phpcs:enable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
 
             if (empty($rows)) {
                 break;
@@ -439,6 +439,7 @@ final class MediaReferenceIndex
         global $wpdb;
 
         // Fetch thumbnail_id alongside the post title for proper attribution.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             "SELECT pm.post_id, pm.meta_value, p.post_title
              FROM {$wpdb->postmeta} pm
@@ -446,7 +447,7 @@ final class MediaReferenceIndex
              WHERE pm.meta_key = '_thumbnail_id'
                AND pm.meta_value REGEXP '^[0-9]+$'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($rows as $row) {
             $attachId  = (int)($row['meta_value'] ?? 0);
             $postId    = (int)($row['post_id'] ?? 0);
@@ -465,6 +466,7 @@ final class MediaReferenceIndex
         }
 
         // WooCommerce product gallery (comma-separated IDs).
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             "SELECT pm.post_id, pm.meta_value, p.post_title
              FROM {$wpdb->postmeta} pm
@@ -472,7 +474,7 @@ final class MediaReferenceIndex
              WHERE pm.meta_key = '_product_image_gallery'
                AND pm.meta_value != ''",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($rows as $row) {
             $postId    = (int)($row['post_id'] ?? 0);
             $postTitle = (string)($row['post_title'] ?? '');
@@ -517,6 +519,7 @@ final class MediaReferenceIndex
         ];
 
         foreach ($jsonKeys as $key) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT pm.post_id, pm.meta_value, p.post_title
                  FROM {$wpdb->postmeta} pm
@@ -524,7 +527,7 @@ final class MediaReferenceIndex
                  WHERE pm.meta_key = %s
                    AND pm.meta_value != ''",
                 $key
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
             foreach ($rows as $row) {
                 $postId    = (int)($row['post_id'] ?? 0);
                 $postTitle = (string)($row['post_title'] ?? '');
@@ -544,6 +547,7 @@ final class MediaReferenceIndex
         // braces (the post_content walk above already covers most Divi uses).
         $diviKeys = ['_et_pb_post_hide_nav', 'divi_content'];
         foreach ($diviKeys as $key) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT pm.post_id, pm.meta_value, p.post_title
                  FROM {$wpdb->postmeta} pm
@@ -551,7 +555,7 @@ final class MediaReferenceIndex
                  WHERE pm.meta_key = %s
                    AND pm.meta_value != ''",
                 $key
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
             foreach ($rows as $row) {
                 $postId    = (int)($row['post_id'] ?? 0);
                 $postTitle = (string)($row['post_title'] ?? '');
@@ -570,6 +574,7 @@ final class MediaReferenceIndex
         // WPBakery stores raw shortcode content in post_content; the js_status
         // meta is a flag (not image-bearing). Belt-and-braces URL scan of all
         // WPBakery shortcode meta.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $wpbRows = $wpdb->get_results(
             "SELECT pm.post_id, pm.meta_value, p.post_title
              FROM {$wpdb->postmeta} pm
@@ -577,7 +582,7 @@ final class MediaReferenceIndex
              WHERE pm.meta_key IN ('_wpb_shortcodes_custom_css','_vc_post_settings')
                AND pm.meta_value LIKE '%" . esc_sql($this->uploadsBase) . "%'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($wpbRows as $row) {
             $postId    = (int)($row['post_id'] ?? 0);
             $postTitle = (string)($row['post_title'] ?? '');
@@ -625,6 +630,7 @@ final class MediaReferenceIndex
         //   image, gallery, attachment, thumbnail, photo, logo, icon, bg, avatar, picture
         //
         // Attribution: surface='postmeta', source_id=post ID, detail=meta_key.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $acfRows = $wpdb->get_results(
             "SELECT pm.post_id, CAST(pm.meta_value AS UNSIGNED) AS attach_id, pm.meta_key, p.post_title
              FROM {$wpdb->postmeta} pm
@@ -635,7 +641,7 @@ final class MediaReferenceIndex
              WHERE pm.meta_key NOT LIKE '\_%'
                AND pm.meta_value REGEXP '^[1-9][0-9]{0,9}$'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($acfRows as $row) {
             $id        = (int)($row['attach_id'] ?? 0);
             $postId    = (int)($row['post_id'] ?? 0);
@@ -666,6 +672,7 @@ final class MediaReferenceIndex
         // file path and URLs as part of the restore-anchor data. Scanning it would
         // cause the attachment to "self-reference" via its own optimization record,
         // wrongly marking a genuinely unused optimized image as referenced.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $serialRows = $wpdb->get_col(
             "SELECT meta_value
              FROM {$wpdb->postmeta}
@@ -673,7 +680,7 @@ final class MediaReferenceIndex
                AND meta_key NOT LIKE '\\_wp\\_%'
                AND meta_key NOT LIKE '\\_wpmgr\\_%'
                AND meta_key != 'wpmgr_image_optimization'"
-        );
+        ); // phpcs:enable
         foreach ($serialRows as $raw) {
             $this->extractIdsFromSerialized((string)$raw);
         }
@@ -708,6 +715,7 @@ final class MediaReferenceIndex
         $like = '%' . $wpdb->esc_like($this->uploadsBase) . '%';
 
         while (true) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT pm.post_id, pm.meta_value, p.post_title
                  FROM {$wpdb->postmeta} pm
@@ -719,7 +727,7 @@ final class MediaReferenceIndex
                 'wpmgr_image_optimization',
                 $batch,
                 $offset
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
 
             if (empty($rows)) {
                 break;
@@ -774,7 +782,7 @@ final class MediaReferenceIndex
         // for string values; we repeat the placeholder count to match the key count.
         $placeholders = implode(', ', array_fill(0, count($seoIdKeys), '%s'));
 
-        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results($wpdb->prepare(
             "SELECT pm.post_id, pm.meta_key, pm.meta_value, p.post_title
              FROM {$wpdb->postmeta} pm
@@ -823,7 +831,7 @@ final class MediaReferenceIndex
     {
         global $wpdb;
 
-        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared
+        // phpcs:disable WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             "SELECT o.option_name, CAST(o.option_value AS UNSIGNED) AS attach_id
              FROM {$wpdb->options} o
@@ -867,12 +875,13 @@ final class MediaReferenceIndex
         global $wpdb;
 
         // theme_mods_* rows. One row per active/previously-active theme.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $themeMods = $wpdb->get_results(
             "SELECT option_name, option_value
              FROM {$wpdb->options}
              WHERE option_name LIKE 'theme\\_mods\\_%'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($themeMods as $row) {
             $optName = (string)($row['option_name'] ?? '');
             $val     = (string)($row['option_value'] ?? '');
@@ -942,13 +951,14 @@ final class MediaReferenceIndex
         // Generic broad scan: any option value containing the uploads URL.
         if ($this->uploadsBase !== '') {
             $like = '%' . $wpdb->esc_like($this->uploadsBase) . '%';
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery -- direct query on plugin-owned table; no core $wpdb helper exists; static literal LIKE pattern, no bound value
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT option_name, option_value
                  FROM {$wpdb->options}
                  WHERE option_value LIKE %s
                    AND option_name NOT LIKE 'wpmgr\\_%'",
                 $like
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.LikeWildcardsInQuery
             foreach ($rows as $row) {
                 $optName = (string)($row['option_name'] ?? '');
                 $this->extractFromHtmlAttributed(
@@ -971,6 +981,7 @@ final class MediaReferenceIndex
     {
         global $wpdb;
 
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             "SELECT term_id, meta_key, meta_value
              FROM {$wpdb->termmeta}
@@ -982,7 +993,7 @@ final class MediaReferenceIndex
              )
              AND meta_value REGEXP '^[0-9]+$'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($rows as $row) {
             $id      = (int)($row['meta_value'] ?? 0);
             $termId  = (int)($row['term_id'] ?? 0);
@@ -1002,12 +1013,13 @@ final class MediaReferenceIndex
         // Also broad URL scan in termmeta.
         if ($this->uploadsBase !== '') {
             $like = '%' . $wpdb->esc_like($this->uploadsBase) . '%';
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $urlRows = $wpdb->get_results($wpdb->prepare(
                 "SELECT term_id, meta_value
                  FROM {$wpdb->termmeta}
                  WHERE meta_value LIKE %s",
                 $like
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
             foreach ($urlRows as $row) {
                 $termId = (int)($row['term_id'] ?? 0);
                 $this->extractFromHtmlAttributed(
@@ -1038,13 +1050,14 @@ final class MediaReferenceIndex
         ];
 
         foreach ($metaKeys as $key) {
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $rows = $wpdb->get_results($wpdb->prepare(
                 "SELECT user_id, meta_value
                  FROM {$wpdb->usermeta}
                  WHERE meta_key = %s
                    AND meta_value != ''",
                 $key
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
             foreach ($rows as $row) {
                 $userId = (int)($row['user_id'] ?? 0);
                 $val    = (string)($row['meta_value'] ?? '');
@@ -1072,12 +1085,13 @@ final class MediaReferenceIndex
         // Broad uploads URL scan in usermeta.
         if ($this->uploadsBase !== '') {
             $like = '%' . $wpdb->esc_like($this->uploadsBase) . '%';
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
             $urlRows = $wpdb->get_results($wpdb->prepare(
                 "SELECT user_id, meta_value
                  FROM {$wpdb->usermeta}
                  WHERE meta_value LIKE %s",
                 $like
-            ), ARRAY_A);
+            ), ARRAY_A); // phpcs:enable
             foreach ($urlRows as $row) {
                 $userId = (int)($row['user_id'] ?? 0);
                 $this->extractFromHtmlAttributed(
@@ -1102,6 +1116,7 @@ final class MediaReferenceIndex
         global $wpdb;
 
         // Find all nav_menu_item posts whose object type is 'attachment'.
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching
         $rows = $wpdb->get_results(
             "SELECT pm.post_id, pm.meta_value
              FROM {$wpdb->postmeta} pm
@@ -1112,7 +1127,7 @@ final class MediaReferenceIndex
              WHERE pm.meta_key = '_menu_item_object_id'
                AND pm.meta_value REGEXP '^[0-9]+$'",
             ARRAY_A
-        );
+        ); // phpcs:enable
         foreach ($rows as $row) {
             $menuItemPostId = (int)($row['post_id'] ?? 0);
             $attachId       = (int)($row['meta_value'] ?? 0);

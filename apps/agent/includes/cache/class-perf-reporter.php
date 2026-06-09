@@ -204,7 +204,7 @@ final class PerfReporter
             $wpCacheSet = defined('WP_CACHE') && (bool) constant('WP_CACHE');
 
             $serverSoftware = isset($_SERVER['SERVER_SOFTWARE']) && is_string($_SERVER['SERVER_SOFTWARE'])
-                ? (string) $_SERVER['SERVER_SOFTWARE']
+                ? sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE']))
                 : '';
 
             $configVersion = (int) (function_exists('get_option')

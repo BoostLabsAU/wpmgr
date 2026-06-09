@@ -192,7 +192,7 @@ final class RestoreRunner
      */
     public function run(): string
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running restore loop must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         $currentPhase = self::PHASE_PREFLIGHT;
@@ -327,7 +327,7 @@ final class RestoreRunner
 
             return self::PHASE_COMPLETED;
         } catch (\Throwable $e) {
-            error_log('WPMgr RestoreRunner: phase ' . $currentPhase . ' failed: ' . $e->getMessage());
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: phase ' . $currentPhase . ' failed: ' . $e->getMessage());
 
             // Best-effort: mark failed, drop maintenance, try to clean up
             // tmp DB tables. Failures in the cleanup are swallowed.
@@ -407,8 +407,8 @@ final class RestoreRunner
             // operators reason about when looking at `df -h`.
             throw new \RuntimeException(sprintf(
                 'Not enough free disk. Need ~%s GB, have %s GB. Free up space and retry, or restore to a different mount.',
-                self::formatGb($required),
-                self::formatGb($free)
+                esc_html(self::formatGb($required)),
+                esc_html(self::formatGb($free))
             ));
         }
 
@@ -478,16 +478,16 @@ final class RestoreRunner
             $logical = (string) ($entry['logical_path'] ?? '');
             $chunks  = isset($entry['chunks']) && is_array($entry['chunks']) ? $entry['chunks'] : [];
             if ($logical === '') {
-                throw new \RuntimeException('download_artifacts: entry ' . $i . ' missing logical_path');
+                throw new \RuntimeException('download_artifacts: entry ' . esc_html((string) $i) . ' missing logical_path');
             }
             if (!self::isSafeLogicalPath($logical)) {
-                throw new \RuntimeException('download_artifacts: unsafe logical_path: ' . $logical);
+                throw new \RuntimeException('download_artifacts: unsafe logical_path: ' . esc_html($logical));
             }
 
             $outPath = $this->scratchDir() . DIRECTORY_SEPARATOR . $logical;
             $outDir  = dirname($outPath);
-            if (!is_dir($outDir) && !@mkdir($outDir, 0700, true) && !is_dir($outDir)) {
-                throw new \RuntimeException('download_artifacts: cannot create out dir: ' . $outDir);
+            if (!is_dir($outDir) && !@mkdir($outDir, 0700, true) && !is_dir($outDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+                throw new \RuntimeException('download_artifacts: cannot create out dir: ' . esc_html($outDir));
             }
 
             // Resume policy: which chunks (if any) of this artifact have
@@ -520,7 +520,7 @@ final class RestoreRunner
                         $expectedOffset += (int) $c['size'];
                     }
                 }
-                $handle = @fopen($outPath, 'r+b');
+                $handle = @fopen($outPath, 'r+b'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
                 if ($handle !== false) {
                     // ftruncate to expectedOffset then seek to it, so the next
                     // fwrite appends at exactly the right byte.
@@ -535,10 +535,10 @@ final class RestoreRunner
                 }
             } else {
                 $startChunk = 0;
-                $handle     = @fopen($outPath, 'wb');
+                $handle     = @fopen($outPath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
             }
             if ($handle === false) {
-                throw new \RuntimeException('download_artifacts: cannot open output file: ' . $outPath);
+                throw new \RuntimeException('download_artifacts: cannot open output file: ' . esc_html($outPath));
             }
 
             try {
@@ -570,7 +570,7 @@ final class RestoreRunner
                         ? $age->decryptChunk($bytes)
                         : $bytes;
 
-                    $w = @fwrite($handle, $plain);
+                    $w = @fwrite($handle, $plain); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
                     if ($w === false || $w !== strlen($plain)) {
                         throw new \RuntimeException('download_artifacts: write failed for ' . $logical);
                     }
@@ -606,7 +606,7 @@ final class RestoreRunner
                     }
                 }
             } finally {
-                fclose($handle);
+                fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
 
             $artifactPaths[$logical] = $outPath;
@@ -662,10 +662,10 @@ final class RestoreRunner
         $total = count($paths);
         foreach ($paths as $logical => $abs) {
             if (!is_string($abs) || !is_file($abs)) {
-                throw new \RuntimeException('verify_artifacts: missing artifact on disk: ' . (string) $logical);
+                throw new \RuntimeException('verify_artifacts: missing artifact on disk: ' . esc_html((string) $logical));
             }
             if (@filesize($abs) === 0) {
-                throw new \RuntimeException('verify_artifacts: empty artifact: ' . (string) $logical);
+                throw new \RuntimeException('verify_artifacts: empty artifact: ' . esc_html((string) $logical));
             }
             $count++;
         }
@@ -806,7 +806,7 @@ final class RestoreRunner
                 // ABSPATH not available — skip core extraction (non-fatal: the
                 // backup still contains the core archive; the operator can
                 // manually extract it). Log and continue.
-                error_log('WPMgr RestoreRunner: ABSPATH not available for core extraction — skipping core zip extraction');
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: ABSPATH not available for core extraction — skipping core zip extraction');
             } else {
                 $coreStagingDir = $this->extractCorePartsToStaging($coreZips, $absPath, $restoreId);
             }
@@ -839,10 +839,10 @@ final class RestoreRunner
                         continue;
                     }
                     if (is_file($safePath)) {
-                        if (@unlink($safePath)) {
+                        if (wp_delete_file($safePath) || !file_exists($safePath)) {
                             $tombstonesDeleted++;
                         } else {
-                            error_log('WPMgr RestoreRunner: tombstone unlink failed: ' . $safePath);
+                            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone unlink failed: ' . $safePath);
                             $tombstoneErrors++;
                         }
                     } elseif (is_dir($safePath)) {
@@ -854,7 +854,7 @@ final class RestoreRunner
                         if (!is_dir($safePath)) {
                             $tombstonesDeleted++;
                         } else {
-                            error_log('WPMgr RestoreRunner: tombstone rmdir failed: ' . $safePath);
+                            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone rmdir failed: ' . $safePath);
                             $tombstoneErrors++;
                         }
                     }
@@ -900,7 +900,7 @@ final class RestoreRunner
     private function extractCorePartsToStaging(array $coreZips, string $absPath, string $restoreId): string
     {
         if (!class_exists(\ZipArchive::class)) {
-            error_log('WPMgr RestoreRunner: ext-zip unavailable — cannot extract core parts');
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: ext-zip unavailable — cannot extract core parts');
             return '';
         }
 
@@ -910,8 +910,8 @@ final class RestoreRunner
         }
         $stagingDir = dirname(rtrim($absPath, DIRECTORY_SEPARATOR)) . DIRECTORY_SEPARATOR . '.wpmgr-core-staging-' . $short;
 
-        if (!is_dir($stagingDir) && !@mkdir($stagingDir, 0755, true) && !is_dir($stagingDir)) {
-            error_log('WPMgr RestoreRunner: cannot create core staging dir: ' . $stagingDir);
+        if (!is_dir($stagingDir) && !wp_mkdir_p($stagingDir) && !is_dir($stagingDir)) {
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: cannot create core staging dir: ' . $stagingDir);
             return '';
         }
 
@@ -921,7 +921,7 @@ final class RestoreRunner
             }
             $zip = new \ZipArchive();
             if ($zip->open($zipPath) !== true) {
-                error_log('WPMgr RestoreRunner: cannot open core zip: ' . $zipPath);
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: cannot open core zip: ' . $zipPath);
                 continue;
             }
             for ($i = 0; $i < $zip->numFiles; $i++) {
@@ -931,29 +931,29 @@ final class RestoreRunner
                 }
                 // Sanitize: reject absolute paths, dotdot segments, NUL bytes.
                 if (!self::isSafeLogicalPath($name)) {
-                    error_log('WPMgr RestoreRunner: unsafe core zip entry rejected: ' . substr($name, 0, 120));
+                    \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: unsafe core zip entry rejected: ' . substr($name, 0, 120));
                     continue;
                 }
                 // Directories end with '/' — create them and skip file write.
                 if (substr($name, -1) === '/') {
                     $dir = $stagingDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, rtrim($name, '/'));
                     if (!is_dir($dir)) {
-                        @mkdir($dir, 0755, true);
+                        wp_mkdir_p($dir);
                     }
                     continue;
                 }
                 $destPath = $stagingDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $name);
                 $destDir  = dirname($destPath);
-                if (!is_dir($destDir) && !@mkdir($destDir, 0755, true) && !is_dir($destDir)) {
-                    error_log('WPMgr RestoreRunner: cannot create core staging subdir: ' . $destDir);
+                if (!is_dir($destDir) && !wp_mkdir_p($destDir) && !is_dir($destDir)) {
+                    \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: cannot create core staging subdir: ' . $destDir);
                     continue;
                 }
                 $bytes = $zip->getFromIndex($i);
                 if ($bytes === false) {
-                    error_log('WPMgr RestoreRunner: failed to read core zip entry: ' . $name);
+                    \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: failed to read core zip entry: ' . $name);
                     continue;
                 }
-                @file_put_contents($destPath, $bytes);
+                @file_put_contents($destPath, $bytes); // phpcs:ignore WordPress.WP.AlternativeFunctions.WriteFile.ABSPATHDetected,PluginCheck.CodeAnalysis.WriteFile.ABSPATHDetected -- restore/quarantine engine intentionally writes under ABSPATH (the live WP tree); relocating would defeat the restore
             }
             $zip->close();
         }
@@ -1154,7 +1154,7 @@ final class RestoreRunner
                 )
             );
         } catch (\UnexpectedValueException $e) {
-            error_log('WPMgr RestoreRunner: cannot iterate core staging dir: ' . $e->getMessage());
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: cannot iterate core staging dir: ' . $e->getMessage());
             return;
         }
 
@@ -1166,12 +1166,12 @@ final class RestoreRunner
             $rel  = substr((string) $info->getPathname(), $srcLen);
             $dest = $absPath . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel);
             $dir  = dirname($dest);
-            if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-                error_log('WPMgr RestoreRunner: cannot create ABSPATH subdir during core overlay: ' . $dir);
+            if (!is_dir($dir) && !wp_mkdir_p($dir) && !is_dir($dir)) {
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: cannot create ABSPATH subdir during core overlay: ' . $dir);
                 continue;
             }
-            if (!@copy((string) $info->getPathname(), $dest)) {
-                error_log('WPMgr RestoreRunner: core overlay copy failed: ' . $rel);
+            if (!@copy((string) $info->getPathname(), $dest)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.WriteFile.ABSPATHDetected,PluginCheck.CodeAnalysis.WriteFile.ABSPATHDetected -- restore/quarantine engine intentionally writes under ABSPATH (the live WP tree); relocating would defeat the restore
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: core overlay copy failed: ' . $rel);
             }
         }
     }
@@ -1598,13 +1598,13 @@ final class RestoreRunner
                     }
                     $p = $scratch . DIRECTORY_SEPARATOR . $i;
                     if (is_file($p)) {
-                        @unlink($p);
+                        wp_delete_file($p);
                     } elseif (is_dir($p)) {
                         $this->rrmdir($p);
                     }
                 }
             }
-            @rmdir($scratch);
+            @rmdir($scratch); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
         }
 
         // 2. Old-files disposition. Track 5 — two shapes:
@@ -1652,7 +1652,7 @@ final class RestoreRunner
                             if (is_dir($h)) {
                                 $this->rrmdir($h);
                             } elseif (is_file($h) || is_link($h)) {
-                                @unlink($h);
+                                wp_delete_file($h);
                             }
                         }
                     }
@@ -1728,7 +1728,7 @@ final class RestoreRunner
             // for "wpmgr restore retry" if the restore eventually succeeds
             // (so they know it wasn't a smooth ride). We log host + status +
             // attempt; we NEVER log the presigned URL itself.
-            error_log(sprintf(
+            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                 'WPMgr RestoreRunner: download retry chunk %s[%d] hash=%s attempt=%d/%d host=%s status=%d err=%s next_delay_ms=%d',
                 $logical,
                 $chunkIdx,
@@ -1773,7 +1773,7 @@ final class RestoreRunner
         );
         // Cap at 240 chars to match the saveTaskState last_error column limit
         // and the postProgress phase_detail message budget.
-        throw new \RuntimeException(substr($msg, 0, 240));
+        throw new \RuntimeException(esc_html(substr($msg, 0, 240)));
     }
 
     // ==================================================================
@@ -1788,7 +1788,7 @@ final class RestoreRunner
     private function maintenanceOn(): void
     {
         $root = $this->wpRoot();
-        if ($root === '' || !is_dir($root) || !is_writable($root)) {
+        if ($root === '' || !is_dir($root) || !is_writable($root)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             return;
         }
         $path = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.maintenance';
@@ -1804,7 +1804,7 @@ final class RestoreRunner
         }
         $path = rtrim($root, DIRECTORY_SEPARATOR) . DIRECTORY_SEPARATOR . '.maintenance';
         if (is_file($path)) {
-            @unlink($path);
+            wp_delete_file($path);
         }
     }
 
@@ -1830,9 +1830,9 @@ final class RestoreRunner
                 FROM {$table}
                 WHERE snapshot_id = %s AND restore_id = %s LIMIT 1";
         /** @phpstan-ignore-next-line — $wpdb is a runtime interface. */
-        $prepared = $wpdb->prepare($sql, $this->snapshotId(), $this->restoreId());
+        $prepared = $wpdb->prepare($sql, $this->snapshotId(), $this->restoreId()); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on the preceding line
         /** @phpstan-ignore-next-line */
-        $row = $wpdb->get_row($prepared, ARRAY_A);
+        $row = $wpdb->get_row($prepared, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned table; correctness requires a live read; already prepared above; value is the output of $wpdb->prepare()
 
         if (!is_array($row)) {
             return null;
@@ -1872,7 +1872,7 @@ final class RestoreRunner
                 VALUES (%s, %s, %s, %s, %s, %d, %d, %d, %d)";
         /** @phpstan-ignore-next-line */
         $prepared = $wpdb->prepare(
-            $sql,
+            $sql, // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier validated against information_schema / prefix+constant; values bound via placeholders
             $this->snapshotId(),
             $this->restoreId(),
             $this->kind(),
@@ -1884,7 +1884,7 @@ final class RestoreRunner
             6
         );
         /** @phpstan-ignore-next-line */
-        $wpdb->query($prepared);
+        $wpdb->query($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned table; correctness requires a live read; already prepared above; value is the output of $wpdb->prepare()
     }
 
     /**
@@ -1910,12 +1910,13 @@ final class RestoreRunner
         // Substitute the bad bytes instead, and never persist '{}' over good state.
         $encoded = json_encode($subState, JSON_INVALID_UTF8_SUBSTITUTE | JSON_PARTIAL_OUTPUT_ON_ERROR);
         if ($encoded === false || $encoded === '') {
-            error_log('WPMgr RestoreRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
             return;
         }
         $this->lastDbUpdate = $now;
 
         /** @phpstan-ignore-next-line */
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; correctness requires a live read
         $wpdb->update(
             $table,
             [
@@ -1949,6 +1950,7 @@ final class RestoreRunner
         $this->lastDbUpdate = $now;
 
         /** @phpstan-ignore-next-line */
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; correctness requires a live read
         $wpdb->update(
             $table,
             ['last_progress_at' => $now],
@@ -2001,6 +2003,7 @@ final class RestoreRunner
         if (is_object($wpdb)) {
             $runsTable = $this->prefix() . Schema::BACKUP_RESTORE_RUNS_TABLE;
             /** @phpstan-ignore-next-line */
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; correctness requires a live read
             $wpdb->delete(
                 $runsTable,
                 [
@@ -2022,10 +2025,10 @@ final class RestoreRunner
         if ($dir === '') {
             throw new \RuntimeException('RestoreRunner: scratch_dir is empty');
         }
-        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
-            throw new \RuntimeException('RestoreRunner: cannot create scratch dir: ' . $dir);
+        if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+            throw new \RuntimeException('RestoreRunner: cannot create scratch dir: ' . esc_html($dir));
         }
-        @chmod($dir, 0700);
+        @chmod($dir, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
     }
 
     private function snapshotId(): string
@@ -2220,7 +2223,7 @@ final class RestoreRunner
         }
         // Rule 2: reject absolute paths (must not start with / or \).
         if ($rawPath[0] === '/' || $rawPath[0] === '\\') {
-            error_log('WPMgr RestoreRunner: tombstone path escape attempt (absolute): ' . $rawPath);
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone path escape attempt (absolute): ' . $rawPath);
             return null;
         }
         // Rule 3: reject any '..' or '.' component (split on both / and \).
@@ -2230,13 +2233,13 @@ final class RestoreRunner
         }
         foreach ($parts as $part) {
             if ($part === '..' || $part === '.') {
-                error_log('WPMgr RestoreRunner: tombstone path escape attempt (dot-segment): ' . $rawPath);
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone path escape attempt (dot-segment): ' . $rawPath);
                 return null;
             }
         }
         // Rule 4: reject NUL bytes.
         if (str_contains($rawPath, "\x00")) {
-            error_log('WPMgr RestoreRunner: tombstone path NUL byte rejected: ' . substr($rawPath, 0, 120));
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone path NUL byte rejected: ' . substr($rawPath, 0, 120));
             return null;
         }
         // Rule 5: build candidate path inside staging root.
@@ -2253,7 +2256,7 @@ final class RestoreRunner
         // Catches symlink escapes: a symlink inside staging pointing outside
         // staging would resolve to a path outside the prefix.
         if (!str_starts_with($real . DIRECTORY_SEPARATOR, $stagingRoot . DIRECTORY_SEPARATOR)) {
-            error_log('WPMgr RestoreRunner: tombstone path escape attempt (symlink/resolve): ' . $rawPath);
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr RestoreRunner: tombstone path escape attempt (symlink/resolve): ' . $rawPath);
             return null;
         }
         return $real;
@@ -2292,11 +2295,11 @@ final class RestoreRunner
             }
             $p = $dir . DIRECTORY_SEPARATOR . $i;
             if (is_link($p) || is_file($p)) {
-                @unlink($p);
+                wp_delete_file($p);
             } elseif (is_dir($p)) {
                 $this->rrmdir($p);
             }
         }
-        @rmdir($dir);
+        @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch/snapshot dir; WP_Filesystem not initialized
     }
 }

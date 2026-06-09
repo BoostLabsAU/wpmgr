@@ -274,7 +274,7 @@ final class DbTableActionCommand implements CommandInterface
             return null;
         }
 
-        $result = $this->wpdb->get_var($prepared);
+        $result = $this->wpdb->get_var($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- already prepared on the preceding line; information_schema table-name validation; no caching appropriate
         return is_string($result) && $result !== '' ? $result : null;
     }
 
@@ -330,7 +330,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('OPTIMIZE TABLE ' . $escaped);
+        $result  = $this->wpdb->query('OPTIMIZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             // $wpdb->last_error is a public PROPERTY, not a method, so the old
@@ -346,7 +346,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         // Follow-up ANALYZE TABLE to refresh information_schema statistics.
-        $this->wpdb->query('ANALYZE TABLE ' . $escaped);
+        $this->wpdb->query('ANALYZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         return ['table' => $table, 'status' => 'done', 'detail' => ''];
     }
@@ -364,7 +364,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('REPAIR TABLE ' . $escaped);
+        $result  = $this->wpdb->query('REPAIR TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             // $wpdb->last_error is a public PROPERTY, not a method, so the old
@@ -379,7 +379,7 @@ final class DbTableActionCommand implements CommandInterface
             return ['table' => $table, 'status' => 'error', 'detail' => $lastError];
         }
 
-        $this->wpdb->query('ANALYZE TABLE ' . $escaped);
+        $this->wpdb->query('ANALYZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         return ['table' => $table, 'status' => 'done', 'detail' => ''];
     }
@@ -401,7 +401,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('DROP TABLE IF EXISTS ' . $escaped);
+        $result  = $this->wpdb->query('DROP TABLE IF EXISTS ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             // $wpdb->last_error is a public PROPERTY, not a method, so the old
@@ -438,7 +438,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('TRUNCATE TABLE ' . $escaped);
+        $result  = $this->wpdb->query('TRUNCATE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             // $wpdb->last_error is a public PROPERTY, not a method, so the old
@@ -453,7 +453,7 @@ final class DbTableActionCommand implements CommandInterface
             return ['table' => $table, 'status' => 'error', 'detail' => $lastError];
         }
 
-        $this->wpdb->query('ANALYZE TABLE ' . $escaped);
+        $this->wpdb->query('ANALYZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         return ['table' => $table, 'status' => 'done', 'detail' => ''];
     }
@@ -476,7 +476,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('ANALYZE TABLE ' . $escaped);
+        $result  = $this->wpdb->query('ANALYZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             $lastError = isset($this->wpdb->last_error)
@@ -512,7 +512,7 @@ final class DbTableActionCommand implements CommandInterface
         }
 
         $escaped = '`' . str_replace('`', '', $table) . '`';
-        $result  = $this->wpdb->query('ALTER TABLE ' . $escaped . ' ENGINE=InnoDB');
+        $result  = $this->wpdb->query('ALTER TABLE ' . $escaped . ' ENGINE=InnoDB'); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         if ($result === false) {
             $lastError = isset($this->wpdb->last_error)
@@ -525,7 +525,7 @@ final class DbTableActionCommand implements CommandInterface
 
         // Follow-up ANALYZE TABLE to refresh information_schema statistics after
         // the engine conversion, mirroring the pattern in runOptimize/runRepair.
-        $this->wpdb->query('ANALYZE TABLE ' . $escaped);
+        $this->wpdb->query('ANALYZE TABLE ' . $escaped); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; DDL statement has no bind values
 
         return ['table' => $table, 'status' => 'done', 'detail' => ''];
     }

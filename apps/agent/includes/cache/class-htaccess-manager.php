@@ -96,7 +96,7 @@ final class HtaccessManager
         }
 
         $dir = dirname($path);
-        if (!@is_writable($dir) && @is_file($path) && !@is_writable($path)) {
+        if (!@is_writable($dir) && @is_file($path) && !@is_writable($path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             return false;
         }
 
@@ -155,7 +155,7 @@ final class HtaccessManager
         if (!isset($_SERVER['SERVER_SOFTWARE']) || !is_string($_SERVER['SERVER_SOFTWARE'])) {
             return false;
         }
-        return str_contains(strtolower($_SERVER['SERVER_SOFTWARE']), 'nginx');
+        return str_contains(strtolower(sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE']))), 'nginx'); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- sanitized via sanitize_text_field(wp_unslash())
     }
 
     /**
@@ -168,7 +168,7 @@ final class HtaccessManager
         if (!isset($_SERVER['LSWS_EDITION']) || !is_string($_SERVER['LSWS_EDITION'])) {
             return false;
         }
-        return preg_match('/openlitespeed/i', $_SERVER['LSWS_EDITION']) === 1;
+        return preg_match('/openlitespeed/i', sanitize_text_field(wp_unslash($_SERVER['LSWS_EDITION']))) === 1; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- sanitized via sanitize_text_field(wp_unslash())
     }
 
     // -------------------------------------------------------------------------

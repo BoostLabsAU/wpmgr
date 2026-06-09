@@ -386,7 +386,7 @@ final class AutologinCommand implements CommandInterface
             wp_set_auth_cookie($userId, false, function_exists('is_ssl') ? is_ssl() : false);
         }
         if (function_exists('do_action')) {
-            do_action('wp_login', $userLogin, $user);
+            do_action('wp_login', $userLogin, $user); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- 'wp_login' is a WordPress core action; must fire unprefixed so 2FA/audit/session plugins observe the login
         }
     }
 
@@ -453,7 +453,7 @@ final class AutologinCommand implements CommandInterface
         // Prefer REMOTE_ADDR from the underlying SAPI; never trust X-Forwarded-For
         // unless an operator has configured a trusted-proxy chain (out of scope).
         $remote = isset($_SERVER['REMOTE_ADDR']) && is_string($_SERVER['REMOTE_ADDR'])
-            ? $_SERVER['REMOTE_ADDR']
+            ? sanitize_text_field(wp_unslash($_SERVER['REMOTE_ADDR']))
             : '';
 
         // Validate as an IP; reject anything else (including spoofed garbage).

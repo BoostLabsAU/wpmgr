@@ -126,7 +126,7 @@ final class CacheRefreshCron
     {
         $host = '';
         if (function_exists('home_url')) {
-            $host = (string) (parse_url((string) home_url('/'), PHP_URL_HOST) ?? '');
+            $host = (string) (wp_parse_url((string) home_url('/'), PHP_URL_HOST) ?? '');
         }
 
         if ($host !== '') {

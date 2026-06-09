@@ -169,7 +169,7 @@ final class MediaQuarantine
         // manifest.json is written to manifests/<id>.json (outside media/).
         $filesDir = $this->mediaRoot . '/' . $manifestId . '/files';
         if (!is_dir($filesDir)) {
-            mkdir($filesDir, 0755, true);
+            wp_mkdir_p($filesDir);
         }
 
         return $manifestId;
@@ -218,10 +218,10 @@ final class MediaQuarantine
             // Ensure destination directory exists.
             $destDir = dirname($dest);
             if (!is_dir($destDir)) {
-                mkdir($destDir, 0755, true);
+                wp_mkdir_p($destDir);
             }
 
-            if (rename($src, $dest)) {
+            if (@rename($src, $dest)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-resume safety
                 // Store both the unresolved original path (restore destination) and
                 // the resolved fragment (quarantine location). The fragment is derived
                 // from the realpath-resolved source, so it always matches the actual
@@ -340,10 +340,10 @@ final class MediaQuarantine
                 // Ensure destination directory exists.
                 $destDir = dirname($normalised);
                 if (!is_dir($destDir)) {
-                    mkdir($destDir, 0755, true);
+                    wp_mkdir_p($destDir);
                 }
 
-                if (rename($src, $normalised)) {
+                if (@rename($src, $normalised)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename,WordPress.WP.AlternativeFunctions.file_system_operations_rename,PluginCheck.CodeAnalysis.WriteFile.ABSPATHDetected -- restore/quarantine engine intentionally writes under ABSPATH (the live WP tree); relocating would defeat the restore
                     $restored++;
                 }
             }
@@ -691,14 +691,14 @@ final class MediaQuarantine
         }
 
         if (!is_dir($this->quarantineRoot)) {
-            mkdir($this->quarantineRoot, 0755, true);
+            wp_mkdir_p($this->quarantineRoot);
         }
         if (!is_dir($this->mediaRoot)) {
-            mkdir($this->mediaRoot, 0755, true);
+            wp_mkdir_p($this->mediaRoot);
         }
         // Manifests directory: outside media/, holds the path-disclosing JSON files.
         if (!is_dir($this->manifestsRoot)) {
-            mkdir($this->manifestsRoot, 0755, true);
+            wp_mkdir_p($this->manifestsRoot);
         }
 
         // Web-access guard (.htaccess) — effective on Apache/LiteSpeed.
@@ -770,7 +770,7 @@ final class MediaQuarantine
         // Remove the manifest JSON from manifests/.
         $jsonPath = $this->manifestsRoot . '/' . $manifestId . '.json';
         if (file_exists($jsonPath)) {
-            @unlink($jsonPath);
+            wp_delete_file($jsonPath);
         }
     }
 
@@ -791,10 +791,10 @@ final class MediaQuarantine
             if (is_dir($path)) {
                 $this->rmdirRecursive($path);
             } else {
-                @unlink($path);
+                wp_delete_file($path);
             }
         }
-        @rmdir($dir);
+        @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived quarantine scratch dir; WP_Filesystem not initialized
     }
 
     /**

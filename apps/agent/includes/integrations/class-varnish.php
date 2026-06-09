@@ -46,10 +46,12 @@ final class Varnish extends Integration
             // A `varnishpass` application marker means Varnish is bypassing the
             // request, so there is nothing cached to purge.
             $app = isset($_SERVER['HTTP_X_APPLICATION'])
+                // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server detection header; value filtered by string-comparison allowlist check
                 ? strtolower((string) $_SERVER['HTTP_X_APPLICATION'])
                 : '';
             return $app !== 'varnishpass';
         }
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server detection header; value used only in string-contains check
         $via = isset($_SERVER['HTTP_VIA']) ? strtolower((string) $_SERVER['HTTP_VIA']) : '';
         return str_contains($via, 'varnish');
     }
@@ -77,7 +79,7 @@ final class Varnish extends Integration
             if ($count++ >= self::MAX_URLS) {
                 break;
             }
-            $path = (string) (parse_url($url, PHP_URL_PATH) ?? '/');
+            $path = (string) (wp_parse_url($url, PHP_URL_PATH) ?? '/');
             if ($path === '') {
                 $path = '/';
             }
@@ -139,13 +141,15 @@ final class Varnish extends Integration
     private function host(): string
     {
         if (isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== '') {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server hostname for loopback Varnish Host header; no output, no state change
             return (string) $_SERVER['HTTP_HOST'];
         }
         if (isset($_SERVER['SERVER_NAME']) && is_string($_SERVER['SERVER_NAME'])) {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server hostname for loopback Varnish Host header; no output, no state change
             return (string) $_SERVER['SERVER_NAME'];
         }
         if (function_exists('home_url')) {
-            return (string) (parse_url((string) \home_url('/'), PHP_URL_HOST) ?? '');
+            return (string) (wp_parse_url((string) \home_url('/'), PHP_URL_HOST) ?? '');
         }
         return '';
     }

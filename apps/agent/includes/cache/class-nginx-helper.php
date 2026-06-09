@@ -37,6 +37,7 @@ final class NginxHelper
         if (!isset($_SERVER['SERVER_SOFTWARE']) || !is_string($_SERVER['SERVER_SOFTWARE'])) {
             return false;
         }
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server value used only for a string-contains detection; no output, no state change
         return str_contains(strtolower($_SERVER['SERVER_SOFTWARE']), 'nginx');
     }
 
@@ -62,48 +63,48 @@ final class NginxHelper
 
         $prefix = '/' . trim($cachePathPrefix, '/');
 
-        return <<<NGINX
-# WPMgr Page Cache — nginx equivalent (add inside your server {} block manually).
-# nginx has no .htaccess; this serve rule must be installed by the operator.
-
-set \$wpmgr_cache "";
-# Only consider the disk cache for anonymous, query-less, cacheable requests.
-if (\$request_method ~ ^(GET|HEAD)\$) { set \$wpmgr_cache "M"; }
-if (\$query_string != "") { set \$wpmgr_cache ""; }
-if (\$http_cookie ~* "wordpress_logged_in|wp-postpass|comment_author|woocommerce_items_in_cart") {
-    set \$wpmgr_cache "";
-}
-if (\$request_uri ~* "/wp-(admin|login|register|comments-post|cron|json)") {
-    set \$wpmgr_cache "";
-}
-
-location / {
-    # Block direct hits on cache files.
-    location ~* {$prefix}/.*\\.html\\.gz\$ { internal; }
-
-    # Serve the pre-gzipped page when a cache file exists and \$wpmgr_cache == "M".
-    if (-f "\$document_root{$prefix}/\$host\$uri/index.html.gz") {
-        set \$wpmgr_cache "\${wpmgr_cache}F";
-    }
-    if (\$wpmgr_cache = "MF") {
-        add_header Content-Encoding gzip;
-        add_header X-WPMgr-Cache HIT;
-        add_header Cache-Control "no-cache, must-revalidate";
-        rewrite ^ {$prefix}/\$host\$uri/index.html.gz break;
-    }
-
-    try_files \$uri \$uri/ /index.php?\$args;
-}
-
-# WPMgr Browser Cache — add inside your server {} block manually.
-# Serves all static assets with a 1-year public cache lifetime.
-# Assets served by WordPress include a ?ver= query string that changes on
-# update, so browsers and CDNs revalidate when the URL changes.
-location ~* \.(css|js|mjs|woff2?|ttf|otf|eot|avif|webp|png|jpe?g|gif|svg|ico|mp4|webm|pdf)$ {
-    expires 1y;
-    add_header Cache-Control "public, max-age=31536000";
-    access_log off;
-}
-NGINX;
+        return implode("\n", [
+            '# WPMgr Page Cache — nginx equivalent (add inside your server {} block manually).',
+            '# nginx has no .htaccess; this serve rule must be installed by the operator.',
+            '',
+            'set $wpmgr_cache "";',
+            '# Only consider the disk cache for anonymous, query-less, cacheable requests.',
+            'if ($request_method ~ ^(GET|HEAD)$) { set $wpmgr_cache "M"; }',
+            'if ($query_string != "") { set $wpmgr_cache ""; }',
+            'if ($http_cookie ~* "wordpress_logged_in|wp-postpass|comment_author|woocommerce_items_in_cart") {',
+            '    set $wpmgr_cache "";',
+            '}',
+            'if ($request_uri ~* "/wp-(admin|login|register|comments-post|cron|json)") {',
+            '    set $wpmgr_cache "";',
+            '}',
+            '',
+            'location / {',
+            '    # Block direct hits on cache files.',
+            '    location ~* ' . $prefix . '/.*\\.html\\.gz$ { internal; }',
+            '',
+            '    # Serve the pre-gzipped page when a cache file exists and $wpmgr_cache == "M".',
+            '    if (-f "$document_root' . $prefix . '/$host$uri/index.html.gz") {',
+            '        set $wpmgr_cache "${wpmgr_cache}F";',
+            '    }',
+            '    if ($wpmgr_cache = "MF") {',
+            '        add_header Content-Encoding gzip;',
+            '        add_header X-WPMgr-Cache HIT;',
+            '        add_header Cache-Control "no-cache, must-revalidate";',
+            '        rewrite ^ ' . $prefix . '/$host$uri/index.html.gz break;',
+            '    }',
+            '',
+            '    try_files $uri $uri/ /index.php?$args;',
+            '}',
+            '',
+            '# WPMgr Browser Cache — add inside your server {} block manually.',
+            '# Serves all static assets with a 1-year public cache lifetime.',
+            '# Assets served by WordPress include a ?ver= query string that changes on',
+            '# update, so browsers and CDNs revalidate when the URL changes.',
+            'location ~* \\.(css|js|mjs|woff2?|ttf|otf|eot|avif|webp|png|jpe?g|gif|svg|ico|mp4|webm|pdf)$ {',
+            '    expires 1y;',
+            '    add_header Cache-Control "public, max-age=31536000";',
+            '    access_log off;',
+            '}',
+        ]);
     }
 }

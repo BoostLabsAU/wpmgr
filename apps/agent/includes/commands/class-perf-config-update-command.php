@@ -158,7 +158,7 @@ final class PerfConfigUpdateCommand implements CommandInterface
     private function addInstallStateFields(array $result): array
     {
         $result['server_software'] = isset($_SERVER['SERVER_SOFTWARE']) && is_string($_SERVER['SERVER_SOFTWARE'])
-            ? (string) $_SERVER['SERVER_SOFTWARE']
+            ? sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE']))
             : '';
 
         $dropin      = new DropinInstaller();

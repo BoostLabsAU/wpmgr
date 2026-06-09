@@ -257,12 +257,12 @@ final class RucssComputeCommand implements CommandInterface
             return false;
         }
 
-        $scheme = strtolower((string) (parse_url($url, PHP_URL_SCHEME) ?? ''));
+        $scheme = strtolower((string) (wp_parse_url($url, PHP_URL_SCHEME) ?? ''));
         if ($scheme !== 'http' && $scheme !== 'https') {
             return false;
         }
 
-        $host = parse_url($url, PHP_URL_HOST);
+        $host = wp_parse_url($url, PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return false;
         }
@@ -280,7 +280,7 @@ final class RucssComputeCommand implements CommandInterface
         if (!function_exists('home_url')) {
             return '';
         }
-        $host = parse_url((string) home_url('/'), PHP_URL_HOST);
+        $host = wp_parse_url((string) home_url('/'), PHP_URL_HOST);
         return is_string($host) ? strtolower($host) : '';
     }
 }

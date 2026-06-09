@@ -119,7 +119,7 @@ final class CacheEnableCommand implements CommandInterface
     {
         // server_software — raw SERVER_SOFTWARE header.
         $result['server_software'] = isset($_SERVER['SERVER_SOFTWARE']) && is_string($_SERVER['SERVER_SOFTWARE'])
-            ? (string) $_SERVER['SERVER_SOFTWARE']
+            ? sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE'])) // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitize_text_field+wp_unslash applied; server-env read-only value reported to CP
             : '';
 
         // dropin_installed — our drop-in is on disk and signed by us.

@@ -193,7 +193,7 @@ final class Settings
             $url = esc_url_raw($url, ['http', 'https']);
         }
 
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         if ($parts === false || !isset($parts['scheme'], $parts['host'])) {
             return '';
         }

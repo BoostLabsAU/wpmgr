@@ -94,7 +94,7 @@ final class DbRestorer
     public function restore(string $sqlGzPath, string $tmpPrefix, string $sourcePrefix, callable $progress): array
     {
         if (!is_file($sqlGzPath)) {
-            throw new \RuntimeException('DbRestorer: dump file missing: ' . $sqlGzPath);
+            throw new \RuntimeException('DbRestorer: dump file missing: ' . esc_html($sqlGzPath)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         if ($tmpPrefix === '' || substr($tmpPrefix, -1) !== '_') {
             throw new \RuntimeException('DbRestorer: tmpPrefix must end with "_"');
@@ -103,7 +103,7 @@ final class DbRestorer
             throw new \RuntimeException('DbRestorer: sourcePrefix empty');
         }
 
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running restore loop must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         $mysqli = $this->connect();
@@ -161,7 +161,7 @@ final class DbRestorer
                         $ok = @$mysqli->query($stmt);
                         if ($ok === false) {
                             // Log-and-continue — permissive per-statement semantics.
-                            error_log(sprintf(
+                            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                                 'WPMgr DbRestorer: statement #%d failed: %s',
                                 $statements + 1,
                                 substr((string) $mysqli->error, 0, 240)
@@ -253,7 +253,7 @@ final class DbRestorer
             throw new \RuntimeException('DbRestorer::swap: empty prefix');
         }
 
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running restore swap loop must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         $mysqli = $this->connect();
@@ -328,7 +328,7 @@ final class DbRestorer
      */
     public function rewriteAllTables(string $tmpPrefix, string $sourcePrefix, array $replacements, array $resume, callable $checkpoint, callable $progress): array
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running URL-rewrite loop must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         $mysqli = $this->connect();
@@ -566,7 +566,7 @@ final class DbRestorer
         if ($primaryKey === '') {
             // No primary key — can't rewrite safely (we'd risk updating the
             // wrong row). Skip; RestoreRunner logs and continues.
-            error_log('WPMgr UrlRewriter: skipping table without PK: ' . $tmpTable);
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr UrlRewriter: skipping table without PK: ' . $tmpTable);
             return $result;
         }
 
@@ -585,7 +585,7 @@ final class DbRestorer
         $rows = @$mysqli->query($sql);
         if ($rows === false) {
             // Surface — runner will catch and translate to a failed phase.
-            throw new \RuntimeException('UrlRewriter: SELECT failed for ' . $tmpTable . ': ' . $mysqli->error);
+            throw new \RuntimeException('UrlRewriter: SELECT failed for ' . esc_html($tmpTable) . ': ' . esc_html((string) $mysqli->error)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
 
         $batch       = '';
@@ -822,9 +822,9 @@ final class DbRestorer
 
         // Suppress mysqli's default exception/warning chatter so we can
         // surface a clean error.
-        $mysqli = @new \mysqli($host, $user, $pass, $name, $port, $sock ?? '');
+        $mysqli = @new \mysqli($host, $user, $pass, $name, $port, $sock ?? ''); // phpcs:ignore WordPress.DB.RestrictedClasses.mysql__mysqli -- dedicated streaming connection for backup DB restore; $wpdb buffers the full result set (OOM risk)
         if ($mysqli->connect_errno) {
-            throw new \RuntimeException('DbRestorer: connect failed: ' . $mysqli->connect_error);
+            throw new \RuntimeException('DbRestorer: connect failed: ' . esc_html((string) $mysqli->connect_error)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
         @$mysqli->set_charset('utf8mb4');
         return $mysqli;

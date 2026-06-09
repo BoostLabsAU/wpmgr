@@ -424,7 +424,7 @@ final class DbCleanup
                   AND ENGINE <> 'InnoDB'
                   AND DATA_FREE > 0";
 
-        $rows = $this->wpdb->get_results($sql, ARRAY_A);
+        $rows = $this->wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- static catalog query against information_schema; no user input; table identifier validated
         if (!is_array($rows) || $rows === []) {
             return ['count' => 0, 'bytes' => 0, 'tables' => []];
         }
@@ -510,8 +510,8 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'get_col')) {
             return ['count' => 0, 'bytes' => 0];
         }
-        $ttSql     = "SELECT term_taxonomy_id FROM {$termTaxonomy} WHERE taxonomy <> 'link_category'";
-        $ttIds     = $this->wpdb->get_col($ttSql);
+        $ttSql     = "SELECT term_taxonomy_id FROM {$termTaxonomy} WHERE taxonomy <> 'link_category'"; // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); no user input in values
+        $ttIds     = $this->wpdb->get_col($ttSql); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- static catalog query; identifier is prefix+constant; no values to prepare
         if (!is_array($ttIds) || $ttIds === []) {
             return ['count' => 0, 'bytes' => 0];
         }
@@ -641,12 +641,12 @@ final class DbCleanup
                     ORDER BY option_name
                     LIMIT %d OFFSET %d";
 
-            $prepared = $this->wpdb->prepare($sql, $transientPat, $siteTransientPat, self::ORPHAN_OPTIONS_PAGE, $offset);
+            $prepared = $this->wpdb->prepare($sql, $transientPat, $siteTransientPat, self::ORPHAN_OPTIONS_PAGE, $offset); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
             if (!is_string($prepared)) {
                 break;
             }
 
-            $rows = $this->wpdb->get_results($prepared, ARRAY_A);
+            $rows = $this->wpdb->get_results($prepared, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
             if (!is_array($rows) || $rows === []) {
                 break; // no more rows
             }
@@ -1183,7 +1183,7 @@ final class DbCleanup
                 WHERE TABLE_SCHEMA = DATABASE()
                 ORDER BY (DATA_LENGTH + INDEX_LENGTH) DESC";
 
-        $rows = $this->wpdb->get_results($sql, ARRAY_A);
+        $rows = $this->wpdb->get_results($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- static catalog query against information_schema; no user input; no values to prepare
         if (!is_array($rows)) {
             return [];
         }
@@ -1710,7 +1710,7 @@ final class DbCleanup
                 FROM information_schema.TABLES
                 WHERE TABLE_SCHEMA = DATABASE()";
 
-        $row = $this->wpdb->get_row($sql, ARRAY_A);
+        $row = $this->wpdb->get_row($sql, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- static catalog query against information_schema; no user input; no values to prepare
         if (!is_array($row)) {
             return [0, 0];
         }
@@ -1737,11 +1737,11 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'prepare') || !method_exists($this->wpdb, 'get_var')) {
             return ['count' => 0, 'capped' => false];
         }
-        $prepared = $this->wpdb->prepare($sql, ...$args);
+        $prepared = $this->wpdb->prepare($sql, ...$args); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
         if (!is_string($prepared)) {
             return ['count' => 0, 'capped' => false];
         }
-        $raw = $this->wpdb->get_var($prepared);
+        $raw = $this->wpdb->get_var($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         $n   = is_numeric($raw) ? (int) $raw : 0;
 
         // Detect cap: the last arg is SCAN_COUNT_CAP for subquery-wrapped forms.
@@ -1977,7 +1977,7 @@ final class DbCleanup
 
         $count = 0;
         foreach ($optimizable as $table) {
-            $this->wpdb->query('OPTIMIZE TABLE `' . str_replace('`', '', $table) . '`');
+            $this->wpdb->query('OPTIMIZE TABLE `' . str_replace('`', '', $table) . '`'); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table identifier validated against information_schema + backtick-escaped; OPTIMIZE TABLE has no placeholder support
             $count++;
         }
 
@@ -2244,13 +2244,13 @@ final class DbCleanup
         }
 
         $prepared = $this->wpdb->prepare(
-            "DELETE FROM {$table} WHERE status = %s",
+            "DELETE FROM {$table} WHERE status = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             $status
         );
         if (!is_string($prepared)) {
             return $this->doneResult(0);
         }
-        $result = $this->wpdb->query($prepared);
+        $result = $this->wpdb->query($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         return $this->doneResult(is_numeric($result) ? (int) $result : 0);
     }
 
@@ -2347,14 +2347,14 @@ final class DbCleanup
                   AND DATA_FREE > 0
                   AND TABLE_NAME IN ($placeholders)";
         /** @var string $prepared */
-        $prepared = $this->wpdb->prepare($sql, $tables);
+        $prepared = $this->wpdb->prepare($sql, $tables); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
         if (!is_string($prepared)) {
             return [];
         }
         if (!method_exists($this->wpdb, 'get_results')) {
             return [];
         }
-        $rows = $this->wpdb->get_results($prepared, ARRAY_A);
+        $rows = $this->wpdb->get_results($prepared, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         if (!is_array($rows)) {
             return [];
         }
@@ -2385,7 +2385,7 @@ final class DbCleanup
         if (!is_string($prepared)) {
             return false;
         }
-        $col = $this->wpdb->get_col($prepared);
+        $col = $this->wpdb->get_col($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on the preceding line; value is output of $wpdb->prepare()
         return is_array($col) && count($col) > 0;
     }
 
@@ -2402,7 +2402,7 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'query')) {
             return 0;
         }
-        $result = $this->wpdb->query($sql);
+        $result = $this->wpdb->query($sql); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- table names from trusted prefix; no user input; intentionally raw for trusted callers
         return is_numeric($result) ? (int) $result : 0;
     }
 
@@ -2436,11 +2436,11 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'prepare') || !method_exists($this->wpdb, 'get_col')) {
             return [];
         }
-        $prepared = $this->wpdb->prepare($sql, ...$args);
+        $prepared = $this->wpdb->prepare($sql, ...$args); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
         if (!is_string($prepared)) {
             return [];
         }
-        $col = $this->wpdb->get_col($prepared);
+        $col = $this->wpdb->get_col($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         if (!is_array($col)) {
             return [];
         }
@@ -2459,11 +2459,11 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'prepare') || !method_exists($this->wpdb, 'get_results')) {
             return [];
         }
-        $prepared = $this->wpdb->prepare($sql, ...$args);
+        $prepared = $this->wpdb->prepare($sql, ...$args); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
         if (!is_string($prepared)) {
             return [];
         }
-        $rows = $this->wpdb->get_results($prepared, ARRAY_A);
+        $rows = $this->wpdb->get_results($prepared, ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         return is_array($rows) ? $rows : [];
     }
 
@@ -2479,11 +2479,11 @@ final class DbCleanup
         if ($this->wpdb === null || !method_exists($this->wpdb, 'prepare') || !method_exists($this->wpdb, 'query')) {
             return 0;
         }
-        $prepared = $this->wpdb->prepare($sql, ...$args);
+        $prepared = $this->wpdb->prepare($sql, ...$args); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
         if (!is_string($prepared)) {
             return 0;
         }
-        $result = $this->wpdb->query($prepared);
+        $result = $this->wpdb->query($prepared); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- already prepared on the preceding line; value is output of $wpdb->prepare()
         return is_numeric($result) ? (int) $result : 0;
     }
 

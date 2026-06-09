@@ -585,7 +585,7 @@ final class DiagnosticsCommand implements CommandInterface
         // Wrap in a try/catch — a corrupted DB connection should not fatal
         // the entire diagnostics run.
         try {
-            $version = $wpdb->get_var('SELECT VERSION()');
+            $version = $wpdb->get_var('SELECT VERSION()'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- diagnostic catalog read; no plugin-owned table; no caching (live version read required)
             if (is_string($version)) {
                 $out['version'] = $version;
             }
@@ -598,7 +598,7 @@ final class DiagnosticsCommand implements CommandInterface
 
             $vars = ['max_allowed_packet', 'innodb_buffer_pool_size', 'innodb_file_per_table', 'wait_timeout', 'max_connections', 'sql_mode', 'character_set_server', 'collation_server'];
             foreach ($vars as $v) {
-                $row = $wpdb->get_row($wpdb->prepare('SHOW VARIABLES LIKE %s', $v), ARRAY_N);
+                $row = $wpdb->get_row($wpdb->prepare('SHOW VARIABLES LIKE %s', $v), ARRAY_N); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- diagnostic server-variable read; no caching (live read required)
                 if (is_array($row) && isset($row[1])) {
                     $out['variables'][$v] = (string) $row[1];
                 }
@@ -647,9 +647,9 @@ final class DiagnosticsCommand implements CommandInterface
 
         return [
             'wp_content_dir'        => $wpContent,
-            'wp_content_writable'   => $wpContent !== '' && is_writable($wpContent),
+            'wp_content_writable'   => $wpContent !== '' && is_writable($wpContent), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             'uploads_dir'           => $uploads,
-            'uploads_writable'      => $uploads !== '' && is_writable($uploads),
+            'uploads_writable'      => $uploads !== '' && is_writable($uploads), // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             'free_bytes'            => $freeBytes,
             'tmp_dir'               => function_exists('get_temp_dir') ? (string) get_temp_dir() : sys_get_temp_dir(),
             'open_basedir'          => (string) ini_get('open_basedir'),
@@ -931,7 +931,7 @@ final class DiagnosticsCommand implements CommandInterface
 
     private function scheme(string $url): string
     {
-        $parts = parse_url($url);
+        $parts = wp_parse_url($url);
         return is_array($parts) && isset($parts['scheme']) ? (string) $parts['scheme'] : '';
     }
 
@@ -1000,7 +1000,7 @@ final class DiagnosticsCommand implements CommandInterface
             'is_flywheel'     => defined('FLYWHEEL_CONFIG_DIR'),
             'is_runcloud'     => defined('RUNCLOUD'),
             'is_cloudways'    => defined('CLOUDWAYS_HOSTING'),
-            'server_software' => isset($_SERVER['SERVER_SOFTWARE']) ? (string) $_SERVER['SERVER_SOFTWARE'] : '',
+            'server_software' => isset($_SERVER['SERVER_SOFTWARE']) ? sanitize_text_field(wp_unslash((string) $_SERVER['SERVER_SOFTWARE'])) : '', // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitize_text_field+wp_unslash applied; server-env read-only value reported to CP
             // M28 fallback: agent-observed egress IP. Empty string when the probe
             // fails or times out — the CP uses its own observed IP in that case.
             'public_ip'       => $this->fetchPublicIp(),

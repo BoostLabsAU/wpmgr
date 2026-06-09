@@ -53,7 +53,7 @@ final class DiskWriter
             if (function_exists('wp_mkdir_p')) {
                 wp_mkdir_p($dir);
             } else {
-                @mkdir($dir, 0755, true);
+                @mkdir($dir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- wp_mkdir_p not available (pre-boot context); fallback for environments without WP functions loaded
             }
             if (!is_dir($dir)) {
                 return false;
@@ -66,18 +66,18 @@ final class DiskWriter
 
         $written = @file_put_contents($tmp, $bytes, LOCK_EX);
         if ($written === false || $written !== strlen($bytes)) {
-            @unlink($tmp);
+            wp_delete_file($tmp);
 
             return false;
         }
 
-        if (!@rename($tmp, $path)) {
-            @unlink($tmp);
+        if (!@rename($tmp, $path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and would leave a corrupt partial file at the live URL
+            wp_delete_file($tmp);
 
             return false;
         }
 
-        @chmod($path, 0644);
+        @chmod($path, 0644); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0644) for web-served optimized image; WP_Filesystem would coerce to wider FS_CHMOD_FILE
 
         return true;
     }
@@ -99,6 +99,6 @@ final class DiskWriter
 
             return;
         }
-        @unlink($path);
+        @unlink($path); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- wp_delete_file not available; fallback for environments without WP functions loaded
     }
 }

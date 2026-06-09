@@ -91,7 +91,7 @@ final class MuPluginInstaller
             // Best-effort create; on a host where the WP user cannot write
             // wp-content/, this returns false and we surface that via
             // diagnostics rather than fatal.
-            if (!@mkdir($muDir, 0755, true) && !is_dir($muDir)) {
+            if (!wp_mkdir_p($muDir) && !is_dir($muDir)) {
                 return false;
             }
         }
@@ -110,7 +110,7 @@ final class MuPluginInstaller
         if ($bytes === false) {
             return false;
         }
-        $written = @file_put_contents($dest, $bytes);
+        $written = @file_put_contents($dest, $bytes); // phpcs:ignore WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite,PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/mu-plugins, a persistent install target outside the plugin folder
         if ($written === false) {
             return false;
         }
@@ -145,7 +145,7 @@ final class MuPluginInstaller
         }
 
         if (!is_dir($muDir)) {
-            if (!@mkdir($muDir, 0755, true) && !is_dir($muDir)) {
+            if (!wp_mkdir_p($muDir) && !is_dir($muDir)) {
                 return false;
             }
         }
@@ -163,7 +163,7 @@ final class MuPluginInstaller
         if ($bytes === false) {
             return false;
         }
-        $written = @file_put_contents($dest, $bytes);
+        $written = @file_put_contents($dest, $bytes); // phpcs:ignore WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite,PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/mu-plugins, a persistent install target outside the plugin folder
         if ($written === false) {
             return false;
         }
@@ -189,7 +189,8 @@ final class MuPluginInstaller
         if (function_exists('delete_option')) {
             delete_option(self::OPTION_WAF_INSTALLED);
         }
-        return (bool) @unlink($dest);
+        wp_delete_file($dest);
+        return !file_exists($dest);
     }
 
     /**
@@ -232,7 +233,8 @@ final class MuPluginInstaller
         if (function_exists('delete_option')) {
             delete_option(self::OPTION_INSTALLED);
         }
-        return (bool) @unlink($dest);
+        wp_delete_file($dest);
+        return !file_exists($dest);
     }
 
     /**

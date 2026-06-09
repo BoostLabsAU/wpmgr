@@ -116,17 +116,17 @@ final class AssetCache
         if (!$this->isUsable()) {
             return false;
         }
-        if (!@is_dir($this->dir) && !@mkdir($this->dir, 0o755, true) && !@is_dir($this->dir)) {
+        if (!@is_dir($this->dir) && !wp_mkdir_p($this->dir) && !@is_dir($this->dir)) {
             return false;
         }
         $path = $this->dir . '/' . $name;
-        $tmp  = $path . '.tmp-' . getmypid() . '-' . mt_rand();
+        $tmp  = $path . '.tmp-' . getmypid() . '-' . wp_rand();
         if (@file_put_contents($tmp, $bytes, LOCK_EX) === false) {
-            @unlink($tmp);
+            wp_delete_file($tmp);
             return false;
         }
-        if (!@rename($tmp, $path)) {
-            @unlink($tmp);
+        if (!@rename($tmp, $path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem temp-file swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-resume safety
+            wp_delete_file($tmp);
             return false;
         }
         return true;

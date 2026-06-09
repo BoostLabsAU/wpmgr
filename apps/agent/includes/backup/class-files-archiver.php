@@ -260,7 +260,7 @@ final class FilesArchiver
 
         $real = realpath($sourceDir);
         if ($real === false || !is_dir($real)) {
-            throw new \RuntimeException('FilesArchiver: sourceDir is not a readable directory: ' . $sourceDir);
+            throw new \RuntimeException('FilesArchiver: sourceDir is not a readable directory: ' . esc_html($sourceDir));
         }
         $this->sourceDir = rtrim($real, DIRECTORY_SEPARATOR);
 
@@ -370,7 +370,7 @@ final class FilesArchiver
         if (!is_file($filesListPath)) {
             return $map;
         }
-        $handle = @fopen($filesListPath, 'rb');
+        $handle = @fopen($filesListPath, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
         if ($handle === false) {
             return $map;
         }
@@ -389,7 +389,7 @@ final class FilesArchiver
             }
             $map[$rel] = ['size' => (int) $size, 'mtime' => (int) $mtime];
         }
-        fclose($handle);
+        fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
         return $map;
     }
 
@@ -432,11 +432,11 @@ final class FilesArchiver
         // Lift caller-imposed time/abort guards. Watchdog handles
         // stall recovery; we want this loop to run as long as the SAPI
         // will let it.
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         @ignore_user_abort(true);
 
-        if (!is_dir($outDir) && !@mkdir($outDir, 0755, true) && !is_dir($outDir)) {
-            throw new \RuntimeException('FilesArchiver: cannot create outDir: ' . $outDir);
+        if (!is_dir($outDir) && !wp_mkdir_p($outDir) && !is_dir($outDir)) {
+            throw new \RuntimeException('FilesArchiver: cannot create outDir: ' . esc_html($outDir));
         }
         $outDir = rtrim((string) realpath($outDir), DIRECTORY_SEPARATOR);
 
@@ -509,9 +509,9 @@ final class FilesArchiver
             }
         }
 
-        $cacheHandle = @fopen($cachePath, 'rb');
+        $cacheHandle = @fopen($cachePath, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
         if ($cacheHandle === false) {
-            throw new \RuntimeException('FilesArchiver: cannot reopen path cache: ' . $cachePath);
+            throw new \RuntimeException('FilesArchiver: cannot reopen path cache: ' . esc_html($cachePath));
         }
 
         // Seek to the requested line by counting newlines.
@@ -523,7 +523,7 @@ final class FilesArchiver
             if ($skipped < $fileIndex) {
                 // Cache shorter than the recorded cursor — should never
                 // happen, but recover by treating as already-done.
-                fclose($cacheHandle);
+                fclose($cacheHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
                 return $this->buildDoneResult($partsCompleted, $partKinds, $totalFiles, $bytesWritten, $progress, null, $tombstonesFile, $tombstonesCount, $filesCarried, $prevMapSize, ($prevMap !== null));
             }
         }
@@ -625,7 +625,7 @@ final class FilesArchiver
             }
         }
 
-        fclose($cacheHandle);
+        fclose($cacheHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
 
         // Close every still-open per-component active part.
         foreach ($compState as $compName => &$state) {
@@ -663,7 +663,7 @@ final class FilesArchiver
         $zip       = new \ZipArchive();
         $openFlags = is_file($partPath) ? \ZipArchive::CREATE : (\ZipArchive::CREATE | \ZipArchive::OVERWRITE);
         if ($zip->open($partPath, $openFlags) !== true) {
-            throw new \RuntimeException('FilesArchiver: cannot open zip part: ' . $partPath);
+            throw new \RuntimeException('FilesArchiver: cannot open zip part: ' . esc_html($partPath));
         }
         $state['zip']                  = $zip;
         $state['part_path']            = $partPath;
@@ -698,7 +698,7 @@ final class FilesArchiver
             // unlink covers that.
             $zip->close();
             if (is_file($partPath)) {
-                @unlink($partPath);
+                wp_delete_file($partPath);
             }
             $state['zip']       = null;
             $state['part_path'] = '';
@@ -706,7 +706,7 @@ final class FilesArchiver
         }
 
         if (!$zip->close()) {
-            throw new \RuntimeException('FilesArchiver: zip close failed for ' . $partPath);
+            throw new \RuntimeException('FilesArchiver: zip close failed for ' . esc_html($partPath));
         }
         $size = (int) @filesize($partPath);
         $state['zip']       = null;
@@ -756,15 +756,15 @@ final class FilesArchiver
         ?string $filesListPath = null,
         ?string $tombstonesPath = null
     ): array {
-        $handle = @fopen($cachePath, 'wb');
+        $handle = @fopen($cachePath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
         if ($handle === false) {
-            throw new \RuntimeException('FilesArchiver: cannot create path cache: ' . $cachePath);
+            throw new \RuntimeException('FilesArchiver: cannot create path cache: ' . esc_html($cachePath));
         }
 
         // files.list sidecar — free to emit since SplFileInfo already has size+mtime.
         $outDir        = dirname($cachePath);
         $flPath        = $filesListPath ?? $outDir . DIRECTORY_SEPARATOR . self::FILES_LIST_NAME;
-        $flHandle      = @fopen($flPath, 'wb');
+        $flHandle      = @fopen($flPath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
         // Non-fatal if we can't open; the backup itself is unaffected.
         if ($flHandle === false) {
             $flHandle = null;
@@ -792,11 +792,11 @@ final class FilesArchiver
                 \RecursiveIteratorIterator::SELF_FIRST
             );
         } catch (\UnexpectedValueException $e) {
-            fclose($handle);
+            fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             if ($flHandle !== null) {
-                fclose($flHandle);
+                fclose($flHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
-            throw new \RuntimeException('FilesArchiver: cannot iterate sourceDir: ' . $e->getMessage(), 0, $e);
+            throw new \RuntimeException('FilesArchiver: cannot iterate sourceDir: ' . esc_html($e->getMessage()), 0, $e); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
         }
 
         /** @var \SplFileInfo $info */
@@ -841,7 +841,7 @@ final class FilesArchiver
                     // Unchanged — skip from paths.cache, but still emit to files.list
                     // so the new snapshot's files.list is a complete picture.
                     if ($flHandle !== null) {
-                        fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n");
+                        fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
                     }
                     $carried++;
                     continue;
@@ -861,16 +861,16 @@ final class FilesArchiver
                 continue;
             }
 
-            fwrite($handle, $component . "\t" . $rel . "\n");
+            fwrite($handle, $component . "\t" . $rel . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
             if ($flHandle !== null) {
-                fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n");
+                fwrite($flHandle, $rel . "\t" . $size . "\t" . $mtime . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
             }
             $count++;
         }
 
-        fclose($handle);
+        fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
         if ($flHandle !== null) {
-            fclose($flHandle);
+            fclose($flHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
         }
 
         // Compute tombstones: prev keys absent from the fresh full-tree walk.
@@ -884,7 +884,7 @@ final class FilesArchiver
                 }
                 // Lazy-open the tombstones file on first deletion found.
                 if ($tbHandle === null) {
-                    $tbHandle = @fopen($tbPath, 'wb');
+                    $tbHandle = @fopen($tbPath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread/fwrite over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
                     if ($tbHandle === false) {
                         $tbHandle = null;
                         // Non-fatal: tombstones.list write failure leaves
@@ -894,12 +894,12 @@ final class FilesArchiver
                     }
                     $tombstonesFile = $tbPath;
                 }
-                fwrite($tbHandle, $prevRel . "\n");
+                fwrite($tbHandle, $prevRel . "\n"); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
                 $tombstonesCount++;
             }
 
             if ($tbHandle !== null) {
-                fclose($tbHandle);
+                fclose($tbHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
         }
 

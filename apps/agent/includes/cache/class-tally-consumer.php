@@ -93,13 +93,13 @@ final class TallyConsumer
 
             // Atomically rename so concurrent drop-in appends start a fresh file.
             $consuming = $filePath . '.consuming';
-            if (!@rename($filePath, $consuming)) {
+            if (!@rename($filePath, $consuming)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-resume safety
                 // Another process may have grabbed it; skip safely.
                 continue;
             }
 
             $count = $this->countLines($consuming);
-            @unlink($consuming);
+            wp_delete_file($consuming);
 
             if ($kind === 'hit') {
                 $hits  += $count;
