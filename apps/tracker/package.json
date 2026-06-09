@@ -4,12 +4,18 @@
   "private": true,
   "type": "module",
   "license": "MIT",
-  "description": "MIT-licensed Core Web Vitals tracker (V1)",
-  "main": "src/index.ts",
+  "description": "MIT-licensed Core Web Vitals tracker (V1). Bundles Google web-vitals (Apache-2.0) into a single IIFE.",
   "scripts": {
-    "build": "echo 'tracker build wired in V1 (M9-area)'",
-    "lint": "echo 'noop'",
-    "typecheck": "echo 'noop'",
-    "test": "echo 'noop'"
+    "build": "node build.mjs",
+    "lint": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "echo 'no unit tests for the tracker bundle'"
+  },
+  "dependencies": {
+    "web-vitals": "^4.2.4"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.4",
+    "typescript": "^5.6.3"
   }
 }

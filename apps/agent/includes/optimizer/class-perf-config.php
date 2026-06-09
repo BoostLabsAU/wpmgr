@@ -183,6 +183,38 @@ final class PerfConfig
     /** @var bool Cap stored post revisions. */
     public bool $bloatPostRevisionsControl;
 
+    // -- Real User Monitoring (RUM) ----------------------------------------
+    /**
+     * Whether the RUM beacon collector should be injected into anonymous
+     * cacheable pages for this site. DEFAULT-OFF. The CP pushes this flag
+     * via the perf.config.update command when the operator opts in.
+     */
+    public bool $rumEnabled;
+
+    /**
+     * Client-side sample rate delivered by the CP [0.0, 1.0].
+     * 1.0 = beacon every page load. 0.0 = never beacon.
+     * DEFAULT: 1.0 (100 % sampling; the server re-applies an authoritative
+     * random sample as a secondary gate, independent of this value).
+     */
+    public float $rumSampleRate;
+
+    /**
+     * Plaintext public beacon key baked into the cached HTML.
+     * The CP stores only its SHA-256 hash; the plaintext is delivered
+     * here on the perf-config push and is NOT persisted server-side.
+     * '' when RUM is off or the key has not yet been generated.
+     */
+    public string $rumBeaconKey;
+
+    /**
+     * Full ingest endpoint URL (e.g. https://cp.example.com/rum/ingest).
+     * Derived from the known CP base URL by the PerfConfig constructor so
+     * the agent does not need a second option read for the CP URL.
+     * '' when the CP URL is unknown or RUM is off.
+     */
+    public string $rumIngestUrl;
+
     // -- WooCommerce cacheable-session (issue #169) -----------------------
     /**
      * When true, anonymous WooCommerce shoppers who hold only a cart or session
@@ -259,6 +291,15 @@ final class PerfConfig
 
         $this->wooCacheableSession   = (bool) ($data['woo_cacheable_session'] ?? false);
 
+        // RUM (Real User Monitoring).
+        $this->rumEnabled     = (bool) ($data['rum_enabled'] ?? false);
+        $this->rumSampleRate  = self::clampFloat($data['rum_sample_rate'] ?? 1.0, 0.0, 1.0);
+        $this->rumBeaconKey   = is_string($data['rum_beacon_key'] ?? null) ? (string) $data['rum_beacon_key'] : '';
+        // Derive the ingest URL from the CP base URL stored in wp-options so the
+        // cached HTML always points to the correct CP endpoint without the
+        // PerfConfig needing its own separate CP-URL option read.
+        $this->rumIngestUrl   = self::deriveIngestUrl($data['rum_ingest_url'] ?? '');
+
         // Preload tuning (Task #171). Clamp (never reject) to the frozen bounds.
         $this->preloadConcurrency = self::clampInt($data['preload_concurrency'] ?? 1, 1, 4);
         $this->preloadDelayMs     = self::clampInt($data['preload_delay_ms'] ?? 500, 0, 10000);
@@ -298,7 +339,8 @@ final class PerfConfig
             || $this->youtubePlaceholder
             || $this->selfHostGravatars
             || $this->cdn
-            || $this->cacheLinkPrefetch;
+            || $this->cacheLinkPrefetch
+            || $this->rumEnabled;
     }
 
     /**
@@ -368,6 +410,10 @@ final class PerfConfig
             'bloat_heartbeat_control'      => $this->bloatHeartbeatControl,
             'bloat_post_revisions_control' => $this->bloatPostRevisionsControl,
             'woo_cacheable_session'        => $this->wooCacheableSession,
+            'rum_enabled'                  => $this->rumEnabled,
+            'rum_sample_rate'              => $this->rumSampleRate,
+            'rum_beacon_key'               => $this->rumBeaconKey,
+            'rum_ingest_url'               => $this->rumIngestUrl,
             'preload_concurrency'          => $this->preloadConcurrency,
             'preload_delay_ms'             => $this->preloadDelayMs,
             'preload_batch_size'           => $this->preloadBatchSize,
@@ -464,6 +510,46 @@ final class PerfConfig
             return $max;
         }
         return $v;
+    }
+
+    /**
+     * Derive the RUM ingest URL from the CP-pushed value or from the stored
+     * CP base URL option. Preference order:
+     *
+     *   1. The CP explicitly pushes 'rum_ingest_url' in the perf-config payload
+     *      (canonical; no guesswork needed).
+     *   2. When the CP does not supply it, attempt to derive it from the
+     *      stored control-plane base URL (wpmgr_agent_cp_url) by appending
+     *      '/rum/ingest'.
+     *
+     * Returns '' when neither source produces a valid http(s) URL so the
+     * RumInjector can skip injection rather than baking a broken URL into HTML.
+     *
+     * @param mixed $pushed Value from the CP payload (may be '' or absent).
+     * @return string
+     */
+    private static function deriveIngestUrl($pushed): string
+    {
+        // 1. CP-supplied explicit URL (preferred).
+        if (is_string($pushed) && $pushed !== '') {
+            $clean = trim($pushed);
+            if (str_starts_with($clean, 'http://') || str_starts_with($clean, 'https://')) {
+                return $clean;
+            }
+        }
+
+        // 2. Derive from the stored CP base URL.
+        if (function_exists('get_option')) {
+            $base = get_option('wpmgr_agent_cp_url', '');
+            if (is_string($base) && $base !== '') {
+                $base = rtrim($base, '/');
+                if (str_starts_with($base, 'http://') || str_starts_with($base, 'https://')) {
+                    return $base . '/rum/ingest';
+                }
+            }
+        }
+
+        return '';
     }
 
     /**

@@ -17,7 +17,7 @@ const advanceBackupScheduleRun = `-- name: AdvanceBackupScheduleRun :one
 UPDATE backup_schedules
 SET last_run_at = now(), next_run_at = $3, updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, next_run_at, last_run_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, notify_on_completion, notify_recipients, backup_components, exclude_paths, exclude_extensions, exclude_file_size_mb, include_core, next_run_at, last_run_at, created_at, updated_at
 `
 
 type AdvanceBackupScheduleRunParams struct {
@@ -47,6 +47,15 @@ func (q *Queries) AdvanceBackupScheduleRun(ctx context.Context, arg AdvanceBacku
 		&i.DayOfMonth,
 		&i.FrequencyHours,
 		&i.KeepLast,
+		&i.IncrementalEnabled,
+		&i.BaseWindowDays,
+		&i.NotifyOnCompletion,
+		&i.NotifyRecipients,
+		&i.BackupComponents,
+		&i.ExcludePaths,
+		&i.ExcludeExtensions,
+		&i.ExcludeFileSizeMb,
+		&i.IncludeCore,
 		&i.NextRunAt,
 		&i.LastRunAt,
 		&i.CreatedAt,
@@ -63,7 +72,7 @@ SET status = 'completed',
     finished_at = now(),
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at
 `
 
 type CompleteBackupSnapshotParams struct {
@@ -93,10 +102,20 @@ func (q *Queries) CompleteBackupSnapshot(ctx context.Context, arg CompleteBackup
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -108,7 +127,7 @@ const createBackupSnapshot = `-- name: CreateBackupSnapshot :one
 
 INSERT INTO backup_snapshots (tenant_id, site_id, created_by, kind, status, age_recipient)
 VALUES ($1, $2, $3, $4, 'pending', $5)
-RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at
 `
 
 type CreateBackupSnapshotParams struct {
@@ -145,10 +164,20 @@ func (q *Queries) CreateBackupSnapshot(ctx context.Context, arg CreateBackupSnap
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -223,8 +252,9 @@ type DecrementChunkRefcountRow struct {
 	Blake3   string `json:"blake3"`
 }
 
-// Decrements but never below zero. Returns the new refcount + s3_key so the GC
-// job can delete the object from storage when the count reaches zero.
+// DEPRECATED (ADR-050): refcount is observability-only post-mark-and-sweep and
+// is NEVER consulted for a delete. Retained only so the generated querier keeps
+// compiling; the GC delete path no longer calls it.
 func (q *Queries) DecrementChunkRefcount(ctx context.Context, arg DecrementChunkRefcountParams) (DecrementChunkRefcountRow, error) {
 	row := q.db.QueryRow(ctx, decrementChunkRefcount, arg.TenantID, arg.Blake3)
 	var i DecrementChunkRefcountRow
@@ -260,8 +290,11 @@ type DeleteOrphanChunkParams struct {
 	Blake3   string    `json:"blake3"`
 }
 
-// Deletes a chunk row only if its refcount is zero (the object was already
-// removed from storage by the GC job). Tenant-scoped.
+// DEPRECATED (ADR-050): the refcount==0 gate is unsound for incremental dedup
+// (refcount counts ORIGIN refs, not live refs). The mark-and-sweep pass deletes
+// chunks by reachability + grace floor instead (see ListChunksForSweep /
+// DeleteSweptChunk below, implemented as raw SQL in repo.go). Retained only so
+// the generated querier keeps compiling.
 func (q *Queries) DeleteOrphanChunk(ctx context.Context, arg DeleteOrphanChunkParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteOrphanChunk, arg.TenantID, arg.Blake3)
 	if err != nil {
@@ -277,7 +310,7 @@ SET status = 'failed',
     finished_at = now(),
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at
 `
 
 type FailBackupSnapshotParams struct {
@@ -301,10 +334,20 @@ func (q *Queries) FailBackupSnapshot(ctx context.Context, arg FailBackupSnapshot
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -343,7 +386,8 @@ func (q *Queries) GetBackupChunk(ctx context.Context, arg GetBackupChunkParams) 
 
 const getBackupScheduleForSite = `-- name: GetBackupScheduleForSite :one
 
-SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
+
+SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, notify_on_completion, notify_recipients, backup_components, exclude_paths, exclude_extensions, exclude_file_size_mb, include_core, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
 WHERE tenant_id = $1 AND site_id = $2
 `
 
@@ -352,6 +396,48 @@ type GetBackupScheduleForSiteParams struct {
 	SiteID   uuid.UUID `json:"site_id"`
 }
 
+// ADR-050 MARK-AND-SWEEP retention GC. These are implemented as raw tx.Query /
+// tx.Exec in repo.go (matching the m44/m46 raw-SQL precedent) rather than
+// regenerating sqlc; the canonical statements are documented here.
+//
+// m47 data-loss fix: a chunk's deletion boundary is GREATEST(created_at,
+// last_referenced_at), not created_at alone. The dedup oracle (the
+// ExistingChunkHashes path PresignChunks relies on) bumps last_referenced_at =
+// now() for every chunk it reports as already-stored, so an OLD chunk an
+// in-flight backup re-references via tenant-global dedup is protected even
+// though its created_at is ancient and its last completed referrer expired this
+// run.
+//
+// TouchExistingChunks (dedup oracle — read + touch in ONE statement):
+//
+//	UPDATE backup_chunks
+//	   SET last_referenced_at = now(), updated_at = now()
+//	 WHERE tenant_id = $1 AND blake3 = ANY($2::text[])
+//	RETURNING id, tenant_id, blake3, s3_key, size, refcount,
+//	          created_at, updated_at;
+//
+// ListChunksForSweep (keyset-paged by (created_at, blake3)):
+//
+//	SELECT blake3, s3_key, created_at, last_referenced_at FROM backup_chunks
+//	 WHERE tenant_id = $1 AND (created_at, blake3) > ($2, $3)
+//	 ORDER BY created_at ASC, blake3 ASC LIMIT $4;
+//
+// DeleteSweptChunk (object deleted first; row only when STILL below the floor by
+// the GREATEST boundary, so a chunk re-referenced after the read survives):
+//
+//	DELETE FROM backup_chunks
+//	 WHERE tenant_id = $1 AND blake3 = $2
+//	   AND GREATEST(created_at, last_referenced_at) < $3;
+//
+// The per-tenant sweep takes a SESSION-level advisory lock (released via
+// pg_advisory_unlock) spanning SHORT per-page transactions, so no pooled
+// connection is pinned across object-store I/O (avoiding Cloud SQL's
+// idle_in_transaction_session_timeout):
+//
+//	SELECT pg_try_advisory_lock(hashtext('backup_gc'), hashtext($1));   -- acquire
+//	SELECT pg_advisory_unlock(hashtext('backup_gc'), hashtext($1));     -- release
+//
+// so two GC passes never sweep the same tenant concurrently.
 // ---------------------------------------------------------------------------
 // backup_schedules
 // ---------------------------------------------------------------------------
@@ -375,6 +461,13 @@ func (q *Queries) GetBackupScheduleForSite(ctx context.Context, arg GetBackupSch
 		&i.KeepLast,
 		&i.IncrementalEnabled,
 		&i.BaseWindowDays,
+		&i.NotifyOnCompletion,
+		&i.NotifyRecipients,
+		&i.BackupComponents,
+		&i.ExcludePaths,
+		&i.ExcludeExtensions,
+		&i.ExcludeFileSizeMb,
+		&i.IncludeCore,
 		&i.NextRunAt,
 		&i.LastRunAt,
 		&i.CreatedAt,
@@ -425,7 +518,7 @@ func (q *Queries) GetBackupSiteInfo(ctx context.Context, arg GetBackupSiteInfoPa
 }
 
 const getBackupSnapshot = `-- name: GetBackupSnapshot :one
-SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at FROM backup_snapshots
+SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at FROM backup_snapshots
 WHERE id = $1 AND tenant_id = $2
 `
 
@@ -449,10 +542,20 @@ func (q *Queries) GetBackupSnapshot(ctx context.Context, arg GetBackupSnapshotPa
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -556,7 +659,7 @@ func (q *Queries) ListBackupSiteIDsForTenant(ctx context.Context, tenantID uuid.
 }
 
 const listBackupSnapshotsForSite = `-- name: ListBackupSnapshotsForSite :many
-SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at FROM backup_snapshots
+SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at FROM backup_snapshots
 WHERE tenant_id = $1 AND site_id = $2
 ORDER BY created_at DESC
 LIMIT $3 OFFSET $4
@@ -595,10 +698,20 @@ func (q *Queries) ListBackupSnapshotsForSite(ctx context.Context, arg ListBackup
 			&i.ChunkCount,
 			&i.Error,
 			&i.Archived,
+			&i.Locked,
 			&i.Progress,
 			&i.ProgressUpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.IsIncremental,
+			&i.ParentSnapshotID,
+			&i.BaseSnapshotID,
+			&i.ChainID,
+			&i.Generation,
+			&i.CycleFilesScanned,
+			&i.CycleFilesChanged,
+			&i.CycleFilesDeleted,
+			&i.CycleBytesUploaded,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -613,7 +726,8 @@ func (q *Queries) ListBackupSnapshotsForSite(ctx context.Context, arg ListBackup
 }
 
 const listCompletedSnapshotsForSite = `-- name: ListCompletedSnapshotsForSite :many
-SELECT id, created_at, archived FROM backup_snapshots
+SELECT id, created_at, archived, chain_id, generation, is_incremental
+FROM backup_snapshots
 WHERE tenant_id = $1 AND site_id = $2 AND status = 'completed'
 ORDER BY created_at DESC
 `
@@ -624,13 +738,19 @@ type ListCompletedSnapshotsForSiteParams struct {
 }
 
 type ListCompletedSnapshotsForSiteRow struct {
-	ID        uuid.UUID `json:"id"`
-	CreatedAt time.Time `json:"created_at"`
-	Archived  bool      `json:"archived"`
+	ID            uuid.UUID   `json:"id"`
+	CreatedAt     time.Time   `json:"created_at"`
+	Archived      bool        `json:"archived"`
+	ChainID       pgtype.UUID `json:"chain_id"`
+	Generation    int32       `json:"generation"`
+	IsIncremental bool        `json:"is_incremental"`
 }
 
 // Completed snapshots for a site, newest first, used to compute the retention
-// archive set (newest per calendar month).
+// archive set (newest per calendar month). ADR-050 widened the projection to
+// carry the chain columns so the mark-and-sweep GC can do chain-aware
+// expansion (pin a carry-forward chunk's old origin generation under a live
+// tip) without a second round-trip.
 func (q *Queries) ListCompletedSnapshotsForSite(ctx context.Context, arg ListCompletedSnapshotsForSiteParams) ([]ListCompletedSnapshotsForSiteRow, error) {
 	rows, err := q.db.Query(ctx, listCompletedSnapshotsForSite, arg.TenantID, arg.SiteID)
 	if err != nil {
@@ -640,7 +760,14 @@ func (q *Queries) ListCompletedSnapshotsForSite(ctx context.Context, arg ListCom
 	var items []ListCompletedSnapshotsForSiteRow
 	for rows.Next() {
 		var i ListCompletedSnapshotsForSiteRow
-		if err := rows.Scan(&i.ID, &i.CreatedAt, &i.Archived); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.CreatedAt,
+			&i.Archived,
+			&i.ChainID,
+			&i.Generation,
+			&i.IsIncremental,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -652,7 +779,7 @@ func (q *Queries) ListCompletedSnapshotsForSite(ctx context.Context, arg ListCom
 }
 
 const listDueBackupSchedules = `-- name: ListDueBackupSchedules :many
-SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
+SELECT id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, notify_on_completion, notify_recipients, backup_components, exclude_paths, exclude_extensions, exclude_file_size_mb, include_core, next_run_at, last_run_at, created_at, updated_at FROM backup_schedules
 WHERE enabled = true AND next_run_at <= $1
 ORDER BY next_run_at ASC
 LIMIT $2
@@ -691,6 +818,13 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, arg ListDueBackupS
 			&i.KeepLast,
 			&i.IncrementalEnabled,
 			&i.BaseWindowDays,
+			&i.NotifyOnCompletion,
+			&i.NotifyRecipients,
+			&i.BackupComponents,
+			&i.ExcludePaths,
+			&i.ExcludeExtensions,
+			&i.ExcludeFileSizeMb,
+			&i.IncludeCore,
 			&i.NextRunAt,
 			&i.LastRunAt,
 			&i.CreatedAt,
@@ -707,7 +841,7 @@ func (q *Queries) ListDueBackupSchedules(ctx context.Context, arg ListDueBackupS
 }
 
 const listExpiredBackupSnapshots = `-- name: ListExpiredBackupSnapshots :many
-SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at FROM backup_snapshots
+SELECT id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at FROM backup_snapshots
 WHERE tenant_id = $1
   AND status = 'completed'
   AND archived = false
@@ -744,10 +878,20 @@ func (q *Queries) ListExpiredBackupSnapshots(ctx context.Context, arg ListExpire
 			&i.ChunkCount,
 			&i.Error,
 			&i.Archived,
+			&i.Locked,
 			&i.Progress,
 			&i.ProgressUpdatedAt,
 			&i.StartedAt,
 			&i.FinishedAt,
+			&i.IsIncremental,
+			&i.ParentSnapshotID,
+			&i.BaseSnapshotID,
+			&i.ChainID,
+			&i.Generation,
+			&i.CycleFilesScanned,
+			&i.CycleFilesChanged,
+			&i.CycleFilesDeleted,
+			&i.CycleBytesUploaded,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -759,6 +903,25 @@ func (q *Queries) ListExpiredBackupSnapshots(ctx context.Context, arg ListExpire
 		return nil, err
 	}
 	return items, nil
+}
+
+const listInFlightSnapshotFloor = `-- name: ListInFlightSnapshotFloor :one
+SELECT min(created_at)::timestamptz AS floor
+FROM backup_snapshots
+WHERE tenant_id = $1 AND status IN ('pending', 'running')
+`
+
+// ADR-050 mark-and-sweep grace floor: the oldest created_at among snapshots
+// that are still pending or running for the tenant. A chunk created before this
+// floor cannot be re-referenced by an in-flight backup (its manifest/file_index
+// rows are not yet visible at mark time), so the sweep uses
+// min(markStart, inflightFloor) as the deletion horizon. Returns NULL when no
+// in-flight snapshot exists (the caller then uses markStart alone).
+func (q *Queries) ListInFlightSnapshotFloor(ctx context.Context, tenantID uuid.UUID) (time.Time, error) {
+	row := q.db.QueryRow(ctx, listInFlightSnapshotFloor, tenantID)
+	var floor time.Time
+	err := row.Scan(&floor)
+	return floor, err
 }
 
 const listManifestEntries = `-- name: ListManifestEntries :many
@@ -886,7 +1049,7 @@ const markBackupSnapshotRunning = `-- name: MarkBackupSnapshotRunning :one
 UPDATE backup_snapshots
 SET status = 'running', started_at = now(), updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at
 `
 
 type MarkBackupSnapshotRunningParams struct {
@@ -909,10 +1072,20 @@ func (q *Queries) MarkBackupSnapshotRunning(ctx context.Context, arg MarkBackupS
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -942,7 +1115,7 @@ SET progress = $3,
     progress_updated_at = now(),
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, progress, progress_updated_at, started_at, finished_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, created_by, kind, status, age_recipient, total_size, chunk_count, error, archived, locked, progress, progress_updated_at, started_at, finished_at, is_incremental, parent_snapshot_id, base_snapshot_id, chain_id, generation, cycle_files_scanned, cycle_files_changed, cycle_files_deleted, cycle_bytes_uploaded, created_at, updated_at
 `
 
 type UpdateBackupSnapshotProgressParams struct {
@@ -972,10 +1145,20 @@ func (q *Queries) UpdateBackupSnapshotProgress(ctx context.Context, arg UpdateBa
 		&i.ChunkCount,
 		&i.Error,
 		&i.Archived,
+		&i.Locked,
 		&i.Progress,
 		&i.ProgressUpdatedAt,
 		&i.StartedAt,
 		&i.FinishedAt,
+		&i.IsIncremental,
+		&i.ParentSnapshotID,
+		&i.BaseSnapshotID,
+		&i.ChainID,
+		&i.Generation,
+		&i.CycleFilesScanned,
+		&i.CycleFilesChanged,
+		&i.CycleFilesDeleted,
+		&i.CycleBytesUploaded,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1045,7 +1228,7 @@ DO UPDATE SET cadence              = EXCLUDED.cadence,
               incremental_enabled  = EXCLUDED.incremental_enabled,
               base_window_days     = EXCLUDED.base_window_days,
               updated_at           = now()
-RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, next_run_at, last_run_at, created_at, updated_at
+RETURNING id, tenant_id, site_id, cadence, kind, enabled, retention_days, monthly_archive_keep, run_hour, run_minute, day_of_week, day_of_month, frequency_hours, keep_last, incremental_enabled, base_window_days, notify_on_completion, notify_recipients, backup_components, exclude_paths, exclude_extensions, exclude_file_size_mb, include_core, next_run_at, last_run_at, created_at, updated_at
 `
 
 type UpsertBackupScheduleParams struct {
@@ -1108,6 +1291,13 @@ func (q *Queries) UpsertBackupSchedule(ctx context.Context, arg UpsertBackupSche
 		&i.KeepLast,
 		&i.IncrementalEnabled,
 		&i.BaseWindowDays,
+		&i.NotifyOnCompletion,
+		&i.NotifyRecipients,
+		&i.BackupComponents,
+		&i.ExcludePaths,
+		&i.ExcludeExtensions,
+		&i.ExcludeFileSizeMb,
+		&i.IncludeCore,
 		&i.NextRunAt,
 		&i.LastRunAt,
 		&i.CreatedAt,

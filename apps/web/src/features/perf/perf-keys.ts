@@ -14,4 +14,7 @@ export const perfKeys = {
   fleetDbHealth: () => [...perfKeys.all, "fleetDbHealth"] as const,
   // Font results catalog (ADR-052 Phase 2 / m55).
   fonts: (siteId: string) => [...perfKeys.all, "fonts", siteId] as const,
+  // RUM / Core Web Vitals (Phase 3b).
+  rum: (siteId: string) => [...perfKeys.all, "rum", siteId] as const,
+  rumSummary: (siteId: string) => [...perfKeys.all, "rumSummary", siteId] as const,
 } as const;

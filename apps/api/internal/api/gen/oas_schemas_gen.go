@@ -11576,6 +11576,282 @@ func (o OptRole) Or(d Role) Role {
 	return d
 }
 
+// NewOptRumMetricSummaryDevice returns new OptRumMetricSummaryDevice with value set to v.
+func NewOptRumMetricSummaryDevice(v RumMetricSummaryDevice) OptRumMetricSummaryDevice {
+	return OptRumMetricSummaryDevice{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumMetricSummaryDevice is optional RumMetricSummaryDevice.
+type OptRumMetricSummaryDevice struct {
+	Value RumMetricSummaryDevice
+	Set   bool
+}
+
+// IsSet returns true if OptRumMetricSummaryDevice was set.
+func (o OptRumMetricSummaryDevice) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumMetricSummaryDevice) Reset() {
+	var v RumMetricSummaryDevice
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumMetricSummaryDevice) SetTo(v RumMetricSummaryDevice) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumMetricSummaryDevice) Get() (v RumMetricSummaryDevice, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumMetricSummaryDevice) Or(d RumMetricSummaryDevice) RumMetricSummaryDevice {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptRumMetricSummaryMetric returns new OptRumMetricSummaryMetric with value set to v.
+func NewOptRumMetricSummaryMetric(v RumMetricSummaryMetric) OptRumMetricSummaryMetric {
+	return OptRumMetricSummaryMetric{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumMetricSummaryMetric is optional RumMetricSummaryMetric.
+type OptRumMetricSummaryMetric struct {
+	Value RumMetricSummaryMetric
+	Set   bool
+}
+
+// IsSet returns true if OptRumMetricSummaryMetric was set.
+func (o OptRumMetricSummaryMetric) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumMetricSummaryMetric) Reset() {
+	var v RumMetricSummaryMetric
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumMetricSummaryMetric) SetTo(v RumMetricSummaryMetric) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumMetricSummaryMetric) Get() (v RumMetricSummaryMetric, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumMetricSummaryMetric) Or(d RumMetricSummaryMetric) RumMetricSummaryMetric {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptRumMetricSummaryRating returns new OptRumMetricSummaryRating with value set to v.
+func NewOptRumMetricSummaryRating(v RumMetricSummaryRating) OptRumMetricSummaryRating {
+	return OptRumMetricSummaryRating{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumMetricSummaryRating is optional RumMetricSummaryRating.
+type OptRumMetricSummaryRating struct {
+	Value RumMetricSummaryRating
+	Set   bool
+}
+
+// IsSet returns true if OptRumMetricSummaryRating was set.
+func (o OptRumMetricSummaryRating) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumMetricSummaryRating) Reset() {
+	var v RumMetricSummaryRating
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumMetricSummaryRating) SetTo(v RumMetricSummaryRating) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumMetricSummaryRating) Get() (v RumMetricSummaryRating, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumMetricSummaryRating) Or(d RumMetricSummaryRating) RumMetricSummaryRating {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptRumResultDevice returns new OptRumResultDevice with value set to v.
+func NewOptRumResultDevice(v RumResultDevice) OptRumResultDevice {
+	return OptRumResultDevice{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumResultDevice is optional RumResultDevice.
+type OptRumResultDevice struct {
+	Value RumResultDevice
+	Set   bool
+}
+
+// IsSet returns true if OptRumResultDevice was set.
+func (o OptRumResultDevice) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumResultDevice) Reset() {
+	var v RumResultDevice
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumResultDevice) SetTo(v RumResultDevice) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumResultDevice) Get() (v RumResultDevice, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumResultDevice) Or(d RumResultDevice) RumResultDevice {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptRumResultMetric returns new OptRumResultMetric with value set to v.
+func NewOptRumResultMetric(v RumResultMetric) OptRumResultMetric {
+	return OptRumResultMetric{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumResultMetric is optional RumResultMetric.
+type OptRumResultMetric struct {
+	Value RumResultMetric
+	Set   bool
+}
+
+// IsSet returns true if OptRumResultMetric was set.
+func (o OptRumResultMetric) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumResultMetric) Reset() {
+	var v RumResultMetric
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumResultMetric) SetTo(v RumResultMetric) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumResultMetric) Get() (v RumResultMetric, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumResultMetric) Or(d RumResultMetric) RumResultMetric {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptRumResultRating returns new OptRumResultRating with value set to v.
+func NewOptRumResultRating(v RumResultRating) OptRumResultRating {
+	return OptRumResultRating{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptRumResultRating is optional RumResultRating.
+type OptRumResultRating struct {
+	Value RumResultRating
+	Set   bool
+}
+
+// IsSet returns true if OptRumResultRating was set.
+func (o OptRumResultRating) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptRumResultRating) Reset() {
+	var v RumResultRating
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptRumResultRating) SetTo(v RumResultRating) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptRumResultRating) Get() (v RumResultRating, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptRumResultRating) Or(d RumResultRating) RumResultRating {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion returns new OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion with value set to v.
 func NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion(v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
 	return OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion{
@@ -14386,6 +14662,573 @@ func (s *RucssResultList) GetItems() []RucssResult {
 // SetItems sets the value of Items.
 func (s *RucssResultList) SetItems(val []RucssResult) {
 	s.Items = val
+}
+
+// P75 summary for one (metric, device, country) slice over the requested window. suppressed=true
+// when the sample count is below the site's min_sample_count floor; p75_ms is 0 in that case and the
+// dashboard must render "insufficient samples (sample_count of min_sample_count)".
+// Ref: #/components/schemas/RumMetricSummary
+type RumMetricSummary struct {
+	// The Core Web Vital metric name.
+	Metric OptRumMetricSummaryMetric `json:"metric"`
+	// Device class derived from the user agent.
+	Device OptRumMetricSummaryDevice `json:"device"`
+	// ISO-3166-1 alpha-2 country code or "__other__".
+	Country OptString `json:"country"`
+	// Interpolated 75th-percentile value in milliseconds (0 when suppressed).
+	P75Ms OptFloat64 `json:"p75_ms"`
+	// Raw (pre-scale) sample count used for this estimate.
+	SampleCount OptInt64 `json:"sample_count"`
+	// CWV standard rating band per the official web-vitals thresholds. Empty when suppressed=true or
+	// when the metric has no threshold.
+	Rating OptRumMetricSummaryRating `json:"rating"`
+	// True when sample_count < min_sample_count. Dashboard must render "insufficient samples" rather
+	// than a p75.
+	Suppressed OptBool `json:"suppressed"`
+}
+
+// GetMetric returns the value of Metric.
+func (s *RumMetricSummary) GetMetric() OptRumMetricSummaryMetric {
+	return s.Metric
+}
+
+// GetDevice returns the value of Device.
+func (s *RumMetricSummary) GetDevice() OptRumMetricSummaryDevice {
+	return s.Device
+}
+
+// GetCountry returns the value of Country.
+func (s *RumMetricSummary) GetCountry() OptString {
+	return s.Country
+}
+
+// GetP75Ms returns the value of P75Ms.
+func (s *RumMetricSummary) GetP75Ms() OptFloat64 {
+	return s.P75Ms
+}
+
+// GetSampleCount returns the value of SampleCount.
+func (s *RumMetricSummary) GetSampleCount() OptInt64 {
+	return s.SampleCount
+}
+
+// GetRating returns the value of Rating.
+func (s *RumMetricSummary) GetRating() OptRumMetricSummaryRating {
+	return s.Rating
+}
+
+// GetSuppressed returns the value of Suppressed.
+func (s *RumMetricSummary) GetSuppressed() OptBool {
+	return s.Suppressed
+}
+
+// SetMetric sets the value of Metric.
+func (s *RumMetricSummary) SetMetric(val OptRumMetricSummaryMetric) {
+	s.Metric = val
+}
+
+// SetDevice sets the value of Device.
+func (s *RumMetricSummary) SetDevice(val OptRumMetricSummaryDevice) {
+	s.Device = val
+}
+
+// SetCountry sets the value of Country.
+func (s *RumMetricSummary) SetCountry(val OptString) {
+	s.Country = val
+}
+
+// SetP75Ms sets the value of P75Ms.
+func (s *RumMetricSummary) SetP75Ms(val OptFloat64) {
+	s.P75Ms = val
+}
+
+// SetSampleCount sets the value of SampleCount.
+func (s *RumMetricSummary) SetSampleCount(val OptInt64) {
+	s.SampleCount = val
+}
+
+// SetRating sets the value of Rating.
+func (s *RumMetricSummary) SetRating(val OptRumMetricSummaryRating) {
+	s.Rating = val
+}
+
+// SetSuppressed sets the value of Suppressed.
+func (s *RumMetricSummary) SetSuppressed(val OptBool) {
+	s.Suppressed = val
+}
+
+// Device class derived from the user agent.
+type RumMetricSummaryDevice string
+
+const (
+	RumMetricSummaryDeviceDesktop RumMetricSummaryDevice = "desktop"
+	RumMetricSummaryDeviceMobile  RumMetricSummaryDevice = "mobile"
+	RumMetricSummaryDeviceTablet  RumMetricSummaryDevice = "tablet"
+)
+
+// AllValues returns all RumMetricSummaryDevice values.
+func (RumMetricSummaryDevice) AllValues() []RumMetricSummaryDevice {
+	return []RumMetricSummaryDevice{
+		RumMetricSummaryDeviceDesktop,
+		RumMetricSummaryDeviceMobile,
+		RumMetricSummaryDeviceTablet,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumMetricSummaryDevice) MarshalText() ([]byte, error) {
+	switch s {
+	case RumMetricSummaryDeviceDesktop:
+		return []byte(s), nil
+	case RumMetricSummaryDeviceMobile:
+		return []byte(s), nil
+	case RumMetricSummaryDeviceTablet:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumMetricSummaryDevice) UnmarshalText(data []byte) error {
+	switch RumMetricSummaryDevice(data) {
+	case RumMetricSummaryDeviceDesktop:
+		*s = RumMetricSummaryDeviceDesktop
+		return nil
+	case RumMetricSummaryDeviceMobile:
+		*s = RumMetricSummaryDeviceMobile
+		return nil
+	case RumMetricSummaryDeviceTablet:
+		*s = RumMetricSummaryDeviceTablet
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// The Core Web Vital metric name.
+type RumMetricSummaryMetric string
+
+const (
+	RumMetricSummaryMetricLcp  RumMetricSummaryMetric = "lcp"
+	RumMetricSummaryMetricInp  RumMetricSummaryMetric = "inp"
+	RumMetricSummaryMetricCls  RumMetricSummaryMetric = "cls"
+	RumMetricSummaryMetricTtfb RumMetricSummaryMetric = "ttfb"
+	RumMetricSummaryMetricFcp  RumMetricSummaryMetric = "fcp"
+)
+
+// AllValues returns all RumMetricSummaryMetric values.
+func (RumMetricSummaryMetric) AllValues() []RumMetricSummaryMetric {
+	return []RumMetricSummaryMetric{
+		RumMetricSummaryMetricLcp,
+		RumMetricSummaryMetricInp,
+		RumMetricSummaryMetricCls,
+		RumMetricSummaryMetricTtfb,
+		RumMetricSummaryMetricFcp,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumMetricSummaryMetric) MarshalText() ([]byte, error) {
+	switch s {
+	case RumMetricSummaryMetricLcp:
+		return []byte(s), nil
+	case RumMetricSummaryMetricInp:
+		return []byte(s), nil
+	case RumMetricSummaryMetricCls:
+		return []byte(s), nil
+	case RumMetricSummaryMetricTtfb:
+		return []byte(s), nil
+	case RumMetricSummaryMetricFcp:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumMetricSummaryMetric) UnmarshalText(data []byte) error {
+	switch RumMetricSummaryMetric(data) {
+	case RumMetricSummaryMetricLcp:
+		*s = RumMetricSummaryMetricLcp
+		return nil
+	case RumMetricSummaryMetricInp:
+		*s = RumMetricSummaryMetricInp
+		return nil
+	case RumMetricSummaryMetricCls:
+		*s = RumMetricSummaryMetricCls
+		return nil
+	case RumMetricSummaryMetricTtfb:
+		*s = RumMetricSummaryMetricTtfb
+		return nil
+	case RumMetricSummaryMetricFcp:
+		*s = RumMetricSummaryMetricFcp
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// CWV standard rating band per the official web-vitals thresholds. Empty when suppressed=true or
+// when the metric has no threshold.
+type RumMetricSummaryRating string
+
+const (
+	RumMetricSummaryRatingGood             RumMetricSummaryRating = "good"
+	RumMetricSummaryRatingNeedsImprovement RumMetricSummaryRating = "needs_improvement"
+	RumMetricSummaryRatingPoor             RumMetricSummaryRating = "poor"
+)
+
+// AllValues returns all RumMetricSummaryRating values.
+func (RumMetricSummaryRating) AllValues() []RumMetricSummaryRating {
+	return []RumMetricSummaryRating{
+		RumMetricSummaryRatingGood,
+		RumMetricSummaryRatingNeedsImprovement,
+		RumMetricSummaryRatingPoor,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumMetricSummaryRating) MarshalText() ([]byte, error) {
+	switch s {
+	case RumMetricSummaryRatingGood:
+		return []byte(s), nil
+	case RumMetricSummaryRatingNeedsImprovement:
+		return []byte(s), nil
+	case RumMetricSummaryRatingPoor:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumMetricSummaryRating) UnmarshalText(data []byte) error {
+	switch RumMetricSummaryRating(data) {
+	case RumMetricSummaryRatingGood:
+		*s = RumMetricSummaryRatingGood
+		return nil
+	case RumMetricSummaryRatingNeedsImprovement:
+		*s = RumMetricSummaryRatingNeedsImprovement
+		return nil
+	case RumMetricSummaryRatingPoor:
+		*s = RumMetricSummaryRatingPoor
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// One per-URL/metric/device/country p75 breakdown row for the dashboard table. suppressed=true when
+// sample_count < min_sample_count.
+// Ref: #/components/schemas/RumResult
+type RumResult struct {
+	// Normalized page URL pattern (query string stripped, IDs templated).
+	URLPattern OptString          `json:"url_pattern"`
+	Metric     OptRumResultMetric `json:"metric"`
+	Device     OptRumResultDevice `json:"device"`
+	// ISO-3166-1 alpha-2 country code or "__other__".
+	Country OptString `json:"country"`
+	// Interpolated 75th-percentile value in milliseconds (0 when suppressed).
+	P75Ms       OptFloat64         `json:"p75_ms"`
+	SampleCount OptInt64           `json:"sample_count"`
+	Rating      OptRumResultRating `json:"rating"`
+	// True when sample_count < min_sample_count.
+	Suppressed OptBool `json:"suppressed"`
+}
+
+// GetURLPattern returns the value of URLPattern.
+func (s *RumResult) GetURLPattern() OptString {
+	return s.URLPattern
+}
+
+// GetMetric returns the value of Metric.
+func (s *RumResult) GetMetric() OptRumResultMetric {
+	return s.Metric
+}
+
+// GetDevice returns the value of Device.
+func (s *RumResult) GetDevice() OptRumResultDevice {
+	return s.Device
+}
+
+// GetCountry returns the value of Country.
+func (s *RumResult) GetCountry() OptString {
+	return s.Country
+}
+
+// GetP75Ms returns the value of P75Ms.
+func (s *RumResult) GetP75Ms() OptFloat64 {
+	return s.P75Ms
+}
+
+// GetSampleCount returns the value of SampleCount.
+func (s *RumResult) GetSampleCount() OptInt64 {
+	return s.SampleCount
+}
+
+// GetRating returns the value of Rating.
+func (s *RumResult) GetRating() OptRumResultRating {
+	return s.Rating
+}
+
+// GetSuppressed returns the value of Suppressed.
+func (s *RumResult) GetSuppressed() OptBool {
+	return s.Suppressed
+}
+
+// SetURLPattern sets the value of URLPattern.
+func (s *RumResult) SetURLPattern(val OptString) {
+	s.URLPattern = val
+}
+
+// SetMetric sets the value of Metric.
+func (s *RumResult) SetMetric(val OptRumResultMetric) {
+	s.Metric = val
+}
+
+// SetDevice sets the value of Device.
+func (s *RumResult) SetDevice(val OptRumResultDevice) {
+	s.Device = val
+}
+
+// SetCountry sets the value of Country.
+func (s *RumResult) SetCountry(val OptString) {
+	s.Country = val
+}
+
+// SetP75Ms sets the value of P75Ms.
+func (s *RumResult) SetP75Ms(val OptFloat64) {
+	s.P75Ms = val
+}
+
+// SetSampleCount sets the value of SampleCount.
+func (s *RumResult) SetSampleCount(val OptInt64) {
+	s.SampleCount = val
+}
+
+// SetRating sets the value of Rating.
+func (s *RumResult) SetRating(val OptRumResultRating) {
+	s.Rating = val
+}
+
+// SetSuppressed sets the value of Suppressed.
+func (s *RumResult) SetSuppressed(val OptBool) {
+	s.Suppressed = val
+}
+
+type RumResultDevice string
+
+const (
+	RumResultDeviceDesktop RumResultDevice = "desktop"
+	RumResultDeviceMobile  RumResultDevice = "mobile"
+	RumResultDeviceTablet  RumResultDevice = "tablet"
+)
+
+// AllValues returns all RumResultDevice values.
+func (RumResultDevice) AllValues() []RumResultDevice {
+	return []RumResultDevice{
+		RumResultDeviceDesktop,
+		RumResultDeviceMobile,
+		RumResultDeviceTablet,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumResultDevice) MarshalText() ([]byte, error) {
+	switch s {
+	case RumResultDeviceDesktop:
+		return []byte(s), nil
+	case RumResultDeviceMobile:
+		return []byte(s), nil
+	case RumResultDeviceTablet:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumResultDevice) UnmarshalText(data []byte) error {
+	switch RumResultDevice(data) {
+	case RumResultDeviceDesktop:
+		*s = RumResultDeviceDesktop
+		return nil
+	case RumResultDeviceMobile:
+		*s = RumResultDeviceMobile
+		return nil
+	case RumResultDeviceTablet:
+		*s = RumResultDeviceTablet
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/RumResultList
+type RumResultList struct {
+	Items []RumResult `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *RumResultList) GetItems() []RumResult {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *RumResultList) SetItems(val []RumResult) {
+	s.Items = val
+}
+
+type RumResultMetric string
+
+const (
+	RumResultMetricLcp  RumResultMetric = "lcp"
+	RumResultMetricInp  RumResultMetric = "inp"
+	RumResultMetricCls  RumResultMetric = "cls"
+	RumResultMetricTtfb RumResultMetric = "ttfb"
+	RumResultMetricFcp  RumResultMetric = "fcp"
+)
+
+// AllValues returns all RumResultMetric values.
+func (RumResultMetric) AllValues() []RumResultMetric {
+	return []RumResultMetric{
+		RumResultMetricLcp,
+		RumResultMetricInp,
+		RumResultMetricCls,
+		RumResultMetricTtfb,
+		RumResultMetricFcp,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumResultMetric) MarshalText() ([]byte, error) {
+	switch s {
+	case RumResultMetricLcp:
+		return []byte(s), nil
+	case RumResultMetricInp:
+		return []byte(s), nil
+	case RumResultMetricCls:
+		return []byte(s), nil
+	case RumResultMetricTtfb:
+		return []byte(s), nil
+	case RumResultMetricFcp:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumResultMetric) UnmarshalText(data []byte) error {
+	switch RumResultMetric(data) {
+	case RumResultMetricLcp:
+		*s = RumResultMetricLcp
+		return nil
+	case RumResultMetricInp:
+		*s = RumResultMetricInp
+		return nil
+	case RumResultMetricCls:
+		*s = RumResultMetricCls
+		return nil
+	case RumResultMetricTtfb:
+		*s = RumResultMetricTtfb
+		return nil
+	case RumResultMetricFcp:
+		*s = RumResultMetricFcp
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type RumResultRating string
+
+const (
+	RumResultRatingGood             RumResultRating = "good"
+	RumResultRatingNeedsImprovement RumResultRating = "needs_improvement"
+	RumResultRatingPoor             RumResultRating = "poor"
+)
+
+// AllValues returns all RumResultRating values.
+func (RumResultRating) AllValues() []RumResultRating {
+	return []RumResultRating{
+		RumResultRatingGood,
+		RumResultRatingNeedsImprovement,
+		RumResultRatingPoor,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RumResultRating) MarshalText() ([]byte, error) {
+	switch s {
+	case RumResultRatingGood:
+		return []byte(s), nil
+	case RumResultRatingNeedsImprovement:
+		return []byte(s), nil
+	case RumResultRatingPoor:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RumResultRating) UnmarshalText(data []byte) error {
+	switch RumResultRating(data) {
+	case RumResultRatingGood:
+		*s = RumResultRatingGood
+		return nil
+	case RumResultRatingNeedsImprovement:
+		*s = RumResultRatingNeedsImprovement
+		return nil
+	case RumResultRatingPoor:
+		*s = RumResultRatingPoor
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Site-level Core Web Vitals p75 summary over a configurable window.
+// Ref: #/components/schemas/RumSummary
+type RumSummary struct {
+	// Number of days covered by this summary.
+	WindowDays OptInt `json:"window_days"`
+	// The site's configured min_sample_count floor.
+	MinSampleCount OptInt `json:"min_sample_count"`
+	// Flat list of p75 results by (metric, device, country).
+	Metrics []RumMetricSummary `json:"metrics"`
+}
+
+// GetWindowDays returns the value of WindowDays.
+func (s *RumSummary) GetWindowDays() OptInt {
+	return s.WindowDays
+}
+
+// GetMinSampleCount returns the value of MinSampleCount.
+func (s *RumSummary) GetMinSampleCount() OptInt {
+	return s.MinSampleCount
+}
+
+// GetMetrics returns the value of Metrics.
+func (s *RumSummary) GetMetrics() []RumMetricSummary {
+	return s.Metrics
+}
+
+// SetWindowDays sets the value of WindowDays.
+func (s *RumSummary) SetWindowDays(val OptInt) {
+	s.WindowDays = val
+}
+
+// SetMinSampleCount sets the value of MinSampleCount.
+func (s *RumSummary) SetMinSampleCount(val OptInt) {
+	s.MinSampleCount = val
+}
+
+// SetMetrics sets the value of Metrics.
+func (s *RumSummary) SetMetrics(val []RumMetricSummary) {
+	s.Metrics = val
 }
 
 // A single scheduled-backup fire. Pre-inserted as `scheduled` before

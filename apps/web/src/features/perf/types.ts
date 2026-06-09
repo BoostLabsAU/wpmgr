@@ -104,6 +104,21 @@ export interface PerfConfig {
   bloat_heartbeat_control: boolean;
   bloat_post_revisions_control: boolean;
 
+  // Real User Monitoring (Phase 3b — off by default, visitor data flow)
+  /**
+   * Enable RUM beacon injection. When true the agent injects a small
+   * first-party collector script into cached pages; visitor Core Web Vitals
+   * are sent from the browser to the CP ingest endpoint. Default false (opt-in)
+   * because this turns on a visitor data flow.
+   */
+  rum_enabled?: boolean;
+  /**
+   * Fraction of pageviews to beacon (0.0 to 1.0). Default 1.0 (100%).
+   * Lowering this value reduces storage and ingest load on high-traffic sites
+   * while keeping the retained sample statistically representative.
+   */
+  rum_sample_rate?: number;
+
   // WooCommerce cart-session caching (#169)
   //   woo_cacheable_session       — operator toggle (READ+WRITE).
   //   woo_theme_fragments_supported — agent-reported capability flag (READ-ONLY;
@@ -142,6 +157,14 @@ export interface CacheStats {
  * overlaid from fonts-store.
  */
 export type { FontResult } from "@wpmgr/api";
+
+/**
+ * Core Web Vitals p75 summary for one site (GET /perf/rum/summary).
+ * Re-exported from @wpmgr/api. Contains a flat list of RumMetricSummary rows
+ * keyed by (metric, device, country). When suppressed=true on a row, render
+ * "insufficient samples" rather than a p75 number.
+ */
+export type { RumSummary, RumResult } from "@wpmgr/api";
 
 /** One cached RUCSS result row (GET /rucss/results). */
 export interface RucssResult {

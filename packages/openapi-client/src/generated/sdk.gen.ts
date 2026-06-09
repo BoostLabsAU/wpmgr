@@ -175,6 +175,8 @@ import type {
   GetRestoreRunData,
   GetRestoreRunErrors,
   GetRestoreRunResponses,
+  GetRumSummaryData,
+  GetRumSummaryResponses,
   GetScheduleRunData,
   GetScheduleRunErrors,
   GetScheduleRunResponses,
@@ -242,6 +244,8 @@ import type {
   ListRestoreRunsResponses,
   ListRucssResultsData,
   ListRucssResultsResponses,
+  ListRumResultsData,
+  ListRumResultsResponses,
   ListScheduleRunsData,
   ListScheduleRunsErrors,
   ListScheduleRunsResponses,
@@ -3121,6 +3125,48 @@ export const listFontResults = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/perf/fonts", ...options });
+
+/**
+ * Get site-level Core Web Vitals p75 summary
+ *
+ * Returns site-level Core Web Vitals p75 estimates (LCP, INP, CLS, FCP,
+ * TTFB) over a configurable window (default 28 days, matching CrUX/GSC),
+ * with good/needs-improvement/poor ratings per the official web-vitals
+ * thresholds. Any (metric, device, country) slice whose scaled sample
+ * count is below the site's min_sample_count floor is returned with
+ * suppressed=true and p75_ms=0; the dashboard must render
+ * "insufficient samples (N of M needed)" for those rows.
+ *
+ * Requires the `site:read` permission.
+ *
+ */
+export const getRumSummary = <ThrowOnError extends boolean = false>(
+  options: Options<GetRumSummaryData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<GetRumSummaryResponses, unknown, ThrowOnError>(
+    { url: "/api/v1/sites/{siteId}/perf/rum/summary", ...options },
+  );
+
+/**
+ * List per-URL RUM Core Web Vitals breakdown rows
+ *
+ * Returns per-URL/metric/device/country p75 breakdown rows for the
+ * dashboard table. Each row includes the url_pattern, metric, device,
+ * country, p75_ms, sample_count, the CWV rating band, and a suppressed
+ * flag. Rows below the site's min_sample_count floor have suppressed=true
+ * and p75_ms=0; the dashboard renders "insufficient samples" for those.
+ *
+ * Requires the `site:read` permission.
+ *
+ */
+export const listRumResults = <ThrowOnError extends boolean = false>(
+  options: Options<ListRumResultsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListRumResultsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/rum", ...options });
 
 /**
  * List cached Used-CSS (RUCSS) results for a site

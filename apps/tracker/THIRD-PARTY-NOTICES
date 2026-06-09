@@ -1,0 +1,12 @@
+This package bundles the following third-party library:
+
+web-vitals
+  License: Apache License 2.0
+  Copyright 2020 Google LLC
+  Source:  https://github.com/GoogleChrome/web-vitals
+  SPDX-License-Identifier: Apache-2.0
+
+The Apache License 2.0 is permissive and compatible with the MIT-licensed
+@wpmgr/tracker package. Attribution is required by the Apache 2.0 grant.
+The bundled artifact (wpmgr-rum.min.js) incorporates code from web-vitals
+as permitted under Apache-2.0, Section 4 (Redistribution).

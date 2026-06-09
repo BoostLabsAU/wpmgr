@@ -461,6 +461,17 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
       break;
     }
 
+    // ── RUM rollup signal (Phase 3b) ─────────────────────────────────────────
+    // rum.rollup_updated: the rollup worker has folded new beacons into the
+    // hourly/daily tables for this site. Invalidate the summary + breakdown
+    // queries so the CWV panel refreshes. This is a throttled aggregate signal
+    // from the CP (at most once every few seconds), not a per-beacon stream, so
+    // a query invalidation per frame is the correct and only reaction.
+    case "rum.rollup_updated":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.rumSummary(siteId) });
+      void queryClient.invalidateQueries({ queryKey: perfKeys.rum(siteId) });
+      break;
+
     default:
       break;
   }
@@ -473,7 +484,8 @@ function isPerfEvent(type: string): boolean {
     type.startsWith("rucss.") ||
     type.startsWith("db.") ||
     type.startsWith("perf.") ||
-    type.startsWith("font.")
+    type.startsWith("font.") ||
+    type.startsWith("rum.")
   );
 }
 

@@ -559,6 +559,9 @@ CREATE TABLE backup_snapshots (
     -- archived marks a snapshot kept by the monthly-archive retention rule so GC
     -- spares it even once it falls outside the rolling window.
     archived      boolean     NOT NULL DEFAULT false,
+    -- locked: operator pin (m49). When true, the retention GC MUST skip this
+    -- snapshot regardless of retention_days/keep_last. Explicit unlock required.
+    locked        boolean     NOT NULL DEFAULT false,
     -- progress: phpbu-engine real-time progress (M5.6 / ADR-032). Latest phase
     -- payload posted by the agent runner. Shape:
     --   {"phase": "uploading", "phase_detail": {"chunks_done": 17, ...}}
@@ -570,6 +573,16 @@ CREATE TABLE backup_snapshots (
     progress_updated_at  timestamptz,
     started_at    timestamptz,
     finished_at   timestamptz,
+    -- m44 incremental backup columns (ADR-048)
+    is_incremental       boolean     NOT NULL DEFAULT false,
+    parent_snapshot_id   uuid        REFERENCES backup_snapshots (id) ON DELETE SET NULL,
+    base_snapshot_id     uuid        REFERENCES backup_snapshots (id) ON DELETE SET NULL,
+    chain_id             uuid,
+    generation           integer     NOT NULL DEFAULT 0,
+    cycle_files_scanned  bigint      NOT NULL DEFAULT 0,
+    cycle_files_changed  bigint      NOT NULL DEFAULT 0,
+    cycle_files_deleted  bigint      NOT NULL DEFAULT 0,
+    cycle_bytes_uploaded bigint      NOT NULL DEFAULT 0,
     created_at    timestamptz NOT NULL DEFAULT now(),
     updated_at    timestamptz NOT NULL DEFAULT now()
 );
@@ -580,6 +593,17 @@ CREATE INDEX backup_snapshots_tenant_created_idx ON backup_snapshots (tenant_id,
 -- stall threshold. Filtered btree on status keeps the predicate selective.
 CREATE INDEX backup_snapshots_running_progress_idx ON backup_snapshots (progress_updated_at)
     WHERE status = 'running';
+-- m44: chain lookup for incremental GC and restore planning.
+CREATE INDEX backup_snapshots_chain_id_idx ON backup_snapshots (chain_id)
+    WHERE chain_id IS NOT NULL;
+CREATE INDEX backup_snapshots_parent_id_idx ON backup_snapshots (parent_snapshot_id)
+    WHERE parent_snapshot_id IS NOT NULL;
+-- m45: composite index for ListChainSnapshots (chain_id + generation predicate).
+CREATE INDEX backup_snapshots_chain_gen_idx ON backup_snapshots (chain_id, generation)
+    WHERE chain_id IS NOT NULL;
+-- m49: index for the GC locked-pin check.
+CREATE INDEX backup_snapshots_locked_idx ON backup_snapshots (tenant_id, locked)
+    WHERE locked = true;
 
 ALTER TABLE backup_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backup_snapshots FORCE ROW LEVEL SECURITY;
@@ -592,6 +616,41 @@ CREATE POLICY backup_snapshots_tenant_isolation ON backup_snapshots
 -- tenant under the isolation policy. Permit that read-only enumeration when the
 -- app.agent GUC is 'on' (set by InAgentTx), mirroring the health/scheduler jobs.
 CREATE POLICY backup_snapshots_gc ON backup_snapshots
+    FOR SELECT
+    USING (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- backup_file_index  (m44 — per-file delta tracking for incremental backups)
+-- ---------------------------------------------------------------------------
+-- One row per file per snapshot (or tombstone for deleted files). chunk_hashes
+-- is the ORDERED list of BLAKE3 hashes that reassemble the file. Used by the
+-- chain-restore planner and the incremental GC reachability walk.
+CREATE TABLE backup_file_index (
+    id           uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id    uuid        NOT NULL,
+    snapshot_id  uuid        NOT NULL,
+    file_path    text        NOT NULL,
+    file_size    bigint      NOT NULL DEFAULT 0,
+    file_mtime   bigint      NOT NULL DEFAULT 0,
+    file_blake3  text        NOT NULL DEFAULT '',
+    chunk_hashes text[]      NOT NULL DEFAULT '{}',
+    is_tombstone boolean     NOT NULL DEFAULT false,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (id),
+    FOREIGN KEY (snapshot_id) REFERENCES backup_snapshots (id) ON DELETE CASCADE,
+    FOREIGN KEY (tenant_id)   REFERENCES tenants (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX backup_file_index_snapshot_path_key ON backup_file_index (snapshot_id, file_path);
+CREATE INDEX backup_file_index_snapshot_path_idx ON backup_file_index (snapshot_id, file_path);
+CREATE INDEX backup_file_index_tenant_id_idx ON backup_file_index (tenant_id);
+
+ALTER TABLE backup_file_index ENABLE ROW LEVEL SECURITY;
+ALTER TABLE backup_file_index FORCE ROW LEVEL SECURITY;
+CREATE POLICY backup_file_index_tenant_isolation ON backup_file_index
+    USING  (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY backup_file_index_agent ON backup_file_index
     FOR SELECT
     USING (current_setting('app.agent', true) = 'on');
 
@@ -663,6 +722,16 @@ CREATE TABLE backup_schedules (
     incremental_enabled boolean NOT NULL DEFAULT false,
     -- Optional override of BackupBaseWindowDays (7). NULL = use the constant.
     base_window_days    integer NULL CHECK (base_window_days IS NULL OR base_window_days BETWEEN 1 AND 365),
+    -- m49 — per-schedule notification settings (Track B).
+    notify_on_completion text    NOT NULL DEFAULT 'never'
+        CHECK (notify_on_completion IN ('always', 'on_failure', 'never')),
+    notify_recipients    jsonb   NOT NULL DEFAULT '[]'::jsonb,
+    -- m49 — backup composition / exclusions (Track A).
+    backup_components    jsonb   NULL,
+    exclude_paths        jsonb   NULL,
+    exclude_extensions   jsonb   NULL,
+    exclude_file_size_mb integer NULL CHECK (exclude_file_size_mb > 0),
+    include_core         boolean NOT NULL DEFAULT false,
     next_run_at   timestamptz NOT NULL DEFAULT now(),
     last_run_at   timestamptz,
     created_at    timestamptz NOT NULL DEFAULT now(),
@@ -1345,11 +1414,32 @@ CREATE TABLE site_perf_config (
     -- M53 / #169 — WooCommerce cacheable-session.
     woo_cacheable_session         boolean     NOT NULL DEFAULT false,
     woo_theme_fragments_supported boolean     NOT NULL DEFAULT false,
+    -- M56 — Real User Monitoring (RUM). All off by default (opt-in per site).
+    -- rum_enabled: per-site toggle; must be true for the beacon to be injected.
+    -- rum_sample_rate: fraction of beacons the CP keeps after server-side sampling.
+    -- max_distinct_countries: country-dimension cap; others fold to '__other__'.
+    -- min_sample_count: display floor below which no p75 is shown (CrUX-style).
+    -- beacon_key_hash: sha256(plaintext_beacon_key); used for anonymous ingest
+    --   resolution. The plaintext is NEVER stored here — it is only returned
+    --   transiently to the agent on perf-config push/ack.
+    -- beacon_key_hash_prev: grace-window previous hash (nullable; cleared after
+    --   the grace window expires so old cached pages still resolve during rotation).
+    rum_enabled               boolean  NOT NULL DEFAULT false,
+    rum_sample_rate           real     NOT NULL DEFAULT 1.0,
+    max_distinct_countries    integer  NOT NULL DEFAULT 8,
+    min_sample_count          integer  NOT NULL DEFAULT 100,
+    beacon_key_hash           bytea,
+    beacon_key_hash_prev      bytea,
     created_at                    timestamptz NOT NULL DEFAULT now(),
     updated_at                    timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE INDEX site_perf_config_tenant_idx ON site_perf_config (tenant_id);
+-- M56: unique index for beacon-key → site/tenant resolution in InRumIngestLookupTx.
+-- A point lookup on sha256(presented_key) resolves to exactly one site.
+CREATE UNIQUE INDEX site_perf_config_beacon_key_hash_uniq
+    ON site_perf_config (beacon_key_hash)
+    WHERE beacon_key_hash IS NOT NULL;
 
 ALTER TABLE site_perf_config ENABLE ROW LEVEL SECURITY;
 ALTER TABLE site_perf_config FORCE ROW LEVEL SECURITY;
@@ -1359,6 +1449,12 @@ CREATE POLICY site_perf_config_tenant_isolation ON site_perf_config
 CREATE POLICY site_perf_config_agent ON site_perf_config
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+-- M56: SELECT-only RUM beacon-key lookup policy. Enables InRumIngestLookupTx to
+-- read (site_id, tenant_id, rum_enabled, rum_sample_rate) by beacon_key_hash
+-- BEFORE any tenant GUC is set. Mirrors api_keys_prefix_lookup exactly.
+CREATE POLICY site_perf_config_rum_lookup ON site_perf_config
+    FOR SELECT
+    USING (current_setting('app.rum_lookup', true) = 'on');
 
 -- site_db_scan_results — latest db_scan output per site (M39 + M41).
 -- One row per site, upserted on every scan. Holds the full per-category
@@ -1394,6 +1490,35 @@ CREATE POLICY site_db_scan_results_tenant_isolation ON site_db_scan_results
 CREATE POLICY site_db_scan_results_agent ON site_db_scan_results
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_cache_hit_ratio_history — M52 / #162: append-only hit-ratio trend.
+-- One row per cache-stats report cycle when the agent supplies a non-zero delta.
+-- Mirrors site_db_size_history RLS EXACTLY.
+CREATE TABLE site_cache_hit_ratio_history (
+    id         uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    site_id    uuid          NOT NULL REFERENCES sites   (id) ON DELETE CASCADE,
+    tenant_id  uuid          NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    hit_count  bigint        NOT NULL DEFAULT 0,
+    miss_count bigint        NOT NULL DEFAULT 0,
+    ratio_pct  numeric(5,2),
+    sampled_at timestamptz   NOT NULL,
+    created_at timestamptz   NOT NULL DEFAULT now(),
+    CONSTRAINT site_cache_hit_ratio_history_site_sampled_uniq UNIQUE (site_id, sampled_at)
+);
+
+CREATE INDEX site_cache_hit_ratio_history_site_sampled_idx
+    ON site_cache_hit_ratio_history (site_id, sampled_at DESC);
+CREATE INDEX site_cache_hit_ratio_history_created_idx
+    ON site_cache_hit_ratio_history (created_at);
+
+ALTER TABLE site_cache_hit_ratio_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_cache_hit_ratio_history FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_cache_hit_ratio_history_tenant_isolation ON site_cache_hit_ratio_history
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+-- GC path only deletes; inserts flow through tenant_isolation via InTenantTx.
+CREATE POLICY site_cache_hit_ratio_history_agent ON site_cache_hit_ratio_history
+    USING (current_setting('app.agent', true) = 'on');
 
 -- site_cache_stats — latest cache gauges the agent reports (overwritten in place).
 CREATE TABLE site_cache_stats (
@@ -1666,3 +1791,154 @@ CREATE POLICY font_results_tenant_isolation ON font_results
 CREATE POLICY font_results_agent_access ON font_results
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- RUM tables  (m56 — Real User Monitoring)
+-- ---------------------------------------------------------------------------
+-- Three-table design: raw events (short-retention drill-down buffer),
+-- hourly rollups, and daily rollups. All use the RUM-specific RLS policy set:
+--   tenant_isolation (app.tenant_id) — dashboard read path. KEEP.
+--   rum_ingest (app.rum_ingest)      — INSERT-only, WITH CHECK only, no USING.
+--                                      The anonymous browser write path. ADD.
+--   agent_access                     — OMIT. The agent never touches RUM.
+-- This is NOT the m55 template verbatim; it deliberately excludes agent_access.
+
+-- rum_add_int_arrays: element-wise sum of two same-length integer arrays.
+-- Used by the ON CONFLICT DO UPDATE clauses in UpsertRumRollup*.
+CREATE OR REPLACE FUNCTION rum_add_int_arrays(a integer[], b integer[])
+RETURNS integer[]
+LANGUAGE sql
+IMMUTABLE STRICT PARALLEL SAFE
+AS $$
+    SELECT array_agg(ai + bi ORDER BY idx)
+    FROM unnest(a, b) WITH ORDINALITY AS t(ai, bi, idx)
+$$;
+
+-- rum_events_raw: 48h (SaaS) / 24h (self-host) rolling drill-down buffer.
+-- RANGE partitioning by day on received_at keeps partition drops cheap (no DELETE).
+-- In Phase 1 we create a non-partitioned table; partitioning is a later migration
+-- once the ingest volume justifies it and Atlas can diff it safely. The BRIN and
+-- composite index are what matter for correctness.
+CREATE TABLE IF NOT EXISTS rum_events_raw (
+    id           uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id    uuid        NOT NULL,
+    site_id      uuid        NOT NULL,
+    url_pattern  text        NOT NULL DEFAULT '',
+    metric       text        NOT NULL CHECK (metric IN ('lcp','inp','cls','ttfb','fcp')),
+    value_milli  integer     NOT NULL DEFAULT 0,
+    device       text        NOT NULL DEFAULT 'desktop',
+    country      text        NOT NULL DEFAULT '__other__',
+    conn         text        NOT NULL DEFAULT 'unknown',
+    received_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id)   REFERENCES sites   (id) ON DELETE CASCADE
+);
+
+-- BRIN for time-range scans on the rolling buffer (efficient when writes are
+-- time-ordered, which they are for an ingest-only table).
+CREATE INDEX IF NOT EXISTS rum_events_raw_received_at_brin
+    ON rum_events_raw USING BRIN (received_at);
+
+CREATE INDEX IF NOT EXISTS rum_events_raw_site_received_idx
+    ON rum_events_raw (site_id, received_at);
+
+CREATE INDEX IF NOT EXISTS rum_events_raw_tenant_idx
+    ON rum_events_raw (tenant_id);
+
+ALTER TABLE rum_events_raw ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rum_events_raw FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY rum_events_raw_tenant_isolation ON rum_events_raw
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+-- INSERT-only: the anonymous browser beacon writes under app.rum_ingest.
+-- WITH CHECK only (no USING) so this policy cannot be used to read rows.
+-- M3: tenant_id and site_id are pinned to the GUC-resolved values so a Go-layer
+-- bug that passes wrong IDs is caught by the DB rather than writing cross-tenant.
+CREATE POLICY rum_events_raw_rum_ingest ON rum_events_raw
+    FOR INSERT
+    WITH CHECK (
+        current_setting('app.rum_ingest', true) = 'on'
+        AND tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND site_id   = nullif(current_setting('app.site_id',   true), '')::uuid
+    );
+
+-- rum_rollup_hourly: PK (site_id, url_pattern, metric, device, country, bucket_hour).
+-- bucket_counts is the CrUX-anchored histogram as a fixed-width integer array.
+-- sample_rate is persisted so read-time code can scale counts back to true volume.
+CREATE TABLE IF NOT EXISTS rum_rollup_hourly (
+    tenant_id    uuid        NOT NULL,
+    site_id      uuid        NOT NULL,
+    url_pattern  text        NOT NULL,
+    metric       text        NOT NULL,
+    device       text        NOT NULL,
+    country      text        NOT NULL,
+    bucket_hour  timestamptz NOT NULL,
+    sample_count bigint      NOT NULL DEFAULT 0,
+    sample_rate  real        NOT NULL DEFAULT 1.0,
+    bucket_counts integer[]  NOT NULL DEFAULT '{}',
+    sum_value    bigint      NOT NULL DEFAULT 0,
+    min_value    integer     NOT NULL DEFAULT 0,
+    max_value    integer     NOT NULL DEFAULT 0,
+    PRIMARY KEY (site_id, url_pattern, metric, device, country, bucket_hour),
+    FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id)   REFERENCES sites   (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS rum_rollup_hourly_tenant_idx
+    ON rum_rollup_hourly (tenant_id);
+
+ALTER TABLE rum_rollup_hourly ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rum_rollup_hourly FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY rum_rollup_hourly_tenant_isolation ON rum_rollup_hourly
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY rum_rollup_hourly_rum_ingest ON rum_rollup_hourly
+    FOR INSERT
+    WITH CHECK (
+        current_setting('app.rum_ingest', true) = 'on'
+        AND tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND site_id   = nullif(current_setting('app.site_id',   true), '')::uuid
+    );
+
+-- rum_rollup_daily: identical to hourly but bucket_day is a date.
+CREATE TABLE IF NOT EXISTS rum_rollup_daily (
+    tenant_id    uuid        NOT NULL,
+    site_id      uuid        NOT NULL,
+    url_pattern  text        NOT NULL,
+    metric       text        NOT NULL,
+    device       text        NOT NULL,
+    country      text        NOT NULL,
+    bucket_day   date        NOT NULL,
+    sample_count bigint      NOT NULL DEFAULT 0,
+    sample_rate  real        NOT NULL DEFAULT 1.0,
+    bucket_counts integer[]  NOT NULL DEFAULT '{}',
+    sum_value    bigint      NOT NULL DEFAULT 0,
+    min_value    integer     NOT NULL DEFAULT 0,
+    max_value    integer     NOT NULL DEFAULT 0,
+    PRIMARY KEY (site_id, url_pattern, metric, device, country, bucket_day),
+    FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id)   REFERENCES sites   (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS rum_rollup_daily_tenant_idx
+    ON rum_rollup_daily (tenant_id);
+
+ALTER TABLE rum_rollup_daily ENABLE ROW LEVEL SECURITY;
+ALTER TABLE rum_rollup_daily FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY rum_rollup_daily_tenant_isolation ON rum_rollup_daily
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY rum_rollup_daily_rum_ingest ON rum_rollup_daily
+    FOR INSERT
+    WITH CHECK (
+        current_setting('app.rum_ingest', true) = 'on'
+        AND tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+        AND site_id   = nullif(current_setting('app.site_id',   true), '')::uuid
+    );

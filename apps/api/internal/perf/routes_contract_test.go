@@ -61,6 +61,9 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/rucss/compute",
 	// M55 — Font results catalog (dashboard list).
 	"GET    /api/v1/sites/:siteId/perf/fonts",
+	// M56 — RUM Core Web Vitals read endpoints.
+	"GET    /api/v1/sites/:siteId/perf/rum/summary",
+	"GET    /api/v1/sites/:siteId/perf/rum",
 	"POST   /api/v1/cache/bulk-purge",
 	"PUT    /api/v1/cache/bulk-config",
 	// P3.7 — tenant-level (no :siteId) fleet DB health aggregate.

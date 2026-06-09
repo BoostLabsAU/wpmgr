@@ -112,6 +112,13 @@ const SITE_EVENT_TYPES = [
   "font.skipped",
   "font.failed",
   "font.completed",
+  // RUM rollup signal (Phase 3b). The CP emits this throttled aggregate frame
+  // (at most once every few seconds) when the rollup worker has folded new
+  // beacons into the hourly/daily rollup tables for the currently-open site.
+  // The dashboard reacts by invalidating the rum / rumSummary queries — no
+  // per-beacon streaming. Any new rum.* type NOT listed here is silently dropped
+  // by z.enum(SITE_EVENT_TYPES) validation before it reaches usePerfEvents.
+  "rum.rollup_updated",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

@@ -24,6 +24,7 @@ type Handler struct {
 	svc       *Service
 	rucss     *RucssResultsReader
 	fonts     *FontResultsReader
+	rum       *RumResultsReader // M56 — nil degrades to empty response
 	audit     *audit.Recorder
 	corpus    CorpusSource // P3.5 — nil degrades orphans to no-scan-found
 	cpBaseURL string       // forwarded to Service.DBClean for progress_endpoint
@@ -118,6 +119,13 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 	// M55 — Font results catalog (dashboard list, operator read-only).
 	g.GET("/perf/fonts", authz.RequirePermission(authz.PermSiteRead), h.fontResults)
+
+	// M56 — RUM Core Web Vitals read endpoints (operator read-only).
+	// /perf/rum/summary returns site-level p75 aggregates over a configurable window.
+	// /perf/rum returns per-URL/metric/device breakdown rows for the dashboard table.
+	// Both enforce the min_sample_count suppression floor server-side.
+	g.GET("/perf/rum/summary", authz.RequirePermission(authz.PermSiteRead), h.rumSummary)
+	g.GET("/perf/rum", authz.RequirePermission(authz.PermSiteRead), h.rumResults)
 
 	// #190 — Media Cleaner tool.
 	// Scan is read-only (PermMediaCleanScan = viewer+); isolate/restore are

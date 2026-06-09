@@ -120,6 +120,9 @@ export {
   listQuarantinedMedia,
   // font results catalog (ADR-052 Phase 2 / m55)
   listFontResults,
+  // RUM / Core Web Vitals (Phase 3b)
+  getRumSummary,
+  listRumResults,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -392,4 +395,13 @@ export type {
   FontResultList,
   ListFontResultsData,
   ListFontResultsResponse,
+  // RUM / Core Web Vitals (Phase 3b)
+  RumSummary,
+  RumResult,
+  RumResultList,
+  RumMetricSummary,
+  GetRumSummaryData,
+  GetRumSummaryResponse,
+  ListRumResultsData,
+  ListRumResultsResponse,
 } from "./generated/types.gen";

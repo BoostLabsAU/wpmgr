@@ -12,11 +12,14 @@ import { BloatSection } from "./BloatSection";
 import { DatabaseSection } from "./DatabaseSection";
 import { RucssResultsTable } from "./RucssResultsTable";
 import { FontResultsTable } from "./FontResultsTable";
+import { RumSection } from "./RumSection";
+import { RumResultsTable } from "./RumResultsTable";
 
-// OptimizeTab — the asset-optimization entry surface. Six settings sections
-// (CSS/JS, Fonts, Media/HTML, CDN, Bloat, Database) plus the RUCSS results
-// table. SSE is wired here via usePerfEvents so config + RUCSS results stay
-// live. Every setting autosaves (optimistic PUT → toast on error).
+// OptimizeTab — the asset-optimization entry surface. Settings sections
+// (CSS/JS, Fonts, Media/HTML, CDN, Bloat, Database, RUM) plus results tables
+// (RUCSS, Fonts, RUM). SSE is wired here via usePerfEvents so config, RUCSS
+// results, and RUM rollup data stay live. Every setting autosaves
+// (optimistic PUT with rollback on error).
 
 export interface OptimizeTabProps {
   siteId: string;
@@ -85,6 +88,13 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
         hostname={hostname}
         canOperate={canOperate}
       />
+      <RumSection
+        config={cfg}
+        save={save}
+        disabled={disabled}
+        saving={saving}
+      />
+      <RumResultsTable siteId={siteId} perSite />
     </div>
   );
 }

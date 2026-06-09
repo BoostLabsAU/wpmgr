@@ -6,6 +6,24 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-06-09
+
+### Added
+
+- Real User Monitoring (RUM). Per-site, opt-in, off by default. When enabled, a
+  tiny first-party collector script is injected into cached pages by the agent at
+  cache-write time. The site visitor's browser beacons Core Web Vitals (LCP, INP,
+  CLS, FCP, TTFB) plus page-load timing directly to the control plane. Data is
+  anonymous: the page path is stored with the query string stripped, the IP is
+  used only transiently for coarse country lookup then discarded, and no cookies
+  or cross-site identifiers are set. Measurements are stored in Postgres histogram
+  rollups (hourly and daily, with ClickHouse available as an opt-in scale backend
+  via the same boot-selection pattern as the existing metrics store). The operator
+  dashboard shows p75 per metric with per-URL and per-device breakdowns, live
+  updates over SSE, and a minimum-sample floor that suppresses any slice below the
+  configured count so noise is never presented as a metric. On a self-hosted
+  control plane, all RUM data stays on the operator's own infrastructure.
+
 ## [0.32.1] - 2026-06-09
 
 ### Fixed

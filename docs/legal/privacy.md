@@ -1,6 +1,6 @@
 # Privacy Policy
 
-_Last updated: 8 June 2026_
+_Last updated: 9 June 2026_
 
 WPMgr is open-source, self-hostable software for managing a fleet of WordPress
 sites — backups, updates, performance, and security. This Privacy Policy explains
@@ -24,7 +24,10 @@ apply.
 
 Once you connect a site, the agent communicates **only** with the control-plane
 URL you configured, and only for the management actions you (or your schedules)
-initiate:
+initiate. The agent is the transmitter for all management data listed below.
+The one exception is the optional Real User Monitoring feature, described in the
+next section, where the site visitor's browser — not the agent — transmits
+anonymous performance data directly to the control plane; it is off by default.
 
 - **Site and environment metadata** — site URL, WordPress / PHP / server
   versions, active theme and plugins, and Site Health diagnostics. Used to show
@@ -44,6 +47,36 @@ Every agent request is verified with an Ed25519 signature tied to the key
 established when you enroll the site. The agent does not execute arbitrary remote
 code; it accepts only a fixed, named allow-list of commands.
 
+## Real User Monitoring (when you enable it)
+
+Real User Monitoring (RUM) is the **one exception** to the agent-as-sole-transmitter
+model above. It is a separate, opt-in data flow that does not go through the agent.
+When you enable RUM for a site, the agent injects a small, public measurement
+script into that site's pages. The **site visitor's own browser** then sends
+anonymous performance measurements **directly** to the control plane you
+configured (on the hosted service, **manage.wpmgr.app**). RUM is **off by
+default** and is enabled per site.
+
+This introduces a new data subject: **your site's visitors**. What their browser
+sends is deliberately minimal and anonymous:
+
+- **Performance measurements** — Core Web Vitals (LCP, INP, CLS) plus TTFB and
+  FCP, and page-load timing.
+- **The page path, with the query string stripped** — tokens, emails, and order
+  IDs that appear in query strings are never transmitted.
+- **Coarse, non-identifying context** — browser and device type derived from the
+  User-Agent, connection type (4G, 3G, etc.), and an approximate country code.
+- **No cookies, no localStorage, no cross-site identifier, and no stored full IP
+  address.** The visitor's IP is used only transiently for rate-limiting and the
+  coarse country lookup, then discarded; it is never stored.
+
+Because RUM transmits from the visitor's browser rather than from the agent,
+**you (the site owner) are the data controller for your visitors' RUM data** and
+must disclose this collection in your own site's privacy policy, the same way you
+would for any analytics or performance tool. If you self-host the control plane,
+this data stays entirely on your own infrastructure. On the hosted service, it
+is processed by us on your behalf as described below.
+
 ## The hosted service (manage.wpmgr.app)
 
 If you use the hosted WPMgr service rather than self-hosting, we also process:
@@ -53,6 +86,9 @@ If you use the hosted WPMgr service rather than self-hosting, we also process:
 - **The site data described above**, on your behalf, to provide the dashboard,
   backups, and management features you use.
 - **Encrypted backup archives**, stored in cloud object storage.
+- **Anonymous Real User Monitoring measurements** from your site visitors, if you
+  enable RUM, processed on your behalf as the operator of the hosted service. We
+  do not use this data to identify individual visitors.
 - **Operational logs** needed to run and secure the service.
 
 ## What we do not do
@@ -74,6 +110,8 @@ sub-processors at all.
 - **Self-host** to keep all data on infrastructure you control.
 - **Disconnect** the agent (or deactivate the plugin) at any time to stop all
   data transmission immediately.
+- **Disable RUM** per site at any time to stop browser-originated performance
+  beacons immediately.
 - On the hosted service you can request access to, export of, or deletion of your
   account data by contacting us.
 

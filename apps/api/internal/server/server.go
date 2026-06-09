@@ -31,6 +31,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
 	"github.com/mosamlife/wpmgr/apps/api/internal/settings"
@@ -142,7 +143,11 @@ type Deps struct {
 	FontResultsAgentH *perf.FontResultsAgentHandler
 	// AdminH serves the superadmin instance-management area under
 	// /api/v1/admin. nil ⇒ routes not mounted.
-	AdminH      *admin.Handler
+	AdminH *admin.Handler
+	// RumH serves the public POST /rum/ingest endpoint (M56 — Real User
+	// Monitoring). Mounted on the root engine (no session, no tenant gate);
+	// the beacon key is the sole access credential. nil ⇒ route not mounted.
+	RumH        *rum.Handler
 	ServiceName string
 	Version     string
 }
@@ -161,11 +166,25 @@ func New(deps Deps) *Server {
 	}
 
 	engine := gin.New()
+	// Recovery MUST remain on the root engine so that ALL route groups — including
+	// the public /rum/ingest endpoint — are covered by panic-safety. (L3: this
+	// middleware must not be moved off the root engine when reorganising groups.)
 	engine.Use(
 		middleware.RequestID(),
 		otelgin.Middleware(deps.ServiceName),
 		middleware.Logger(deps.Logger),
 		middleware.Recovery(deps.Logger),
+	)
+	// sessionAuthGroup is a zero-prefix group that carries Sessions.LoadAndSave()
+	// and Auth.Authenticate(). All routes that need a session or principal
+	// (auth endpoints, /api/v1, /agent/v1) register through this group or through
+	// groups derived from it. The public /rum/ingest endpoint must NOT share these
+	// middlewares: it carries no session and no tenant GUC, so loading a session
+	// on each beacon costs a Redis round-trip for nothing and creates a standing
+	// trap where future code might accidentally touch the session or principal on
+	// the ingest path. (H2 fix: Sessions.LoadAndSave + Auth.Authenticate are
+	// absent from the root engine and absent from the /rum group.)
+	sessionAuthGroup := engine.Group("",
 		deps.Sessions.LoadAndSave(),
 		deps.Auth.Authenticate(),
 	)
@@ -182,16 +201,23 @@ func New(deps Deps) *Server {
 
 	s.registerSystem(engine)
 
-	// Public auth endpoints (login/register/logout/me + OIDC).
-	deps.AuthH.Register(engine)
+	// Public auth endpoints (login/register/logout/me + OIDC) need session + auth.
+	deps.AuthH.Register(sessionAuthGroup)
 
 	// Public invitation-accept endpoint (creates the session itself; no RequireAuth).
 	if deps.InvitationH != nil {
-		deps.InvitationH.RegisterPublic(engine)
+		deps.InvitationH.RegisterPublic(sessionAuthGroup)
 	}
 
 	// Public agent enrollment (no session/tenant; the pairing code authorizes).
 	deps.SiteH.RegisterPublic(engine)
+
+	// Public RUM ingest (M56): POST /rum/ingest. No session, no tenant gate.
+	// The beacon key is the only credential. Isolated from /api/v1 and /agent/v1.
+	// Intentionally does NOT use sessionAuthGroup — see H2 note above.
+	if deps.RumH != nil {
+		deps.RumH.RegisterPublic(engine)
+	}
 
 	// Agent-authenticated endpoints: the agent authenticator verifies an Ed25519
 	// signed request and resolves the site/tenant from the verified key — this
@@ -253,18 +279,19 @@ func New(deps Deps) *Server {
 		}
 	}
 
-	// Everything under /api/v1 requires an authenticated principal with an
-	// active tenant; finer per-route RBAC is applied by each handler.
-	v1 := engine.Group("/api/v1")
+	// Everything under /api/v1 requires session load + authentication + an active
+	// tenant; finer per-route RBAC is applied by each handler.
+	// Derive from sessionAuthGroup so session + auth middlewares are inherited.
+	v1 := sessionAuthGroup.Group("/api/v1")
 	v1.Use(authz.RequireAuth(), authz.RequireTenant())
 
-	// Org routes require auth but NOT an active tenant: a user creates (or lists,
-	// or activates) their FIRST organisation precisely when they have none yet
-	// (e.g. a former site-collaborator whose access was revoked). RequireTenant
-	// would 403 them out of the create-org onboarding. Each org handler does its
-	// own per-org membership/role authorization, so dropping the tenant gate here
-	// opens no hole. (ADR-045 Phase 3 onboarding.)
-	v1Auth := engine.Group("/api/v1")
+	// Org routes require session + auth but NOT an active tenant: a user creates
+	// (or lists, or activates) their FIRST organisation precisely when they have
+	// none yet (e.g. a former site-collaborator whose access was revoked).
+	// RequireTenant would 403 them out of the create-org onboarding. Each org
+	// handler does its own per-org membership/role authorization, so dropping the
+	// tenant gate here opens no hole. (ADR-045 Phase 3 onboarding.)
+	v1Auth := sessionAuthGroup.Group("/api/v1")
 	v1Auth.Use(authz.RequireAuth())
 	deps.TenantH.Register(v1)
 	deps.SiteH.Register(v1)

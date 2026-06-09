@@ -114,6 +114,17 @@ type perfConfigDTO struct {
 	// perf/config-ack.
 	WooThemeFragmentsSupported bool `json:"woo_theme_fragments_supported"`
 
+	// M56 / RUM — Real User Monitoring settings.
+	// RumEnabled and RumSampleRate are operator read+write. BeaconKeySet is
+	// read-only (the plaintext key is never returned; the UI uses this boolean
+	// to show whether RUM is fully provisioned). MaxDistinctCountries and
+	// MinSampleCount are operator-tunable thresholds.
+	RumEnabled           bool    `json:"rum_enabled"`
+	RumSampleRate        float64 `json:"rum_sample_rate"`
+	MaxDistinctCountries int     `json:"max_distinct_countries"`
+	MinSampleCount       int     `json:"min_sample_count"`
+	BeaconKeySet         bool    `json:"beacon_key_set"` // read-only
+
 	ConfigVersion int    `json:"config_version"`
 	UpdatedAt     string `json:"updated_at,omitempty"`
 }
@@ -184,6 +195,11 @@ func toConfigDTO(c Config) perfConfigDTO {
 		HtaccessManaged:            c.HtaccessManaged,
 		WooCacheableSession:        c.WooCacheableSession,
 		WooThemeFragmentsSupported: c.WooThemeFragmentsSupported,
+		RumEnabled:                 c.RumEnabled,
+		RumSampleRate:              c.RumSampleRate,
+		MaxDistinctCountries:       c.MaxDistinctCountries,
+		MinSampleCount:             c.MinSampleCount,
+		BeaconKeySet:               c.BeaconKeySet,
 		ConfigVersion:              c.ConfigVersion,
 	}
 	if !c.UpdatedAt.IsZero() {
@@ -257,6 +273,13 @@ func fromConfigDTO(dto perfConfigDTO, tenantID, siteID uuid.UUID) Config {
 		// WooThemeFragmentsSupported is agent-reported and deliberately NOT read from
 		// dto here — the PUT handler must not let an operator write it.
 		WooCacheableSession: dto.WooCacheableSession,
+		// M56 / RUM: RumEnabled, RumSampleRate, MaxDistinctCountries,
+		// MinSampleCount are operator-writable. BeaconKeySet is read-only and
+		// deliberately NOT read from dto here — the service manages beacon keys.
+		RumEnabled:           dto.RumEnabled,
+		RumSampleRate:        dto.RumSampleRate,
+		MaxDistinctCountries: dto.MaxDistinctCountries,
+		MinSampleCount:       dto.MinSampleCount,
 	}
 }
 
@@ -414,4 +437,99 @@ func nonNil(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// ---------------------------------------------------------------------------
+// RUM read DTOs (M56 Phase 3a)
+// ---------------------------------------------------------------------------
+
+// RumMetricSummary is the p75 summary for one metric in one device/country slice.
+// Suppressed is true when the sample count is below the min_sample_count floor;
+// in that case P75Ms is 0 and the UI renders "insufficient samples (SampleCount
+// of MinNeeded)" rather than a number. This mirrors the CrUX suppression model.
+type RumMetricSummary struct {
+	Metric      string  `json:"metric"`       // lcp | inp | cls | ttfb | fcp
+	Device      string  `json:"device"`       // desktop | mobile | tablet | all
+	Country     string  `json:"country"`      // ISO-3166-1 alpha-2 or "__other__"
+	P75Ms       float64 `json:"p75_ms"`       // 0 when Suppressed
+	SampleCount int64   `json:"sample_count"` // raw (pre-scale) count
+	// Rating is the CWV standard rating band: "good" | "needs_improvement" | "poor".
+	// Empty when Suppressed is true or when the metric has no official threshold.
+	Rating string `json:"rating,omitempty"`
+	// Suppressed is true when SampleCount < min_sample_count. The dashboard must
+	// render "insufficient samples" rather than a p75 in this state.
+	Suppressed bool `json:"suppressed"`
+}
+
+// RumSummaryDTO is the response shape for GET /perf/rum/summary. It carries
+// site-level Core Web Vitals p75s over the requested window, with per-device
+// and per-country breakdowns. Any slice below the min_sample_count floor is
+// returned with Suppressed=true and P75Ms=0.
+type RumSummaryDTO struct {
+	// WindowDays is the number of days covered by this summary.
+	WindowDays int `json:"window_days"`
+	// MinSampleCount is the site's configured floor (from perf config).
+	MinSampleCount int `json:"min_sample_count"`
+	// Metrics is the flat list of p75 results by (metric, device, country).
+	Metrics []RumMetricSummary `json:"metrics"`
+}
+
+// RumResultDTO is one per-URL/metric/device p75 breakdown row for the dashboard
+// table. Suppressed carries the same semantics as in RumMetricSummary.
+type RumResultDTO struct {
+	URLPattern  string  `json:"url_pattern"`
+	Metric      string  `json:"metric"`
+	Device      string  `json:"device"`
+	Country     string  `json:"country"`
+	P75Ms       float64 `json:"p75_ms"`
+	SampleCount int64   `json:"sample_count"`
+	Rating      string  `json:"rating,omitempty"`
+	Suppressed  bool    `json:"suppressed"`
+}
+
+// cwvRating returns the CWV standard band for a p75 millisecond value.
+// Thresholds are the official web-vitals constants (same as the tracker JS).
+// Returns "" for metrics with no official threshold (none currently).
+func cwvRating(metric string, p75Ms float64) string {
+	switch metric {
+	case "lcp":
+		if p75Ms <= 2500 {
+			return "good"
+		} else if p75Ms <= 4000 {
+			return "needs_improvement"
+		}
+		return "poor"
+	case "inp":
+		if p75Ms <= 200 {
+			return "good"
+		} else if p75Ms <= 500 {
+			return "needs_improvement"
+		}
+		return "poor"
+	case "cls":
+		// CLS is stored as milli-units (value x 1000) to share integer machinery.
+		// p75Ms is therefore cls_value * 1000; thresholds are 0.1 and 0.25 raw,
+		// i.e. 100 and 250 in the milli-unit representation.
+		if p75Ms <= 100 {
+			return "good"
+		} else if p75Ms <= 250 {
+			return "needs_improvement"
+		}
+		return "poor"
+	case "fcp":
+		if p75Ms <= 1800 {
+			return "good"
+		} else if p75Ms <= 3000 {
+			return "needs_improvement"
+		}
+		return "poor"
+	case "ttfb":
+		if p75Ms <= 800 {
+			return "good"
+		} else if p75Ms <= 1800 {
+			return "needs_improvement"
+		}
+		return "poor"
+	}
+	return ""
 }

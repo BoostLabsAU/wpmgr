@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.32.1
+Stable tag: 0.33.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -77,6 +77,24 @@ Once connected, the agent communicates only with the control-plane URL you confi
 
 The agent does not sell or share this data with third parties. It receives signed, allow-listed commands (backup, restore, update, cache operations) from your control plane; it does NOT download or execute arbitrary remote PHP code.
 
+**Real User Monitoring (when you enable it)**
+
+Real User Monitoring (RUM) is off by default and must be enabled per site. It is the one exception to the agent-as-sole-transmitter model above.
+
+When RUM is enabled, the agent injects a small, public measurement script into cached pages at cache-write time. Your site visitor's own browser -- not the agent -- then sends anonymous performance measurements directly to the control plane. The agent itself transmits nothing new; it only adds the script to the HTML it already serves.
+
+What the visitor's browser sends:
+
+- Core Web Vitals (LCP, INP, CLS) plus TTFB and FCP, and page-load timing.
+- The page path only -- query strings are stripped before transmission, so tokens, emails, and order IDs in URLs are never sent.
+- Coarse, non-identifying context: browser and device type derived from the User-Agent, connection type, and an approximate country code.
+
+What is never collected: cookies, localStorage, cross-site identifiers, or the visitor's full IP address. The IP is used only transiently for rate-limiting and coarse country lookup, then discarded and never stored.
+
+Because this data originates from your site visitors' browsers, you (the site owner) are the data controller for it and must disclose it in your own site's privacy policy. If you self-host the control plane, RUM data stays entirely on your own infrastructure and never reaches WPMgr. If you use the hosted service at https://manage.wpmgr.app, that service processes the measurements on your behalf.
+
+Disable RUM at any time in the Performance settings; the script is removed from newly cached pages immediately.
+
 If you connect to the hosted WPMgr service, that service's Terms of Service (https://manage.wpmgr.app/terms) and Privacy Policy (https://manage.wpmgr.app/privacy) apply. If you self-host the control plane, you operate the receiving service and your own policies apply. You can stop all data transmission at any time by disconnecting the agent (Disconnect in the agent admin screen) or deactivating the plugin.
 
 **How it works / security**
@@ -102,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.0 =
+* Performance: Real User Monitoring (RUM), per-site and off by default. When enabled, the agent injects a tiny first-party measurement script into cached pages; the visitor's browser sends anonymous Core Web Vitals (LCP, INP, CLS, FCP, TTFB) and page-load timing directly to your control plane. No cookies, no cross-site identifiers, the page path is stored with the query string stripped, and the visitor IP is never stored. See the Privacy section.
+
 = 0.32.1 =
 * Maintenance: version alignment with the control plane. No plugin functional changes (the fix in this release was control-plane only).
 
@@ -116,6 +137,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.0 =
+Adds opt-in, off-by-default Real User Monitoring (anonymous Core Web Vitals from real visitors). No database changes on the site. Safe to update in place.
 
 = 0.32.1 =
 Version alignment with the control plane. No plugin functional changes. Safe to update in place.

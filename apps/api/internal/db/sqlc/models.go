@@ -92,6 +92,19 @@ type BackupChunk struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type BackupFileIndex struct {
+	ID          uuid.UUID `json:"id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	SnapshotID  uuid.UUID `json:"snapshot_id"`
+	FilePath    string    `json:"file_path"`
+	FileSize    int64     `json:"file_size"`
+	FileMtime   int64     `json:"file_mtime"`
+	FileBlake3  string    `json:"file_blake3"`
+	ChunkHashes []string  `json:"chunk_hashes"`
+	IsTombstone bool      `json:"is_tombstone"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type BackupManifestEntry struct {
 	ID          uuid.UUID `json:"id"`
 	SnapshotID  uuid.UUID `json:"snapshot_id"`
@@ -122,6 +135,13 @@ type BackupSchedule struct {
 	KeepLast           int32              `json:"keep_last"`
 	IncrementalEnabled bool               `json:"incremental_enabled"`
 	BaseWindowDays     *int32             `json:"base_window_days"`
+	NotifyOnCompletion string             `json:"notify_on_completion"`
+	NotifyRecipients   []byte             `json:"notify_recipients"`
+	BackupComponents   []byte             `json:"backup_components"`
+	ExcludePaths       []byte             `json:"exclude_paths"`
+	ExcludeExtensions  []byte             `json:"exclude_extensions"`
+	ExcludeFileSizeMb  *int32             `json:"exclude_file_size_mb"`
+	IncludeCore        bool               `json:"include_core"`
 	NextRunAt          time.Time          `json:"next_run_at"`
 	LastRunAt          pgtype.Timestamptz `json:"last_run_at"`
 	CreatedAt          time.Time          `json:"created_at"`
@@ -146,23 +166,33 @@ type BackupScheduleRun struct {
 }
 
 type BackupSnapshot struct {
-	ID                uuid.UUID          `json:"id"`
-	TenantID          uuid.UUID          `json:"tenant_id"`
-	SiteID            uuid.UUID          `json:"site_id"`
-	CreatedBy         pgtype.UUID        `json:"created_by"`
-	Kind              string             `json:"kind"`
-	Status            string             `json:"status"`
-	AgeRecipient      string             `json:"age_recipient"`
-	TotalSize         int64              `json:"total_size"`
-	ChunkCount        int64              `json:"chunk_count"`
-	Error             string             `json:"error"`
-	Archived          bool               `json:"archived"`
-	Progress          []byte             `json:"progress"`
-	ProgressUpdatedAt pgtype.Timestamptz `json:"progress_updated_at"`
-	StartedAt         pgtype.Timestamptz `json:"started_at"`
-	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
+	ID                 uuid.UUID          `json:"id"`
+	TenantID           uuid.UUID          `json:"tenant_id"`
+	SiteID             uuid.UUID          `json:"site_id"`
+	CreatedBy          pgtype.UUID        `json:"created_by"`
+	Kind               string             `json:"kind"`
+	Status             string             `json:"status"`
+	AgeRecipient       string             `json:"age_recipient"`
+	TotalSize          int64              `json:"total_size"`
+	ChunkCount         int64              `json:"chunk_count"`
+	Error              string             `json:"error"`
+	Archived           bool               `json:"archived"`
+	Locked             bool               `json:"locked"`
+	Progress           []byte             `json:"progress"`
+	ProgressUpdatedAt  pgtype.Timestamptz `json:"progress_updated_at"`
+	StartedAt          pgtype.Timestamptz `json:"started_at"`
+	FinishedAt         pgtype.Timestamptz `json:"finished_at"`
+	IsIncremental      bool               `json:"is_incremental"`
+	ParentSnapshotID   pgtype.UUID        `json:"parent_snapshot_id"`
+	BaseSnapshotID     pgtype.UUID        `json:"base_snapshot_id"`
+	ChainID            pgtype.UUID        `json:"chain_id"`
+	Generation         int32              `json:"generation"`
+	CycleFilesScanned  int64              `json:"cycle_files_scanned"`
+	CycleFilesChanged  int64              `json:"cycle_files_changed"`
+	CycleFilesDeleted  int64              `json:"cycle_files_deleted"`
+	CycleBytesUploaded int64              `json:"cycle_bytes_uploaded"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
 }
 
 type CachePurgeAudit struct {
@@ -196,6 +226,37 @@ type EmailVerificationToken struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt time.Time          `json:"created_at"`
+}
+
+type FontResult struct {
+	ID           uuid.UUID      `json:"id"`
+	TenantID     uuid.UUID      `json:"tenant_id"`
+	SiteID       uuid.UUID      `json:"site_id"`
+	SourceHash   string         `json:"source_hash"`
+	Family       *string        `json:"family"`
+	SourceFile   *string        `json:"source_file"`
+	OriginalExt  *string        `json:"original_ext"`
+	OriginalSize *int32         `json:"original_size"`
+	Woff2Size    *int32         `json:"woff2_size"`
+	SubsetSize   *int32         `json:"subset_size"`
+	UnicodeRange *string        `json:"unicode_range"`
+	State        string         `json:"state"`
+	ErrorDetail  *string        `json:"error_detail"`
+	SavingsPct   pgtype.Numeric `json:"savings_pct"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
+}
+
+type FontTranscodeResult struct {
+	SourceHash  string    `json:"source_hash"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	SiteID      uuid.UUID `json:"site_id"`
+	RiverJobID  *int64    `json:"river_job_id"`
+	Woff2Key    *string   `json:"woff2_key"`
+	Negative    bool      `json:"negative"`
+	ErrorDetail *string   `json:"error_detail"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type Invitation struct {
@@ -292,6 +353,51 @@ type RucssResult struct {
 	LastUsedAt       time.Time      `json:"last_used_at"`
 }
 
+type RumEventsRaw struct {
+	ID         uuid.UUID `json:"id"`
+	TenantID   uuid.UUID `json:"tenant_id"`
+	SiteID     uuid.UUID `json:"site_id"`
+	UrlPattern string    `json:"url_pattern"`
+	Metric     string    `json:"metric"`
+	ValueMilli int32     `json:"value_milli"`
+	Device     string    `json:"device"`
+	Country    string    `json:"country"`
+	Conn       string    `json:"conn"`
+	ReceivedAt time.Time `json:"received_at"`
+}
+
+type RumRollupDaily struct {
+	TenantID     uuid.UUID   `json:"tenant_id"`
+	SiteID       uuid.UUID   `json:"site_id"`
+	UrlPattern   string      `json:"url_pattern"`
+	Metric       string      `json:"metric"`
+	Device       string      `json:"device"`
+	Country      string      `json:"country"`
+	BucketDay    pgtype.Date `json:"bucket_day"`
+	SampleCount  int64       `json:"sample_count"`
+	SampleRate   float32     `json:"sample_rate"`
+	BucketCounts []int32     `json:"bucket_counts"`
+	SumValue     int64       `json:"sum_value"`
+	MinValue     int32       `json:"min_value"`
+	MaxValue     int32       `json:"max_value"`
+}
+
+type RumRollupHourly struct {
+	TenantID     uuid.UUID `json:"tenant_id"`
+	SiteID       uuid.UUID `json:"site_id"`
+	UrlPattern   string    `json:"url_pattern"`
+	Metric       string    `json:"metric"`
+	Device       string    `json:"device"`
+	Country      string    `json:"country"`
+	BucketHour   time.Time `json:"bucket_hour"`
+	SampleCount  int64     `json:"sample_count"`
+	SampleRate   float32   `json:"sample_rate"`
+	BucketCounts []int32   `json:"bucket_counts"`
+	SumValue     int64     `json:"sum_value"`
+	MinValue     int32     `json:"min_value"`
+	MaxValue     int32     `json:"max_value"`
+}
+
 type Site struct {
 	ID                    uuid.UUID          `json:"id"`
 	TenantID              uuid.UUID          `json:"tenant_id"`
@@ -334,6 +440,17 @@ type SiteAlertState struct {
 	InIncident      bool               `json:"in_incident"`
 	LastAlertAt     pgtype.Timestamptz `json:"last_alert_at"`
 	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
+type SiteCacheHitRatioHistory struct {
+	ID        uuid.UUID      `json:"id"`
+	SiteID    uuid.UUID      `json:"site_id"`
+	TenantID  uuid.UUID      `json:"tenant_id"`
+	HitCount  int64          `json:"hit_count"`
+	MissCount int64          `json:"miss_count"`
+	RatioPct  pgtype.Numeric `json:"ratio_pct"`
+	SampledAt time.Time      `json:"sampled_at"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 type SiteCacheStat struct {
@@ -387,21 +504,6 @@ type SiteDbSizeHistory struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-// SiteCacheHitRatioHistory is one row of site_cache_hit_ratio_history (M52).
-// RatioPct is nullable: NULL only in the impossible case both counts are zero
-// (the ingest guard blocks that path). The *float64 is the pgx-compatible
-// representation for the numeric(5,2) column in the absence of pgtype.Numeric.
-type SiteCacheHitRatioHistory struct {
-	ID        uuid.UUID `json:"id"`
-	SiteID    uuid.UUID `json:"site_id"`
-	TenantID  uuid.UUID `json:"tenant_id"`
-	HitCount  int64     `json:"hit_count"`
-	MissCount int64     `json:"miss_count"`
-	RatioPct  *float64  `json:"ratio_pct"`
-	SampledAt time.Time `json:"sampled_at"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type SiteEvent struct {
 	EventID   string      `json:"event_id"`
 	TenantID  uuid.UUID   `json:"tenant_id"`
@@ -412,133 +514,88 @@ type SiteEvent struct {
 }
 
 type SitePerfConfig struct {
-	SiteID                    uuid.UUID          `json:"site_id"`
-	TenantID                  uuid.UUID          `json:"tenant_id"`
-	CacheEnabled              bool               `json:"cache_enabled"`
-	CacheLoggedIn             bool               `json:"cache_logged_in"`
-	CacheMobile               bool               `json:"cache_mobile"`
-	CacheRefresh              bool               `json:"cache_refresh"`
-	CacheRefreshInterval      string             `json:"cache_refresh_interval"`
-	CacheLinkPrefetch         bool               `json:"cache_link_prefetch"`
-	CacheBypassUrls           []string           `json:"cache_bypass_urls"`
-	CacheBypassCookies        []string           `json:"cache_bypass_cookies"`
-	CacheIncludeQueries       []string           `json:"cache_include_queries"`
-	CacheIncludeCookies       []string           `json:"cache_include_cookies"`
-	CssJsMinify               bool               `json:"css_js_minify"`
-	CssRucss                  bool               `json:"css_rucss"`
-	CssRucssIncludeSelectors  []string           `json:"css_rucss_include_selectors"`
-	CssJsSelfHostThirdParty   bool               `json:"css_js_self_host_third_party"`
-	JsDelay                   bool               `json:"js_delay"`
-	JsDelayMethod             string             `json:"js_delay_method"`
-	JsDelayExcludes           []string           `json:"js_delay_excludes"`
-	JsDelayThirdParty         bool               `json:"js_delay_third_party"`
-	JsDelayThirdPartyExcludes []string           `json:"js_delay_third_party_excludes"`
-	FontsDisplaySwap          bool               `json:"fonts_display_swap"`
-	FontsOptimizeGoogle       bool               `json:"fonts_optimize_google"`
-	FontsPreload              bool               `json:"fonts_preload"`
-	LazyLoad                  bool               `json:"lazy_load"`
-	LazyLoadExclusions        []string           `json:"lazy_load_exclusions"`
-	ProperlySizeImages        bool               `json:"properly_size_images"`
-	YoutubePlaceholder        bool               `json:"youtube_placeholder"`
-	SelfHostGravatars         bool               `json:"self_host_gravatars"`
-	CdnEnabled                bool               `json:"cdn_enabled"`
-	CdnUrl                    *string            `json:"cdn_url"`
-	CdnFileTypes              string             `json:"cdn_file_types"`
-	CdnProvider               *string            `json:"cdn_provider"`
-	CdnCredentialsEncrypted   []byte             `json:"cdn_credentials_encrypted"`
-	DbAutoClean               bool               `json:"db_auto_clean"`
-	DbAutoCleanInterval       string             `json:"db_auto_clean_interval"`
-	DbPostRevisions           bool               `json:"db_post_revisions"`
-	DbPostAutoDrafts          bool               `json:"db_post_auto_drafts"`
-	DbPostTrashed             bool               `json:"db_post_trashed"`
-	DbCommentsSpam            bool               `json:"db_comments_spam"`
-	DbCommentsTrashed         bool               `json:"db_comments_trashed"`
-	DbTransientsExpired       bool               `json:"db_transients_expired"`
-	DbOptimizeTables          bool               `json:"db_optimize_tables"`
-	NextDbCleanAt             pgtype.Timestamptz `json:"next_db_clean_at"`
-	BloatDisableBlockCss      bool               `json:"bloat_disable_block_css"`
-	BloatDisableDashicons     bool               `json:"bloat_disable_dashicons"`
-	BloatDisableEmojis        bool               `json:"bloat_disable_emojis"`
-	BloatDisableJqueryMigrate bool               `json:"bloat_disable_jquery_migrate"`
-	BloatDisableXmlRpc        bool               `json:"bloat_disable_xml_rpc"`
-	BloatDisableRssFeed       bool               `json:"bloat_disable_rss_feed"`
-	BloatDisableOembeds       bool               `json:"bloat_disable_oembeds"`
-	BloatHeartbeatControl     bool               `json:"bloat_heartbeat_control"`
-	BloatPostRevisionsControl bool               `json:"bloat_post_revisions_control"`
-	PreloadConcurrency        int32              `json:"preload_concurrency"`
-	PreloadDelayMs            int32              `json:"preload_delay_ms"`
-	PreloadBatchSize          int32              `json:"preload_batch_size"`
-	PreloadMaxLoad            float32            `json:"preload_max_load"`
-	ServerSoftware            *string            `json:"server_software"`
-	DropinInstalled           bool               `json:"dropin_installed"`
-	WpCacheConstantSet        bool               `json:"wp_cache_constant_set"`
-	HtaccessManaged           bool               `json:"htaccess_managed"`
-	ConfigVersion             int32              `json:"config_version"`
-	ActiveDbCleanJobID        *string            `json:"active_db_clean_job_id"`
-	ActiveDbCleanStarted      pgtype.Timestamptz `json:"active_db_clean_started"`
-	ActiveDbScanJobID         *string            `json:"active_db_scan_job_id"`
-	ActiveDbScanStarted       pgtype.Timestamptz `json:"active_db_scan_started"`
-	// M53 / #169 — WooCommerce cacheable-session flag.
-	// WooCacheableSession is operator-writable (default false). When true the CP
-	// includes this flag in the perf-config push so the agent can cache the
-	// WooCommerce catalog shell for anonymous shoppers who have a cart.
-	WooCacheableSession bool `json:"woo_cacheable_session"`
-	// WooThemeFragmentsSupported is agent-reported (read-only from the operator
-	// API). The agent sets it after probing its own theme and WooCommerce hooks;
-	// the CP stores it but never lets an operator PUT overwrite it.
-	WooThemeFragmentsSupported bool `json:"woo_theme_fragments_supported"`
-	// M54 — Font transcode to WOFF2 flag.
-	// FontsTranscodeWOFF2 is operator-writable (default false). When true the
-	// CP includes this flag in the perf-config push so the agent requests
-	// server-side WOFF2 transcoding for self-hosted fonts.
-	FontsTranscodeWoff2 bool `json:"fonts_transcode_woff2"`
-	// M55 — Font subsetting flags (experimental, default OFF).
-	// FontsSubset enables the subset-WOFF2 path in the media-encoder worker.
-	// FontsSubsetMode: "range" (fixed unicode-range) or "used" (aggressive opt-in).
-	// FontsSubsetRange: the named range to subset to; "latin-ext" is the safe default.
-	FontsSubset      bool      `json:"fonts_subset"`
-	FontsSubsetMode  string    `json:"fonts_subset_mode"`
-	FontsSubsetRange string    `json:"fonts_subset_range"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
-}
-
-// FontResult is one row of font_results — the per-site dashboard catalog for
-// font processing (m55). Distinct from FontTranscodeResult (job control).
-// State: pending|ready|subset|negative. SavingsPct is CP-derived.
-type FontResult struct {
-	ID           uuid.UUID          `json:"id"`
-	TenantID     uuid.UUID          `json:"tenant_id"`
-	SiteID       uuid.UUID          `json:"site_id"`
-	SourceHash   string             `json:"source_hash"`
-	Family       *string            `json:"family"`
-	SourceFile   *string            `json:"source_file"`
-	OriginalExt  *string            `json:"original_ext"`
-	OriginalSize *int32             `json:"original_size"`
-	Woff2Size    *int32             `json:"woff2_size"`
-	SubsetSize   *int32             `json:"subset_size"`
-	UnicodeRange *string            `json:"unicode_range"`
-	State        string             `json:"state"`
-	ErrorDetail  *string            `json:"error_detail"`
-	SavingsPct   pgtype.Numeric     `json:"savings_pct"`
-	CreatedAt    time.Time          `json:"created_at"`
-	UpdatedAt    time.Time          `json:"updated_at"`
-}
-
-// FontTranscodeResult is one row of font_transcode_results. It records the
-// transcoding outcome for a single content-addressed source font (identified
-// by its BLAKE3 hex hash). When Negative=true the agent must serve the
-// original font permanently; the CP never retries the hash.
-type FontTranscodeResult struct {
-	SourceHash  string     `json:"source_hash"`
-	TenantID    uuid.UUID  `json:"tenant_id"`
-	SiteID      uuid.UUID  `json:"site_id"`
-	RiverJobID  *int64     `json:"river_job_id"`
-	Woff2Key    *string    `json:"woff2_key"`
-	Negative    bool       `json:"negative"`
-	ErrorDetail *string    `json:"error_detail"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
+	SiteID                     uuid.UUID          `json:"site_id"`
+	TenantID                   uuid.UUID          `json:"tenant_id"`
+	CacheEnabled               bool               `json:"cache_enabled"`
+	CacheLoggedIn              bool               `json:"cache_logged_in"`
+	CacheMobile                bool               `json:"cache_mobile"`
+	CacheRefresh               bool               `json:"cache_refresh"`
+	CacheRefreshInterval       string             `json:"cache_refresh_interval"`
+	CacheLinkPrefetch          bool               `json:"cache_link_prefetch"`
+	CacheBypassUrls            []string           `json:"cache_bypass_urls"`
+	CacheBypassCookies         []string           `json:"cache_bypass_cookies"`
+	CacheIncludeQueries        []string           `json:"cache_include_queries"`
+	CacheIncludeCookies        []string           `json:"cache_include_cookies"`
+	CssJsMinify                bool               `json:"css_js_minify"`
+	CssRucss                   bool               `json:"css_rucss"`
+	CssRucssIncludeSelectors   []string           `json:"css_rucss_include_selectors"`
+	CssJsSelfHostThirdParty    bool               `json:"css_js_self_host_third_party"`
+	JsDelay                    bool               `json:"js_delay"`
+	JsDelayMethod              string             `json:"js_delay_method"`
+	JsDelayExcludes            []string           `json:"js_delay_excludes"`
+	JsDelayThirdParty          bool               `json:"js_delay_third_party"`
+	JsDelayThirdPartyExcludes  []string           `json:"js_delay_third_party_excludes"`
+	FontsDisplaySwap           bool               `json:"fonts_display_swap"`
+	FontsOptimizeGoogle        bool               `json:"fonts_optimize_google"`
+	FontsPreload               bool               `json:"fonts_preload"`
+	LazyLoad                   bool               `json:"lazy_load"`
+	LazyLoadExclusions         []string           `json:"lazy_load_exclusions"`
+	ProperlySizeImages         bool               `json:"properly_size_images"`
+	YoutubePlaceholder         bool               `json:"youtube_placeholder"`
+	SelfHostGravatars          bool               `json:"self_host_gravatars"`
+	CdnEnabled                 bool               `json:"cdn_enabled"`
+	CdnUrl                     *string            `json:"cdn_url"`
+	CdnFileTypes               string             `json:"cdn_file_types"`
+	CdnProvider                *string            `json:"cdn_provider"`
+	CdnCredentialsEncrypted    []byte             `json:"cdn_credentials_encrypted"`
+	DbAutoClean                bool               `json:"db_auto_clean"`
+	DbAutoCleanInterval        string             `json:"db_auto_clean_interval"`
+	DbPostRevisions            bool               `json:"db_post_revisions"`
+	DbPostAutoDrafts           bool               `json:"db_post_auto_drafts"`
+	DbPostTrashed              bool               `json:"db_post_trashed"`
+	DbCommentsSpam             bool               `json:"db_comments_spam"`
+	DbCommentsTrashed          bool               `json:"db_comments_trashed"`
+	DbTransientsExpired        bool               `json:"db_transients_expired"`
+	DbOptimizeTables           bool               `json:"db_optimize_tables"`
+	NextDbCleanAt              pgtype.Timestamptz `json:"next_db_clean_at"`
+	BloatDisableBlockCss       bool               `json:"bloat_disable_block_css"`
+	BloatDisableDashicons      bool               `json:"bloat_disable_dashicons"`
+	BloatDisableEmojis         bool               `json:"bloat_disable_emojis"`
+	BloatDisableJqueryMigrate  bool               `json:"bloat_disable_jquery_migrate"`
+	BloatDisableXmlRpc         bool               `json:"bloat_disable_xml_rpc"`
+	BloatDisableRssFeed        bool               `json:"bloat_disable_rss_feed"`
+	BloatDisableOembeds        bool               `json:"bloat_disable_oembeds"`
+	BloatHeartbeatControl      bool               `json:"bloat_heartbeat_control"`
+	BloatPostRevisionsControl  bool               `json:"bloat_post_revisions_control"`
+	PreloadConcurrency         int32              `json:"preload_concurrency"`
+	PreloadDelayMs             int32              `json:"preload_delay_ms"`
+	PreloadBatchSize           int32              `json:"preload_batch_size"`
+	PreloadMaxLoad             float32            `json:"preload_max_load"`
+	ServerSoftware             *string            `json:"server_software"`
+	DropinInstalled            bool               `json:"dropin_installed"`
+	WpCacheConstantSet         bool               `json:"wp_cache_constant_set"`
+	HtaccessManaged            bool               `json:"htaccess_managed"`
+	ConfigVersion              int32              `json:"config_version"`
+	ActiveDbCleanJobID         *string            `json:"active_db_clean_job_id"`
+	ActiveDbCleanStarted       pgtype.Timestamptz `json:"active_db_clean_started"`
+	ActiveDbScanJobID          *string            `json:"active_db_scan_job_id"`
+	ActiveDbScanStarted        pgtype.Timestamptz `json:"active_db_scan_started"`
+	ActiveOrphanDeleteJobID    *string            `json:"active_orphan_delete_job_id"`
+	ActiveOrphanDeleteStarted  pgtype.Timestamptz `json:"active_orphan_delete_started"`
+	FontsTranscodeWoff2        bool               `json:"fonts_transcode_woff2"`
+	FontsSubset                bool               `json:"fonts_subset"`
+	FontsSubsetMode            string             `json:"fonts_subset_mode"`
+	FontsSubsetRange           string             `json:"fonts_subset_range"`
+	WooCacheableSession        bool               `json:"woo_cacheable_session"`
+	WooThemeFragmentsSupported bool               `json:"woo_theme_fragments_supported"`
+	RumEnabled                 bool               `json:"rum_enabled"`
+	RumSampleRate              float32            `json:"rum_sample_rate"`
+	MaxDistinctCountries       int32              `json:"max_distinct_countries"`
+	MinSampleCount             int32              `json:"min_sample_count"`
+	BeaconKeyHash              []byte             `json:"beacon_key_hash"`
+	BeaconKeyHashPrev          []byte             `json:"beacon_key_hash_prev"`
+	CreatedAt                  time.Time          `json:"created_at"`
+	UpdatedAt                  time.Time          `json:"updated_at"`
 }
 
 type SiteShare struct {
