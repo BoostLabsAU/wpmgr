@@ -58,6 +58,34 @@ func encodeAgentDisconnectRequest(
 	return nil
 }
 
+func encodeAgentFontsResultsRequest(
+	req *AgentFontResultsRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeAgentFontsTranscodeRequest(
+	req *FontTranscodeRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeAgentHeartbeatRequest(
 	req OptAgentHeartbeat,
 	r *http.Request,

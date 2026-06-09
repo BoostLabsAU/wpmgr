@@ -58,6 +58,10 @@ type perfConfigDTO struct {
 	// FontsTranscodeWOFF2 enables server-side TTF/OTF/WOFF → WOFF2 transcoding.
 	// When true the agent requests transcode jobs from the CP. Default false.
 	FontsTranscodeWOFF2 bool `json:"fonts_transcode_woff2"`
+	// FontsSubset enables the subset-WOFF2 path (Phase 2, opt-in, experimental).
+	FontsSubset      bool   `json:"fonts_subset"`
+	FontsSubsetMode  string `json:"fonts_subset_mode"`
+	FontsSubsetRange string `json:"fonts_subset_range"`
 
 	// Media / lazy-load
 	LazyLoad           bool     `json:"lazy_load"`
@@ -143,6 +147,9 @@ func toConfigDTO(c Config) perfConfigDTO {
 		FontsOptimizeGoogle: c.FontsOptimizeGoogle,
 		FontsPreload:        c.FontsPreload,
 		FontsTranscodeWOFF2: c.FontsTranscodeWOFF2,
+		FontsSubset:         c.FontsSubset,
+		FontsSubsetMode:     c.FontsSubsetMode,
+		FontsSubsetRange:    c.FontsSubsetRange,
 		LazyLoad:            c.LazyLoad,
 		LazyLoadExclusions:        nonNil(c.LazyLoadExclusions),
 		ProperlySizeImages:        c.ProperlySizeImages,
@@ -216,6 +223,9 @@ func fromConfigDTO(dto perfConfigDTO, tenantID, siteID uuid.UUID) Config {
 		FontsOptimizeGoogle: dto.FontsOptimizeGoogle,
 		FontsPreload:        dto.FontsPreload,
 		FontsTranscodeWOFF2: dto.FontsTranscodeWOFF2,
+		FontsSubset:         dto.FontsSubset,
+		FontsSubsetMode:     dto.FontsSubsetMode,
+		FontsSubsetRange:    dto.FontsSubsetRange,
 		LazyLoad:            dto.LazyLoad,
 		LazyLoadExclusions:        dto.LazyLoadExclusions,
 		ProperlySizeImages:        dto.ProperlySizeImages,
@@ -311,6 +321,45 @@ type bulkResultDTO struct {
 	OK            bool   `json:"ok"`
 	Detail        string `json:"detail"`
 	ConfigVersion int    `json:"config_version,omitempty"`
+}
+
+// FontResultDTO is one font_results row in the operator dashboard list.
+type FontResultDTO struct {
+	ID           string  `json:"id"`
+	SourceHash   string  `json:"source_hash"`
+	Family       string  `json:"family,omitempty"`
+	SourceFile   string  `json:"source_file,omitempty"`
+	OriginalExt  string  `json:"original_ext,omitempty"`
+	OriginalSize int     `json:"original_size"`
+	Woff2Size    int     `json:"woff2_size,omitempty"`
+	SubsetSize   int     `json:"subset_size,omitempty"`
+	UnicodeRange string  `json:"unicode_range,omitempty"`
+	State        string  `json:"state"`
+	ErrorDetail  string  `json:"error_detail,omitempty"`
+	SavingsPct   float64 `json:"savings_pct"`
+	UpdatedAt    string  `json:"updated_at,omitempty"`
+}
+
+// ToFontResultDTO converts a domain FontResult to its wire shape.
+func ToFontResultDTO(r FontResult) FontResultDTO {
+	dto := FontResultDTO{
+		ID:           r.ID.String(),
+		SourceHash:   r.SourceHash,
+		Family:       r.Family,
+		SourceFile:   r.SourceFile,
+		OriginalExt:  r.OriginalExt,
+		OriginalSize: r.OriginalSize,
+		Woff2Size:    r.Woff2Size,
+		SubsetSize:   r.SubsetSize,
+		UnicodeRange: r.UnicodeRange,
+		State:        string(r.State),
+		ErrorDetail:  r.ErrorDetail,
+		SavingsPct:   r.SavingsPct,
+	}
+	if !r.UpdatedAt.IsZero() {
+		dto.UpdatedAt = r.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return dto
 }
 
 // RucssResultDTO is one cached RUCSS result row in the operator results list.

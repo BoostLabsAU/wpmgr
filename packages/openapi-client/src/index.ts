@@ -118,6 +118,8 @@ export {
   restoreIsolatedMedia,
   deleteIsolatedMedia,
   listQuarantinedMedia,
+  // font results catalog (ADR-052 Phase 2 / m55)
+  listFontResults,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -385,4 +387,9 @@ export type {
   DeleteIsolatedMediaResponse,
   ListQuarantinedMediaData,
   ListQuarantinedMediaResponse,
+  // font results catalog (ADR-052 Phase 2 / m55)
+  FontResult,
+  FontResultList,
+  ListFontResultsData,
+  ListFontResultsResponse,
 } from "./generated/types.gen";

@@ -69,6 +69,59 @@ func (UnimplementedHandler) AgentDisconnect(ctx context.Context, req OptAgentDis
 	return r, ht.ErrNotImplemented
 }
 
+// AgentFontsResults implements agentFontsResults operation.
+//
+// Font Results Catalog (M55 / Phase 2) — the agent POSTs after
+// transcoding or subsetting completes (or permanently fails) for one or
+// more self-hosted fonts. The CP upserts the font_results catalog row for
+// each item and derives savings_pct from the reported sizes.
+// **Security:** tenant_id + site_id ALWAYS come from the VERIFIED agent
+// identity (Ed25519 signed-request middleware), NEVER from the body.
+// source_hash items that are not valid 64-char lowercase hex BLAKE3
+// digests are skipped (not rejected) so a bad item never blocks the batch.
+// **Response:** `{"ok": true, "stored": N, "skipped": M}` where N is the
+// count of successfully upserted rows and M is the count of skipped items
+// (invalid hash or transient DB error).
+//
+// POST /agent/v1/fonts/results
+func (UnimplementedHandler) AgentFontsResults(ctx context.Context, req *AgentFontResultsRequest) (r AgentFontsResultsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// AgentFontsTranscode implements agentFontsTranscode operation.
+//
+// Font Transcoder (M54 / Phase 1) — the agent POSTs when it discovers a
+// self-hosted font (TTF/OTF/WOFF) that needs a WOFF2 encoding so it can
+// serve the font with correct `format()` fallbacks.
+// **Upload flow:**
+// 1. Agent POSTs `FontTranscodeRequest` (no storage key — the agent MUST
+// NOT supply or guess a key; the CP derives all keys from the verified
+// tenant identity + `source_hash`).
+// 2. If no job exists yet, the CP enqueues a `font_transcode` River job
+// and returns `state="pending"` with a `source_put_url` (presigned
+// S3 PUT, same TTL as the source-upload URL for media). The agent
+// MUST PUT the raw font bytes to this URL before the encoder runs.
+// 3. On subsequent POSTs for the same hash (`state="pending"` row
+// already exists), `source_put_url` is absent — the source is already
+// uploaded. The agent polls on every page build until state changes.
+// 4. When `state="ready"`, `woff2_get_url` is a short-TTL presigned GET
+// URL minted by the CP for the server-derived, GuardStorageKey-
+// validated WOFF2 object. The agent fetches the WOFF2 bytes from this
+// URL. The agent MUST NOT presign or construct a storage key itself.
+// `woff2_key` is also present as an informational field.
+// 5. When `state="negative"`, transcoding permanently failed; the agent
+// serves the original font forever (no retry).
+// **Security:** keys are SERVER-DERIVED from the verified tenant identity
+// + the caller-validated `source_hash`; `GuardStorageKey` validates every
+// key before it reaches the presigner. The agent identity (Ed25519
+// signed-request middleware) drives the tenant scope — the body never
+// influences which tenant's namespace is used.
+//
+// POST /agent/v1/fonts/transcode
+func (UnimplementedHandler) AgentFontsTranscode(ctx context.Context, req *FontTranscodeRequest) (r AgentFontsTranscodeRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // AgentHeartbeat implements agentHeartbeat operation.
 //
 // The 60s agent heartbeat (ADR-039). Authenticated via the Ed25519
@@ -234,6 +287,27 @@ func (UnimplementedHandler) BulkPurgeCache(ctx context.Context, req *BulkPurgeRe
 //
 // POST /api/v1/backups/{snapshotId}/cancel
 func (UnimplementedHandler) CancelBackup(ctx context.Context, params CancelBackupParams) (r CancelBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// CancelEnrollment implements cancelEnrollment operation.
+//
+// Hard-deletes a site that is in `pending_enrollment` AND has **never
+// connected** (`enrolled_at` is NULL and `agent_public_key` is absent).
+// This is the "Cancel" action in the enrollment modal — it frees the URL
+// so the operator can immediately re-add the same site.
+// The never-connected guard is enforced server-side (NOT by the caller):
+// `connection_state == pending_enrollment` AND `enrolled_at IS NULL` AND
+// `agent_public_key == ""` must all hold. If the site has ever connected
+// (enrolled at least once) the request is rejected with
+// `code: "not_cancellable"` — use `archive` or `revoke` instead.
+// On success a `site.deleted` SSE event is published to the tenant stream
+// so open dashboards can remove the row without a poll.
+// Requires `site:write` + org scope + site access (same chain as
+// `archive`/`revoke`).
+//
+// POST /api/v1/sites/{siteId}/cancel
+func (UnimplementedHandler) CancelEnrollment(ctx context.Context, params CancelEnrollmentParams) (r CancelEnrollmentRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -718,6 +792,29 @@ func (UnimplementedHandler) GetReadyz(ctx context.Context) (r GetReadyzRes, _ er
 	return r, ht.ErrNotImplemented
 }
 
+// GetRestoreRun implements getRestoreRun operation.
+//
+// Returns the restore run record by its UUID. Authorization is enforced
+// by resolving the run's `site_id` and applying the caller's
+// `PermSiteRead` grant on that site (the same by-id pattern as
+// `GET /backups/{snapshotId}`). Requires viewer+.
+//
+// GET /api/v1/restores/{restoreId}
+func (UnimplementedHandler) GetRestoreRun(ctx context.Context, params GetRestoreRunParams) (r GetRestoreRunRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetScheduleRun implements getScheduleRun operation.
+//
+// Returns the schedule run record by its UUID. Authorization is enforced
+// by resolving the run's `site_id` and applying the caller's
+// `PermSiteRead` grant on that site. Requires viewer+.
+//
+// GET /api/v1/schedule-runs/{runId}
+func (UnimplementedHandler) GetScheduleRun(ctx context.Context, params GetScheduleRunParams) (r GetScheduleRunRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetSite implements getSite operation.
 //
 // Get a site by ID.
@@ -901,6 +998,20 @@ func (UnimplementedHandler) ListDbSnapshots(ctx context.Context, params ListDbSn
 	return r, ht.ErrNotImplemented
 }
 
+// ListFontResults implements listFontResults operation.
+//
+// Returns a page of the site's font_results catalog rows — the per-site
+// dashboard view of every self-hosted font that has been discovered and
+// processed (or is pending processing). Each row includes the source hash,
+// font family, sizes, state (pending|ready|subset|negative), and the
+// CP-derived savings_pct.
+// Requires the `site:read` permission. Ordered by updated_at DESC, id DESC.
+//
+// GET /api/v1/sites/{siteId}/perf/fonts
+func (UnimplementedHandler) ListFontResults(ctx context.Context, params ListFontResultsParams) (r *FontResultList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListMediaAssets implements listMediaAssets operation.
 //
 // Cursor-paginated media library mirror with a summary rollup. Gated on
@@ -929,6 +1040,47 @@ func (UnimplementedHandler) ListMembers(ctx context.Context, params ListMembersP
 	return r, ht.ErrNotImplemented
 }
 
+// ListQuarantinedMedia implements listQuarantinedMedia operation.
+//
+// Returns all quarantine manifests currently held on the site. Each manifest
+// was created by a prior isolate call and describes the set of attachment
+// files that were moved to the quarantine directory. This endpoint is
+// read-only — it does not modify any files or attachment posts.
+// Requires the `site.media.clean.scan` permission (viewer+).
+//
+// GET /api/v1/sites/{siteId}/media/clean/quarantine
+func (UnimplementedHandler) ListQuarantinedMedia(ctx context.Context, params ListQuarantinedMediaParams) (r *MediaCleanQuarantineList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListRestoreRunEvents implements listRestoreRunEvents operation.
+//
+// Returns the ordered phase log for a restore run, ascending by event
+// ID. Supports incremental polling via `?after=<id>`: pass the highest
+// `id` from the previous response to receive only newer events.
+// Authorization mirrors `GET /restores/{restoreId}` — the run's site
+// is resolved and the caller's `PermSiteRead` is enforced on it.
+// Requires viewer+.
+//
+// GET /api/v1/restores/{restoreId}/events
+func (UnimplementedHandler) ListRestoreRunEvents(ctx context.Context, params ListRestoreRunEventsParams) (r ListRestoreRunEventsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListRestoreRuns implements listRestoreRuns operation.
+//
+// Returns restore runs for the site, ordered newest-first. Each run
+// records a single restore attempt triggered via
+// `POST /backups/{snapshotId}/restore`. The `triggered_by_email` and
+// `triggered_by_name` fields are populated when the actor is a known
+// user in the tenant directory (API-key or system actors leave them
+// null). Requires viewer+.
+//
+// GET /api/v1/sites/{siteId}/restores
+func (UnimplementedHandler) ListRestoreRuns(ctx context.Context, params ListRestoreRunsParams) (r ListRestoreRunsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListRucssResults implements listRucssResults operation.
 //
 // Returns a page of the site's cached Remove-Unused-CSS results (one row
@@ -937,6 +1089,19 @@ func (UnimplementedHandler) ListMembers(ctx context.Context, params ListMembersP
 //
 // GET /api/v1/sites/{siteId}/perf/rucss/results
 func (UnimplementedHandler) ListRucssResults(ctx context.Context, params ListRucssResultsParams) (r *RucssResultList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListScheduleRuns implements listScheduleRuns operation.
+//
+// Returns a split view of schedule runs for the site: `upcoming`
+// (non-terminal: scheduled/queued/running, bounded to 10) and `past`
+// (terminal: completed/failed/skipped/canceled, paginated via
+// `limit`/`offset`). Filter to one set with `?status=upcoming` or
+// `?status=past`. Requires viewer+.
+//
+// GET /api/v1/sites/{siteId}/schedule-runs
+func (UnimplementedHandler) ListScheduleRuns(ctx context.Context, params ListScheduleRunsParams) (r ListScheduleRunsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

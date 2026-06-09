@@ -1333,6 +1333,18 @@ CREATE TABLE site_perf_config (
     active_db_scan_started        timestamptz,
     active_orphan_delete_job_id   text,
     active_orphan_delete_started  timestamptz,
+    -- M54 Phase 1 — WOFF2 transcoding for self-hosted fonts.
+    fonts_transcode_woff2         boolean     NOT NULL DEFAULT false,
+    -- M55 Phase 2 — font subsetting (experimental, default OFF).
+    -- fonts_subset enables the subset-WOFF2 path in the media-encoder worker.
+    -- fonts_subset_mode: "range" (fixed unicode-range) or "used" (aggressive opt-in).
+    -- fonts_subset_range: the named range to subset to; "latin-ext" is the safe default.
+    fonts_subset                  boolean     NOT NULL DEFAULT false,
+    fonts_subset_mode             text        NOT NULL DEFAULT 'range',
+    fonts_subset_range            text        NOT NULL DEFAULT 'latin-ext',
+    -- M53 / #169 — WooCommerce cacheable-session.
+    woo_cacheable_session         boolean     NOT NULL DEFAULT false,
+    woo_theme_fragments_supported boolean     NOT NULL DEFAULT false,
     created_at                    timestamptz NOT NULL DEFAULT now(),
     updated_at                    timestamptz NOT NULL DEFAULT now()
 );
@@ -1571,3 +1583,86 @@ CREATE POLICY site_db_size_history_tenant_isolation ON site_db_size_history
 -- tenant_isolation policy via InTenantTx.
 CREATE POLICY site_db_size_history_agent ON site_db_size_history
     USING (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- font_transcode_results  (m54 — job-control layer for WOFF2 transcoding)
+-- ---------------------------------------------------------------------------
+-- One row per content-addressed source font hash per tenant. Stores the River
+-- job ID for in-flight jobs and the produced woff2 asset key on completion.
+-- PK = (source_hash, tenant_id).
+CREATE TABLE IF NOT EXISTS font_transcode_results (
+    source_hash    text        NOT NULL,
+    tenant_id      uuid        NOT NULL,
+    site_id        uuid        NOT NULL,
+    river_job_id   bigint,
+    woff2_key      text,
+    negative       boolean     NOT NULL DEFAULT false,
+    error_detail   text,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (source_hash, tenant_id),
+    FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id)   REFERENCES sites   (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS font_transcode_results_site_id_idx
+    ON font_transcode_results (tenant_id, site_id);
+
+ALTER TABLE font_transcode_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE font_transcode_results FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY tenant_isolation ON font_transcode_results
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY agent_access ON font_transcode_results
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- font_results  (m55 — per-site dashboard catalog for font processing)
+-- ---------------------------------------------------------------------------
+-- One row per (site_id, source_hash). The dashboard read-model: tracks family,
+-- sizes, subset state, and CP-derived savings_pct. Distinct from
+-- font_transcode_results (job control). State: pending|ready|subset|negative.
+-- savings_pct is CP-derived at upsert: 1 - min(woff2_size, subset_size) / original_size.
+CREATE TABLE IF NOT EXISTS font_results (
+    id             uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id      uuid        NOT NULL,
+    site_id        uuid        NOT NULL,
+    source_hash    text        NOT NULL,
+    family         text,
+    source_file    text,
+    original_ext   text,
+    original_size  integer,
+    woff2_size     integer,
+    subset_size    integer,
+    unicode_range  text,
+    state          text        NOT NULL DEFAULT 'pending',
+    error_detail   text,
+    savings_pct    numeric(5,2),
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT font_results_pkey        PRIMARY KEY (id),
+    CONSTRAINT font_results_site_hash_uniq UNIQUE (site_id, source_hash),
+    CONSTRAINT font_results_state_check CHECK (state IN ('pending','ready','subset','negative')),
+    FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    FOREIGN KEY (site_id)   REFERENCES sites   (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_font_results_site
+    ON font_results (site_id, updated_at DESC);
+
+CREATE INDEX IF NOT EXISTS font_results_tenant_idx
+    ON font_results (tenant_id);
+
+ALTER TABLE font_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE font_results FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY font_results_tenant_isolation ON font_results
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY font_results_agent_access ON font_results
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"errors"
+	"math/big"
 	"time"
 
 	"github.com/google/uuid"
@@ -156,6 +157,9 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 			ConfigVersion:             int32(c.ConfigVersion),
 			WooCacheableSession:       c.WooCacheableSession,
 			FontsTranscodeWoff2:       c.FontsTranscodeWOFF2,
+			FontsSubset:               c.FontsSubset,
+			FontsSubsetMode:           c.FontsSubsetMode,
+			FontsSubsetRange:          c.FontsSubsetRange,
 		})
 		if qerr != nil {
 			return qerr
@@ -905,8 +909,11 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		HtaccessManaged:            row.HtaccessManaged,
 		WooCacheableSession:        row.WooCacheableSession,
 		WooThemeFragmentsSupported: row.WooThemeFragmentsSupported,
-		FontsTranscodeWOFF2: row.FontsTranscodeWoff2,
-		ConfigVersion:       int(row.ConfigVersion),
+		FontsTranscodeWOFF2:        row.FontsTranscodeWoff2,
+		FontsSubset:                row.FontsSubset,
+		FontsSubsetMode:            row.FontsSubsetMode,
+		FontsSubsetRange:           row.FontsSubsetRange,
+		ConfigVersion:              int(row.ConfigVersion),
 		CreatedAt:           row.CreatedAt,
 		UpdatedAt:           row.UpdatedAt,
 	}
@@ -1078,4 +1085,156 @@ func (r *Repo) GetStalledDBOrphanDeleteJobs(ctx context.Context, threshold time.
 		return nil, err
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------------------
+// font_results catalog (M55 — Phase 2 dashboard read-model)
+// ---------------------------------------------------------------------------
+
+// UpsertFontResultInput is the agent-supplied payload for one font catalog row.
+// tenant_id + site_id MUST come from the verified agent identity — never from
+// the body (same security invariant as font_transcode_results).
+type UpsertFontResultInput struct {
+	TenantID     uuid.UUID
+	SiteID       uuid.UUID
+	SourceHash   string
+	Family       string
+	SourceFile   string
+	OriginalExt  string
+	OriginalSize int
+	Woff2Size    int    // 0 = not yet produced
+	SubsetSize   int    // 0 = not yet produced
+	UnicodeRange string // empty unless subset
+	State        FontResultState
+	ErrorDetail  string // non-empty when State == FontResultNegative
+}
+
+// UpsertFontResult inserts or updates a per-(site, source_hash) font result
+// row. savings_pct is CP-derived from best output size vs original_size.
+// Agent write path (InAgentTx).
+func (r *Repo) UpsertFontResult(ctx context.Context, in UpsertFontResultInput) (FontResult, error) {
+	var out sqlc.FontResult
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		var qerr error
+		out, qerr = sqlc.New(tx).UpsertFontResult(ctx, sqlc.UpsertFontResultParams{
+			TenantID:     in.TenantID,
+			SiteID:       in.SiteID,
+			SourceHash:   in.SourceHash,
+			Family:       strPtr(in.Family),
+			SourceFile:   strPtr(in.SourceFile),
+			OriginalExt:  strPtr(in.OriginalExt),
+			OriginalSize: int32Ptr(in.OriginalSize),
+			Woff2Size:    int32Ptr(in.Woff2Size),
+			SubsetSize:   int32Ptr(in.SubsetSize),
+			UnicodeRange: strPtr(in.UnicodeRange),
+			State:        string(in.State),
+			ErrorDetail:  strPtr(in.ErrorDetail),
+		})
+		return qerr
+	})
+	if err != nil {
+		return FontResult{}, err
+	}
+	return fontResultFromRow(out), nil
+}
+
+// ListFontResultsForSite returns a page of font catalog rows for the dashboard.
+// Ordered by updated_at DESC, id DESC. Operator read path (InTenantTx).
+func (r *Repo) ListFontResultsForSite(ctx context.Context, tenantID, siteID uuid.UUID, limit, offset int32) ([]FontResult, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	var out []FontResult
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).ListFontResultsForSite(ctx, sqlc.ListFontResultsForSiteParams{
+			TenantID:  tenantID,
+			SiteID:    siteID,
+			RowLimit:  limit,
+			RowOffset: offset,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = make([]FontResult, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, fontResultFromRow(row))
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// fontResultFromRow maps a sqlc.FontResult row to the domain FontResult type.
+func fontResultFromRow(row sqlc.FontResult) FontResult {
+	return FontResult{
+		ID:           row.ID,
+		TenantID:     row.TenantID,
+		SiteID:       row.SiteID,
+		SourceHash:   row.SourceHash,
+		Family:       derefStr(row.Family),
+		SourceFile:   derefStr(row.SourceFile),
+		OriginalExt:  derefStr(row.OriginalExt),
+		OriginalSize: derefInt32(row.OriginalSize),
+		Woff2Size:    derefInt32(row.Woff2Size),
+		SubsetSize:   derefInt32(row.SubsetSize),
+		UnicodeRange: derefStr(row.UnicodeRange),
+		State:        FontResultState(row.State),
+		ErrorDetail:  derefStr(row.ErrorDetail),
+		SavingsPct:   floatFromNumericPerf(row.SavingsPct),
+		CreatedAt:    row.CreatedAt,
+		UpdatedAt:    row.UpdatedAt,
+	}
+}
+
+// int32Ptr converts an int to *int32, returning nil for zero values (so NULL is
+// stored for unset optional sizes like Woff2Size before transcoding completes).
+func int32Ptr(n int) *int32 {
+	if n == 0 {
+		return nil
+	}
+	v := int32(n)
+	return &v
+}
+
+// derefInt32 dereferences a *int32 to int, returning 0 for nil.
+func derefInt32(p *int32) int {
+	if p == nil {
+		return 0
+	}
+	return int(*p)
+}
+
+// floatFromNumericPerf converts a pgtype.Numeric back to a float64. An invalid
+// (NULL) numeric maps to 0. Mirrors floatFromNumeric in rucss/repo.
+func floatFromNumericPerf(n pgtype.Numeric) float64 {
+	if !n.Valid || n.Int == nil {
+		return 0
+	}
+	f := new(big.Float).SetInt(n.Int)
+	scale := new(big.Float).SetFloat64(pow10Perf(int(n.Exp)))
+	f.Mul(f, scale)
+	out, _ := f.Float64()
+	return out
+}
+
+// pow10Perf returns 10^exp as a float64 (handles negative exponents).
+func pow10Perf(exp int) float64 {
+	if exp == 0 {
+		return 1
+	}
+	base := 10.0
+	result := 1.0
+	if exp < 0 {
+		for i := 0; i < -exp; i++ {
+			result /= base
+		}
+	} else {
+		for i := 0; i < exp; i++ {
+			result *= base
+		}
+	}
+	return result
 }

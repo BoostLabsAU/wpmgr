@@ -11,6 +11,7 @@ import { CdnSection } from "./CdnSection";
 import { BloatSection } from "./BloatSection";
 import { DatabaseSection } from "./DatabaseSection";
 import { RucssResultsTable } from "./RucssResultsTable";
+import { FontResultsTable } from "./FontResultsTable";
 
 // OptimizeTab — the asset-optimization entry surface. Six settings sections
 // (CSS/JS, Fonts, Media/HTML, CDN, Bloat, Database) plus the RUCSS results
@@ -75,6 +76,11 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
         canOperate={canOperate}
       />
       <RucssResultsTable
+        siteId={siteId}
+        hostname={hostname}
+        canOperate={canOperate}
+      />
+      <FontResultsTable
         siteId={siteId}
         hostname={hostname}
         canOperate={canOperate}

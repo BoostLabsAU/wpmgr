@@ -1032,6 +1032,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// P3.5 — wire the corpus reader so the orphans classification endpoint can
 	// classify stored scan candidates against the live plugin_signatures corpus.
 	perfH.SetCorpusSource(dbclean.NewCorpusPostgresReader(sqlc.New(pool)))
+	// M55 — wire the font results list reader for GET /perf/fonts.
+	perfFontResultsReader := &perf.FontResultsReader{
+		List: func(ctx context.Context, tenantID, siteID uuid.UUID, limit, offset int32) ([]perf.FontResultDTO, error) {
+			rows, lerr := perfRepo.ListFontResultsForSite(ctx, tenantID, siteID, limit, offset)
+			if lerr != nil {
+				return nil, lerr
+			}
+			out := make([]perf.FontResultDTO, 0, len(rows))
+			for _, r := range rows {
+				out = append(out, perf.ToFontResultDTO(r))
+			}
+			return out, nil
+		},
+	}
+	perfH.SetFontResultsReader(perfFontResultsReader)
+	fontResultsAgentH := perf.NewFontResultsAgentHandler(perfRepo)
 	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc)
 
 	// ADR-045 Phase 2 — wire the auth service's transactional mailer (password
@@ -1332,8 +1348,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		MediaH:      mediaH,
 		MediaAgentH: mediaAgentH,
 		// m36 / ADR-046 — Performance Suite.
-		PerfH:      perfH,
-		PerfAgentH: perfAgentH,
+		PerfH:             perfH,
+		PerfAgentH:        perfAgentH,
+		FontResultsAgentH: fontResultsAgentH,
 		// m33 — superadmin instance-management area.
 		AdminH:      adminH,
 		ServiceName: cfg.OTel.ServiceName,

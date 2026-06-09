@@ -109,7 +109,7 @@ export const FEATURES = {
       icon: "Zap",
       title: "Performance and caching",
       desc:
-        "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. See cache hit-ratio trends over 7, 30, and 90 day windows so you know whether caching is working across your fleet. On WooCommerce stores, opt-in cart-session caching serves catalog pages from the cache even for shoppers who have items in their cart, while cart totals stay live via cart fragments. A failed optimization never breaks the page.",
+          "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. Self-hosted fonts are transcoded to WOFF2 and optionally subsetted to the latin-ext range for a further 60 to 90 percent reduction on top of WOFF2 savings. A per-font processing table shows each font's original size, WOFF2 size, subset size, and state so you can see exactly what shipped and what was skipped. See cache hit-ratio trends over 7, 30, and 90 day windows so you know whether caching is working across your fleet. On WooCommerce stores, opt-in cart-session caching serves catalog pages from the cache even for shoppers who have items in their cart, while cart totals stay live via cart fragments. A failed optimization never breaks the page.",
     },
     {
       icon: "ImageOff",
@@ -245,6 +245,7 @@ export const PERFORMANCE = {
   chips: [
     { icon: "Gauge", value: "From disk", label: "Anonymous pages served as pre-gzipped HTML, no PHP on a hit" },
     { icon: "Scissors", value: "Unused CSS", label: "Stripped and inlined, full CSS served on any miss" },
+    { icon: "Type", value: "WOFF2 + subset", label: "Fonts transcoded to WOFF2 and optionally subsetted to latin-ext, 60 to 90 percent smaller" },
     { icon: "ShieldOff", value: "No browser", label: "Pure-Go engine, no headless Chrome and no third-party service" },
     { icon: "ToggleLeft", value: "Per site", label: "Off until you turn it on, with safe, balanced, and aggressive presets" },
   ],
@@ -276,7 +277,7 @@ export const PERFORMANCE_STEPS = {
       icon: "ImageDown",
       title: "Lighten the front end",
       desc:
-        "Lazy-load images with width, height, and srcset preserved, swap in fonts without blocking text, convert self-hosted fonts to WOFF2 for smaller and faster font loads (50 to 65 percent smaller for TTF and OTF), remove front-end bloat, and rewrite asset URLs to your CDN with credentials encrypted at rest.",
+        "Lazy-load images with width, height, and srcset preserved, swap in fonts without blocking text, convert self-hosted fonts to WOFF2 for smaller and faster font loads (50 to 65 percent smaller for TTF and OTF), and optionally subset each font to the latin-ext unicode range for a further 60 to 90 percent reduction. Subsetting is experimental and off by default; icon and variable fonts are detected and skipped automatically. Remove front-end bloat and rewrite asset URLs to your CDN with credentials encrypted at rest.",
     },
     {
       n: "4",

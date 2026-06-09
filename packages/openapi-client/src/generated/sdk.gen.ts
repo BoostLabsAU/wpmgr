@@ -15,6 +15,9 @@ import type {
   AgentDisconnectData,
   AgentDisconnectErrors,
   AgentDisconnectResponses,
+  AgentFontsResultsData,
+  AgentFontsResultsErrors,
+  AgentFontsResultsResponses,
   AgentFontsTranscodeData,
   AgentFontsTranscodeErrors,
   AgentFontsTranscodeResponses,
@@ -220,6 +223,8 @@ import type {
   ListBackupsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
+  ListFontResultsData,
+  ListFontResultsResponses,
   ListMediaAssetsData,
   ListMediaAssetsResponses,
   ListMediaJobsData,
@@ -1659,6 +1664,41 @@ export const agentFontsTranscode = <ThrowOnError extends boolean = false>(
   });
 
 /**
+ * Push font processing results (agent-authenticated)
+ *
+ * Font Results Catalog (M55 / Phase 2) — the agent POSTs after
+ * transcoding or subsetting completes (or permanently fails) for one or
+ * more self-hosted fonts. The CP upserts the font_results catalog row for
+ * each item and derives savings_pct from the reported sizes.
+ *
+ * **Security:** tenant_id + site_id ALWAYS come from the VERIFIED agent
+ * identity (Ed25519 signed-request middleware), NEVER from the body.
+ * source_hash items that are not valid 64-char lowercase hex BLAKE3
+ * digests are skipped (not rejected) so a bad item never blocks the batch.
+ *
+ * **Response:** `{"ok": true, "stored": N, "skipped": M}` where N is the
+ * count of successfully upserted rows and M is the count of skipped items
+ * (invalid hash or transient DB error).
+ *
+ */
+export const agentFontsResults = <ThrowOnError extends boolean = false>(
+  options: Options<AgentFontsResultsData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    AgentFontsResultsResponses,
+    AgentFontsResultsErrors,
+    ThrowOnError
+  >({
+    security: [{ name: "X-WPMgr-Signature", type: "apiKey" }],
+    url: "/agent/v1/fonts/results",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
  * Delete a site
  */
 export const deleteSite = <ThrowOnError extends boolean = false>(
@@ -3060,6 +3100,27 @@ export const listQuarantinedMedia = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/media/clean/quarantine", ...options });
+
+/**
+ * List font processing results for a site
+ *
+ * Returns a page of the site's font_results catalog rows — the per-site
+ * dashboard view of every self-hosted font that has been discovered and
+ * processed (or is pending processing). Each row includes the source hash,
+ * font family, sizes, state (pending|ready|subset|negative), and the
+ * CP-derived savings_pct.
+ *
+ * Requires the `site:read` permission. Ordered by updated_at DESC, id DESC.
+ *
+ */
+export const listFontResults = <ThrowOnError extends boolean = false>(
+  options: Options<ListFontResultsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListFontResultsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/fonts", ...options });
 
 /**
  * List cached Used-CSS (RUCSS) results for a site

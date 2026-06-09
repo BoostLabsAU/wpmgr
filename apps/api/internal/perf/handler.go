@@ -23,6 +23,7 @@ import (
 type Handler struct {
 	svc       *Service
 	rucss     *RucssResultsReader
+	fonts     *FontResultsReader
 	audit     *audit.Recorder
 	corpus    CorpusSource // P3.5 — nil degrades orphans to no-scan-found
 	cpBaseURL string       // forwarded to Service.DBClean for progress_endpoint
@@ -48,6 +49,10 @@ func NewHandler(svc *Service, rucss *RucssResultsReader, rec *audit.Recorder) *H
 // endpoint (P3.5). When nil the endpoint returns a domain.NotFound response
 // (same as when no scan exists).
 func (h *Handler) SetCorpusSource(c CorpusSource) { h.corpus = c }
+
+// SetFontResultsReader wires the font results list reader (M55). When nil the
+// /perf/fonts endpoint returns an empty list.
+func (h *Handler) SetFontResultsReader(f *FontResultsReader) { h.fonts = f }
 
 // SetCPBaseURL sets the CP public base URL used when constructing the
 // progress_endpoint for db_clean commands.
@@ -110,6 +115,9 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/perf/rucss/results", authz.RequirePermission(authz.PermSiteRead), h.rucssResults)
 	g.POST("/perf/rucss/clear", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssClear)
 	g.POST("/perf/rucss/compute", authz.RequirePermission(authz.PermSitePerfConfig), h.rucssCompute)
+
+	// M55 — Font results catalog (dashboard list, operator read-only).
+	g.GET("/perf/fonts", authz.RequirePermission(authz.PermSiteRead), h.fontResults)
 
 	// #190 — Media Cleaner tool.
 	// Scan is read-only (PermMediaCleanScan = viewer+); isolate/restore are

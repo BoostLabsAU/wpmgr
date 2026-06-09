@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+### Added
+
+- Font subsetting (experimental, default OFF). When both WOFF2 transcoding and font subsetting are enabled, the media-encoder produces a subsetted WOFF2 covering the latin-ext unicode range (U+0000 to 00FF, U+0100 to 024F, U+1E00 to 1EFF) alongside the full WOFF2. The browser fetches the subset for in-range codepoints and falls back to the full WOFF2 for anything outside that range, so no codepoint is ever broken. Typical savings on top of WOFF2 transcoding are 60 to 90 percent for body-text Latin fonts. Variable fonts and icon fonts are detected and skipped automatically; the full WOFF2 serves for those. Subsetting is gated behind the new `fonts_subset` per-site flag (default OFF) because OpenType shaping features (GPOS/GSUB ligatures and contextual kerning) are not preserved in the subset output.
+- Per-font processing table on the Optimize tab. Each self-hosted font discovered on the site appears as a row showing its family name, original format, original size, WOFF2 size, subset size when available, savings percentage, and current state (pending, converting, ready, subsetted, skipped, or failed). A live indicator in the card header streams aggregate progress during an active page build. Skipped and failed rows show the reason so you can verify that icon or variable fonts were correctly left alone.
+- External-stylesheet font discovery. The agent now scans fonts loaded by classic themes and plugins via enqueued external stylesheets, in addition to the inline style block scan added in ADR-052. This closes the main discovery gap for sites that load fonts through `wp_enqueue_style` rather than printing inline font-face rules.
+
 ## [0.31.2] - 2026-06-09
 
 ### Added

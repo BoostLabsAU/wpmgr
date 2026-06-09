@@ -52,6 +52,53 @@ type Handler interface {
 	//
 	// POST /agent/v1/disconnect
 	AgentDisconnect(ctx context.Context, req OptAgentDisconnect) (AgentDisconnectRes, error)
+	// AgentFontsResults implements agentFontsResults operation.
+	//
+	// Font Results Catalog (M55 / Phase 2) — the agent POSTs after
+	// transcoding or subsetting completes (or permanently fails) for one or
+	// more self-hosted fonts. The CP upserts the font_results catalog row for
+	// each item and derives savings_pct from the reported sizes.
+	// **Security:** tenant_id + site_id ALWAYS come from the VERIFIED agent
+	// identity (Ed25519 signed-request middleware), NEVER from the body.
+	// source_hash items that are not valid 64-char lowercase hex BLAKE3
+	// digests are skipped (not rejected) so a bad item never blocks the batch.
+	// **Response:** `{"ok": true, "stored": N, "skipped": M}` where N is the
+	// count of successfully upserted rows and M is the count of skipped items
+	// (invalid hash or transient DB error).
+	//
+	// POST /agent/v1/fonts/results
+	AgentFontsResults(ctx context.Context, req *AgentFontResultsRequest) (AgentFontsResultsRes, error)
+	// AgentFontsTranscode implements agentFontsTranscode operation.
+	//
+	// Font Transcoder (M54 / Phase 1) — the agent POSTs when it discovers a
+	// self-hosted font (TTF/OTF/WOFF) that needs a WOFF2 encoding so it can
+	// serve the font with correct `format()` fallbacks.
+	// **Upload flow:**
+	// 1. Agent POSTs `FontTranscodeRequest` (no storage key — the agent MUST
+	// NOT supply or guess a key; the CP derives all keys from the verified
+	// tenant identity + `source_hash`).
+	// 2. If no job exists yet, the CP enqueues a `font_transcode` River job
+	// and returns `state="pending"` with a `source_put_url` (presigned
+	// S3 PUT, same TTL as the source-upload URL for media). The agent
+	// MUST PUT the raw font bytes to this URL before the encoder runs.
+	// 3. On subsequent POSTs for the same hash (`state="pending"` row
+	// already exists), `source_put_url` is absent — the source is already
+	// uploaded. The agent polls on every page build until state changes.
+	// 4. When `state="ready"`, `woff2_get_url` is a short-TTL presigned GET
+	// URL minted by the CP for the server-derived, GuardStorageKey-
+	// validated WOFF2 object. The agent fetches the WOFF2 bytes from this
+	// URL. The agent MUST NOT presign or construct a storage key itself.
+	// `woff2_key` is also present as an informational field.
+	// 5. When `state="negative"`, transcoding permanently failed; the agent
+	// serves the original font forever (no retry).
+	// **Security:** keys are SERVER-DERIVED from the verified tenant identity
+	// + the caller-validated `source_hash`; `GuardStorageKey` validates every
+	// key before it reaches the presigner. The agent identity (Ed25519
+	// signed-request middleware) drives the tenant scope — the body never
+	// influences which tenant's namespace is used.
+	//
+	// POST /agent/v1/fonts/transcode
+	AgentFontsTranscode(ctx context.Context, req *FontTranscodeRequest) (AgentFontsTranscodeRes, error)
 	// AgentHeartbeat implements agentHeartbeat operation.
 	//
 	// The 60s agent heartbeat (ADR-039). Authenticated via the Ed25519
@@ -178,6 +225,24 @@ type Handler interface {
 	//
 	// POST /api/v1/backups/{snapshotId}/cancel
 	CancelBackup(ctx context.Context, params CancelBackupParams) (CancelBackupRes, error)
+	// CancelEnrollment implements cancelEnrollment operation.
+	//
+	// Hard-deletes a site that is in `pending_enrollment` AND has **never
+	// connected** (`enrolled_at` is NULL and `agent_public_key` is absent).
+	// This is the "Cancel" action in the enrollment modal — it frees the URL
+	// so the operator can immediately re-add the same site.
+	// The never-connected guard is enforced server-side (NOT by the caller):
+	// `connection_state == pending_enrollment` AND `enrolled_at IS NULL` AND
+	// `agent_public_key == ""` must all hold. If the site has ever connected
+	// (enrolled at least once) the request is rejected with
+	// `code: "not_cancellable"` — use `archive` or `revoke` instead.
+	// On success a `site.deleted` SSE event is published to the tenant stream
+	// so open dashboards can remove the row without a poll.
+	// Requires `site:write` + org scope + site access (same chain as
+	// `archive`/`revoke`).
+	//
+	// POST /api/v1/sites/{siteId}/cancel
+	CancelEnrollment(ctx context.Context, params CancelEnrollmentParams) (CancelEnrollmentRes, error)
 	// CancelMedia implements cancelMedia operation.
 	//
 	// Cancel all in-flight media jobs for a site.
@@ -536,6 +601,23 @@ type Handler interface {
 	//
 	// GET /readyz
 	GetReadyz(ctx context.Context) (GetReadyzRes, error)
+	// GetRestoreRun implements getRestoreRun operation.
+	//
+	// Returns the restore run record by its UUID. Authorization is enforced
+	// by resolving the run's `site_id` and applying the caller's
+	// `PermSiteRead` grant on that site (the same by-id pattern as
+	// `GET /backups/{snapshotId}`). Requires viewer+.
+	//
+	// GET /api/v1/restores/{restoreId}
+	GetRestoreRun(ctx context.Context, params GetRestoreRunParams) (GetRestoreRunRes, error)
+	// GetScheduleRun implements getScheduleRun operation.
+	//
+	// Returns the schedule run record by its UUID. Authorization is enforced
+	// by resolving the run's `site_id` and applying the caller's
+	// `PermSiteRead` grant on that site. Requires viewer+.
+	//
+	// GET /api/v1/schedule-runs/{runId}
+	GetScheduleRun(ctx context.Context, params GetScheduleRunParams) (GetScheduleRunRes, error)
 	// GetSite implements getSite operation.
 	//
 	// Get a site by ID.
@@ -668,6 +750,17 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/db/snapshots
 	ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (*DbSnapshotList, error)
+	// ListFontResults implements listFontResults operation.
+	//
+	// Returns a page of the site's font_results catalog rows — the per-site
+	// dashboard view of every self-hosted font that has been discovered and
+	// processed (or is pending processing). Each row includes the source hash,
+	// font family, sizes, state (pending|ready|subset|negative), and the
+	// CP-derived savings_pct.
+	// Requires the `site:read` permission. Ordered by updated_at DESC, id DESC.
+	//
+	// GET /api/v1/sites/{siteId}/perf/fonts
+	ListFontResults(ctx context.Context, params ListFontResultsParams) (*FontResultList, error)
 	// ListMediaAssets implements listMediaAssets operation.
 	//
 	// Cursor-paginated media library mirror with a summary rollup. Gated on
@@ -687,6 +780,38 @@ type Handler interface {
 	//
 	// GET /api/v1/members
 	ListMembers(ctx context.Context, params ListMembersParams) (ListMembersRes, error)
+	// ListQuarantinedMedia implements listQuarantinedMedia operation.
+	//
+	// Returns all quarantine manifests currently held on the site. Each manifest
+	// was created by a prior isolate call and describes the set of attachment
+	// files that were moved to the quarantine directory. This endpoint is
+	// read-only — it does not modify any files or attachment posts.
+	// Requires the `site.media.clean.scan` permission (viewer+).
+	//
+	// GET /api/v1/sites/{siteId}/media/clean/quarantine
+	ListQuarantinedMedia(ctx context.Context, params ListQuarantinedMediaParams) (*MediaCleanQuarantineList, error)
+	// ListRestoreRunEvents implements listRestoreRunEvents operation.
+	//
+	// Returns the ordered phase log for a restore run, ascending by event
+	// ID. Supports incremental polling via `?after=<id>`: pass the highest
+	// `id` from the previous response to receive only newer events.
+	// Authorization mirrors `GET /restores/{restoreId}` — the run's site
+	// is resolved and the caller's `PermSiteRead` is enforced on it.
+	// Requires viewer+.
+	//
+	// GET /api/v1/restores/{restoreId}/events
+	ListRestoreRunEvents(ctx context.Context, params ListRestoreRunEventsParams) (ListRestoreRunEventsRes, error)
+	// ListRestoreRuns implements listRestoreRuns operation.
+	//
+	// Returns restore runs for the site, ordered newest-first. Each run
+	// records a single restore attempt triggered via
+	// `POST /backups/{snapshotId}/restore`. The `triggered_by_email` and
+	// `triggered_by_name` fields are populated when the actor is a known
+	// user in the tenant directory (API-key or system actors leave them
+	// null). Requires viewer+.
+	//
+	// GET /api/v1/sites/{siteId}/restores
+	ListRestoreRuns(ctx context.Context, params ListRestoreRunsParams) (ListRestoreRunsRes, error)
 	// ListRucssResults implements listRucssResults operation.
 	//
 	// Returns a page of the site's cached Remove-Unused-CSS results (one row
@@ -695,6 +820,16 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/rucss/results
 	ListRucssResults(ctx context.Context, params ListRucssResultsParams) (*RucssResultList, error)
+	// ListScheduleRuns implements listScheduleRuns operation.
+	//
+	// Returns a split view of schedule runs for the site: `upcoming`
+	// (non-terminal: scheduled/queued/running, bounded to 10) and `past`
+	// (terminal: completed/failed/skipped/canceled, paginated via
+	// `limit`/`offset`). Filter to one set with `?status=upcoming` or
+	// `?status=past`. Requires viewer+.
+	//
+	// GET /api/v1/sites/{siteId}/schedule-runs
+	ListScheduleRuns(ctx context.Context, params ListScheduleRunsParams) (ListScheduleRunsRes, error)
 	// ListSharedWithMe implements listSharedWithMe operation.
 	//
 	// List sites shared to the authenticated user (any logged-in user).
