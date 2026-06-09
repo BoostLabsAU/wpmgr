@@ -49,11 +49,31 @@ type IngestParams struct {
 	TenantID   uuid.UUID
 	SiteID     uuid.UUID
 	URLPattern string
-	Metric     string // lcp | inp | cls | ttfb | fcp
+	Metric     string  // lcp | inp | cls | ttfb | fcp
 	ValueMilli int32
-	Device     string // desktop | mobile | tablet
-	Country    string // ISO-3166-1 alpha-2 or "__other__"
-	Conn       string // 4g | 3g | 2g | slow-2g | offline | unknown
+	Device     string  // desktop | mobile | tablet
+	Country    string  // ISO-3166-1 alpha-2 or "__other__"
+	Conn       string  // 4g | 3g | 2g | slow-2g | offline | unknown
+	SampleRate float32 // fraction in [0,1] from site config; stored on rollup rows
+}
+
+// BucketForValue returns the CrUX histogram bucket index (0-based) for the
+// given metric value in milli-units. The bucket index is the position in the
+// NumBuckets-wide bucket_counts array that the value falls into:
+//
+//	bucket 0  : [0,         CrUXBuckets[0])
+//	bucket i  : [CrUXBuckets[i-1], CrUXBuckets[i])
+//	bucket N-1: [CrUXBuckets[N-2], +∞)            (open-ended last bin)
+//
+// Exported so tests in other packages (e.g. handler_test) can verify the
+// mapping without duplicating the boundary slice.
+func BucketForValue(valueMilli int32) int {
+	for i, boundary := range CrUXBuckets {
+		if valueMilli < boundary {
+			return i
+		}
+	}
+	return NumBuckets - 1 // open-ended last bin
 }
 
 // RollupKey identifies one rollup cell (the PRIMARY KEY columns minus the time
@@ -112,7 +132,12 @@ type P75Result struct {
 // only need WriteEvent + FoldHourly/FoldDaily; the dashboard handler needs
 // GetHourlyRollups / GetDailyRollups + ComputeP75.
 type Store interface {
-	// WriteEvent appends one validated event under InRumIngestTx.
+	// WriteEvent appends one validated event and additively upserts the
+	// corresponding hourly and daily rollup rows, all within a single
+	// InRumIngestTx. The rollup upsert increments sample_count by 1, adds 1
+	// to the bucket_counts element at BucketForValue(p.ValueMilli), and
+	// accumulates sum/min/max. This is the per-beacon rollup path (V1 mechanism);
+	// the RumRollupWorker is reserved for a future batch-fold optimisation.
 	WriteEvent(ctx context.Context, p IngestParams) error
 
 	// FoldHourly aggregates raw events from the given time window into the hourly

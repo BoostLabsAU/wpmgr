@@ -13,6 +13,15 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
 )
 
+// singleEventBucketCounts returns a NumBuckets-length int32 slice with a 1 at
+// the bucket index for valueMilli and zeros elsewhere. Used by WriteEvent to
+// build the minimal histogram row for the per-beacon upsert.
+func singleEventBucketCounts(valueMilli int32) []int32 {
+	counts := make([]int32, NumBuckets)
+	counts[BucketForValue(valueMilli)] = 1
+	return counts
+}
+
 // StorePostgres implements Store using the Postgres sqlc-generated queries.
 // Ingest writes run under InRumIngestTx; rollup upserts run under InRumIngestTx
 // (same GUC — the ingest policy covers both raw-event and rollup writes because
@@ -30,10 +39,34 @@ func NewStorePostgres(pool *db.Pool) *StorePostgres {
 // Compile-time assertion: StorePostgres implements Store.
 var _ Store = (*StorePostgres)(nil)
 
-// WriteEvent appends one validated RUM event under InRumIngestTx.
+// WriteEvent appends one validated RUM event and additively upserts the
+// corresponding hourly and daily rollup rows, all within a single InRumIngestTx.
+//
+// The rollup rows are keyed by (tenant_id, site_id, url_pattern, metric, device,
+// country, bucket_hour/bucket_day). The upsert increments sample_count by 1,
+// adds 1 to the bucket_counts element for the CrUX bucket that contains
+// p.ValueMilli (via BucketForValue), and accumulates sum/min/max. The
+// ON CONFLICT DO UPDATE expressions in UpsertRumRollupHourly/Daily are additive,
+// so concurrent per-beacon inserts converge correctly without any coordination.
+//
+// RLS: InRumIngestTx sets app.rum_ingest='on', app.tenant_id, and app.site_id.
+// The rollup tables' _rum_ingest INSERT policies and _tenant_isolation
+// USING+WITH CHECK policies cover both the INSERT and the ON CONFLICT DO UPDATE
+// arm (the UPDATE arm inherits the session GUCs set at transaction start).
 func (s *StorePostgres) WriteEvent(ctx context.Context, p IngestParams) error {
+	now := time.Now().UTC()
+	bucketHour := now.Truncate(time.Hour)
+
+	bucketDay := pgtype.Date{}
+	_ = bucketDay.Scan(now.Format("2006-01-02"))
+
+	bucketCounts := singleEventBucketCounts(p.ValueMilli)
+
 	return s.pool.InRumIngestTx(ctx, p.TenantID, p.SiteID, func(tx pgx.Tx) error {
-		return sqlc.New(tx).InsertRumEvent(ctx, sqlc.InsertRumEventParams{
+		q := sqlc.New(tx)
+
+		// 1. Append the raw event.
+		if err := q.InsertRumEvent(ctx, sqlc.InsertRumEventParams{
 			TenantID:   p.TenantID,
 			SiteID:     p.SiteID,
 			UrlPattern: p.URLPattern,
@@ -42,6 +75,44 @@ func (s *StorePostgres) WriteEvent(ctx context.Context, p IngestParams) error {
 			Device:     p.Device,
 			Country:    p.Country,
 			Conn:       p.Conn,
+		}); err != nil {
+			return err
+		}
+
+		// 2. Upsert the hourly rollup (additive ON CONFLICT DO UPDATE).
+		if err := q.UpsertRumRollupHourly(ctx, sqlc.UpsertRumRollupHourlyParams{
+			TenantID:     p.TenantID,
+			SiteID:       p.SiteID,
+			UrlPattern:   p.URLPattern,
+			Metric:       p.Metric,
+			Device:       p.Device,
+			Country:      p.Country,
+			BucketHour:   bucketHour,
+			SampleCount:  1,
+			SampleRate:   p.SampleRate,
+			BucketCounts: bucketCounts,
+			SumValue:     int64(p.ValueMilli),
+			MinValue:     p.ValueMilli,
+			MaxValue:     p.ValueMilli,
+		}); err != nil {
+			return err
+		}
+
+		// 3. Upsert the daily rollup (additive ON CONFLICT DO UPDATE).
+		return q.UpsertRumRollupDaily(ctx, sqlc.UpsertRumRollupDailyParams{
+			TenantID:     p.TenantID,
+			SiteID:       p.SiteID,
+			UrlPattern:   p.URLPattern,
+			Metric:       p.Metric,
+			Device:       p.Device,
+			Country:      p.Country,
+			BucketDay:    bucketDay,
+			SampleCount:  1,
+			SampleRate:   p.SampleRate,
+			BucketCounts: bucketCounts,
+			SumValue:     int64(p.ValueMilli),
+			MinValue:     p.ValueMilli,
+			MaxValue:     p.ValueMilli,
 		})
 	})
 }

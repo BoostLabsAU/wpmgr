@@ -16,6 +16,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
+	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 )
 
 // beaconKeyLookup is the subset of BeaconKeyRepo used by the ingest handler.
@@ -153,6 +154,20 @@ func (c *ipLRU) len() int {
 // dangerous memory cliff.
 const DefaultIPLimiterCap = 65_536
 
+// RollupUpdatedThrottle is the minimum time between rum.rollup_updated SSE
+// emits for the same site. One emit per beacon would be a firehose; 30s
+// matches the dashboard refresh cadence so the operator always sees fresh data
+// without flooding the event bus.
+const RollupUpdatedThrottle = 30 * time.Second
+
+// EventPublisher is the subset of site.EventPublisher needed by the RUM handler.
+// Defined locally so the rum package does not import the events implementation
+// (avoids a circular dependency; the concrete *siteevents.Publisher is injected
+// from main.go).
+type EventPublisher interface {
+	Publish(ctx context.Context, ev site.ConnectionEvent) error
+}
+
 // Handler serves the public POST /rum/ingest endpoint. It is intentionally NOT
 // under /api/v1 or /agent/v1: no session, no signature, no tenant gate. The
 // beacon key is the only credential. Handler is registered on the root Gin
@@ -166,17 +181,34 @@ type Handler struct {
 	ipLimiters   *ipLRU
 	siteLimiters map[uuid.UUID]*rate.Limiter
 	mu           sync.Mutex
+
+	// publisher is the site-event bus. May be nil (tests / degraded boot);
+	// when nil, the rum.rollup_updated SSE emit is skipped silently.
+	publisher EventPublisher
+	// rollupEmitAt is the per-site last-emit timestamp map used to throttle
+	// rum.rollup_updated to at most once per RollupUpdatedThrottle per site.
+	rollupEmitAt   map[uuid.UUID]time.Time
+	rollupEmitMu   sync.Mutex
 }
 
-// NewHandler constructs a RUM ingest handler with the default IP-limiter cap.
+// NewHandler constructs a RUM ingest handler with the default IP-limiter cap
+// and no SSE publisher. Use NewHandlerWithPublisher in production to wire the
+// throttled rum.rollup_updated SSE emit.
 // beaconR is *BeaconKeyRepo (satisfies beaconKeyLookup).
 func NewHandler(store Store, beaconR *BeaconKeyRepo) *Handler {
-	return newHandlerWithCap(store, beaconR, DefaultIPLimiterCap)
+	return newHandlerWithCap(store, beaconR, nil, DefaultIPLimiterCap)
+}
+
+// NewHandlerWithPublisher constructs a RUM ingest handler wired to the site
+// event bus. After each successful beacon write, it emits a rum.rollup_updated
+// SSE event for the site, throttled to at most once per RollupUpdatedThrottle.
+func NewHandlerWithPublisher(store Store, beaconR *BeaconKeyRepo, publisher EventPublisher) *Handler {
+	return newHandlerWithCap(store, beaconR, publisher, DefaultIPLimiterCap)
 }
 
 // newHandlerWithCap constructs a RUM ingest handler with a custom IP-limiter cap.
 // Used in tests to inject a stub beacon repo and bound the LRU for fast iteration.
-func newHandlerWithCap(store Store, beaconR beaconKeyLookup, ipCap int) *Handler {
+func newHandlerWithCap(store Store, beaconR beaconKeyLookup, publisher EventPublisher, ipCap int) *Handler {
 	return &Handler{
 		store:   store,
 		beaconR: beaconR,
@@ -184,6 +216,8 @@ func newHandlerWithCap(store Store, beaconR beaconKeyLookup, ipCap int) *Handler
 			return rate.NewLimiter(rate.Every(10*time.Millisecond), 200) // 100 r/s, burst 200
 		}),
 		siteLimiters: make(map[uuid.UUID]*rate.Limiter),
+		publisher:    publisher,
+		rollupEmitAt: make(map[uuid.UUID]time.Time),
 	}
 }
 
@@ -316,7 +350,9 @@ func (h *Handler) handleIngest(c *gin.Context) {
 		conn = "unknown"
 	}
 
-	// ── Write event under InRumIngestTx ──────────────────────────────────────
+	// ── Write event + rollup upsert under InRumIngestTx ─────────────────────
+	// WriteEvent writes the raw event AND additively upserts the hourly and
+	// daily rollup rows in the same transaction. See StorePostgres.WriteEvent.
 	if err := h.store.WriteEvent(c.Request.Context(), IngestParams{
 		TenantID:   row.TenantID,
 		SiteID:     row.SiteID,
@@ -326,6 +362,7 @@ func (h *Handler) handleIngest(c *gin.Context) {
 		Device:     device,
 		Country:    country,
 		Conn:       conn,
+		SampleRate: row.RumSampleRate,
 	}); err != nil {
 		// Ingest failures are silent to the browser (can't retry a fired beacon).
 		// Log on the server side; return 204 so the browser doesn't retry.
@@ -333,7 +370,43 @@ func (h *Handler) handleIngest(c *gin.Context) {
 		return
 	}
 
+	// ── Throttled rum.rollup_updated SSE emit ─────────────────────────────────
+	// Notify the dashboard that rollup data has changed for this site. Throttled
+	// to at most once per RollupUpdatedThrottle per site — emitting per beacon
+	// would flood the event bus on high-traffic sites. The web side listens for
+	// rum.rollup_updated and invalidates the p75 queries (Phase 3b).
+	h.maybeEmitRollupUpdated(c.Request.Context(), row.TenantID, row.SiteID)
+
 	c.Status(http.StatusNoContent)
+}
+
+// maybeEmitRollupUpdated publishes a rum.rollup_updated event to the site event
+// bus if more than RollupUpdatedThrottle has elapsed since the last emit for
+// this site. Noop when the publisher is nil (tests / degraded boot).
+func (h *Handler) maybeEmitRollupUpdated(ctx context.Context, tenantID, siteID uuid.UUID) {
+	if h.publisher == nil {
+		return
+	}
+	now := time.Now().UTC()
+	h.rollupEmitMu.Lock()
+	last := h.rollupEmitAt[siteID]
+	if now.Sub(last) < RollupUpdatedThrottle {
+		h.rollupEmitMu.Unlock()
+		return
+	}
+	h.rollupEmitAt[siteID] = now
+	h.rollupEmitMu.Unlock()
+
+	// Publish outside the lock — the event bus call may block briefly on the DB.
+	// Failures are best-effort: a missed SSE emit does not lose data (the rollup
+	// row is already committed); the dashboard will catch up on the next emit or
+	// on a manual refresh.
+	_ = h.publisher.Publish(ctx, site.ConnectionEvent{
+		Type:     site.EventRumRollupUpdated,
+		TenantID: tenantID,
+		SiteID:   siteID,
+		Data:     map[string]any{"site_id": siteID.String()},
+	})
 }
 
 // rumCORSMiddleware returns a CORS middleware scoped to the /rum group only.

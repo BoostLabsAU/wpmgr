@@ -144,26 +144,26 @@ func NewRumRollupWorker(store *StorePostgres, logger *slog.Logger) *RumRollupWor
 	return &RumRollupWorker{store: store, logger: logger}
 }
 
-// Work runs the rollup fold for one (site, hour) window.
-// Phase 1: FoldHourly and FoldDaily are stubs — the real implementation for
-// cross-tenant raw-to-rollup aggregation is in store_postgres.go's
-// UpsertRollupHourly/UpsertRollupDaily, which the rollup worker calls directly
-// after the ingest handler has already pre-built the histogram row from the
-// beacon payload. See the design note in store_postgres.go FoldHourly.
+// Work is a no-op fold retained for Phase 2 batch-aggregation.
+//
+// V1 mechanism: StorePostgres.WriteEvent writes the raw event AND additively
+// upserts the hourly and daily rollup rows in the same InRumIngestTx on every
+// beacon. This means rollups are populated in real-time without any worker. The
+// throttled rum.rollup_updated SSE emit is also fired by the ingest handler
+// (see Handler.maybeEmitRollupUpdated).
+//
+// This worker remains registered so the River job kind is known and any
+// previously enqueued jobs (from prior deployments) drain cleanly. Phase 2
+// may repurpose it to batch-fold raw events when ingest volume warrants a
+// separate aggregation step.
 func (w *RumRollupWorker) Work(ctx context.Context, job *river.Job[RumRollupArgs]) error {
 	bh, err := time.Parse(time.RFC3339, job.Args.BucketHour)
 	if err != nil {
 		w.logger.Error("rum rollup: parse bucket_hour", slog.String("err", err.Error()))
 		return err
 	}
-	w.logger.Debug("rum rollup: fold",
+	w.logger.Debug("rum rollup worker: no-op (V1 per-beacon upsert handles rollups in WriteEvent)",
 		slog.String("site_id", job.Args.SiteID),
 		slog.String("bucket_hour", bh.Format(time.RFC3339)))
-
-	// Phase 1: no-op fold — the ingest handler writes directly to rum_rollup_hourly
-	// via UpsertRollupHourly in the beacon path (single-event histogram row).
-	// The rollup worker is wired here so the River job schema is registered and
-	// the kind is known; the actual fold logic moves here in Phase 2 when the
-	// raw-event buffer has enough volume to justify a separate aggregation step.
 	return nil
 }

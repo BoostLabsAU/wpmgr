@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"golang.org/x/time/rate"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
+	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 )
 
 func init() {
@@ -314,7 +316,7 @@ func TestHandlerH1_slowLCPStored(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -353,7 +355,7 @@ func TestHandlerH1_negativeLCPDiscarded(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -389,7 +391,7 @@ func TestHandlerH1_clsAt2500Stored(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -532,7 +534,7 @@ func TestRumIngest_noSetCookie(t *testing.T) {
 	sessionGroup.GET("/api/v1/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// /rum/ingest on root — no session middleware.
-	h := newHandlerWithCap(&noopStore{}, &stubBeaconKeyLookup{}, DefaultIPLimiterCap)
+	h := newHandlerWithCap(&noopStore{}, &stubBeaconKeyLookup{}, nil, DefaultIPLimiterCap)
 	h.RegisterPublic(engine)
 
 	w := httptest.NewRecorder()
@@ -618,4 +620,216 @@ func (s *noopStore) PruneHourlyRollups(_ context.Context, _ time.Time) (int64, e
 }
 func (s *noopStore) PruneDailyRollups(_ context.Context, _ time.Time) (int64, error) {
 	return 0, nil
+}
+
+// ---------------------------------------------------------------------------
+// capturePublisher records rum.rollup_updated SSE emits for throttle tests.
+// ---------------------------------------------------------------------------
+
+type capturePublisher struct {
+	mu     sync.Mutex
+	events []site.ConnectionEvent
+}
+
+func (p *capturePublisher) Publish(_ context.Context, ev site.ConnectionEvent) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.events = append(p.events, ev)
+	return nil
+}
+
+func (p *capturePublisher) count() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.events)
+}
+
+func (p *capturePublisher) last() (site.ConnectionEvent, bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.events) == 0 {
+		return site.ConnectionEvent{}, false
+	}
+	return p.events[len(p.events)-1], true
+}
+
+// ---------------------------------------------------------------------------
+// SSE throttle tests
+// ---------------------------------------------------------------------------
+
+// buildValidBeaconRequest creates a POST /rum/ingest request with a valid-looking
+// beacon key (stub lookup returns a matching row regardless of the hash).
+func buildValidBeaconRequest(t *testing.T) *http.Request {
+	t.Helper()
+	payload := map[string]interface{}{
+		"key":    "AAAAAAAAAAAAAAAAAAAAAA",
+		"url":    "https://example.com/",
+		"metric": "lcp",
+		"value":  2500,
+	}
+	b, _ := json.Marshal(payload)
+	req := httptest.NewRequest(http.MethodPost, "/rum/ingest", bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	return req
+}
+
+// TestRollupUpdated_emittedOnFirstBeacon verifies that the very first beacon
+// for a site triggers a rum.rollup_updated SSE event.
+func TestRollupUpdated_emittedOnFirstBeacon(t *testing.T) {
+	pub := &capturePublisher{}
+	beaconR := &stubBeaconKeyLookup{
+		row: sqlc.LookupRumBeaconKeyRow{
+			SiteID:        uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000001"),
+			TenantID:      uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000002"),
+			RumEnabled:    true,
+			RumSampleRate: 1.0,
+		},
+	}
+	h := newHandlerWithCap(&noopStore{}, beaconR, pub, DefaultIPLimiterCap)
+	engine := gin.New()
+	h.RegisterPublic(engine)
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, buildValidBeaconRequest(t))
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if pub.count() != 1 {
+		t.Errorf("expected 1 SSE emit after first beacon, got %d", pub.count())
+	}
+	ev, _ := pub.last()
+	if ev.Type != site.EventRumRollupUpdated {
+		t.Errorf("event type = %q, want %q", ev.Type, site.EventRumRollupUpdated)
+	}
+	if ev.SiteID != beaconR.row.SiteID {
+		t.Errorf("event SiteID = %v, want %v", ev.SiteID, beaconR.row.SiteID)
+	}
+	if ev.TenantID != beaconR.row.TenantID {
+		t.Errorf("event TenantID = %v, want %v", ev.TenantID, beaconR.row.TenantID)
+	}
+}
+
+// TestRollupUpdated_throttledToOnePerWindow verifies that N rapid beacons for
+// the same site produce at most 1 SSE emit (the throttle window has not elapsed).
+func TestRollupUpdated_throttledToOnePerWindow(t *testing.T) {
+	const N = 20
+	pub := &capturePublisher{}
+	beaconR := &stubBeaconKeyLookup{
+		row: sqlc.LookupRumBeaconKeyRow{
+			SiteID:        uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000002"),
+			TenantID:      uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000002"),
+			RumEnabled:    true,
+			RumSampleRate: 1.0,
+		},
+	}
+	h := newHandlerWithCap(&noopStore{}, beaconR, pub, DefaultIPLimiterCap)
+	engine := gin.New()
+	h.RegisterPublic(engine)
+
+	for i := 0; i < N; i++ {
+		w := httptest.NewRecorder()
+		engine.ServeHTTP(w, buildValidBeaconRequest(t))
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("beacon %d: expected 204, got %d", i, w.Code)
+		}
+	}
+
+	if got := pub.count(); got > 1 {
+		t.Errorf("throttle: %d beacons produced %d SSE emits, want ≤1 within the same throttle window", N, got)
+	}
+	if pub.count() == 0 {
+		t.Error("throttle: 0 emits for 20 beacons — at least 1 must fire on the first beacon")
+	}
+}
+
+// TestRollupUpdated_twoDifferentSitesEachGetOneEmit verifies that two sites
+// each get their own independent SSE emit — the throttle is per-site, not global.
+func TestRollupUpdated_twoDifferentSitesEachGetOneEmit(t *testing.T) {
+	pub := &capturePublisher{}
+	siteA := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000010")
+	siteB := uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000011")
+	tenantID := uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000003")
+
+	// We need two separate handlers (one per site) since stubBeaconKeyLookup
+	// returns a single fixed row. Use separate handlers sharing the same publisher.
+	makeHandler := func(siteID uuid.UUID) *Handler {
+		return newHandlerWithCap(&noopStore{}, &stubBeaconKeyLookup{
+			row: sqlc.LookupRumBeaconKeyRow{
+				SiteID: siteID, TenantID: tenantID,
+				RumEnabled: true, RumSampleRate: 1.0,
+			},
+		}, pub, DefaultIPLimiterCap)
+	}
+	hA := makeHandler(siteA)
+	hB := makeHandler(siteB)
+
+	engineA := gin.New()
+	hA.RegisterPublic(engineA)
+	engineB := gin.New()
+	hB.RegisterPublic(engineB)
+
+	// Fire one beacon per site.
+	engineA.ServeHTTP(httptest.NewRecorder(), buildValidBeaconRequest(t))
+	engineB.ServeHTTP(httptest.NewRecorder(), buildValidBeaconRequest(t))
+
+	if got := pub.count(); got != 2 {
+		t.Errorf("expected 2 SSE emits (one per site), got %d", got)
+	}
+}
+
+// TestRollupUpdated_nilPublisherIsNoop verifies that a nil publisher causes
+// no panic and the beacon still returns 204.
+func TestRollupUpdated_nilPublisherIsNoop(t *testing.T) {
+	beaconR := &stubBeaconKeyLookup{
+		row: sqlc.LookupRumBeaconKeyRow{
+			SiteID:        uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000020"),
+			TenantID:      uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000004"),
+			RumEnabled:    true,
+			RumSampleRate: 1.0,
+		},
+	}
+	// nil publisher — should not panic.
+	h := newHandlerWithCap(&noopStore{}, beaconR, nil, DefaultIPLimiterCap)
+	engine := gin.New()
+	h.RegisterPublic(engine)
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, buildValidBeaconRequest(t))
+	if w.Code != http.StatusNoContent {
+		t.Errorf("nil publisher: expected 204, got %d", w.Code)
+	}
+}
+
+// TestRollupUpdated_sampleRatePassedToStore verifies that the handler passes
+// row.RumSampleRate through to IngestParams.SampleRate. This field is needed
+// by WriteEvent to store the sample_rate on rollup rows so the dashboard can
+// scale sample counts back to full-population estimates. We use SampleRate=1.0
+// to guarantee the event is not dropped by random sampling before reaching the store.
+func TestRollupUpdated_sampleRatePassedToStore(t *testing.T) {
+	const wantRate float32 = 1.0
+	stored := &captureStore{}
+	beaconR := &stubBeaconKeyLookup{
+		row: sqlc.LookupRumBeaconKeyRow{
+			SiteID:        uuid.MustParse("aaaaaaaa-0000-0000-0000-000000000030"),
+			TenantID:      uuid.MustParse("bbbbbbbb-0000-0000-0000-000000000005"),
+			RumEnabled:    true,
+			RumSampleRate: wantRate,
+		},
+	}
+	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
+	engine := gin.New()
+	h.RegisterPublic(engine)
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, buildValidBeaconRequest(t))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d", w.Code)
+	}
+	if len(stored.events) != 1 {
+		t.Fatalf("expected 1 stored event, got %d — handler must pass SampleRate through to WriteEvent", len(stored.events))
+	}
+	if stored.events[0].SampleRate != wantRate {
+		t.Errorf("IngestParams.SampleRate = %f, want %f", stored.events[0].SampleRate, wantRate)
+	}
 }

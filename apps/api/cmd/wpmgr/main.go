@@ -900,7 +900,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	rumRetention := rum.DefaultRetention(cfg)
 	rumGCWorker := rum.NewRumGCWorker(rumStore, rumRetention, logger)
 	rumRollupWorker := rum.NewRumRollupWorker(rumStore, logger)
-	rumH := rum.NewHandler(rumStore, rumBeaconRepo)
+	// Wire the site event publisher so the ingest handler can emit the throttled
+	// rum.rollup_updated SSE after each beacon commit. siteEventsPub is wired
+	// before this point (line ~701) and satisfies rum.EventPublisher.
+	rumH := rum.NewHandlerWithPublisher(rumStore, rumBeaconRepo, siteEventsPub)
 
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
