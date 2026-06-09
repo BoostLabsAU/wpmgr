@@ -23,6 +23,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - Real User Monitoring now reliably collects CLS (Cumulative Layout Shift) on cached pages. In web-vitals, the CLS reporter is armed inside the First Contentful Paint callback; the browser collector was registering CLS before FCP, which on an already-cached page widened the timing window in which a load-and-leave visitor could hide the page before the CLS reporter was armed, dropping the measurement. The collectors are now registered in the canonical web-vitals order (TTFB, FCP, LCP, CLS, INP) so the CLS reporter is armed in the same delivery task as FCP, before any page-hide can interrupt it. Verified with a headless-Chromium repro test that induces a guaranteed layout shift then forces page-hide. Agent-only; no server or data change.
 
+## [0.33.2] - 2026-06-09
+
 ### Fixed
 
 - Real User Monitoring now collects CLS (Cumulative Layout Shift), completing Core Web Vitals coverage. In web-vitals, the CLS reporter is armed only after First Contentful Paint resolves, and the collector was loaded as a deferred script at the end of the page, so on a load-and-leave visit the page could be hidden before the CLS reporter was ever armed and no CLS measurement was sent. The collector is upgraded to web-vitals 5 (which resolves the paint gate correctly on briefly-hidden pages) and is now loaded early and asynchronously from the page head, so CLS is captured on every visit. Loading the collector earlier also slightly improves LCP and FCP accuracy. No server or data change.

@@ -13,6 +13,7 @@ import { FeatureCard, IconChip, ProofChip, StatChip, StepCard } from "@/componen
 import { BeforeAfterCard } from "@/components/before-after";
 import { CodeSnippet } from "@/components/code-snippet";
 import { FAQItem } from "@/components/faq-item";
+import { RumPreview } from "@/components/rum-preview";
 import {
   ENROLL,
   FAQ,
@@ -26,6 +27,7 @@ import {
   OPEN_SOURCE,
   PERFORMANCE,
   PERFORMANCE_STEPS,
+  RUM,
   SECURITY,
   SITE,
   STATS,
@@ -347,6 +349,75 @@ export function PerformanceHow() {
             </Reveal>
           ))}
         </div>
+      </Container>
+    </Section>
+  );
+}
+
+export function RumSection() {
+  const d = RUM.demo;
+  return (
+    <Section id="rum" tone="muted">
+      <Container className="grid items-start gap-12 lg:grid-cols-2">
+        {/* Left column: copy + capability list + privacy points */}
+        <Reveal className="flex flex-col gap-6">
+          <Eyebrow>{RUM.eyebrow}</Eyebrow>
+          <h2 className="text-3xl font-semibold text-foreground sm:text-4xl">{RUM.heading}</h2>
+          <p className="text-lg leading-relaxed text-muted-foreground">{RUM.subhead}</p>
+          <div className="grid gap-3 text-sm leading-relaxed text-muted-foreground">
+            {RUM.bodyLines.map((b) => (
+              <p key={b}>{b}</p>
+            ))}
+          </div>
+
+          {/* Capability list */}
+          <ul className="flex flex-col gap-3">
+            {RUM.capabilities.map((cap) => (
+              <li key={cap.label} className="flex items-start gap-3">
+                <span className="mt-0.5 shrink-0 text-primary">
+                  <Icon name={cap.icon} size={17} />
+                </span>
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-sm font-semibold text-foreground">{cap.label}</span>
+                  <span className="text-sm leading-relaxed text-muted-foreground">{cap.detail}</span>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {/* Privacy bullets */}
+          <div className="rounded-xl border border-border bg-card p-5 shadow-sm">
+            <div className="mb-3 flex items-center gap-2">
+              <IconChip name="EyeOff" />
+              <span className="text-sm font-semibold text-foreground">Privacy by default</span>
+            </div>
+            <ul className="flex flex-col gap-1.5">
+              {RUM.privacy.map((line) => (
+                <li key={line} className="flex items-start gap-2 text-sm text-muted-foreground">
+                  <Icon name="Check" size={14} className="mt-0.5 shrink-0 text-[var(--success)]" />
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <CTAButton cta={{ ...RUM.cta, variant: "secondary" }} />
+          </div>
+        </Reveal>
+
+        {/* Right column: visual mock of the RUM dashboard */}
+        <Reveal delay={0.1}>
+          <RumPreview
+            metric={d.metric}
+            p75={d.p75}
+            rating={d.rating}
+            distribution={d.distribution}
+            trend={d.trend}
+            threshold={d.threshold}
+            metrics={d.metrics}
+          />
+        </Reveal>
       </Container>
     </Section>
   );
