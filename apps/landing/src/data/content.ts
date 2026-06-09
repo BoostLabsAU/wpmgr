@@ -19,6 +19,7 @@ export const NAV = {
   links: [
     { label: "Features", href: "#features" },
     { label: "Performance", href: "#performance" },
+    { label: "RUM", href: "#rum" },
     { label: "Media", href: "#media" },
     { label: "DB Cleaner", href: "#features" },
     { label: "How it works", href: "#how-it-works" },
@@ -293,6 +294,54 @@ export const PERFORMANCE_STEPS = {
         "Save the config for one site, purge the cache across many at once, or apply a safe, balanced, or aggressive preset to a whole group in one run. Live status and stats stream to the dashboard with no refresh.",
     },
   ],
+};
+
+export const RUM = {
+  eyebrow: "Real User Monitoring",
+  heading: "Complete Core Web Vitals tracking from real visitors",
+  subhead:
+    "See how your pages actually perform in the field. All five Core Web Vitals, at the p75 percentile Google uses for ranking, sourced from real browsers on your live site.",
+  bodyLines: [
+    "WPMgr collects LCP, INP, CLS, FCP, and TTFB from real visitor sessions and surfaces them at the p75 percentile: the same threshold Google PageSpeed Insights and Search Console use for field data. No lab simulation, no synthetic crawler.",
+    "Every metric shows a PageSpeed Insights-style distribution bar and a 28-day p75 trend with the passing threshold marked, so you can see at a glance whether a recent change moved the needle in the field. Per-URL and per-device breakdowns let you pinpoint exactly where a score comes from.",
+  ],
+  capabilities: [
+    { icon: "BarChart2", label: "All five Core Web Vitals", detail: "LCP, INP, CLS, FCP, and TTFB at p75, the percentile Google uses for field data" },
+    { icon: "TrendingUp", label: "28-day p75 trend per metric", detail: "The passing threshold line is drawn on every trend so you can see the moment a change crossed it" },
+    { icon: "Gauge", label: "Good / needs improvement / poor distribution", detail: "A PageSpeed Insights-style histogram bar built from the same rating buckets Google uses" },
+    { icon: "Monitor", label: "Per-URL and per-device breakdowns", detail: "Narrow to a specific page or separate desktop from mobile without leaving the dashboard" },
+    { icon: "Activity", label: "Live updates over SSE", detail: "New beacons stream to the dashboard in real time with no manual refresh" },
+    { icon: "EyeOff", label: "Privacy-first by design", detail: "Anonymous, off by default, no cookies, no cross-site identifiers, query strings stripped, visitor IP never stored" },
+  ],
+  privacy: [
+    "Off by default. You turn it on per site when you want it.",
+    "No cookies and no cross-site identifiers of any kind.",
+    "Page paths are stored with the query string stripped.",
+    "Visitor IP addresses are never stored.",
+    "On a self-hosted control plane every measurement stays on your own infrastructure.",
+  ],
+  cta: { label: "See it in the dashboard", href: "https://manage.wpmgr.app", icon: "ArrowRight" },
+  // Mock data for the RUM preview widget. These are illustrative figures only,
+  // labelled as sample data in the component.
+  demo: {
+    metric: "LCP",
+    p75: "2.1s",
+    rating: "good" as const,
+    distribution: [
+      { label: "Good", pct: 68, tone: "good" as const },
+      { label: "Needs improvement", pct: 22, tone: "needs-improvement" as const },
+      { label: "Poor", pct: 10, tone: "poor" as const },
+    ],
+    trend: [2.6, 2.4, 2.3, 2.5, 2.2, 2.0, 2.1, 2.3, 2.0, 1.9, 2.1, 2.0, 2.1],
+    threshold: 2.5,
+    metrics: [
+      { name: "LCP", p75: "2.1s", rating: "good" as const },
+      { name: "INP", p75: "148ms", rating: "good" as const },
+      { name: "CLS", p75: "0.05", rating: "good" as const },
+      { name: "FCP", p75: "1.4s", rating: "good" as const },
+      { name: "TTFB", p75: "310ms", rating: "needs-improvement" as const },
+    ],
+  },
 };
 
 export const ENROLL = {

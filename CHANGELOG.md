@@ -6,7 +6,11 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
-## [0.33.4] - 2026-06-09
+## [0.33.5] - 2026-06-09
+
+### Fixed
+
+- The Real User Monitoring dashboard's default "All devices" tab showed "No data" even when the per-device tabs had data. The summary read path returned one row per device and country but never the device-agnostic aggregate the "All" tab reads, so the default view found nothing. The summary now returns, per metric, one country-collapsed row per device plus one all-devices aggregate (device-agnostic, summed across every device and country), and the 28-day trend collapses to a single series per metric for the selected device segment (or across all devices for "All"). The all-devices aggregate also crosses the minimum-sample floor sooner, so the dashboard populates with fewer total pageviews. Per-device tabs now also sum correctly across countries instead of showing a single country's slice. Control-plane only; no agent, migration, or data change.
 
 ### Added
 
@@ -22,6 +26,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 ### Fixed
 
 - Real User Monitoring now reliably collects CLS (Cumulative Layout Shift) on cached pages. In web-vitals, the CLS reporter is armed inside the First Contentful Paint callback; the browser collector was registering CLS before FCP, which on an already-cached page widened the timing window in which a load-and-leave visitor could hide the page before the CLS reporter was armed, dropping the measurement. The collectors are now registered in the canonical web-vitals order (TTFB, FCP, LCP, CLS, INP) so the CLS reporter is armed in the same delivery task as FCP, before any page-hide can interrupt it. Verified with a headless-Chromium repro test that induces a guaranteed layout shift then forces page-hide. Agent-only; no server or data change.
+
+## [0.33.2] - 2026-06-09
 
 ### Fixed
 

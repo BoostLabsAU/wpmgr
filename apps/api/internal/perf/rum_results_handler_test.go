@@ -688,3 +688,306 @@ func TestRumTrend_windowDaysClamp(t *testing.T) {
 		t.Errorf("expected window_days clamped to 90, body=%s", w.Body.String())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// rumSummary all-devices aggregate tests (fix for "All" tab "No data" bug)
+// ---------------------------------------------------------------------------
+
+// TestRumSummary_allDevicesAggregateEmitted verifies that rumSummary emits a
+// device="" aggregate row per metric whose sample_count equals the sum of the
+// per-device rows. This is the row the frontend "All" tab consumes.
+func TestRumSummary_allDevicesAggregateEmitted(t *testing.T) {
+	counts := make([]int32, rum.NumBuckets)
+	counts[0] = 60
+
+	// Two devices, same metric, same country — the all-devices row must sum them.
+	st := &rumStubStore{
+		rollups: []rum.HourlyRollup{
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "US"},
+				SampleCount:  60,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "mobile", Country: "US"},
+				SampleCount:  40,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+		},
+	}
+	reader := &RumResultsReader{
+		GetHourlyRollups: st.GetHourlyRollups,
+		ComputeP75:       st.ComputeP75,
+	}
+	h := newRumTestHandler(reader, 10)
+
+	engine := gin.New()
+	siteID := uuid.New()
+	engine.GET("/sites/:siteId/perf/rum/summary", func(c *gin.Context) {
+		injectPrincipal(c)
+		h.rumSummary(c)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sites/"+siteID.String()+"/perf/rum/summary", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// The all-devices aggregate row (device="") must be present.
+	// JSON: "device":"" (empty string device field).
+	if !rumContains(body, `"device":""`) {
+		t.Errorf("expected all-devices aggregate (device:\"\") in response, body=%s", body)
+	}
+	// The all-devices row sample_count must equal 60+40=100.
+	if !rumContains(body, `"sample_count":100`) {
+		t.Errorf("expected all-devices sample_count=100 (sum of desktop+mobile), body=%s", body)
+	}
+	// Individual device rows must also be present.
+	if !rumContains(body, `"device":"desktop"`) {
+		t.Errorf("expected desktop device row in response, body=%s", body)
+	}
+	if !rumContains(body, `"device":"mobile"`) {
+		t.Errorf("expected mobile device row in response, body=%s", body)
+	}
+}
+
+// TestRumSummary_deviceRowSumsAcrossCountries verifies that a per-device row
+// aggregates across all countries (no per-(device,country) split in the summary).
+func TestRumSummary_deviceRowSumsAcrossCountries(t *testing.T) {
+	counts := make([]int32, rum.NumBuckets)
+	counts[0] = 50
+
+	st := &rumStubStore{
+		rollups: []rum.HourlyRollup{
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "US"},
+				SampleCount:  50,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "GB"},
+				SampleCount:  30,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+		},
+	}
+	reader := &RumResultsReader{
+		GetHourlyRollups: st.GetHourlyRollups,
+		ComputeP75:       st.ComputeP75,
+	}
+	h := newRumTestHandler(reader, 10)
+
+	engine := gin.New()
+	siteID := uuid.New()
+	engine.GET("/sites/:siteId/perf/rum/summary", func(c *gin.Context) {
+		injectPrincipal(c)
+		h.rumSummary(c)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sites/"+siteID.String()+"/perf/rum/summary", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// Desktop row must have sample_count == 50+30 = 80 (country-collapsed).
+	if !rumContains(body, `"sample_count":80`) {
+		t.Errorf("expected desktop device row with sample_count=80 (US+GB collapsed), body=%s", body)
+	}
+	// The response must NOT expose country-level rows (country field must be "").
+	if rumContains(body, `"country":"US"`) || rumContains(body, `"country":"GB"`) {
+		t.Errorf("summary must not expose per-country rows, body=%s", body)
+	}
+}
+
+// TestRumSummary_allTabPopulatesWhenPerDeviceSuppressed verifies that the
+// all-devices row can pass the min_sample_count floor even when no single
+// device row does (the "All" tab populates first).
+func TestRumSummary_allTabPopulatesWhenPerDeviceSuppressed(t *testing.T) {
+	counts := make([]int32, rum.NumBuckets)
+	counts[0] = 20 // 20 < 30 (floor) per device, but 20+20=40 > 30 combined
+
+	st := &rumStubStore{
+		rollups: []rum.HourlyRollup{
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "US"},
+				SampleCount:  20,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+			{
+				RollupKey:    rum.RollupKey{Metric: "lcp", Device: "mobile", Country: "US"},
+				SampleCount:  20,
+				BucketCounts: counts,
+				MaxValue:     150,
+			},
+		},
+	}
+	reader := &RumResultsReader{
+		GetHourlyRollups: st.GetHourlyRollups,
+		ComputeP75:       st.ComputeP75,
+	}
+	h := newRumTestHandler(reader, 30)
+
+	engine := gin.New()
+	siteID := uuid.New()
+	engine.GET("/sites/:siteId/perf/rum/summary", func(c *gin.Context) {
+		injectPrincipal(c)
+		h.rumSummary(c)
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sites/"+siteID.String()+"/perf/rum/summary", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// The all-devices aggregate must NOT be suppressed (40 >= 30).
+	// We verify by asserting device="" is present AND p75_ms is non-zero.
+	if !rumContains(body, `"device":""`) {
+		t.Errorf("expected all-devices row in response, body=%s", body)
+	}
+	// The all-devices row sample_count == 40; verify it is not suppressed by
+	// checking a non-zero p75_ms appears somewhere (bucket 0 → p75 ≈ 150ms).
+	if rumContains(body, `"p75_ms":0`) && !rumContains(body, `"suppressed":false`) {
+		// p75_ms:0 is expected only on suppressed rows. A non-suppressed all-devices
+		// row should have non-zero p75. Check suppressed:false is present.
+		t.Errorf("all-devices row should not be suppressed when total >= floor, body=%s", body)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// rumTrend aggregation key tests (fix for "All" tab collapse bug)
+// ---------------------------------------------------------------------------
+
+// TestRumTrend_allDevicesCollapseToOneSeries verifies that when no device
+// filter is passed, rumTrend returns exactly ONE series per metric (not one
+// per device), and the day's sample_count equals the sum across devices.
+func TestRumTrend_allDevicesCollapseToOneSeries(t *testing.T) {
+	day := time.Date(2026, 5, 20, 0, 0, 0, 0, time.UTC)
+	counts := make([]int32, rum.NumBuckets)
+	counts[0] = 50
+
+	h := newRumTrendTestHandler([]rum.DailyRollup{
+		{
+			RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "US"},
+			BucketDay:    day,
+			SampleCount:  50,
+			BucketCounts: counts,
+			MaxValue:     150,
+		},
+		{
+			RollupKey:    rum.RollupKey{Metric: "lcp", Device: "mobile", Country: "US"},
+			BucketDay:    day,
+			SampleCount:  40,
+			BucketCounts: counts,
+			MaxValue:     150,
+		},
+	}, 10)
+
+	engine := gin.New()
+	siteID := uuid.New()
+	engine.GET("/sites/:siteId/perf/rum/trend", func(c *gin.Context) {
+		injectPrincipal(c)
+		h.rumTrend(c)
+	})
+
+	// No device filter → All tab.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sites/"+siteID.String()+"/perf/rum/trend", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("trend: expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// The day must appear exactly once (not twice — once per device).
+	// Count occurrences of "2026-05-20".
+	count := 0
+	for i := 0; i <= len(body)-len("2026-05-20"); i++ {
+		if body[i:i+len("2026-05-20")] == "2026-05-20" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected day 2026-05-20 to appear exactly once (collapsed), got %d occurrences, body=%s", count, body)
+	}
+
+	// The collapsed day's sample_count must be 50+40=90.
+	if !rumContains(body, `"sample_count":90`) {
+		t.Errorf("expected collapsed sample_count=90 (desktop+mobile), body=%s", body)
+	}
+}
+
+// TestRumTrend_deviceFilterProducesOneSeries verifies that with a device
+// filter, only rows for that device are included and countries are collapsed.
+func TestRumTrend_deviceFilterProducesOneSeries(t *testing.T) {
+	day := time.Date(2026, 5, 21, 0, 0, 0, 0, time.UTC)
+	counts := make([]int32, rum.NumBuckets)
+	counts[0] = 40
+
+	h := newRumTrendTestHandler([]rum.DailyRollup{
+		{
+			RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "US"},
+			BucketDay:    day,
+			SampleCount:  40,
+			BucketCounts: counts,
+			MaxValue:     150,
+		},
+		{
+			RollupKey:    rum.RollupKey{Metric: "lcp", Device: "desktop", Country: "GB"},
+			BucketDay:    day,
+			SampleCount:  25,
+			BucketCounts: counts,
+			MaxValue:     150,
+		},
+		{
+			RollupKey:    rum.RollupKey{Metric: "lcp", Device: "mobile", Country: "US"},
+			BucketDay:    day,
+			SampleCount:  30,
+			BucketCounts: counts,
+			MaxValue:     150,
+		},
+	}, 10)
+
+	engine := gin.New()
+	siteID := uuid.New()
+	engine.GET("/sites/:siteId/perf/rum/trend", func(c *gin.Context) {
+		injectPrincipal(c)
+		h.rumTrend(c)
+	})
+
+	// device=desktop filter: only US+GB desktop rows, mobile excluded.
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sites/"+siteID.String()+"/perf/rum/trend?device=desktop", nil)
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("trend: expected 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	// desktop US+GB collapsed: 40+25=65.
+	if !rumContains(body, `"sample_count":65`) {
+		t.Errorf("expected desktop collapsed sample_count=65 (US+GB), body=%s", body)
+	}
+	// Mobile sample_count (30) must not appear.
+	if rumContains(body, `"sample_count":30`) {
+		t.Errorf("mobile sample_count=30 must not appear with device=desktop filter, body=%s", body)
+	}
+}

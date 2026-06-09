@@ -81,49 +81,128 @@ func (h *Handler) rumSummary(c *gin.Context) {
 		return
 	}
 
-	p75s := h.rum.ComputeP75(rollups, minSampleCount)
-
-	// Build a (metric, device, country) → summed int64 bucket_counts map so we
-	// can compute the distribution for each slice without a second DB round-trip.
-	// We reuse the same rollups slice that ComputeP75 already consumed above.
+	// Build per-(metric, device, country) bucket sums from the raw rollups.
+	// These are used both to compute device-level aggregates (country-collapsed)
+	// and the all-devices aggregate (device="" row the frontend "All" tab consumes).
 	type sliceKey struct {
 		metric  string
 		device  string
 		country string
 	}
-	bucketSums := make(map[sliceKey][]int64)
+	type bucketAcc struct {
+		counts      []int64
+		sampleCount int64
+		maxVal      int32
+	}
+	perSlice := make(map[sliceKey]*bucketAcc)
 	for _, r := range rollups {
 		k := sliceKey{metric: r.Metric, device: r.Device, country: r.Country}
-		sums, ok := bucketSums[k]
+		acc, ok := perSlice[k]
 		if !ok {
-			sums = make([]int64, rum.NumBuckets)
-			bucketSums[k] = sums
+			acc = &bucketAcc{counts: make([]int64, rum.NumBuckets), maxVal: r.MaxValue}
+			perSlice[k] = acc
+		}
+		acc.sampleCount += r.SampleCount
+		if r.MaxValue > acc.maxVal {
+			acc.maxVal = r.MaxValue
 		}
 		for i, c := range r.BucketCounts {
 			if i < rum.NumBuckets {
-				sums[i] += int64(c)
+				acc.counts[i] += int64(c)
 			}
 		}
 	}
 
-	metrics := make([]RumMetricSummary, 0, len(p75s))
-	for _, r := range p75s {
-		suppressed := r.P75Milli == 0 && r.SampleCount < int64(minSampleCount)
+	// Build two sets of aggregated rows per metric:
+	//
+	//   1. Device-level rows (one per (metric, device), country-collapsed):
+	//      sum bucket_counts + sample_count across all countries for that device.
+	//
+	//   2. All-devices row (device="", country-collapsed):
+	//      sum across all devices AND countries.
+	//
+	// The frontend "All" tab expects device="" rows; per-device tabs expect the
+	// device-named rows. Per-(device,country) granularity is NOT emitted here
+	// (that level of detail belongs to the per-URL rumResults endpoint).
+
+	type devKey struct {
+		metric string
+		device string // "" for the all-devices aggregate
+	}
+	devAcc := make(map[devKey]*bucketAcc)
+
+	for k, src := range perSlice {
+		// Device-level aggregate (country collapsed).
+		dk := devKey{metric: k.metric, device: k.device}
+		da, ok := devAcc[dk]
+		if !ok {
+			da = &bucketAcc{counts: make([]int64, rum.NumBuckets), maxVal: src.maxVal}
+			devAcc[dk] = da
+		}
+		da.sampleCount += src.sampleCount
+		if src.maxVal > da.maxVal {
+			da.maxVal = src.maxVal
+		}
+		for i, v := range src.counts {
+			da.counts[i] += v
+		}
+
+		// All-devices aggregate (device="" sentinel).
+		ak := devKey{metric: k.metric, device: ""}
+		aa, ok := devAcc[ak]
+		if !ok {
+			aa = &bucketAcc{counts: make([]int64, rum.NumBuckets), maxVal: src.maxVal}
+			devAcc[ak] = aa
+		}
+		aa.sampleCount += src.sampleCount
+		if src.maxVal > aa.maxVal {
+			aa.maxVal = src.maxVal
+		}
+		for i, v := range src.counts {
+			aa.counts[i] += v
+		}
+	}
+
+	// Sort devKey for deterministic output: (metric ASC, device ASC) with ""
+	// (all-devices) sorted last per metric so device rows appear first.
+	sortedDevKeys := make([]devKey, 0, len(devAcc))
+	for dk := range devAcc {
+		sortedDevKeys = append(sortedDevKeys, dk)
+	}
+	sort.Slice(sortedDevKeys, func(i, j int) bool {
+		a, b := sortedDevKeys[i], sortedDevKeys[j]
+		if a.metric != b.metric {
+			return a.metric < b.metric
+		}
+		// "" sorts last within a metric group.
+		if a.device == "" && b.device != "" {
+			return false
+		}
+		if a.device != "" && b.device == "" {
+			return true
+		}
+		return a.device < b.device
+	})
+
+	metrics := make([]RumMetricSummary, 0, len(sortedDevKeys))
+	for _, dk := range sortedDevKeys {
+		acc := devAcc[dk]
+		suppressed := acc.sampleCount < int64(minSampleCount)
+		p75 := float64(0)
+		if !suppressed {
+			p75 = rum.InterpolateP75FromCounts(acc.counts, acc.sampleCount, acc.maxVal)
+		}
 		ms := RumMetricSummary{
-			Metric:      r.Metric,
-			Device:      r.Device,
-			Country:     r.Country,
-			P75Ms:       r.P75Milli,
-			SampleCount: r.SampleCount,
+			Metric:      dk.metric,
+			Device:      dk.device,
+			Country:     "",
+			P75Ms:       p75,
+			SampleCount: acc.sampleCount,
 			Suppressed:  suppressed,
 		}
 		if !suppressed {
-			ms.Rating = cwvRating(r.Metric, r.P75Milli)
-			// Populate the distribution bar from the already-summed bucket counts.
-			k := sliceKey{metric: r.Metric, device: r.Device, country: r.Country}
-			if sums, ok := bucketSums[k]; ok {
-				ms.Distribution = foldBucketsIntoDistribution(r.Metric, sums)
-			}
+			ms.Rating = cwvRating(dk.metric, p75)
+			ms.Distribution = foldBucketsIntoDistribution(dk.metric, acc.counts)
 		}
 		metrics = append(metrics, ms)
 	}
@@ -281,12 +360,15 @@ func (h *Handler) rumTrend(c *gin.Context) {
 	// site-level point per (metric, day).
 	deviceFilter := c.Query("device")
 
-	// Aggregate: collapse url_patterns and countries (and optionally devices) into
-	// one histogram per (metric, device, day). Working from dailyRows avoids a
-	// second DB call and collapses all countries into one site-level point per day.
+	// Aggregate: collapse url_patterns, countries, and (when deviceFilter is "")
+	// devices into one histogram per (metric, day). The key intentionally omits
+	// device so that:
+	//   - When deviceFilter is set: only rows for that device are included (the
+	//     filter above), and each (metric, day) cell accumulates across countries.
+	//   - When deviceFilter is "" (All tab): all devices pass the filter and all
+	//     collapse into the same (metric, day) cell, giving the all-devices series.
 	type rumTrendKey struct {
 		metric string
-		device string
 		day    time.Time
 	}
 	type rumTrendAcc struct {
@@ -300,7 +382,7 @@ func (h *Handler) rumTrend(c *gin.Context) {
 			continue
 		}
 		day := r.BucketDay.UTC().Truncate(24 * time.Hour)
-		k := rumTrendKey{metric: r.Metric, device: r.Device, day: day}
+		k := rumTrendKey{metric: r.Metric, day: day}
 		acc, found := accs[k]
 		if !found {
 			acc = &rumTrendAcc{counts: make([]int64, rum.NumBuckets), maxVal: r.MaxValue}
@@ -317,7 +399,7 @@ func (h *Handler) rumTrend(c *gin.Context) {
 		}
 	}
 
-	// Sort keys: (metric ASC, device ASC, day ASC) for deterministic output.
+	// Sort keys: (metric ASC, day ASC) for deterministic output.
 	sortedKeys := make([]rumTrendKey, 0, len(accs))
 	for k := range accs {
 		sortedKeys = append(sortedKeys, k)
@@ -326,9 +408,6 @@ func (h *Handler) rumTrend(c *gin.Context) {
 		a, b := sortedKeys[i], sortedKeys[j]
 		if a.metric != b.metric {
 			return a.metric < b.metric
-		}
-		if a.device != b.device {
-			return a.device < b.device
 		}
 		return a.day.Before(b.day)
 	})

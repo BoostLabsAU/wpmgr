@@ -12,6 +12,7 @@ import {
   OpenSource,
   PerformanceHow,
   PerformanceSpotlight,
+  RumSection,
   Security,
   Stats,
   TechStack,
@@ -30,6 +31,7 @@ export function App() {
         <FeatureGrid />
         <PerformanceSpotlight />
         <PerformanceHow />
+        <RumSection />
         <MediaSpotlight />
         <MediaHow />
         <HowItWorks />
