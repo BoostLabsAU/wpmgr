@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"math/rand/v2"
 	"net/http"
 	"strings"
@@ -187,28 +188,37 @@ type Handler struct {
 	publisher EventPublisher
 	// rollupEmitAt is the per-site last-emit timestamp map used to throttle
 	// rum.rollup_updated to at most once per RollupUpdatedThrottle per site.
-	rollupEmitAt   map[uuid.UUID]time.Time
-	rollupEmitMu   sync.Mutex
+	rollupEmitAt map[uuid.UUID]time.Time
+	rollupEmitMu sync.Mutex
+
+	// logger is used to log WriteEvent failures on the ingest path. May be nil
+	// for tests that don't need it; guarded before use. Pass slog.Default() in
+	// production via NewHandlerWithPublisher.
+	logger *slog.Logger
 }
 
 // NewHandler constructs a RUM ingest handler with the default IP-limiter cap
-// and no SSE publisher. Use NewHandlerWithPublisher in production to wire the
-// throttled rum.rollup_updated SSE emit.
+// and no SSE publisher. Uses slog.Default() as the logger. Use
+// NewHandlerWithPublisher in production to also wire the throttled
+// rum.rollup_updated SSE emit.
 // beaconR is *BeaconKeyRepo (satisfies beaconKeyLookup).
 func NewHandler(store Store, beaconR *BeaconKeyRepo) *Handler {
-	return newHandlerWithCap(store, beaconR, nil, DefaultIPLimiterCap)
+	return newHandlerWithCap(store, beaconR, nil, slog.Default(), DefaultIPLimiterCap)
 }
 
 // NewHandlerWithPublisher constructs a RUM ingest handler wired to the site
-// event bus. After each successful beacon write, it emits a rum.rollup_updated
-// SSE event for the site, throttled to at most once per RollupUpdatedThrottle.
-func NewHandlerWithPublisher(store Store, beaconR *BeaconKeyRepo, publisher EventPublisher) *Handler {
-	return newHandlerWithCap(store, beaconR, publisher, DefaultIPLimiterCap)
+// event bus and the supplied structured logger. After each successful beacon
+// write it emits a rum.rollup_updated SSE event for the site, throttled to at
+// most once per RollupUpdatedThrottle. WriteEvent failures are logged at Warn
+// level with structured fields before the 204 response is returned.
+func NewHandlerWithPublisher(store Store, beaconR *BeaconKeyRepo, publisher EventPublisher, logger *slog.Logger) *Handler {
+	return newHandlerWithCap(store, beaconR, publisher, logger, DefaultIPLimiterCap)
 }
 
 // newHandlerWithCap constructs a RUM ingest handler with a custom IP-limiter cap.
-// Used in tests to inject a stub beacon repo and bound the LRU for fast iteration.
-func newHandlerWithCap(store Store, beaconR beaconKeyLookup, publisher EventPublisher, ipCap int) *Handler {
+// Used in tests to inject a stub beacon repo, bound the LRU for fast iteration,
+// and capture log output.
+func newHandlerWithCap(store Store, beaconR beaconKeyLookup, publisher EventPublisher, logger *slog.Logger, ipCap int) *Handler {
 	return &Handler{
 		store:   store,
 		beaconR: beaconR,
@@ -218,6 +228,7 @@ func newHandlerWithCap(store Store, beaconR beaconKeyLookup, publisher EventPubl
 		siteLimiters: make(map[uuid.UUID]*rate.Limiter),
 		publisher:    publisher,
 		rollupEmitAt: make(map[uuid.UUID]time.Time),
+		logger:       logger,
 	}
 }
 
@@ -365,7 +376,16 @@ func (h *Handler) handleIngest(c *gin.Context) {
 		SampleRate: row.RumSampleRate,
 	}); err != nil {
 		// Ingest failures are silent to the browser (can't retry a fired beacon).
-		// Log on the server side; return 204 so the browser doesn't retry.
+		// Log at Warn with structured fields so a broken rollup write is visible
+		// in server logs without surfacing 500 to the anonymous client.
+		if h.logger != nil {
+			h.logger.WarnContext(c.Request.Context(), "rum ingest WriteEvent failed",
+				slog.String("site_id", row.SiteID.String()),
+				slog.String("tenant_id", row.TenantID.String()),
+				slog.String("metric", body.Metric),
+				slog.Any("error", err),
+			)
+		}
 		c.Status(http.StatusNoContent)
 		return
 	}

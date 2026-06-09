@@ -903,7 +903,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// Wire the site event publisher so the ingest handler can emit the throttled
 	// rum.rollup_updated SSE after each beacon commit. siteEventsPub is wired
 	// before this point (line ~701) and satisfies rum.EventPublisher.
-	rumH := rum.NewHandlerWithPublisher(rumStore, rumBeaconRepo, siteEventsPub)
+	rumH := rum.NewHandlerWithPublisher(rumStore, rumBeaconRepo, siteEventsPub, logger)
 
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,

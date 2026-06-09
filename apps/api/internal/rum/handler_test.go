@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -316,7 +318,7 @@ func TestHandlerH1_slowLCPStored(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -355,7 +357,7 @@ func TestHandlerH1_negativeLCPDiscarded(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -391,7 +393,7 @@ func TestHandlerH1_clsAt2500Stored(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -534,7 +536,7 @@ func TestRumIngest_noSetCookie(t *testing.T) {
 	sessionGroup.GET("/api/v1/healthz", func(c *gin.Context) { c.Status(http.StatusOK) })
 
 	// /rum/ingest on root — no session middleware.
-	h := newHandlerWithCap(&noopStore{}, &stubBeaconKeyLookup{}, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(&noopStore{}, &stubBeaconKeyLookup{}, nil, nil, DefaultIPLimiterCap)
 	h.RegisterPublic(engine)
 
 	w := httptest.NewRecorder()
@@ -685,7 +687,7 @@ func TestRollupUpdated_emittedOnFirstBeacon(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(&noopStore{}, beaconR, pub, DefaultIPLimiterCap)
+	h := newHandlerWithCap(&noopStore{}, beaconR, pub, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -723,7 +725,7 @@ func TestRollupUpdated_throttledToOnePerWindow(t *testing.T) {
 			RumSampleRate: 1.0,
 		},
 	}
-	h := newHandlerWithCap(&noopStore{}, beaconR, pub, DefaultIPLimiterCap)
+	h := newHandlerWithCap(&noopStore{}, beaconR, pub, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -759,7 +761,7 @@ func TestRollupUpdated_twoDifferentSitesEachGetOneEmit(t *testing.T) {
 				SiteID: siteID, TenantID: tenantID,
 				RumEnabled: true, RumSampleRate: 1.0,
 			},
-		}, pub, DefaultIPLimiterCap)
+		}, pub, nil, DefaultIPLimiterCap)
 	}
 	hA := makeHandler(siteA)
 	hB := makeHandler(siteB)
@@ -790,7 +792,7 @@ func TestRollupUpdated_nilPublisherIsNoop(t *testing.T) {
 		},
 	}
 	// nil publisher — should not panic.
-	h := newHandlerWithCap(&noopStore{}, beaconR, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(&noopStore{}, beaconR, nil, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -817,7 +819,7 @@ func TestRollupUpdated_sampleRatePassedToStore(t *testing.T) {
 			RumSampleRate: wantRate,
 		},
 	}
-	h := newHandlerWithCap(stored, beaconR, nil, DefaultIPLimiterCap)
+	h := newHandlerWithCap(stored, beaconR, nil, nil, DefaultIPLimiterCap)
 	engine := gin.New()
 	h.RegisterPublic(engine)
 
@@ -831,5 +833,142 @@ func TestRollupUpdated_sampleRatePassedToStore(t *testing.T) {
 	}
 	if stored.events[0].SampleRate != wantRate {
 		t.Errorf("IngestParams.SampleRate = %f, want %f", stored.events[0].SampleRate, wantRate)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// WriteEvent error logging test
+// ---------------------------------------------------------------------------
+
+// captureSlogHandler is a slog.Handler that records log records in memory.
+// Used to assert that specific structured log entries are emitted without
+// relying on stdout parsing.
+type captureSlogHandler struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
+func (h *captureSlogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *captureSlogHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.records = append(h.records, r)
+	return nil
+}
+
+func (h *captureSlogHandler) WithAttrs(attrs []slog.Attr) slog.Handler { return h }
+func (h *captureSlogHandler) WithGroup(name string) slog.Handler       { return h }
+
+func (h *captureSlogHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.records)
+}
+
+// hasAttr returns true when at least one recorded log entry contains an
+// attribute with the given key and a value that formats to contain wantSubstr.
+func (h *captureSlogHandler) hasAttr(key, wantSubstr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, r := range h.records {
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == key && strings.Contains(fmt.Sprintf("%v", a.Value.Any()), wantSubstr) {
+				return false // stop iteration — found
+			}
+			return true
+		})
+	}
+	// Re-scan with a found flag — the above approach exits early but doesn't
+	// return the result cleanly; do a straightforward second pass.
+	for _, r := range h.records {
+		found := false
+		r.Attrs(func(a slog.Attr) bool {
+			if a.Key == key && strings.Contains(fmt.Sprintf("%v", a.Value.Any()), wantSubstr) {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+// failingStore is a Store whose WriteEvent always returns an error.
+// All other methods are no-ops (same as noopStore).
+type failingStore struct {
+	err error
+}
+
+func (s *failingStore) WriteEvent(_ context.Context, _ IngestParams) error { return s.err }
+func (s *failingStore) FoldHourly(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (s *failingStore) FoldDaily(_ context.Context, _, _ uuid.UUID, _ time.Time) error {
+	return nil
+}
+func (s *failingStore) GetHourlyRollups(_ context.Context, _, _ uuid.UUID, _ time.Time) ([]HourlyRollup, error) {
+	return nil, nil
+}
+func (s *failingStore) GetDailyRollups(_ context.Context, _, _ uuid.UUID, _ time.Time) ([]DailyRollup, error) {
+	return nil, nil
+}
+func (s *failingStore) ComputeP75(_ []HourlyRollup, _ int) []P75Result { return nil }
+func (s *failingStore) PruneRawEvents(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (s *failingStore) PruneHourlyRollups(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+func (s *failingStore) PruneDailyRollups(_ context.Context, _ time.Time) (int64, error) {
+	return 0, nil
+}
+
+// TestWriteEventFailure_isLoggedAndReturns204 verifies that when WriteEvent
+// returns an error the handler:
+//  1. Logs a Warn-level entry with site_id, tenant_id, metric and error fields.
+//  2. Still returns 204 (never 500 — the browser cannot retry a fired beacon).
+func TestWriteEventFailure_isLoggedAndReturns204(t *testing.T) {
+	logH := &captureSlogHandler{}
+	logger := slog.New(logH)
+
+	siteID := uuid.MustParse("cccccccc-0000-0000-0000-000000000001")
+	tenantID := uuid.MustParse("dddddddd-0000-0000-0000-000000000002")
+
+	beaconR := &stubBeaconKeyLookup{
+		row: sqlc.LookupRumBeaconKeyRow{
+			SiteID:        siteID,
+			TenantID:      tenantID,
+			RumEnabled:    true,
+			RumSampleRate: 1.0,
+		},
+	}
+	storeErr := fmt.Errorf("db connection reset")
+	h := newHandlerWithCap(&failingStore{err: storeErr}, beaconR, nil, logger, DefaultIPLimiterCap)
+	engine := gin.New()
+	h.RegisterPublic(engine)
+
+	w := httptest.NewRecorder()
+	engine.ServeHTTP(w, buildValidBeaconRequest(t))
+
+	// Must return 204 even though the store failed.
+	if w.Code != http.StatusNoContent {
+		t.Errorf("WriteEvent failure: expected 204, got %d (must never 500 to the browser)", w.Code)
+	}
+
+	// Must have logged at least one entry.
+	if logH.count() == 0 {
+		t.Fatal("WriteEvent failure: no log entry emitted — silent failures hide broken rollup writes")
+	}
+
+	// The log entry must carry site_id and error fields.
+	if !logH.hasAttr("site_id", siteID.String()) {
+		t.Errorf("log entry missing site_id=%s", siteID)
+	}
+	if !logH.hasAttr("error", "db connection reset") {
+		t.Errorf("log entry missing error field containing %q", "db connection reset")
 	}
 }

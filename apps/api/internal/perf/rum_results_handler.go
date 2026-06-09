@@ -65,7 +65,7 @@ func (h *Handler) rumSummary(c *gin.Context) {
 	}
 	minSampleCount := cfg.MinSampleCount
 	if minSampleCount <= 0 {
-		minSampleCount = 100 // safe default when not yet configured
+		minSampleCount = 30 // default floor: matches column DEFAULT 30 (m57)
 	}
 
 	since := time.Now().UTC().AddDate(0, 0, -windowDays)

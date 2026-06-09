@@ -118,6 +118,12 @@ export interface PerfConfig {
    * while keeping the retained sample statistically representative.
    */
   rum_sample_rate?: number;
+  /**
+   * Minimum number of real-visitor samples required before a per-metric p75 is
+   * shown in the RUM dashboard. Below this threshold the dashboard renders
+   * "Insufficient samples". Default 30. Range 1..1000.
+   */
+  min_sample_count?: number;
 
   // WooCommerce cart-session caching (#169)
   //   woo_cacheable_session       — operator toggle (READ+WRITE).

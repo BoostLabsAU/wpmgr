@@ -1,6 +1,7 @@
-import { useId } from "react";
+import { useId, useState } from "react";
 import { Loader2 } from "lucide-react";
 
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { SettingRow } from "../components/SettingRow";
@@ -56,6 +57,12 @@ export function RumSection({
         <SampleRateRow
           value={config.rum_sample_rate ?? 1.0}
           onChange={(v) => save({ rum_sample_rate: v })}
+          disabled={disabled}
+          saving={saving}
+        />
+        <MinSampleCountRow
+          value={config.min_sample_count ?? 30}
+          onCommit={(v) => save({ min_sample_count: v })}
           disabled={disabled}
           saving={saving}
         />
@@ -126,6 +133,94 @@ function SampleRateRow({ value, onChange, disabled, saving }: SampleRateRowProps
             </option>
           ))}
         </select>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Minimum-sample-count sub-control (revealed when rum_enabled is on)
+// ---------------------------------------------------------------------------
+
+interface MinSampleCountRowProps {
+  value: number;
+  onCommit: (v: number) => void;
+  disabled: boolean;
+  saving: boolean;
+}
+
+const MIN_SAMPLE_MIN = 1;
+const MIN_SAMPLE_MAX = 1000;
+
+/**
+ * Numeric input for the minimum-samples-to-display floor.
+ * Commits on blur / Enter (same pattern as NumberField in Field.tsx) so the
+ * perf-config PUT fires once per edit, not once per keystroke. Local draft
+ * state lets the operator clear and retype freely.
+ */
+function MinSampleCountRow({ value, onCommit, disabled, saving }: MinSampleCountRowProps) {
+  const id = useId();
+  const [draft, setDraft] = useState<string>(String(value));
+  const [lastValue, setLastValue] = useState<number>(value);
+  if (value !== lastValue) {
+    setLastValue(value);
+    setDraft(String(value));
+  }
+
+  function commit() {
+    const parsed = parseInt(draft, 10);
+    if (draft.trim() === "" || Number.isNaN(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.min(MIN_SAMPLE_MAX, Math.max(MIN_SAMPLE_MIN, parsed));
+    setDraft(String(clamped));
+    if (clamped !== value) onCommit(clamped);
+  }
+
+  return (
+    <div className="mt-3 flex items-center justify-between gap-4 border-t border-border pt-3">
+      <div className="min-w-0">
+        <Label
+          htmlFor={id}
+          className="cursor-pointer text-sm font-medium text-foreground"
+        >
+          Minimum samples to display
+        </Label>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          Hide a metric's score until at least this many real-visitor samples are
+          collected, so a noisy average over a handful of visits is never shown.
+          Lower it to see scores sooner on low-traffic sites; raise it for
+          stricter accuracy.
+        </p>
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        {saving ? (
+          <Loader2
+            aria-hidden="true"
+            className="size-4 animate-spin text-muted-foreground"
+          />
+        ) : null}
+        <Input
+          id={id}
+          type="number"
+          inputMode="numeric"
+          min={MIN_SAMPLE_MIN}
+          max={MIN_SAMPLE_MAX}
+          step={1}
+          value={draft}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          disabled={disabled}
+          aria-label="Minimum samples to display"
+          className="max-w-24"
+        />
       </div>
     </div>
   );

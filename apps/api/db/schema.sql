@@ -1427,7 +1427,7 @@ CREATE TABLE site_perf_config (
     rum_enabled               boolean  NOT NULL DEFAULT false,
     rum_sample_rate           real     NOT NULL DEFAULT 1.0,
     max_distinct_countries    integer  NOT NULL DEFAULT 8,
-    min_sample_count          integer  NOT NULL DEFAULT 100,
+    min_sample_count          integer  NOT NULL DEFAULT 30,
     beacon_key_hash           bytea,
     beacon_key_hash_prev      bytea,
     created_at                    timestamptz NOT NULL DEFAULT now(),
