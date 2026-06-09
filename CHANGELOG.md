@@ -6,6 +6,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-06-09
+
 ### Added
 
 - Font subsetting (experimental, default OFF). When both WOFF2 transcoding and font subsetting are enabled, the media-encoder produces a subsetted WOFF2 covering the latin-ext unicode range (U+0000 to 00FF, U+0100 to 024F, U+1E00 to 1EFF) alongside the full WOFF2. The browser fetches the subset for in-range codepoints and falls back to the full WOFF2 for anything outside that range, so no codepoint is ever broken. Typical savings on top of WOFF2 transcoding are 60 to 90 percent for body-text Latin fonts. Variable fonts and icon fonts are detected and skipped automatically; the full WOFF2 serves for those. Subsetting is gated behind the new `fonts_subset` per-site flag (default OFF) because OpenType shaping features (GPOS/GSUB ligatures and contextual kerning) are not preserved in the subset output.
