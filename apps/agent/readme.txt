@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.3
+Stable tag: 0.33.4
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.4 =
+* Fix: the Real User Monitoring collector script is now loaded from a versioned URL, so a content delivery network or browser cache refetches it whenever the plugin updates. Previously the collector was served from a static filename, so a long-lived edge cache could keep serving the previous collector after an update until the cache was manually purged. This is the control-plane dashboard release that adds Core Web Vitals distribution bars (good / needs improvement / poor) and a 28-day trend chart; the agent change in this version is the cache-busting fix only.
+
 = 0.33.3 =
 * Fix: Real User Monitoring now reliably collects CLS on cached pages. The Core Web Vital collectors are registered in the order recommended by the web-vitals library (paint metrics before layout shift) so the CLS reporter is always armed before a load-and-leave visitor can hide the page. Previously, on an already-cached page, the CLS measurement could be dropped in a brief timing window. No effect on backups, cache, or other features.
 
@@ -146,6 +149,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.4 =
+Serves the Real User Monitoring collector from a versioned URL so future collector updates are never masked by a content delivery network or browser cache. Pairs with a control-plane dashboard update that adds Core Web Vitals distribution bars and a 28-day trend. Safe to update in place.
 
 = 0.33.3 =
 Fixes Real User Monitoring so it reliably collects CLS on cached pages by registering the Web Vitals collectors in the recommended order. Update to capture CLS from real visitors. Safe to update in place.

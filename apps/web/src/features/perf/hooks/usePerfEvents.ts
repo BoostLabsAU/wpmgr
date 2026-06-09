@@ -467,9 +467,18 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
     // queries so the CWV panel refreshes. This is a throttled aggregate signal
     // from the CP (at most once every few seconds), not a per-beacon stream, so
     // a query invalidation per frame is the correct and only reaction.
+    //
+    // Also invalidate the trend query. The trend key includes device + windowDays
+    // as extra segments after siteId, so a prefix-match on the siteId-anchored
+    // key invalidates all device/window variants for this site at once.
     case "rum.rollup_updated":
       void queryClient.invalidateQueries({ queryKey: perfKeys.rumSummary(siteId) });
       void queryClient.invalidateQueries({ queryKey: perfKeys.rum(siteId) });
+      // Prefix-match: ["perf", "rumTrend", siteId] covers all device/windowDays
+      // variants cached for this site.
+      void queryClient.invalidateQueries({
+        queryKey: [...perfKeys.all, "rumTrend", siteId],
+      });
       break;
 
     default:

@@ -6,7 +6,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 
 import { useRumSummary } from "../hooks/useRumSummary";
-import type { RumSummary, RumResult } from "../types";
+import { useRumTrend } from "../hooks/useRumTrend";
+import type { RumSummary, RumResult, RumDistribution } from "../types";
+import { RumDistributionBar } from "./RumDistributionBar";
+import { RumTrendChart } from "./RumTrendChart";
+import type { MetricName as TrendMetricName } from "./RumTrendChart";
 
 // FleetRumPanel — Core Web Vitals dashboard for the /performance page.
 //
@@ -97,6 +101,8 @@ interface MetricSlice {
   rating: Rating | undefined;
   suppressed: boolean;
   min_sample_count: number;
+  /** Distribution across the three rating bands. Absent when suppressed. */
+  distribution?: RumDistribution;
 }
 
 interface CoreMetricCardProps {
@@ -165,6 +171,11 @@ function CoreMetricCard({ metric, slice }: CoreMetricCardProps) {
       <span className="text-xs text-muted-foreground tabular-nums">
         {slice.sample_count.toLocaleString()} samples
       </span>
+      <RumDistributionBar
+        metricLabel={label}
+        distribution={slice.distribution}
+        suppressed={false}
+      />
     </div>
   );
 }
@@ -296,6 +307,19 @@ function AdditionalMetricRow({ metric, slice }: AdditionalMetricRowProps) {
 // Data extraction helpers
 // ---------------------------------------------------------------------------
 
+// The `distribution` field is present in the live API response (CP side is
+// DONE) but is not yet in the generated SDK types. We access it via a typed
+// cast of the raw row object rather than modifying the generated code.
+interface RawMetricRow {
+  metric?: string;
+  device?: string;
+  p75_ms?: number;
+  sample_count?: number;
+  rating?: "good" | "needs_improvement" | "poor";
+  suppressed?: boolean;
+  distribution?: RumDistribution;
+}
+
 function extractSlice(
   summary: RumSummary,
   metric: MetricName,
@@ -317,18 +341,25 @@ function extractSlice(
   if (candidates.length === 0) return undefined;
   const row = candidates[0];
   if (!row) return undefined;
+  // Cast to access the `distribution` field that the CP now includes but that
+  // is not yet reflected in the generated SDK type definition.
+  const raw = row as RawMetricRow;
   return {
-    p75_ms: row.p75_ms ?? 0,
-    sample_count: row.sample_count ?? 0,
-    rating: row.rating,
-    suppressed: row.suppressed ?? false,
+    p75_ms: raw.p75_ms ?? 0,
+    sample_count: raw.sample_count ?? 0,
+    rating: raw.rating,
+    suppressed: raw.suppressed ?? false,
     min_sample_count: minSampleCount,
+    distribution: raw.suppressed ? undefined : raw.distribution,
   };
 }
 
 // ---------------------------------------------------------------------------
 // Main panel
 // ---------------------------------------------------------------------------
+
+// All five metrics rendered as trend charts, core three first.
+const TREND_METRICS: TrendMetricName[] = ["lcp", "inp", "cls", "fcp", "ttfb"];
 
 export function FleetRumPanel({ siteId, siteName }: FleetRumPanelProps) {
   const { data, isPending, isError, error, refetch } = useRumSummary(siteId);
@@ -344,6 +375,10 @@ export function FleetRumPanel({ siteId, siteName }: FleetRumPanelProps) {
   const clsSlice = data ? extractSlice(data, "cls", device, minSampleCount) : undefined;
   const fcpSlice = data ? extractSlice(data, "fcp", device, minSampleCount) : undefined;
   const ttfbSlice = data ? extractSlice(data, "ttfb", device, minSampleCount) : undefined;
+
+  // Trend data — fetched from the separate /rum/trend endpoint. The device tab
+  // is threaded in so switching device triggers a fresh fetch for that segment.
+  const { data: trendData } = useRumTrend(siteId, { device, windowDays });
 
   // Pass/fail: all three core metrics must have a "good" rating (not suppressed).
   // Derive allGood from the individual slices without non-null assertions.
@@ -374,7 +409,7 @@ export function FleetRumPanel({ siteId, siteName }: FleetRumPanelProps) {
               id="fleet-rum-heading"
               className="text-sm font-semibold text-foreground"
             >
-              Core Web Vitals{siteName ? ` — ${siteName}` : ""}
+              Core Web Vitals{siteName ? ` – ${siteName}` : ""}
             </h2>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Real visitor measurements over {String(windowDays)} days (p75)
@@ -405,7 +440,7 @@ export function FleetRumPanel({ siteId, siteName }: FleetRumPanelProps) {
         <FleetRumEmpty siteId={siteId} />
       ) : (
         <div className="space-y-5 px-5 py-5">
-          {/* Core CWV cards */}
+          {/* Core CWV cards — p75 headline + distribution bar per card */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <CoreMetricCard metric="lcp" slice={lcpSlice} />
             <CoreMetricCard metric="inp" slice={inpSlice} />
@@ -413,13 +448,59 @@ export function FleetRumPanel({ siteId, siteName }: FleetRumPanelProps) {
           </div>
 
           {/* Additional metrics */}
-          <div className="rounded-lg border border-border px-4 py-1 divide-y divide-border">
-            <p className="py-2 text-xs font-medium uppercase tracking-[0.02em] text-muted-foreground">
+          <div className="rounded-lg border border-border divide-y divide-border">
+            <p className="px-4 py-2 text-xs font-medium uppercase tracking-[0.02em] text-muted-foreground">
               Additional metrics
             </p>
-            <AdditionalMetricRow metric="fcp" slice={fcpSlice} />
-            <AdditionalMetricRow metric="ttfb" slice={ttfbSlice} />
+            <div className="px-4">
+              <AdditionalMetricRow metric="fcp" slice={fcpSlice} />
+            </div>
+            {fcpSlice && !fcpSlice.suppressed && fcpSlice.distribution ? (
+              <div className="px-4 pb-3">
+                <RumDistributionBar
+                  metricLabel="FCP"
+                  distribution={fcpSlice.distribution}
+                />
+              </div>
+            ) : null}
+            <div className="px-4">
+              <AdditionalMetricRow metric="ttfb" slice={ttfbSlice} />
+            </div>
+            {ttfbSlice && !ttfbSlice.suppressed && ttfbSlice.distribution ? (
+              <div className="px-4 pb-3">
+                <RumDistributionBar
+                  metricLabel="TTFB"
+                  distribution={ttfbSlice.distribution}
+                />
+              </div>
+            ) : null}
           </div>
+
+          {/* 28-day p75 trend charts — one per metric, small multiples */}
+          {trendData ? (
+            <div className="space-y-4">
+              <p className="text-xs font-medium uppercase tracking-[0.02em] text-muted-foreground">
+                {String(windowDays)}-day p75 trend
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                {TREND_METRICS.map((m) => (
+                  <div
+                    key={m}
+                    className="rounded-lg border border-border bg-background px-3 pt-3 pb-2"
+                  >
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-[0.04em] text-muted-foreground">
+                      {METRIC_LABELS[m]}
+                    </p>
+                    <RumTrendChart
+                      metric={m}
+                      points={trendData.metrics[m]}
+                      height={140}
+                    />
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <p className="text-xs text-muted-foreground">
             All Core Web Vitals breakdowns by page and device are available in the{" "}

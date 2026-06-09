@@ -62,7 +62,9 @@ var canonicalOperatorRoutes = []string{
 	// M55 — Font results catalog (dashboard list).
 	"GET    /api/v1/sites/:siteId/perf/fonts",
 	// M56 — RUM Core Web Vitals read endpoints.
+	// Dashboard redesign: /summary gains distribution field; /trend is new.
 	"GET    /api/v1/sites/:siteId/perf/rum/summary",
+	"GET    /api/v1/sites/:siteId/perf/rum/trend",
 	"GET    /api/v1/sites/:siteId/perf/rum",
 	"POST   /api/v1/cache/bulk-purge",
 	"PUT    /api/v1/cache/bulk-config",

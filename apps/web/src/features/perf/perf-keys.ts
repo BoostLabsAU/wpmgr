@@ -17,4 +17,7 @@ export const perfKeys = {
   // RUM / Core Web Vitals (Phase 3b).
   rum: (siteId: string) => [...perfKeys.all, "rum", siteId] as const,
   rumSummary: (siteId: string) => [...perfKeys.all, "rumSummary", siteId] as const,
+  // RUM daily p75 trend series (dashboard redesign).
+  rumTrend: (siteId: string, device: string, windowDays: number) =>
+    [...perfKeys.all, "rumTrend", siteId, device, windowDays] as const,
 } as const;

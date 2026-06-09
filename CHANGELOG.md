@@ -6,6 +6,17 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.4] - 2026-06-09
+
+### Added
+
+- Core Web Vitals distribution bars on the Real User Monitoring dashboard. Under each p75 metric card (LCP, INP, CLS, and the secondary FCP and TTFB) a single stacked bar now shows the share of real pageviews in the good, needs-improvement, and poor bands, the way PageSpeed Insights and Search Console present field data. The bands are folded server-side from the histogram rollups already stored, at the standard Core Web Vitals thresholds, and respect the same minimum-sample floor that suppresses the p75 (a low-sample slice shows "insufficient samples", never a misleading bar).
+- A 28-day p75 trend chart per metric on the Real User Monitoring dashboard, with the good and needs-improvement threshold lines drawn on it, so the operator can see where each metric sits relative to passing over time. Days below the sample floor render as a gap rather than a zero. A new read endpoint, `GET /api/v1/sites/:siteId/perf/rum/trend`, serves the daily series from the existing rollups, with no new tables and no agent change. Both the distribution and the trend follow the selected device tab and update live over SSE.
+
+### Fixed
+
+- The Real User Monitoring collector script is now served from a versioned URL, so a CDN or browser cache refetches it whenever the agent updates. The collector was served from a static, unversioned filename, so a long-lived edge cache (for example a one-year CDN TTL) could keep serving the previous collector build after a plugin update until the cache was manually purged, masking collector fixes. Versioning the URL changes it on every update, so the edge and the browser pick up the new bytes automatically.
+
 ## [0.33.3] - 2026-06-09
 
 ### Fixed

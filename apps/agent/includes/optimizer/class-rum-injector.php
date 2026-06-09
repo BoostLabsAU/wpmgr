@@ -163,27 +163,43 @@ final class RumInjector
      */
     private function assetUrl(): string
     {
+        $base = '';
+
         // WPMGR_AGENT_FILE is defined in wpmgr-agent.php and is always present
         // at runtime. plugins_url() is the canonical WP asset URL builder.
         if (function_exists('plugins_url') && defined('WPMGR_AGENT_FILE')) {
-            return (string) plugins_url(
+            $base = (string) plugins_url(
                 'assets/wpmgr-rum.min.js',
                 (string) constant('WPMGR_AGENT_FILE')
             );
-        }
-
-        // Fallback: build from WP_PLUGIN_URL + WPMGR_AGENT_DIR.
-        if (defined('WP_PLUGIN_URL') && defined('WPMGR_AGENT_DIR')) {
+        } elseif (defined('WP_PLUGIN_URL') && defined('WPMGR_AGENT_DIR')) {
+            // Fallback: build from WP_PLUGIN_URL + WPMGR_AGENT_DIR.
             $pluginUrl = rtrim((string) constant('WP_PLUGIN_URL'), '/');
             $agentDir  = rtrim((string) constant('WPMGR_AGENT_DIR'), '/\\');
             $pluginDir = defined('WP_PLUGIN_DIR') ? rtrim((string) constant('WP_PLUGIN_DIR'), '/\\') : '';
             if ($pluginDir !== '' && strpos($agentDir, $pluginDir) === 0) {
-                $rel = ltrim(substr($agentDir, strlen($pluginDir)), '/');
-                return $pluginUrl . '/' . $rel . '/assets/wpmgr-rum.min.js';
+                $rel  = ltrim(substr($agentDir, strlen($pluginDir)), '/');
+                $base = $pluginUrl . '/' . $rel . '/assets/wpmgr-rum.min.js';
             }
         }
 
-        return '';
+        if ($base === '') {
+            return '';
+        }
+
+        // Append the plugin version as a cache-busting query arg. The collector
+        // is served from a static, unversioned filename, so a CDN or browser
+        // cache keyed on the URL would keep serving the previous build after a
+        // plugin update -- a long-lived edge cache can mask a collector fix for
+        // the full length of its TTL. Versioning the URL changes it on every
+        // update, so the edge and the browser refetch the new bytes with no
+        // manual purge.
+        $ver = defined('WPMGR_AGENT_VERSION') ? (string) constant('WPMGR_AGENT_VERSION') : '';
+        if ($ver !== '') {
+            $base .= (strpos($base, '?') === false ? '?' : '&') . 'ver=' . rawurlencode($ver);
+        }
+
+        return $base;
     }
 
     /**

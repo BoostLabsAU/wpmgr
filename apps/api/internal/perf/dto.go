@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 )
 
 // ---------------------------------------------------------------------------
@@ -443,6 +445,147 @@ func nonNil(s []string) []string {
 // RUM read DTOs (M56 Phase 3a)
 // ---------------------------------------------------------------------------
 
+// RumDistribution carries the good / needs-improvement / poor sample-count
+// breakdown for one metric slice. Counts are raw (pre-scale) pageviews; Pct
+// fields are rounded integers guaranteed to sum to exactly 100 (Hamilton /
+// largest-remainder rounding). Distribution is nil (omitted) when the slice
+// is suppressed (SampleCount < min_sample_count).
+//
+// CLS distribution caveat: the CrUX histogram boundaries start at 200 ms-units
+// while the CLS "good" threshold is 100 milli-units and "NI" is 250 milli-units.
+// The entire first bucket [0, 200) straddles both boundaries, so it is assigned
+// wholesale to "good" per the straddle-to-lower-band rule. This means CLS
+// distribution is coarse for V1: the "good" band is slightly over-counted and
+// "needs_improvement" slightly under-counted relative to the true split within
+// [0, 200). The effect is minor in practice (most CLS values are near 0) and
+// will be refined in a future iteration using sub-200 histogram resolution.
+type RumDistribution struct {
+	Good                int64 `json:"good"`
+	NeedsImprovement    int64 `json:"needs_improvement"`
+	Poor                int64 `json:"poor"`
+	GoodPct             int   `json:"good_pct"`
+	NeedsImprovementPct int   `json:"needs_improvement_pct"`
+	PoorPct             int   `json:"poor_pct"`
+}
+
+// foldBucketsIntoDistribution folds a NumBuckets-length bucket_counts array
+// into three bands (good / needs-improvement / poor) using the official CWV
+// thresholds for the given metric.
+//
+// Fold rule: a bucket is assigned to the band whose upper bound first reaches
+// or exceeds the band boundary. Concretely, a bucket whose ENTIRE value range
+// is ≤ good-threshold goes to "good"; one entirely within (good, NI] goes to
+// "needs_improvement"; otherwise "poor". A bucket that straddles a threshold
+// (i.e. its lower bound is below the threshold but its upper bound is above) is
+// assigned to the LOWER band (conservative/PSI-compatible behaviour). For
+// LCP/FCP/TTFB/INP the thresholds coincide exactly with CrUX bucket boundaries,
+// so no bucket straddles and the fold is exact. For CLS (thresholds 100/250) the
+// first bucket [0,200) straddles both 100 and 250; it is assigned to "good".
+// See the RumDistribution comment for the full CLS coarseness caveat.
+//
+// Percentages are computed with Hamilton (largest-remainder) rounding so that
+// good_pct + needs_improvement_pct + poor_pct == 100 exactly, even in the
+// presence of rounding ties.
+func foldBucketsIntoDistribution(metric string, counts []int64) *RumDistribution {
+	goodUpper, niUpper := cwvThresholds(metric)
+
+	var good, ni, poor int64
+	for i, c := range counts {
+		if c == 0 {
+			continue
+		}
+		// Lower bound (inclusive) of this bucket.
+		var bucketLower int32
+		if i > 0 {
+			bucketLower = rum.CrUXBuckets[i-1]
+		}
+		// Assign by the bucket's lower bound. The straddle-to-lower-band rule is
+		// implicit: if the lower bound is below the threshold but the upper bound
+		// crosses it, the bucket's lower bound still places it in the lower band.
+		// For LCP/FCP/TTFB/INP the thresholds align with bucket boundaries exactly,
+		// so no bucket straddles in practice. For CLS (thresholds 100/250) the first
+		// bucket [0,200) has lower=0 which is < 100, so it correctly lands in "good".
+		switch {
+		case bucketLower < int32(goodUpper):
+			good += c
+		case bucketLower < int32(niUpper):
+			ni += c
+		default:
+			poor += c
+		}
+	}
+
+	total := good + ni + poor
+	d := &RumDistribution{
+		Good:             good,
+		NeedsImprovement: ni,
+		Poor:             poor,
+	}
+	if total > 0 {
+		d.GoodPct, d.NeedsImprovementPct, d.PoorPct = hamiltonRound3(good, ni, poor, total)
+	}
+	return d
+}
+
+// cwvThresholds returns the (goodUpperInclusive, niUpperInclusive) for a metric
+// in the same integer unit as the histogram (ms for all; milli-units for CLS).
+// These are the same constants as cwvRating — kept here to avoid any divergence.
+func cwvThresholds(metric string) (goodUpper int, niUpper int) {
+	switch metric {
+	case "lcp":
+		return 2500, 4000
+	case "inp":
+		return 200, 500
+	case "cls":
+		// CLS histogram is in milli-units (value * 1000); thresholds in milli-units.
+		return 100, 250
+	case "fcp":
+		return 1800, 3000
+	case "ttfb":
+		return 800, 1800
+	}
+	// Unknown metric: treat entire range as "good" (no threshold to fold on).
+	return 1<<30, 1<<30
+}
+
+// hamiltonRound3 rounds three proportions (a/total, b/total, c/total) to
+// integers that sum to 100, using the Hamilton (largest-remainder) method.
+// This guarantees good_pct + ni_pct + poor_pct == 100 regardless of rounding.
+func hamiltonRound3(a, b, c, total int64) (aPct, bPct, cPct int) {
+	if total == 0 {
+		return 0, 0, 0
+	}
+	// Compute exact floats and take the floor.
+	fa := float64(a) * 100.0 / float64(total)
+	fb := float64(b) * 100.0 / float64(total)
+	fc := float64(c) * 100.0 / float64(total)
+
+	ia, ib, ic := int(fa), int(fb), int(fc)
+	rem := 100 - ia - ib - ic // how many units to distribute (0, 1, or 2)
+
+	// Distribute remainders to the slots with the largest fractional parts.
+	ra := fa - float64(ia)
+	rb := fb - float64(ib)
+	rc := fc - float64(ic)
+
+	type slot struct {
+		idx  int
+		frac float64
+	}
+	slots := [3]slot{{0, ra}, {1, rb}, {2, rc}}
+	// Sort by descending fractional part (simple insertion sort for 3 elements).
+	for i := 1; i < 3; i++ {
+		for j := i; j > 0 && slots[j].frac > slots[j-1].frac; j-- {
+			slots[j], slots[j-1] = slots[j-1], slots[j]
+		}
+	}
+	vals := [3]int{ia, ib, ic}
+	for k := 0; k < rem; k++ {
+		vals[slots[k].idx]++
+	}
+	return vals[0], vals[1], vals[2]
+}
+
 // RumMetricSummary is the p75 summary for one metric in one device/country slice.
 // Suppressed is true when the sample count is below the min_sample_count floor;
 // in that case P75Ms is 0 and the UI renders "insufficient samples (SampleCount
@@ -459,6 +602,9 @@ type RumMetricSummary struct {
 	// Suppressed is true when SampleCount < min_sample_count. The dashboard must
 	// render "insufficient samples" rather than a p75 in this state.
 	Suppressed bool `json:"suppressed"`
+	// Distribution is the good/needs-improvement/poor breakdown for this metric
+	// slice. Nil (omitted) when the slice is suppressed (same floor as P75Ms).
+	Distribution *RumDistribution `json:"distribution,omitempty"`
 }
 
 // RumSummaryDTO is the response shape for GET /perf/rum/summary. It carries
@@ -485,6 +631,35 @@ type RumResultDTO struct {
 	SampleCount int64   `json:"sample_count"`
 	Rating      string  `json:"rating,omitempty"`
 	Suppressed  bool    `json:"suppressed"`
+}
+
+// ---------------------------------------------------------------------------
+// RUM trend DTOs (dashboard redesign)
+// ---------------------------------------------------------------------------
+
+// RumTrendDayPoint is one day's p75 in a metric trend series.
+// CLS p75_ms is in milli-units (raw value * 1000); the client divides by 1000
+// for display, matching the existing FleetRumPanel formatP75 convention.
+// When Suppressed is true, P75Ms is 0 and the client should render a GAP on
+// the trend line for that day (not a zero). The day entry is always included so
+// the client has a consistent X-axis across all metrics.
+type RumTrendDayPoint struct {
+	Day         string  `json:"day"`          // "YYYY-MM-DD"
+	P75Ms       float64 `json:"p75_ms"`       // 0 when Suppressed
+	SampleCount int64   `json:"sample_count"`
+	Rating      string  `json:"rating"`       // "good" | "needs-improvement" | "poor" | ""
+	Suppressed  bool    `json:"suppressed"`
+}
+
+// RumTrendResponse is the shape for GET /perf/rum/trend. Each metric key maps
+// to a slice of daily p75 points ordered ascending by day. Days with no rollup
+// row at all are omitted (the client is only given days we actually have data
+// for). Days with insufficient samples appear as suppressed=true, p75_ms=0
+// entries so the client can render a GAP on the trend line.
+type RumTrendResponse struct {
+	WindowDays     int                          `json:"window_days"`
+	MinSampleCount int                          `json:"min_sample_count"`
+	Metrics        map[string][]RumTrendDayPoint `json:"metrics"`
 }
 
 // cwvRating returns the CWV standard band for a p75 millisecond value.

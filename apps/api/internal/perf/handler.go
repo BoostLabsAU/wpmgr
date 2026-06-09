@@ -121,10 +121,13 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/perf/fonts", authz.RequirePermission(authz.PermSiteRead), h.fontResults)
 
 	// M56 — RUM Core Web Vitals read endpoints (operator read-only).
-	// /perf/rum/summary returns site-level p75 aggregates over a configurable window.
+	// /perf/rum/summary returns site-level p75 aggregates over a configurable window,
+	//   including the good/NI/poor distribution bar for each metric slice.
+	// /perf/rum/trend returns per-metric daily p75 trend series (default 28 days).
 	// /perf/rum returns per-URL/metric/device breakdown rows for the dashboard table.
-	// Both enforce the min_sample_count suppression floor server-side.
+	// All three enforce the min_sample_count suppression floor server-side.
 	g.GET("/perf/rum/summary", authz.RequirePermission(authz.PermSiteRead), h.rumSummary)
+	g.GET("/perf/rum/trend", authz.RequirePermission(authz.PermSiteRead), h.rumTrend)
 	g.GET("/perf/rum", authz.RequirePermission(authz.PermSiteRead), h.rumResults)
 
 	// #190 — Media Cleaner tool.
