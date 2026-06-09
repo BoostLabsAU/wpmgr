@@ -211,7 +211,7 @@ final class MediaRunStore
         $runs = (int) ($run['runs'] ?? 0);
         if ($runs >= self::MAX_RUNS) {
             $this->delete($runId);
-            error_log(sprintf('WPMgr Media: run %s exceeded max background runs (%d); abandoning queue', $runId, self::MAX_RUNS));
+            \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr Media: run %s exceeded max background runs (%d); abandoning queue', $runId, self::MAX_RUNS));
             return;
         }
 
@@ -226,7 +226,7 @@ final class MediaRunStore
         // REST request, so it may run for the full time budget. ignore_user_abort
         // keeps it alive even if the loopback spawn_cron connection is dropped.
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running media background run must not hit max_execution_time; @-guarded, no-op when disabled
         }
         if (function_exists('ignore_user_abort')) {
             @ignore_user_abort(true);
@@ -265,7 +265,7 @@ final class MediaRunStore
                     // A job that errors mid-batch MUST NOT abort the rest. Swallow,
                     // log without secrets, continue. The callback is responsible
                     // for reporting its own per-job failure to the CP.
-                    error_log(sprintf('WPMgr Media: run %s job error: %s', $runId, substr($e->getMessage(), 0, 200)));
+                    \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr Media: run %s job error: %s', $runId, substr($e->getMessage(), 0, 200)));
                 }
             }
 

@@ -139,7 +139,7 @@ final class SqlInspector
         // the read path uniform regardless of whether the dump is gzipped.
         $handle = @gzopen($dumpPath, 'rb');
         if ($handle === false) {
-            throw new \RuntimeException('SqlInspector: cannot open dump: ' . $dumpPath);
+            throw new \RuntimeException('SqlInspector: cannot open dump: ' . esc_html($dumpPath));
         }
 
         // Accumulators. All "current table" state is a single struct that

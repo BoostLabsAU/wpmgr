@@ -103,7 +103,7 @@ final class SelfHost
      */
     private function localize(string $url, string $ext): ?string
     {
-        $name = $this->cache->name($url, basename((string) (parse_url($url, PHP_URL_PATH) ?? '')), $ext);
+        $name = $this->cache->name($url, basename((string) (wp_parse_url($url, PHP_URL_PATH) ?? '')), $ext);
         if ($this->cache->exists($name)) {
             return $this->cache->url($name);
         }
@@ -126,7 +126,7 @@ final class SelfHost
      */
     private function stripResourceHints(string $html, string $url): string
     {
-        $host = parse_url(str_starts_with($url, '//') ? 'https:' . $url : $url, PHP_URL_HOST);
+        $host = wp_parse_url(str_starts_with($url, '//') ? 'https:' . $url : $url, PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return $html;
         }

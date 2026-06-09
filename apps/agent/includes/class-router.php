@@ -117,7 +117,7 @@ final class Router
             // without giving an attacker any cryptographic oracle beyond what they
             // already get from the 403 itself.
             $category = $this->classifyTokenError($e->getMessage());
-            error_log('WPMgr Agent: command authorize failed: command=' . $command . ' category=' . $category . ' reason=' . $e->getMessage());
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr Agent: command authorize failed: command=' . $command . ' category=' . $category . ' reason=' . $e->getMessage());
             return $this->forbidden($category);
         }
 

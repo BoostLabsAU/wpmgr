@@ -160,27 +160,27 @@ final class FilesRestorer
         }
         $targetDir = rtrim($targetDir, DIRECTORY_SEPARATOR);
         if ($targetDir === '' || !is_dir($targetDir)) {
-            throw new \RuntimeException('FilesRestorer: targetDir does not exist: ' . $targetDir);
+            throw new \RuntimeException('FilesRestorer: targetDir does not exist: ' . esc_html($targetDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         $parent = dirname($targetDir);
-        if (!is_dir($parent) || !is_writable($parent)) {
-            throw new \RuntimeException('FilesRestorer: target parent not writable: ' . $parent);
+        if (!is_dir($parent) || !is_writable($parent)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
+            throw new \RuntimeException('FilesRestorer: target parent not writable: ' . esc_html($parent)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         // --- PREFLIGHT: every zip must open + contain entries -------------
         $totalFiles = 0;
         foreach ($zipPaths as $z) {
             if (!is_file($z)) {
-                throw new \RuntimeException('FilesRestorer: missing zip part: ' . $z);
+                throw new \RuntimeException('FilesRestorer: missing zip part: ' . esc_html($z)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
             }
             $zip = new ZipArchive();
             $rc  = $zip->open($z);
             if ($rc !== true) {
-                throw new \RuntimeException('FilesRestorer: cannot open zip part: ' . $z . ' (code=' . $rc . ')');
+                throw new \RuntimeException('FilesRestorer: cannot open zip part: ' . esc_html($z) . ' (code=' . esc_html((string) $rc) . ')'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
             }
             if ($zip->numFiles <= 0) {
                 $zip->close();
-                throw new \RuntimeException('FilesRestorer: empty zip part: ' . $z);
+                throw new \RuntimeException('FilesRestorer: empty zip part: ' . esc_html($z)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
             }
             $totalFiles += $zip->numFiles;
             $zip->close();
@@ -189,15 +189,15 @@ final class FilesRestorer
         // --- Create staging dir (idempotent across watchdog resume) -------
         $short      = self::shortId($restoreId);
         $stagingDir = $parent . DIRECTORY_SEPARATOR . '.wpmgr-staging-' . $short;
-        if (!is_dir($stagingDir) && !@mkdir($stagingDir, 0700, true) && !is_dir($stagingDir)) {
-            throw new \RuntimeException('FilesRestorer: cannot create staging dir: ' . $stagingDir);
+        if (!is_dir($stagingDir) && !@mkdir($stagingDir, 0700, true) && !is_dir($stagingDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on staging scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+            throw new \RuntimeException('FilesRestorer: cannot create staging dir: ' . esc_html($stagingDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
-        @chmod($stagingDir, 0700);
+        @chmod($stagingDir, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
 
         // Canonical staging real-path (used for traversal containment check).
         $stagingReal = self::canonical($stagingDir);
         if ($stagingReal === '') {
-            throw new \RuntimeException('FilesRestorer: cannot resolve staging real path');
+            throw new \RuntimeException('FilesRestorer: cannot resolve staging real path'); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         // --- Extract each part, per-entry traversal-checked + excluded ---
@@ -211,7 +211,7 @@ final class FilesRestorer
             $zip = new ZipArchive();
             $rc  = $zip->open($zipPath);
             if ($rc !== true) {
-                throw new \RuntimeException('FilesRestorer: cannot reopen zip: ' . $zipPath);
+                throw new \RuntimeException('FilesRestorer: cannot reopen zip: ' . $zipPath); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
             }
 
             try {
@@ -240,7 +240,7 @@ final class FilesRestorer
                     $target = $stagingReal . DIRECTORY_SEPARATOR . ltrim($entryName, DIRECTORY_SEPARATOR);
                     $targetParent = dirname($target);
                     // Pre-create the directory so extractTo can write the file.
-                    if (!is_dir($targetParent) && !@mkdir($targetParent, 0755, true) && !is_dir($targetParent)) {
+                    if (!is_dir($targetParent) && !wp_mkdir_p($targetParent) && !is_dir($targetParent)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- converted to wp_mkdir_p
                         // Cannot create — skip this entry; not fatal.
                         continue;
                     }
@@ -342,10 +342,10 @@ final class FilesRestorer
     {
         $targetDir = rtrim($targetDir, DIRECTORY_SEPARATOR);
         if (!is_dir($stagingDir)) {
-            throw new \RuntimeException('FilesRestorer: staging dir missing for swap: ' . $stagingDir);
+            throw new \RuntimeException('FilesRestorer: staging dir missing for swap: ' . esc_html($stagingDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         if (!is_dir($targetDir)) {
-            throw new \RuntimeException('FilesRestorer: target dir missing for swap: ' . $targetDir);
+            throw new \RuntimeException('FilesRestorer: target dir missing for swap: ' . esc_html($targetDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         $parent     = dirname($targetDir);
@@ -372,8 +372,8 @@ final class FilesRestorer
         // dir but failed before renaming staging — so the current "target"
         // is actually a leftover. Skip the first rename in that case.
         if (!is_dir($oldFiles)) {
-            if (!@rename($targetDir, $oldFiles)) {
-                throw new \RuntimeException('FilesRestorer: cannot move live dir aside: ' . $targetDir . ' -> ' . $oldFiles);
+            if (!@rename($targetDir, $oldFiles)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
+                throw new \RuntimeException('FilesRestorer: cannot move live dir aside: ' . esc_html($targetDir) . ' -> ' . esc_html($oldFiles)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
             }
         }
 
@@ -381,13 +381,13 @@ final class FilesRestorer
         // Safety: if target exists at this point (e.g. someone mkdir'd it
         // between step 1 and now), rmdir-attempt it first; if it's not empty
         // we can't rename — abort.
-        if (is_dir($targetDir) && @rmdir($targetDir) === false) {
-            throw new \RuntimeException('FilesRestorer: target dir reappeared and is not empty: ' . $targetDir);
+        if (is_dir($targetDir) && @rmdir($targetDir) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
+            throw new \RuntimeException('FilesRestorer: target dir reappeared and is not empty: ' . esc_html($targetDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
-        if (!@rename($stagingDir, $targetDir)) {
+        if (!@rename($stagingDir, $targetDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
             // Best-effort rollback: put the old tree back.
-            @rename($oldFiles, $targetDir);
-            throw new \RuntimeException('FilesRestorer: cannot promote staging dir: ' . $stagingDir . ' -> ' . $targetDir);
+            @rename($oldFiles, $targetDir); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem rollback swap; WP_Filesystem::move() is non-atomic
+            throw new \RuntimeException('FilesRestorer: cannot promote staging dir: ' . esc_html($stagingDir) . ' -> ' . esc_html($targetDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         self::safeProgress($progress, 'swap_files', [
@@ -447,10 +447,10 @@ final class FilesRestorer
     {
         $targetDir = rtrim($targetDir, DIRECTORY_SEPARATOR);
         if (!is_dir($stagingDir)) {
-            throw new \RuntimeException('FilesRestorer: staging dir missing for swap: ' . $stagingDir);
+            throw new \RuntimeException('FilesRestorer: staging dir missing for swap: ' . esc_html($stagingDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         if (!is_dir($targetDir)) {
-            throw new \RuntimeException('FilesRestorer: target dir missing for swap: ' . $targetDir);
+            throw new \RuntimeException('FilesRestorer: target dir missing for swap: ' . esc_html($targetDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
         if ($components === []) {
             throw new \RuntimeException('FilesRestorer: swapComponents called with empty component list');
@@ -482,28 +482,28 @@ final class FilesRestorer
                     // already validated the snapshot contains entries for the
                     // requested component. Treat as a hard fail rather than
                     // silently leave the live subdir in place.
-                    throw new \RuntimeException('FilesRestorer: staging missing component subdir: ' . $stagingSub);
+                    throw new \RuntimeException('FilesRestorer: staging missing component subdir: ' . esc_html($stagingSub)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                 }
 
                 // Move live subdir aside (skip if a watchdog mid-swap re-entry
                 // already did this leg).
                 if (is_dir($liveSub) && !is_dir($oldSub)) {
-                    if (!@rename($liveSub, $oldSub)) {
-                        throw new \RuntimeException('FilesRestorer: cannot move live ' . $subdir . ' aside: ' . $liveSub);
+                    if (!@rename($liveSub, $oldSub)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
+                        throw new \RuntimeException('FilesRestorer: cannot move live ' . esc_html($subdir) . ' aside: ' . esc_html($liveSub)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                     }
                 }
 
                 // Safety: if a non-empty dir reappeared at $liveSub between
                 // the move-aside and now, abort — we'd otherwise lose
                 // whatever just appeared.
-                if (is_dir($liveSub) && @rmdir($liveSub) === false) {
-                    throw new \RuntimeException('FilesRestorer: live ' . $subdir . ' reappeared and is not empty: ' . $liveSub);
+                if (is_dir($liveSub) && @rmdir($liveSub) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
+                    throw new \RuntimeException('FilesRestorer: live ' . esc_html($subdir) . ' reappeared and is not empty: ' . esc_html($liveSub)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                 }
 
-                if (!@rename($stagingSub, $liveSub)) {
+                if (!@rename($stagingSub, $liveSub)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
                     // Best-effort rollback: put the old subdir back.
-                    @rename($oldSub, $liveSub);
-                    throw new \RuntimeException('FilesRestorer: cannot promote staging ' . $subdir . ': ' . $stagingSub);
+                    @rename($oldSub, $liveSub); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem rollback swap; WP_Filesystem::move() is non-atomic
+                    throw new \RuntimeException('FilesRestorer: cannot promote staging ' . esc_html($subdir) . ': ' . esc_html($stagingSub)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                 }
 
                 $oldDirs[$comp] = $oldSub;
@@ -527,7 +527,7 @@ final class FilesRestorer
                 }
                 $items = @scandir($stagingDir);
                 if ($items === false) {
-                    throw new \RuntimeException('FilesRestorer: cannot read staging dir for wp-content swap: ' . $stagingDir);
+                    throw new \RuntimeException('FilesRestorer: cannot read staging dir for wp-content swap: ' . esc_html($stagingDir)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                 }
                 $swappedAny = false;
                 foreach ($items as $name) {
@@ -543,16 +543,16 @@ final class FilesRestorer
                     $oldItem     = $targetDir . DIRECTORY_SEPARATOR . '.wpmgr-old-wpcontent-' . $short . '-' . $name;
 
                     if (file_exists($liveItem) && !file_exists($oldItem)) {
-                        if (!@rename($liveItem, $oldItem)) {
-                            throw new \RuntimeException('FilesRestorer: cannot move live wp-content item aside: ' . $liveItem);
+                        if (!@rename($liveItem, $oldItem)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
+                            throw new \RuntimeException('FilesRestorer: cannot move live wp-content item aside: ' . esc_html($liveItem)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                         }
                     }
-                    if (file_exists($liveItem) && is_dir($liveItem) && @rmdir($liveItem) === false) {
-                        throw new \RuntimeException('FilesRestorer: live wp-content item reappeared and is not empty: ' . $liveItem);
+                    if (file_exists($liveItem) && is_dir($liveItem) && @rmdir($liveItem) === false) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
+                        throw new \RuntimeException('FilesRestorer: live wp-content item reappeared and is not empty: ' . esc_html($liveItem)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                     }
-                    if (!@rename($stagingItem, $liveItem)) {
-                        @rename($oldItem, $liveItem);
-                        throw new \RuntimeException('FilesRestorer: cannot promote staging wp-content item: ' . $stagingItem);
+                    if (!@rename($stagingItem, $liveItem)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
+                        @rename($oldItem, $liveItem); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem rollback swap; WP_Filesystem::move() is non-atomic
+                        throw new \RuntimeException('FilesRestorer: cannot promote staging wp-content item: ' . esc_html($stagingItem)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
                     }
                     $swappedAny = true;
                 }
@@ -570,7 +570,7 @@ final class FilesRestorer
                 continue;
             }
 
-            throw new \RuntimeException('FilesRestorer: unknown swap component: ' . $comp);
+            throw new \RuntimeException('FilesRestorer: unknown swap component: ' . esc_html($comp)); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to log/SSE, not browser
         }
 
         // Caller is responsible for rrmdir'ing the staging dir after we're
@@ -819,8 +819,8 @@ final class FilesRestorer
             }
 
             $dstParent = dirname($dst);
-            if (!is_dir($dstParent) && !@mkdir($dstParent, 0755, true) && !is_dir($dstParent)) {
-                error_log('WPMgr FilesRestorer: preserveFromLiveScoped cannot create parent: ' . $dstParent);
+            if (!is_dir($dstParent) && !wp_mkdir_p($dstParent) && !is_dir($dstParent)) {
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr FilesRestorer: preserveFromLiveScoped cannot create parent: ' . $dstParent);
                 continue;
             }
 
@@ -831,7 +831,7 @@ final class FilesRestorer
                     @copy($src, $dst);
                 }
             } catch (\Throwable $e) {
-                error_log('WPMgr FilesRestorer: preserveFromLiveScoped failed for ' . $rel . ': ' . $e->getMessage());
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr FilesRestorer: preserveFromLiveScoped failed for ' . $rel . ': ' . $e->getMessage());
             }
         }
     }
@@ -877,8 +877,8 @@ final class FilesRestorer
 
             // Ensure the destination parent exists.
             $dstParent = dirname($dst);
-            if (!is_dir($dstParent) && !@mkdir($dstParent, 0755, true) && !is_dir($dstParent)) {
-                error_log('WPMgr FilesRestorer: preserveFromLive cannot create parent: ' . $dstParent);
+            if (!is_dir($dstParent) && !wp_mkdir_p($dstParent) && !is_dir($dstParent)) {
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr FilesRestorer: preserveFromLive cannot create parent: ' . $dstParent);
                 continue;
             }
 
@@ -889,7 +889,7 @@ final class FilesRestorer
                     @copy($src, $dst);
                 }
             } catch (\Throwable $e) {
-                error_log('WPMgr FilesRestorer: preserveFromLive failed for ' . $rel . ': ' . $e->getMessage());
+                \WPMgr\Agent\Support\DebugLog::write('WPMgr FilesRestorer: preserveFromLive failed for ' . $rel . ': ' . $e->getMessage());
             }
         }
     }
@@ -905,7 +905,7 @@ final class FilesRestorer
         if (!is_dir($src)) {
             return;
         }
-        if (!is_dir($dst) && !@mkdir($dst, 0755, true) && !is_dir($dst)) {
+        if (!is_dir($dst) && !wp_mkdir_p($dst) && !is_dir($dst)) {
             return;
         }
         $items = @scandir($src);
@@ -1016,12 +1016,12 @@ final class FilesRestorer
             }
             $p = $dir . DIRECTORY_SEPARATOR . $i;
             if (is_link($p) || is_file($p)) {
-                @unlink($p);
+                wp_delete_file($p);
             } elseif (is_dir($p)) {
                 self::rrmdir($p);
             }
         }
-        @rmdir($dir);
+        @rmdir($dir); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
     }
 
     /**

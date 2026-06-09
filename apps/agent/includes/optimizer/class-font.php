@@ -202,7 +202,7 @@ final class Font
         }
         // Download the woff2/woff files and rewrite their URLs to local copies.
         foreach ($this->extractFontUrls($css) as $fontUrl) {
-            $fontName = $this->cache->name($fontUrl, basename((string) (parse_url($fontUrl, PHP_URL_PATH) ?? '')), pathinfo($fontUrl, PATHINFO_EXTENSION) ?: 'woff2');
+            $fontName = $this->cache->name($fontUrl, basename((string) (wp_parse_url($fontUrl, PHP_URL_PATH) ?? '')), pathinfo($fontUrl, PATHINFO_EXTENSION) ?: 'woff2');
             if (!$this->cache->exists($fontName)) {
                 $fontBytes = ($this->downloader)($fontUrl);
                 if (!is_string($fontBytes) || strlen($fontBytes) < 100) {

@@ -326,7 +326,7 @@ class UpdateRunner
                     if (\is_wp_error($activated)) {
                         $outcome['log'] .= "\n[wpmgr] upgrade succeeded but reactivation failed: "
                             . $activated->get_error_message();
-                        error_log('WPMgr Agent: post-upgrade reactivation failed for '
+                        \WPMgr\Agent\Support\DebugLog::write('WPMgr Agent: post-upgrade reactivation failed for '
                             . $slug . ': ' . $activated->get_error_message());
                     }
                 }

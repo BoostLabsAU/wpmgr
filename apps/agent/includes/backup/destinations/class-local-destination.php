@@ -80,11 +80,11 @@ final class LocalDestination implements BackupDestination
 
         $snapshotDir = $base . DIRECTORY_SEPARATOR . $snapshotId;
         $chunksDir   = $snapshotDir . DIRECTORY_SEPARATOR . 'chunks';
-        if (!is_dir($chunksDir) && !mkdir($chunksDir, self::DIR_MODE, true) && !is_dir($chunksDir)) {
-            throw new \RuntimeException('WPMgr Local Destination: cannot create chunks dir at ' . $chunksDir);
+        if (!is_dir($chunksDir) && !mkdir($chunksDir, self::DIR_MODE, true) && !is_dir($chunksDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on secret/scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+            throw new \RuntimeException('WPMgr Local Destination: cannot create chunks dir at ' . esc_html($chunksDir));
         }
-        @chmod($snapshotDir, self::DIR_MODE);
-        @chmod($chunksDir, self::DIR_MODE);
+        @chmod($snapshotDir, self::DIR_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
+        @chmod($chunksDir, self::DIR_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
 
         $this->snapshotDir = $snapshotDir;
     }
@@ -107,7 +107,7 @@ final class LocalDestination implements BackupDestination
         if ($written !== $bytes) {
             return false;
         }
-        @chmod($path, self::CHUNK_MODE);
+        @chmod($path, self::CHUNK_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0640); WP_Filesystem would coerce to wider FS_CHMOD_FILE
         return true;
     }
 
@@ -154,7 +154,7 @@ final class LocalDestination implements BackupDestination
             'written_at'    => time(),
         ]);
         @file_put_contents($manifestPath, $manifestJson, LOCK_EX);
-        @chmod($manifestPath, self::CHUNK_MODE);
+        @chmod($manifestPath, self::CHUNK_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0640); WP_Filesystem would coerce to wider FS_CHMOD_FILE
 
         // POST the SAME manifest shape to the CP. The CP records the snapshot
         // as completed with `destination_kind='local'` (the destination_id
@@ -185,7 +185,7 @@ final class LocalDestination implements BackupDestination
             }
             $path = $this->chunkPath($hash);
             if (is_file($path)) {
-                @unlink($path);
+                wp_delete_file($path);
             }
         }
     }
@@ -215,15 +215,15 @@ final class LocalDestination implements BackupDestination
         }
         foreach ($candidates as $candidate) {
             if (is_dir($candidate)) {
-                if (is_writable($candidate)) {
+                if (is_writable($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                     return $candidate;
                 }
                 continue;
             }
             // Try to create + chmod the dir; if we succeed it's writable for us.
-            if (@mkdir($candidate, self::DIR_MODE, true) || is_dir($candidate)) {
-                @chmod($candidate, self::DIR_MODE);
-                if (is_writable($candidate)) {
+            if (@mkdir($candidate, self::DIR_MODE, true) || is_dir($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on secret backup dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+                @chmod($candidate, self::DIR_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
+                if (is_writable($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                     return $candidate;
                 }
             }
@@ -250,7 +250,7 @@ final class LocalDestination implements BackupDestination
                 continue;
             }
             @file_put_contents($path, $contents, LOCK_EX);
-            @chmod($path, self::CHUNK_MODE);
+            @chmod($path, self::CHUNK_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0640) on deny-by-default guard files; WP_Filesystem would coerce to wider FS_CHMOD_FILE
         }
     }
 

@@ -523,7 +523,7 @@ final class Keystore
     private function createKeyFile(string $path): ?string
     {
         $dir = dirname($path);
-        if (!is_dir($dir) || !is_writable($dir)) {
+        if (!is_dir($dir) || !is_writable($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             return null;
         }
 
@@ -532,7 +532,7 @@ final class Keystore
             sodium_memzero($key);
             return null;
         }
-        @chmod($path, 0600);
+        @chmod($path, 0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0600); WP_Filesystem would coerce to wider FS_CHMOD_FILE
 
         return $key;
     }
@@ -550,10 +550,10 @@ final class Keystore
             $dir       = $candidate['dir'];
             $inWebroot = $candidate['in_webroot'];
 
-            if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) {
+            if (!is_dir($dir) && !@mkdir($dir, 0700, true) && !is_dir($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on secret/scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
                 continue;
             }
-            if (!is_writable($dir)) {
+            if (!is_writable($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                 continue;
             }
 

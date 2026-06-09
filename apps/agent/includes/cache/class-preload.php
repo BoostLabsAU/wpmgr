@@ -279,7 +279,7 @@ final class Preload
         }
 
         if ($code === 429 || $code >= 500) {
-            throw new \RuntimeException('preload backoff: HTTP ' . $code);
+            throw new \RuntimeException('preload backoff: HTTP ' . esc_html((string) $code));
         }
     }
 
@@ -322,12 +322,12 @@ final class Preload
             return false;
         }
 
-        $scheme = strtolower((string) (parse_url($url, PHP_URL_SCHEME) ?? ''));
+        $scheme = strtolower((string) (wp_parse_url($url, PHP_URL_SCHEME) ?? ''));
         if ($scheme !== 'http' && $scheme !== 'https') {
             return false;
         }
 
-        $host = parse_url($url, PHP_URL_HOST);
+        $host = wp_parse_url($url, PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return false;
         }
@@ -346,7 +346,7 @@ final class Preload
         if (!function_exists('home_url')) {
             return '';
         }
-        $host = parse_url((string) home_url('/'), PHP_URL_HOST);
+        $host = wp_parse_url((string) home_url('/'), PHP_URL_HOST);
         return is_string($host) ? strtolower($host) : '';
     }
 
@@ -358,9 +358,7 @@ final class Preload
      */
     private function logOffHost(string $url): void
     {
-        if (function_exists('error_log')) {
-            $host = parse_url($url, PHP_URL_HOST);
-            error_log('wpmgr-agent: preload rejected off-host url (host=' . (is_string($host) ? $host : '?') . ')');
-        }
+        $host = wp_parse_url($url, PHP_URL_HOST);
+        \WPMgr\Agent\Support\DebugLog::write('wpmgr-agent: preload rejected off-host url (host=' . (is_string($host) ? $host : '?') . ')');
     }
 }

@@ -194,7 +194,7 @@ final class EncryptAndUpload
     {
         // Lift caller-imposed time/abort guards. We may be running inside an
         // FPM request that has already called fastcgi_finish_request().
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running encrypt pass must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         // Idempotent no-op for an already-completed cursor.
@@ -203,7 +203,7 @@ final class EncryptAndUpload
         }
 
         if (!is_dir($scratchDir)) {
-            throw new \RuntimeException('EncryptAndUpload: scratchDir does not exist: ' . $scratchDir);
+            throw new \RuntimeException('EncryptAndUpload: scratchDir does not exist: ' . esc_html($scratchDir));
         }
 
         // Inspection pass-0: walk the dump file BEFORE chunking and emit a
@@ -257,16 +257,16 @@ final class EncryptAndUpload
             $absPath  = (string) ($artifact['path'] ?? '');
             $logical  = (string) ($artifact['logical'] ?? '');
             if ($absPath === '' || $logical === '') {
-                throw new \RuntimeException('EncryptAndUpload: malformed artifact at index ' . $i);
+                throw new \RuntimeException('EncryptAndUpload: malformed artifact at index ' . $i); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
             }
             if (!is_file($absPath)) {
-                throw new \RuntimeException('EncryptAndUpload: artifact missing on disk: ' . $absPath);
+                throw new \RuntimeException('EncryptAndUpload: artifact missing on disk: ' . $absPath); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
             }
 
             $currentLogical = $logical;
-            $handle         = @fopen($absPath, 'rb');
+            $handle         = @fopen($absPath, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread over multi-GB archives; WP_Filesystem exposes only whole-file get/put which would OOM
             if ($handle === false) {
-                throw new \RuntimeException('EncryptAndUpload: cannot open artifact: ' . $absPath);
+                throw new \RuntimeException('EncryptAndUpload: cannot open artifact: ' . esc_html($absPath));
             }
 
             /** @var list<array{blake3:string,size:int}> $chunkList */
@@ -275,9 +275,9 @@ final class EncryptAndUpload
 
             try {
                 while (!feof($handle)) {
-                    $plain = fread($handle, $this->chunkBytes);
+                    $plain = fread($handle, $this->chunkBytes); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- chunked read over a multi-GB artifact; WP_Filesystem get_contents reads whole file into memory
                     if ($plain === false) {
-                        throw new \RuntimeException('EncryptAndUpload: read failed: ' . $absPath);
+                        throw new \RuntimeException('EncryptAndUpload: read failed: ' . esc_html($absPath));
                     }
                     if ($plain === '') {
                         // EOF on an aligned boundary; feof() will catch on the next iter.
@@ -350,7 +350,7 @@ final class EncryptAndUpload
                     }
                 }
             } finally {
-                fclose($handle);
+                fclose($handle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
 
             $entries[] = [
@@ -399,7 +399,7 @@ final class EncryptAndUpload
      */
     public function uploadChunks(array $encryptCursor, array $resume, callable $progress): array
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running upload pass must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         if (!empty($resume['done'])) {
@@ -460,18 +460,18 @@ final class EncryptAndUpload
                 }
                 $chunkPath = $this->chunkPath($scratchDir, $hash);
                 if (!is_file($chunkPath)) {
-                    throw new \RuntimeException('EncryptAndUpload: missing local chunk for local-destination write: ' . $hash);
+                    throw new \RuntimeException('EncryptAndUpload: missing local chunk for local-destination write: ' . esc_html($hash));
                 }
                 $cipher = @file_get_contents($chunkPath);
                 if ($cipher === false) {
-                    throw new \RuntimeException('EncryptAndUpload: cannot read local chunk: ' . $chunkPath);
+                    throw new \RuntimeException('EncryptAndUpload: cannot read local chunk: ' . esc_html($chunkPath));
                 }
                 if (!$this->destination->putChunk($hash, $cipher)) {
-                    throw new \RuntimeException('EncryptAndUpload: local-destination write failed for chunk ' . $hash);
+                    throw new \RuntimeException('EncryptAndUpload: local-destination write failed for chunk ' . esc_html($hash));
                 }
                 $bytesUploaded += strlen($cipher);
                 $cipher = '';
-                @unlink($chunkPath);
+                wp_delete_file($chunkPath);
 
                 $uploadedHashes[$hash] = 1;
                 $putCount++;
@@ -516,11 +516,11 @@ final class EncryptAndUpload
                     // scratch dir. Treat as already-uploaded only if the CP no
                     // longer asks for it — but here the CP IS asking for it, so
                     // this is fatal.
-                    throw new \RuntimeException('EncryptAndUpload: missing local chunk for upload: ' . $hash);
+                    throw new \RuntimeException('EncryptAndUpload: missing local chunk for upload: ' . esc_html($hash));
                 }
                 $cipher = @file_get_contents($chunkPath);
                 if ($cipher === false) {
-                    throw new \RuntimeException('EncryptAndUpload: cannot read local chunk: ' . $chunkPath);
+                    throw new \RuntimeException('EncryptAndUpload: cannot read local chunk: ' . esc_html($chunkPath));
                 }
 
                 $ok = ($this->destination instanceof CpDestination)
@@ -530,13 +530,13 @@ final class EncryptAndUpload
                     // Surface as RuntimeException so the TaskRunner's top-level
                     // catch marks the snapshot failed (or, in watchdog re-entry,
                     // resume_count increments and we try again).
-                    throw new \RuntimeException('EncryptAndUpload: PUT failed for chunk ' . $hash);
+                    throw new \RuntimeException('EncryptAndUpload: PUT failed for chunk ' . esc_html($hash));
                 }
                 $bytesUploaded += strlen($cipher);
                 $cipher         = '';
 
                 // Drop the local copy now we know it's durably uploaded.
-                @unlink($chunkPath);
+                wp_delete_file($chunkPath);
 
                 $uploadedHashes[$hash] = 1;
                 $putCount++;
@@ -568,7 +568,7 @@ final class EncryptAndUpload
                 }
                 $chunkPath = $this->chunkPath($scratchDir, $hash);
                 if (is_file($chunkPath)) {
-                    @unlink($chunkPath);
+                    wp_delete_file($chunkPath);
                 }
                 $uploadedHashes[$hash] = 1;
                 $dedupHits++;
@@ -607,7 +607,7 @@ final class EncryptAndUpload
      */
     public function submitManifest(array $entries, callable $progress): void
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running manifest submit must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         try {
@@ -629,9 +629,9 @@ final class EncryptAndUpload
             // top-level catch increments resume_count; watchdog re-entry
             // makes this safe to retry.
             throw new \RuntimeException(
-                'EncryptAndUpload: manifest submit failed: ' . $e->getMessage(),
+                'EncryptAndUpload: manifest submit failed: ' . esc_html($e->getMessage()), // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
                 0,
-                $e
+                $e // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; previous exception object, not browser output
             );
         }
 
@@ -805,7 +805,7 @@ final class EncryptAndUpload
                 ]);
                 // Best-effort cleanup of a partial file.
                 if (is_file($reportPath)) {
-                    @unlink($reportPath);
+                    wp_delete_file($reportPath);
                 }
                 return $artifacts;
             }
@@ -871,7 +871,7 @@ final class EncryptAndUpload
                     'warning' => 'env fingerprint failed: ' . substr($e->getMessage(), 0, 200),
                 ]);
                 if (is_file($reportPath)) {
-                    @unlink($reportPath);
+                    wp_delete_file($reportPath);
                 }
                 return $artifacts;
             }
@@ -909,7 +909,7 @@ final class EncryptAndUpload
         if (is_object($wpdb)) {
             try {
                 // @phpstan-ignore-next-line
-                $mysqlVersion = (string) $wpdb->get_var('SELECT VERSION()');
+                $mysqlVersion = (string) $wpdb->get_var('SELECT VERSION()'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query for environment fingerprint; result is one-shot per backup run, not cached
             } catch (\Throwable $e) {
                 // ignore.
             }
@@ -932,7 +932,7 @@ final class EncryptAndUpload
         if (is_object($wpdb)) {
             try {
                 // @phpstan-ignore-next-line
-                $rows = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A);
+                $rows = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct catalog query for environment fingerprint; result is one-shot per backup run, not cached
                 if (is_array($rows)) {
                     foreach ($rows as $row) {
                         if (!is_array($row)) {

@@ -77,7 +77,7 @@ final class MediaSyncCommand implements CommandInterface
         // (the dispatch is bounded by the CP's 120s media commander) and survive
         // a dropped loopback connection. Mirrors the backup/diagnostics paths.
         if (function_exists('set_time_limit')) {
-            @set_time_limit(0);
+            @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         }
         if (function_exists('ignore_user_abort')) {
             @ignore_user_abort(true);
@@ -127,7 +127,7 @@ final class MediaSyncCommand implements CommandInterface
         }
 
         if (defined('WP_DEBUG') && WP_DEBUG) {
-            error_log(sprintf('WPMgr media_sync: enumerated %d image attachments across %d page(s), upserted %d', $totalSeen, $pages, $upserted));
+            \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr media_sync: enumerated %d image attachments across %d page(s), upserted %d', $totalSeen, $pages, $upserted));
         }
 
         // CLEAN full enumeration: tell the CP to reconcile offline deletions. The
@@ -195,6 +195,7 @@ final class MediaSyncCommand implements CommandInterface
 
         // $wpdb->posts is a trusted core table name; 'image/%' passes through
         // prepare() as a literal value whose % stays a SQL LIKE wildcard.
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on the preceding line; table name is a trusted core $wpdb property
         $sql = $wpdb->prepare(
             "SELECT ID FROM {$wpdb->posts}
              WHERE post_type = 'attachment'
@@ -208,6 +209,7 @@ final class MediaSyncCommand implements CommandInterface
             self::PAGE_SIZE
         );
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- direct query on core table; identifier validated against information_schema / prefix+constant; values bound via placeholders; get_posts() silently truncates real libraries via post_status filtering and pre_get_posts hooks
         $ids = $wpdb->get_col($sql);
 
         return is_array($ids) ? array_values(array_map('intval', $ids)) : [];

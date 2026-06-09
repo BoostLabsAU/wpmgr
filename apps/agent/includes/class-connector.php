@@ -240,12 +240,12 @@ final class Connector
         // $table is built from a class constant + the trusted wpdb prefix (no
         // user input), so interpolating it ahead of prepare() is safe.
         // @phpstan-ignore-next-line
-        $sql = $wpdb->prepare("SELECT 1 FROM {$table} WHERE jti_hash = %s AND expires_at >= %d LIMIT 1", $hash, $now);
+        $sql = $wpdb->prepare("SELECT 1 FROM {$table} WHERE jti_hash = %s AND expires_at >= %d LIMIT 1", $hash, $now); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
         if (!is_string($sql)) {
             return false;
         }
 
-        return $wpdb->get_var($sql) !== null;
+        return $wpdb->get_var($sql) !== null; // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDB.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned anti-replay table; correctness requires a live read (no cache); already prepared above; value is the output of $wpdb->prepare()
     }
 
     /**
@@ -267,12 +267,12 @@ final class Connector
         $table = $this->jtiTableName();
         // $table is built from a class constant + the trusted wpdb prefix.
         // @phpstan-ignore-next-line
-        $pruneSql = $wpdb->prepare("DELETE FROM {$table} WHERE expires_at < %d", $now);
+        $pruneSql = $wpdb->prepare("DELETE FROM {$table} WHERE expires_at < %d", $now); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); value bound via placeholder
         if (is_string($pruneSql)) {
-            $wpdb->query($pruneSql);
+            $wpdb->query($pruneSql); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDB.UnescapedDBParameter,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct prune on plugin-owned anti-replay table; live read required; already prepared above; value is the output of $wpdb->prepare()
         }
 
-        $result = $wpdb->insert(
+        $result = $wpdb->insert( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- insert on plugin-owned anti-replay table
             $table,
             [
                 'jti_hash'   => $this->hashJti($jti),
@@ -290,7 +290,7 @@ final class Connector
                 ? $wpdb->last_error
                 : '';
             $missingTable = $lastError !== '' && stripos($lastError, "doesn't exist") !== false;
-            error_log(sprintf(
+            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                 'wpmgr-agent: connector jti insert failed (table=%s)%s%s',
                 $table,
                 $lastError === '' ? '' : ' driver_error=' . $lastError,

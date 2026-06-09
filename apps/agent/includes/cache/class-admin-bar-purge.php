@@ -139,7 +139,8 @@ final class AdminBarPurge
     public function handlePurgeUrl(): void
     {
         $this->guard(self::ACTION_PURGE_URL);
-        $raw = isset($_GET['url']) ? rawurldecode((string) wp_unslash($_GET['url'])) : '';
+        // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- nonce + capability verified in guard()/check_admin_referer() at top of handler
+        $raw = isset($_GET['url']) ? rawurldecode(sanitize_text_field(wp_unslash($_GET['url']))) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- nonce + capability verified in guard()/check_admin_referer() at top of handler
         $url = $this->safeSameHostUrl($raw);
         if ($url === '') {
             $this->notice('error', 'Could not determine the page to purge.');

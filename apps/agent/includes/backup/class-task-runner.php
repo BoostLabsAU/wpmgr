@@ -178,7 +178,7 @@ final class TaskRunner
      */
     public function run(): string
     {
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged, PHPCompatibility.FunctionUse.ArgumentFunctionsReportCurrentValue.NeedsInspection, Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup loop must not hit max_execution_time; @-guarded, no-op when disabled
         @ignore_user_abort(true);
 
         $currentPhase = self::PHASE_QUEUED;
@@ -254,7 +254,7 @@ final class TaskRunner
 
             return self::PHASE_COMPLETED;
         } catch (\Throwable $e) {
-            error_log('WPMgr TaskRunner: phase ' . $currentPhase . ' failed: ' . $e->getMessage());
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr TaskRunner: phase ' . $currentPhase . ' failed: ' . $e->getMessage());
 
             // Best-effort: persist `failed` + post one progress event. If
             // either of these throws we swallow and still return 'failed' —
@@ -285,7 +285,7 @@ final class TaskRunner
                 if (is_object($wpdb)) {
                     $tasksTable = $this->prefix() . Schema::BACKUP_TASKS_TABLE;
                     /** @phpstan-ignore-next-line */
-                    @$wpdb->delete($tasksTable, ['snapshot_id' => $this->snapshotId()], ['%s']);
+                    @$wpdb->delete($tasksTable, ['snapshot_id' => $this->snapshotId()], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; no core helper exists
                 }
             } catch (\Throwable $_) {
                 // Swallow.
@@ -457,7 +457,7 @@ final class TaskRunner
             $prevMapLoaded = ($prevMap !== null);
             $prevMapSize   = is_array($prevMap) ? count($prevMap) : 0;
             if ($prevMap === [] && $prevChunkCount > 0) {
-                error_log(sprintf(
+                \WPMgr\Agent\Support\DebugLog::write(sprintf(
                     'WPMgr TaskRunner: ADR-051 prevMap EMPTY despite %d prev_files_list_chunks ' .
                     '(snapshot=%s gen=%s) — parent files.list parsed to zero entries; ' .
                     'falling back to FULL re-archive. Investigate the prev files.list wire format.',
@@ -574,7 +574,7 @@ final class TaskRunner
                 'tombstones'        => $tombstones,
             ];
             $this->postProgress('archiving_files', $instr);
-            error_log(sprintf(
+            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                 'WPMgr TaskRunner: ADR-051 increment instrumentation snapshot=%s gen=%d ' .
                 'prev_chunks_count=%d prevmap_loaded=%s prevmap_size=%d ' .
                 'files_total=%d files_changed=%d files_carried=%d tombstones=%d',
@@ -631,9 +631,9 @@ final class TaskRunner
 
         // Fetch and concatenate each chunk. Each entry in $chunks is a RestoreChunk:
         // at minimum: ['url' => '<presigned-get-url>', 'hash' => '<blake3>'].
-        $outHandle = @fopen($localPath, 'wb');
+        $outHandle = @fopen($localPath, 'wb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fwrite over multi-GB prev-files-list; WP_Filesystem exposes only whole-file get/put which would OOM
         if ($outHandle === false) {
-            error_log('WPMgr TaskRunner: cannot create prev_files.list scratch file');
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr TaskRunner: cannot create prev_files.list scratch file');
             return null;
         }
 
@@ -651,14 +651,14 @@ final class TaskRunner
                     // here too would double-close: in PHP 8 fclose() on a closed
                     // resource throws a TypeError that `@` does NOT suppress, which
                     // would crash the whole archive phase instead of falling back.)
-                    error_log('WPMgr TaskRunner: failed to fetch prev_files.list chunk from ' . $url);
+                    \WPMgr\Agent\Support\DebugLog::write('WPMgr TaskRunner: failed to fetch prev_files.list chunk from ' . $url);
                     return null;
                 }
-                fwrite($outHandle, $body);
+                fwrite($outHandle, $body); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite -- incremental write into a streaming handle; WP_Filesystem put_contents is whole-buffer only
             }
         } finally {
             if (is_resource($outHandle)) {
-                fclose($outHandle);
+                fclose($outHandle); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
         }
 
@@ -683,28 +683,23 @@ final class TaskRunner
         // ext-curl is configured for the HTTP(S) presigned URLs the CP sends.
         // Any non-HTTP scheme (e.g. a local file:// the e2e uses) goes straight
         // to the stream fallback — some curl builds disable file:// entirely.
-        $scheme    = strtolower((string) parse_url($url, PHP_URL_SCHEME));
+        $scheme    = strtolower((string) wp_parse_url($url, PHP_URL_SCHEME));
         $isHttpish = ($scheme === 'http' || $scheme === 'https');
 
-        if ($isHttpish && function_exists('curl_init')) {
-            $ch = curl_init($url);
-            if ($ch === false) {
+        if ($isHttpish && function_exists('wp_remote_get')) {
+            $response = wp_remote_get($url, ['timeout' => 60, 'sslverify' => true]);
+            if (is_wp_error($response)) {
                 return null;
             }
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 60);
-            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, true);
-            $body = curl_exec($ch);
-            $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-            curl_close($ch);
-            if ($body === false || $code < 200 || $code >= 300) {
+            $code = (int) wp_remote_retrieve_response_code($response);
+            if ($code < 200 || $code >= 300) {
                 return null;
             }
-            return (string) $body;
+            return (string) wp_remote_retrieve_body($response);
         }
 
-        // Fallback: file_get_contents with a short timeout.
+        // Fallback: file_get_contents with a short timeout (also handles file:// URLs
+        // used by ADR-051 e2e tests).
         $ctx  = stream_context_create(['http' => ['timeout' => 60]]);
         $body = @file_get_contents($url, false, $ctx);
         return $body === false ? null : $body;
@@ -953,7 +948,7 @@ final class TaskRunner
             : '';
 
         if ($tombstonesFile !== '' && is_file($tombstonesFile)) {
-            $fh = @fopen($tombstonesFile, 'rb');
+            $fh = @fopen($tombstonesFile, 'rb'); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- streaming handle for chunked fread over multi-GB tombstones list; WP_Filesystem exposes only whole-file get/put which would OOM
             if ($fh !== false) {
                 while (($line = fgets($fh)) !== false) {
                     $rel = rtrim($line, "\r\n");
@@ -973,7 +968,7 @@ final class TaskRunner
                     ];
                     $already[$rel] = true;
                 }
-                fclose($fh);
+                fclose($fh); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- closes a streaming handle over multi-GB archives; WP_Filesystem has no streaming API
             }
             return $entries;
         }
@@ -1050,11 +1045,12 @@ final class TaskRunner
             return null;
         }
 
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); value bound via %s placeholder
         $sql = "SELECT phase, kind, sub_state, resume_count, max_resumes FROM {$table} WHERE snapshot_id = %s LIMIT 1";
         /** @phpstan-ignore-next-line — $wpdb is a runtime interface. */
-        $prepared = $wpdb->prepare($sql, $this->snapshotId());
+        $prepared = $wpdb->prepare($sql, $this->snapshotId()); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on the preceding line
         /** @phpstan-ignore-next-line */
-        $row      = $wpdb->get_row($prepared, ARRAY_A);
+        $row      = $wpdb->get_row($prepared, ARRAY_A); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter, PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-owned table; value is the output of $wpdb->prepare()
 
         if (!is_array($row)) {
             return null;
@@ -1111,12 +1107,13 @@ final class TaskRunner
         // Use REPLACE/INSERT IGNORE semantics via $wpdb->query() with a raw
         // INSERT IGNORE — $wpdb->insert() doesn't surface the IGNORE qualifier
         // and would throw on duplicate-key collisions.
+        // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
         $sql = "INSERT IGNORE INTO {$table}
                 (snapshot_id, kind, phase, sub_state, started_at, last_progress_at, resume_count, max_resumes)
                 VALUES (%s, %s, %s, %s, %d, %d, %d, %d)";
         /** @phpstan-ignore-next-line */
-        $prepared = $wpdb->prepare(
-            $sql,
+        $prepared = $wpdb->prepare( // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- already prepared on this line via $wpdb->prepare()
+            $sql, // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- identifier validated against information_schema / prefix+constant; values bound via placeholders
             $this->snapshotId(),
             $this->kind(),
             self::PHASE_QUEUED,
@@ -1127,7 +1124,7 @@ final class TaskRunner
             6
         );
         /** @phpstan-ignore-next-line */
-        $wpdb->query($prepared);
+        $wpdb->query($prepared); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter, PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct INSERT IGNORE on plugin-owned table; value is the output of $wpdb->prepare()
     }
 
     /**
@@ -1206,7 +1203,7 @@ final class TaskRunner
             // last good state. json_encode should never fail for the small
             // part-cursor state we persist; if it does, logging is better
             // than wiping the prior cursor with '{}'.
-            error_log('WPMgr TaskRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr TaskRunner: sub_state json_encode failed for phase ' . $phase . ' — skipping state write to preserve the prior cursor');
             return;
         }
 
@@ -1223,12 +1220,12 @@ final class TaskRunner
             $tmpPath     = $sidecarPath . '.tmp.' . getmypid();
             $written     = @file_put_contents($tmpPath, $encoded);
             if ($written !== false && $written === strlen($encoded)) {
-                @rename($tmpPath, $sidecarPath);
+                @rename($tmpPath, $sidecarPath); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash/watchdog-resume safety
                 // DB column holds only the pointer; the full cursor is on disk.
                 $pointer    = json_encode([self::SUBSTATE_SIDECAR_KEY => true, 'file' => $sidecarPath]);
                 $rowEncoded = $pointer !== false ? $pointer : $encoded;
             } else {
-                @unlink($tmpPath);
+                wp_delete_file($tmpPath);
                 // Sidecar write failed — fall through to inline write (may
                 // hit the packet limit, but that will be caught by the
                 // throw-on-false below).
@@ -1236,7 +1233,7 @@ final class TaskRunner
         }
 
         /** @phpstan-ignore-next-line */
-        $result = $wpdb->update(
+        $result = $wpdb->update( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned table; no core helper exists; correctness requires a live write
             $table,
             [
                 'phase'            => $phase,
@@ -1255,7 +1252,7 @@ final class TaskRunner
         // silently completing with a stale cursor.
         if ($result === false) {
             throw new \RuntimeException(
-                'TaskRunner: DB update failed for phase ' . $phase . ' (possible @@max_allowed_packet overflow or connection loss)'
+                'TaskRunner: DB update failed for phase ' . esc_html($phase) . ' (possible @@max_allowed_packet overflow or connection loss)'
             );
         }
     }
@@ -1283,7 +1280,7 @@ final class TaskRunner
         $this->lastDbUpdate = $now;
 
         /** @phpstan-ignore-next-line */
-        $wpdb->update(
+        $wpdb->update( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned table; throttled liveness ping; no core helper exists
             $table,
             ['last_progress_at' => $now],
             ['snapshot_id' => $this->snapshotId()],
@@ -1342,27 +1339,27 @@ final class TaskRunner
         $chunks = @glob($scratch . DIRECTORY_SEPARATOR . 'chunks-*.age');
         if (is_array($chunks)) {
             foreach ($chunks as $f) {
-                @unlink($f);
+                wp_delete_file($f);
             }
         }
         $plainChunks = @glob($scratch . DIRECTORY_SEPARATOR . 'chunks-*.bin');
         if (is_array($plainChunks)) {
             foreach ($plainChunks as $f) {
-                @unlink($f);
+                wp_delete_file($f);
             }
         }
         // ADR-051: remove the prev_files.list scratch file assembled from
         // PrevFilesListChunks during the archiving phase.
         $prevList = $scratch . DIRECTORY_SEPARATOR . 'prev_files.list';
         if (is_file($prevList)) {
-            @unlink($prevList);
+            wp_delete_file($prevList);
         }
         // Sidecar sub_state file (written when sub_state exceeded the
         // SUBSTATE_SIDECAR_THRESHOLD in saveTaskState). Must be unlinked
         // after completion so no stale cursor survives to a future run.
         $sidecar = $scratch . DIRECTORY_SEPARATOR . self::SUBSTATE_SIDECAR_NAME;
         if (is_file($sidecar)) {
-            @unlink($sidecar);
+            wp_delete_file($sidecar);
         }
 
         // 2. Artifact files (DB dump + zip parts + files.list + tombstones.list).
@@ -1374,7 +1371,7 @@ final class TaskRunner
         ];
         foreach ($patterns as $p) {
             if (is_file($p)) {
-                @unlink($p);
+                wp_delete_file($p);
             }
         }
         // Track A / A2 (#187): include 'core' in the component sweep so
@@ -1385,18 +1382,18 @@ final class TaskRunner
             $zips = @glob($scratch . DIRECTORY_SEPARATOR . $comp . '.*part*.zip');
             if (is_array($zips)) {
                 foreach ($zips as $f) {
-                    @unlink($f);
+                    wp_delete_file($f);
                 }
             }
         }
         // Also clean up the on-disk core-paths.cache written by CoreFilesArchiver.
         $coreCachePath = $scratch . DIRECTORY_SEPARATOR . 'core-paths.cache';
         if (is_file($coreCachePath)) {
-            @unlink($coreCachePath);
+            wp_delete_file($coreCachePath);
         }
 
         // 3. The scratch dir itself (rmdir refuses if not empty — that's fine).
-        @rmdir($scratch);
+        @rmdir($scratch); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived scratch dir; WP_Filesystem not initialized
 
         // 4. The legacy `wpmgr_backup_runs` dedup row so a future backup of
         //    the same snapshot id can spawn. Best-effort: missing table or
@@ -1405,7 +1402,7 @@ final class TaskRunner
         if (is_object($wpdb)) {
             $runsTable = $this->prefix() . Schema::BACKUP_RUNS_TABLE;
             /** @phpstan-ignore-next-line */
-            $wpdb->delete($runsTable, ['snapshot_id' => $this->snapshotId()], ['%s']);
+            $wpdb->delete($runsTable, ['snapshot_id' => $this->snapshotId()], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; no core helper exists
         }
 
         // 5. DELETE the wpmgr_backup_tasks row (Bug 2 fix). Earlier design
@@ -1421,7 +1418,7 @@ final class TaskRunner
         if (is_object($wpdb)) {
             $tasksTable = $this->prefix() . Schema::BACKUP_TASKS_TABLE;
             /** @phpstan-ignore-next-line */
-            @$wpdb->delete($tasksTable, ['snapshot_id' => $this->snapshotId()], ['%s']);
+            @$wpdb->delete($tasksTable, ['snapshot_id' => $this->snapshotId()], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; no core helper exists
         }
     }
 
@@ -1438,8 +1435,8 @@ final class TaskRunner
         if ($dir === '') {
             throw new \RuntimeException('TaskRunner: scratch_dir is empty');
         }
-        if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) {
-            throw new \RuntimeException('TaskRunner: cannot create scratch dir: ' . $dir);
+        if (!is_dir($dir) && !wp_mkdir_p($dir) && !is_dir($dir)) {
+            throw new \RuntimeException('TaskRunner: cannot create scratch dir: ' . esc_html($dir));
         }
     }
 

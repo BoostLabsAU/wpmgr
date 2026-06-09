@@ -259,7 +259,7 @@ final class MetadataCommand implements CommandInterface
      */
     private function serverSoftware(): string
     {
-        $value = $_SERVER['SERVER_SOFTWARE'] ?? '';
+        $value = isset($_SERVER['SERVER_SOFTWARE']) ? sanitize_text_field(wp_unslash($_SERVER['SERVER_SOFTWARE'])) : '';
 
         return is_string($value) ? $value : '';
     }

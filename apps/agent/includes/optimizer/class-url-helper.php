@@ -52,7 +52,7 @@ final class UrlHelper
      */
     public function host(): string
     {
-        $host = (string) (parse_url($this->siteUrl, PHP_URL_HOST) ?? '');
+        $host = (string) (wp_parse_url($this->siteUrl, PHP_URL_HOST) ?? '');
         return strtolower($host);
     }
 
@@ -73,7 +73,7 @@ final class UrlHelper
         if ($url[0] === '/' && (!isset($url[1]) || $url[1] !== '/')) {
             return false;
         }
-        $host = parse_url(self::normalizeScheme($url), PHP_URL_HOST);
+        $host = wp_parse_url(self::normalizeScheme($url), PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return false;
         }
@@ -102,11 +102,11 @@ final class UrlHelper
             $path = $url; // root-relative
         } else {
             $normalized = self::normalizeScheme($url);
-            $host = parse_url($normalized, PHP_URL_HOST);
+            $host = wp_parse_url($normalized, PHP_URL_HOST);
             if (!is_string($host) || strtolower($host) !== $this->host() || $this->host() === '') {
                 return null; // external
             }
-            $path = parse_url($normalized, PHP_URL_PATH);
+            $path = wp_parse_url($normalized, PHP_URL_PATH);
         }
         if (!is_string($path) || $path === '') {
             return null;

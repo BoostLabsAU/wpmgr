@@ -194,6 +194,8 @@ final class PreloadQueue
     // Enqueue
     // -------------------------------------------------------------------------
 
+    // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,WordPress.DB.PreparedSQL.NotPrepared -- direct queries on plugin-owned table (wpmgr_preload_queue); no core helper exists; $table is prefix+constant (trusted); correctness requires live reads (anti-replay/locking window)
+
     /**
      * Enqueue (or revive) a (url, device) warm task. Idempotent upsert keyed on
      * (group_name, task_hash): a re-queue of the same (url, device) is a no-op
@@ -221,7 +223,7 @@ final class PreloadQueue
         $table    = $this->table();
 
         try {
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "INSERT INTO {$table}
                         (group_name, callback, url, device, task_hash, priority, status, attempts, created_at, updated_at)
@@ -270,7 +272,7 @@ final class PreloadQueue
 
         try {
             // STEP 1 — stale-requeue.
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "UPDATE {$table}
                         SET status='pending', lock_token=NULL, locked_at=NULL, updated_at=UTC_TIMESTAMP()
@@ -282,7 +284,7 @@ final class PreloadQueue
 
             // STEP 2 — atomic claim of the highest-priority due row.
             $token = $this->newToken();
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "UPDATE {$table}
                         SET status='processing', lock_token=%s, locked_at=UTC_TIMESTAMP(),
@@ -302,7 +304,7 @@ final class PreloadQueue
                 return null;
             }
 
-            $row = $wpdb->get_row(
+            $row = $wpdb->get_row( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare("SELECT * FROM {$table} WHERE lock_token=%s LIMIT 1", $token),
                 ARRAY_A
             );
@@ -336,7 +338,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "DELETE FROM {$table} WHERE id=%d AND lock_token=%s",
                     $id,
@@ -371,7 +373,7 @@ final class PreloadQueue
                     // PARK for retry: a FUTURE locked_at excludes this row from
                     // claimNext() until the backoff window elapses.
                     $backoff = $this->retryBackoffSeconds($attempts);
-                    $wpdb->query(
+                    $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                         $wpdb->prepare(
                             "UPDATE {$table}
                                 SET status='pending', lock_token=NULL,
@@ -385,7 +387,7 @@ final class PreloadQueue
                         )
                     );
                 } else {
-                    $wpdb->query(
+                    $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                         $wpdb->prepare(
                             "UPDATE {$table}
                                 SET status='failed', lock_token=NULL, locked_at=NULL,
@@ -438,7 +440,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            return (int) $wpdb->get_var(
+            return (int) $wpdb->get_var( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table}
                       WHERE group_name=%s AND callback=%s
@@ -486,7 +488,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            return (int) $wpdb->get_var(
+            return (int) $wpdb->get_var( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table}
                       WHERE group_name=%s AND callback=%s AND status=%s",
@@ -515,7 +517,7 @@ final class PreloadQueue
         $limit = min(200, max(1, $limit));
         $table = $this->table();
         try {
-            $rows = $wpdb->get_results(
+            $rows = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT id, url, device, priority, status, attempts, last_error, created_at, locked_at, updated_at
                        FROM {$table}
@@ -548,7 +550,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "UPDATE {$table}
                         SET status='pending', lock_token=NULL, locked_at=NULL,
@@ -577,7 +579,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "DELETE FROM {$table} WHERE group_name=%s AND callback=%s",
                     $this->group,
@@ -631,7 +633,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            return (int) $wpdb->get_var(
+            return (int) $wpdb->get_var( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table}
                       WHERE group_name=%s AND callback=%s
@@ -660,7 +662,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            return (int) $wpdb->get_var(
+            return (int) $wpdb->get_var( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table}
                       WHERE group_name=%s AND callback=%s
@@ -688,7 +690,7 @@ final class PreloadQueue
         }
         $table = $this->table();
         try {
-            $count = (int) $wpdb->get_var(
+            $count = (int) $wpdb->get_var( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table}
                       WHERE group_name=%s AND callback=%s
@@ -899,7 +901,7 @@ final class PreloadQueue
                 return;
             }
 
-            $stalled = $wpdb->get_results(
+            $stalled = $wpdb->get_results( // phpcs:ignore PluginCheck.Security.DirectDB.UnescapedDBParameter -- value is the output of $wpdb->prepare(); not attacker-controlled
                 $wpdb->prepare(
                     "SELECT group_name, callback
                        FROM {$table}
@@ -942,6 +944,8 @@ final class PreloadQueue
             $queue->dispatchRunners();
         }
     }
+
+    // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.UnescapedDBParameter,WordPress.DB.PreparedSQL.NotPrepared
 
     // -------------------------------------------------------------------------
     // Load gate

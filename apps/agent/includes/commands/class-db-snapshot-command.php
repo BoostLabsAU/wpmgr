@@ -132,10 +132,10 @@ final class DbSnapshotCommand implements CommandInterface
         $snapDir  = $storeDir . '/' . $snapId;
         $dumpPath = $snapDir . '/db.sql.gz';
 
-        if (!@mkdir($snapDir, 0700, true) && !is_dir($snapDir)) {
+        if (!@mkdir($snapDir, 0700, true) && !is_dir($snapDir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on snapshot dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
             return ['ok' => false, 'detail' => 'cannot create snapshot directory'];
         }
-        @chmod($snapDir, 0700);
+        @chmod($snapDir, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
 
         // Count tables before dumping so the manifest has an accurate table_count.
         $tableCount = $this->countTables();
@@ -168,7 +168,7 @@ final class DbSnapshotCommand implements CommandInterface
             'table_count' => $tableCount,
         ];
         @file_put_contents($snapDir . '/meta.json', (string) wp_json_encode($meta), LOCK_EX);
-        @chmod($snapDir . '/meta.json', 0600);
+        @chmod($snapDir . '/meta.json', 0600); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0600); WP_Filesystem would coerce to wider FS_CHMOD_FILE
 
         return [
             'ok'     => true,
@@ -377,18 +377,18 @@ final class DbSnapshotCommand implements CommandInterface
         if (!is_dir($base)) {
             if (function_exists('wp_mkdir_p')) {
                 if (!wp_mkdir_p($base) && !is_dir($base)) {
-                    throw new \RuntimeException('cannot create snapshots directory: ' . $base);
+                    throw new \RuntimeException('cannot create snapshots directory: ' . esc_html($base));
                 }
-            } elseif (!@mkdir($base, 0700, true) && !is_dir($base)) {
-                throw new \RuntimeException('cannot create snapshots directory: ' . $base);
+            } elseif (!@mkdir($base, 0700, true) && !is_dir($base)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on snapshot dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
+                throw new \RuntimeException('cannot create snapshots directory: ' . esc_html($base));
             }
         }
 
-        if (!is_writable($base)) {
-            throw new \RuntimeException('snapshots directory is not writable: ' . $base);
+        if (!is_writable($base)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
+            throw new \RuntimeException('snapshots directory is not writable: ' . esc_html($base));
         }
 
-        @chmod($base, 0700);
+        @chmod($base, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
 
         // Harden against web access on first setup. Files are written once;
         // missing-on-web-serve → the .htaccess/index.php barrier is the guard.
@@ -408,7 +408,7 @@ final class DbSnapshotCommand implements CommandInterface
         $index = $base . '/index.php';
         if (!file_exists($index)) {
             @file_put_contents($index, "<?php\n// Silence is golden.\n");
-            @chmod($index, 0644);
+            @chmod($index, 0644); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0644); WP_Filesystem would coerce to wider FS_CHMOD_FILE
         }
 
         $htaccess = $base . '/.htaccess';
@@ -423,7 +423,7 @@ final class DbSnapshotCommand implements CommandInterface
                 . "    Deny from all\n"
                 . "</IfModule>\n"
             );
-            @chmod($htaccess, 0644);
+            @chmod($htaccess, 0644); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0644); WP_Filesystem would coerce to wider FS_CHMOD_FILE
         }
     }
 
@@ -538,8 +538,7 @@ final class DbSnapshotCommand implements CommandInterface
             return 0;
         }
         try {
-            // @phpstan-ignore-next-line
-            $count = $wpdb->get_var("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'");
+            $count = $wpdb->get_var("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_TYPE = 'BASE TABLE'"); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- static literal query on information_schema; direct query; no caching appropriate for a live count
             return is_numeric($count) ? (int) $count : 0;
         } catch (\Throwable $e) {
             return 0;
@@ -631,10 +630,11 @@ final class DbSnapshotCommand implements CommandInterface
             if (is_dir($path) && !is_link($path)) {
                 $ok = $this->deleteDir($path) && $ok;
             } else {
-                $ok = (@unlink($path) !== false) && $ok;
+                wp_delete_file($path);
+                $ok = (!file_exists($path)) && $ok;
             }
         }
-        $ok = (@rmdir($dir) !== false) && $ok;
+        $ok = (@rmdir($dir) !== false) && $ok; // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_rmdir -- removes an empty server-derived snapshot dir; WP_Filesystem not initialized
         return $ok;
     }
 }

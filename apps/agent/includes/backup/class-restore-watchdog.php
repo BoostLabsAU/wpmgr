@@ -66,8 +66,9 @@ final class RestoreWatchdog
         }
         $table = $wpdb->prefix . Schema::BACKUP_RESTORE_TASKS_TABLE;
         // @phpstan-ignore-next-line — dynamic wpdb.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read (anti-replay/locking)
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE snapshot_id = %s AND restore_id = %s",
+            "SELECT * FROM {$table} WHERE snapshot_id = %s AND restore_id = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             $snapshotId,
             $restoreId
         ), ARRAY_A);
@@ -93,6 +94,7 @@ final class RestoreWatchdog
         $maxResumes  = (int) ($row['max_resumes'] ?? 6);
         if ($resumeCount >= $maxResumes) {
             // @phpstan-ignore-next-line
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read (anti-replay/locking)
             @$wpdb->update(
                 $table,
                 ['phase' => RestoreRunner::PHASE_FAILED, 'last_progress_at' => time()],
@@ -100,7 +102,7 @@ final class RestoreWatchdog
                 ['%s', '%d'],
                 ['%s', '%s']
             );
-            error_log(sprintf(
+            \WPMgr\Agent\Support\DebugLog::write(sprintf(
                 'WPMgr Restore: %s/%s exhausted %d resume attempts; marked failed',
                 $snapshotId,
                 $restoreId,
@@ -110,6 +112,7 @@ final class RestoreWatchdog
         }
 
         // @phpstan-ignore-next-line
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read (anti-replay/locking)
         @$wpdb->update(
             $table,
             ['resume_count' => $resumeCount + 1, 'last_progress_at' => time()],
@@ -117,8 +120,8 @@ final class RestoreWatchdog
             ['%d', '%d'],
             ['%s', '%s']
         );
-        error_log(sprintf(
-            'WPMgr Restore: watchdog resuming %s/%s (attempt %d/%d) — stalled %ds in phase=%s',
+        \WPMgr\Agent\Support\DebugLog::write(sprintf(
+            'WPMgr Restore: watchdog resuming %s/%s (attempt %d/%d) - stalled %ds in phase=%s',
             $snapshotId,
             $restoreId,
             $resumeCount + 1,
@@ -130,7 +133,7 @@ final class RestoreWatchdog
         $subState = self::decodeSubState($row['sub_state'] ?? '');
         $params   = is_array($subState['params'] ?? null) ? $subState['params'] : null;
         if (!is_array($params)) {
-            error_log(sprintf('WPMgr Restore: watchdog cannot resume %s/%s — sub_state.params missing', $snapshotId, $restoreId));
+            \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr Restore: watchdog cannot resume %s/%s - sub_state.params missing', $snapshotId, $restoreId));
             return;
         }
 
@@ -161,13 +164,14 @@ final class RestoreWatchdog
         }
         $table = $wpdb->prefix . Schema::BACKUP_RESTORE_TASKS_TABLE;
         // @phpstan-ignore-next-line — dynamic wpdb.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct query on plugin-owned table; no core $wpdb helper exists; correctness requires a live read (anti-replay/locking)
         $row = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM {$table} WHERE snapshot_id = %s AND restore_id = %s",
+            "SELECT * FROM {$table} WHERE snapshot_id = %s AND restore_id = %s", // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             $snapshotId,
             $restoreId
         ), ARRAY_A);
         if (!is_array($row)) {
-            error_log(sprintf('WPMgr Restore: dispatch cannot find task row for %s/%s', $snapshotId, $restoreId));
+            \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr Restore: dispatch cannot find task row for %s/%s', $snapshotId, $restoreId));
             return;
         }
         $phase = (string) ($row['phase'] ?? '');
@@ -177,15 +181,15 @@ final class RestoreWatchdog
         $subState = self::decodeSubState($row['sub_state'] ?? '');
         $params   = is_array($subState['params'] ?? null) ? $subState['params'] : null;
         if (!is_array($params)) {
-            error_log(sprintf('WPMgr Restore: dispatch cannot extract params for %s/%s', $snapshotId, $restoreId));
+            \WPMgr\Agent\Support\DebugLog::write(sprintf('WPMgr Restore: dispatch cannot extract params for %s/%s', $snapshotId, $restoreId));
             return;
         }
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         @ignore_user_abort(true);
         try {
             (new RestoreRunner($params))->run();
         } catch (\Throwable $e) {
-            error_log('WPMgr Restore: dispatch runner fatal: ' . $e->getMessage());
+            \WPMgr\Agent\Support\DebugLog::write('WPMgr Restore: dispatch runner fatal: ' . $e->getMessage());
         }
     }
 

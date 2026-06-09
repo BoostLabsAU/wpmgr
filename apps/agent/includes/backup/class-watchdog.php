@@ -31,6 +31,7 @@ declare(strict_types=1);
 namespace WPMgr\Agent\Backup;
 
 use WPMgr\Agent\Schema;
+use WPMgr\Agent\Support\DebugLog;
 
 final class Watchdog
 {
@@ -78,6 +79,7 @@ final class Watchdog
 
         $table = $wpdb->prefix . Schema::BACKUP_TASKS_TABLE;
         // @phpstan-ignore-next-line — dynamic wpdb.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned table; identifier is prefix+constant; no caching on live task-state read
         $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE snapshot_id = %s", $snapshotId), ARRAY_A);
         if (!is_array($row)) {
             return; // Task was already cleaned up (a completed runner deletes its row).
@@ -89,7 +91,7 @@ final class Watchdog
             // wpmgr_backup_watchdog event can't even find it. (Defensive
             // cleanup — the TaskRunner success path now also DELETEs.)
             // @phpstan-ignore-next-line — dynamic wpdb.
-            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
+            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; correctness requires a live write
             return;
         }
 
@@ -112,8 +114,8 @@ final class Watchdog
             // 'completed' on the CP, this guard prevents the phantom 'failed'
             // event that would otherwise overwrite it.
             // @phpstan-ignore-next-line — dynamic wpdb.
-            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
-            error_log(sprintf(
+            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; stale-row cleanup
+            DebugLog::write(sprintf(
                 'WPMgr Backup: watchdog refusing to re-enter stale task for snapshot %s (started %ds ago, phase=%s); deleted row without re-entry',
                 $snapshotId, $age, $phase
             ));
@@ -136,8 +138,8 @@ final class Watchdog
             && $stalledFor > 300
         ) {
             // @phpstan-ignore-next-line — dynamic wpdb.
-            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
-            error_log(sprintf(
+            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; late-phase stale-row cleanup
+            DebugLog::write(sprintf(
                 'WPMgr Backup: watchdog refusing to re-enter late-phase stalled task for snapshot %s (phase=%s, stalled %ds); deleted row',
                 $snapshotId, $phase, $stalledFor
             ));
@@ -161,14 +163,14 @@ final class Watchdog
             // defensive (the runner might be wedged in a way we can't
             // re-enter).
             // @phpstan-ignore-next-line
-            @$wpdb->update($table, ['phase' => TaskRunner::PHASE_FAILED, 'last_progress_at' => time()], ['snapshot_id' => $snapshotId], ['%s', '%d'], ['%s']);
-            error_log(sprintf('WPMgr Backup: snapshot %s exhausted %d resume attempts; marked failed', $snapshotId, $maxResumes));
+            @$wpdb->update($table, ['phase' => TaskRunner::PHASE_FAILED, 'last_progress_at' => time()], ['snapshot_id' => $snapshotId], ['%s', '%d'], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned table; correctness requires a live write
+            DebugLog::write(sprintf('WPMgr Backup: snapshot %s exhausted %d resume attempts; marked failed', $snapshotId, $maxResumes));
             return;
         }
 
         // @phpstan-ignore-next-line
-        @$wpdb->update($table, ['resume_count' => $resumeCount + 1, 'last_progress_at' => time()], ['snapshot_id' => $snapshotId], ['%d', '%d'], ['%s']);
-        error_log(sprintf('WPMgr Backup: watchdog resuming snapshot %s (attempt %d/%d) — stalled for %ds in phase=%s',
+        @$wpdb->update($table, ['resume_count' => $resumeCount + 1, 'last_progress_at' => time()], ['snapshot_id' => $snapshotId], ['%d', '%d'], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned table; watchdog resume-count must be written live
+        DebugLog::write(sprintf('WPMgr Backup: watchdog resuming snapshot %s (attempt %d/%d) — stalled for %ds in phase=%s',
             $snapshotId, $resumeCount + 1, $maxResumes, $stalledFor, $phase));
 
         // Reconstruct the runner from the persisted task row. params
@@ -179,7 +181,7 @@ final class Watchdog
         $subState = self::decodeSubState($row['sub_state'] ?? '');
         $params   = is_array($subState['params'] ?? null) ? $subState['params'] : null;
         if (!is_array($params)) {
-            error_log(sprintf('WPMgr Backup: watchdog cannot resume %s — sub_state.params missing', $snapshotId));
+            DebugLog::write(sprintf('WPMgr Backup: watchdog cannot resume %s — sub_state.params missing', $snapshotId));
             return;
         }
 
@@ -223,9 +225,10 @@ final class Watchdog
         }
         $table = $wpdb->prefix . Schema::BACKUP_TASKS_TABLE;
         // @phpstan-ignore-next-line — dynamic wpdb.
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned table; identifier is prefix+constant; no caching on live task-state read
         $row = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE snapshot_id = %s", $snapshotId), ARRAY_A);
         if (!is_array($row)) {
-            error_log(sprintf('WPMgr Backup: dispatch cannot find task row for snapshot %s', $snapshotId));
+            DebugLog::write(sprintf('WPMgr Backup: dispatch cannot find task row for snapshot %s', $snapshotId));
             return;
         }
         $phase = (string) ($row['phase'] ?? '');
@@ -234,7 +237,7 @@ final class Watchdog
             // wpmgr_backup_run firings short-circuit at the "row missing"
             // check above. Mirrors the success-path cleanup in TaskRunner.
             // @phpstan-ignore-next-line — dynamic wpdb.
-            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
+            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; terminal cleanup
             return;
         }
 
@@ -248,8 +251,8 @@ final class Watchdog
         $startedAt = (int) ($row['started_at'] ?? 0);
         if ($startedAt > 0 && (time() - $startedAt) > 7200 && $phase !== TaskRunner::PHASE_QUEUED) {
             // @phpstan-ignore-next-line — dynamic wpdb.
-            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
-            error_log(sprintf(
+            @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; stale dispatch cleanup
+            DebugLog::write(sprintf(
                 'WPMgr Backup: dispatch refusing to start stale task for snapshot %s (started %ds ago, phase=%s); deleted row',
                 $snapshotId, time() - $startedAt, $phase
             ));
@@ -259,16 +262,16 @@ final class Watchdog
         $subState = self::decodeSubState($row['sub_state'] ?? '');
         $params   = is_array($subState['params'] ?? null) ? $subState['params'] : null;
         if (!is_array($params)) {
-            error_log(sprintf('WPMgr Backup: dispatch cannot extract params for snapshot %s', $snapshotId));
+            DebugLog::write(sprintf('WPMgr Backup: dispatch cannot extract params for snapshot %s', $snapshotId));
             return;
         }
         // Lift PHP's per-request caps — this cron worker may run for minutes.
-        @set_time_limit(0);
+        @set_time_limit(0); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged,Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup dispatch must not hit max_execution_time; @-guarded
         @ignore_user_abort(true);
         try {
             (new TaskRunner($params))->run();
         } catch (\Throwable $e) {
-            error_log('WPMgr Backup: dispatch runner fatal: ' . $e->getMessage());
+            DebugLog::write('WPMgr Backup: dispatch runner fatal: ' . $e->getMessage());
         }
     }
 

@@ -77,7 +77,7 @@ final class ProgressClient
     /** Extract the URL path (everything after the host) for the signature. */
     private function path(): string
     {
-        $parts = parse_url($this->endpoint);
+        $parts = wp_parse_url($this->endpoint);
         if (!is_array($parts) || empty($parts['path'])) {
             return '/';
         }

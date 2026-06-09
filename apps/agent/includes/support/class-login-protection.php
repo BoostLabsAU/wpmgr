@@ -324,6 +324,7 @@ final class LoginProtection
 
         try {
             $table = $wpdb->prefix . self::TABLE;
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned login-protection table; interpolated identifier is prefix+constant; anti-replay correctness requires live read
             $wpdb->query(
                 $wpdb->prepare(
                     "DELETE FROM {$table} WHERE ip = %s AND status = %d",
@@ -331,6 +332,7 @@ final class LoginProtection
                     self::STATUS_FAILURE
                 )
             );
+            // phpcs:enable
         } catch (\Throwable $_) {
             // Best-effort; never fatal the request.
         }
@@ -496,6 +498,7 @@ final class LoginProtection
         $sinceId = (int) (function_exists('get_option') ? get_option(self::OPTION_SHIP_CURSOR, 0) : 0);
         $table   = $wpdb->prefix . self::TABLE;
 
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned login-protection table; interpolated identifier is prefix+constant; live read required for shipping cursor
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT id, ip, status, category, username, request_id, occurred_at
@@ -508,6 +511,7 @@ final class LoginProtection
             ),
             ARRAY_A
         );
+        // phpcs:enable
 
         if (!is_array($rows)) {
             return [];
@@ -574,6 +578,7 @@ final class LoginProtection
         $table  = $wpdb->prefix . self::TABLE;
 
         try {
+            // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             if ($ip !== null && $ip !== '') {
                 $sql = $wpdb->prepare(
                     "SELECT COUNT(*) FROM {$table} WHERE status = %d AND occurred_at > %d AND ip = %s",
@@ -588,8 +593,9 @@ final class LoginProtection
                     $cutoff
                 );
             }
+            // phpcs:enable
 
-            $result = $wpdb->get_var($sql);
+            $result = $wpdb->get_var($sql); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared -- direct query on plugin-owned login-protection table; sliding-window count requires a live read (no cache); already prepared above
 
             if (!is_numeric($result)) {
                 return 0;
@@ -745,7 +751,7 @@ final class LoginProtection
             . '<p style="color:#999;font-size:0.85em;">Reference ID: ' . $safeRequestId . '</p>'
             . '</div>';
 
-        wp_die($html, 'Login Blocked', ['response' => 403, 'back_link' => false]);
+        wp_die($html, 'Login Blocked', ['response' => 403, 'back_link' => false]); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $html is pre-escaped via htmlspecialchars() on non-user-controlled values; outer markup is static
         // wp_die() never returns.
     }
 
@@ -797,7 +803,7 @@ final class LoginProtection
 
         try {
             $table = $wpdb->prefix . self::TABLE;
-            $wpdb->insert(
+            $wpdb->insert( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- insert on plugin-owned login-protection table
                 $table,
                 [
                     'ip'          => substr($ip, 0, 64),
@@ -835,6 +841,7 @@ final class LoginProtection
 
         try {
             $table = $wpdb->prefix . self::TABLE;
+            // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned table; row-cap enforcement requires a live count; interpolated identifier is prefix+constant
             $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
 
             if ($count <= self::ROW_CAP) {
@@ -850,6 +857,7 @@ final class LoginProtection
                     $batch
                 )
             );
+            // phpcs:enable
         } catch (\Throwable $_) {
             // Best-effort eviction; never fatal.
         }

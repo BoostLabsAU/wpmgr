@@ -347,17 +347,17 @@ final class BackupCommand implements CommandInterface
         $cutoff = $now - self::DEDUP_WINDOW_SECONDS;
 
         // @phpstan-ignore-next-line
-        $existing = $wpdb->get_row($wpdb->prepare("SELECT pid, started_at FROM {$table} WHERE snapshot_id = %s", $snapshotId));
+        $existing = $wpdb->get_row($wpdb->prepare("SELECT pid, started_at FROM {$table} WHERE snapshot_id = %s", $snapshotId)); // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- interpolated identifier is prefix+constant (trusted); direct query on plugin-owned dedup table; no core helper exists
         if (is_object($existing) && (int) $existing->started_at > $cutoff) {
             return false;
         }
         if (is_object($existing)) {
             // @phpstan-ignore-next-line
-            $wpdb->update($table, ['pid' => getmypid() ?: 0, 'started_at' => $now], ['snapshot_id' => $snapshotId], ['%d', '%d'], ['%s']);
+            $wpdb->update($table, ['pid' => getmypid() ?: 0, 'started_at' => $now], ['snapshot_id' => $snapshotId], ['%d', '%d'], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned dedup table; no core helper exists
             return true;
         }
         // @phpstan-ignore-next-line
-        $inserted = $wpdb->insert($table, ['snapshot_id' => $snapshotId, 'pid' => getmypid() ?: 0, 'started_at' => $now], ['%s', '%d', '%d']);
+        $inserted = $wpdb->insert($table, ['snapshot_id' => $snapshotId, 'pid' => getmypid() ?: 0, 'started_at' => $now], ['%s', '%d', '%d']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct insert on plugin-owned dedup table; no core helper exists
         return $inserted !== false;
     }
 
@@ -369,7 +369,7 @@ final class BackupCommand implements CommandInterface
         }
         $table = $wpdb->prefix . Schema::BACKUP_RUNS_TABLE;
         // @phpstan-ignore-next-line
-        @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']);
+        @$wpdb->delete($table, ['snapshot_id' => $snapshotId], ['%s']); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned dedup table; no core helper exists
     }
 
     /**
@@ -390,13 +390,13 @@ final class BackupCommand implements CommandInterface
     {
         $base = WP_CONTENT_DIR . '/wpmgr-agent/runs';
         if (!is_dir($base) && !wp_mkdir_p($base) && !is_dir($base)) {
-            throw new \RuntimeException('cannot create backup scratch base: ' . $base);
+            throw new \RuntimeException('cannot create backup scratch base: ' . esc_html($base));
         }
         $dir = $base . DIRECTORY_SEPARATOR . $snapshotId;
-        if (!is_dir($dir) && !@mkdir($dir, 0700) && !is_dir($dir)) {
+        if (!is_dir($dir) && !@mkdir($dir, 0700) && !is_dir($dir)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on scratch dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
             throw new \RuntimeException('cannot create scratch dir');
         }
-        @chmod($dir, 0700);
+        @chmod($dir, 0700); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
         return $dir;
     }
 
@@ -416,7 +416,8 @@ final class BackupCommand implements CommandInterface
         $subState = (string) wp_json_encode(['params' => $runnerParams]);
 
         // @phpstan-ignore-next-line
-        $wpdb->query($wpdb->prepare(
+        $wpdb->query($wpdb->prepare( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct INSERT IGNORE on plugin-owned table; no core helper exists
+            // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
             "INSERT IGNORE INTO {$table} (snapshot_id, kind, phase, sub_state, started_at, last_progress_at, resume_count, max_resumes) VALUES (%s, %s, %s, %s, %d, %d, %d, %d)",
             $snapshotId,
             $kind,
@@ -501,7 +502,7 @@ final class BackupCommand implements CommandInterface
         if (is_object($wpdb)) {
             try {
                 // @phpstan-ignore-next-line — runtime wpdb seam.
-                $probe = $wpdb->get_var('SELECT 1');
+                $probe = $wpdb->get_var('SELECT 1'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- preflight DB connectivity probe; no suitable cached alternative
                 if ((string) $probe !== '1') {
                     $failures[] = 'DB ping (SELECT 1) returned unexpected: ' . substr((string) $probe, 0, 80);
                 }
@@ -535,9 +536,10 @@ final class BackupCommand implements CommandInterface
             $failures[] = 'WP_CONTENT_DIR is undefined; cannot resolve scratch base';
         } else {
             $parent = dirname($scratchBase);
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             if (!is_dir($scratchBase) && is_dir($parent) && !is_writable($parent)) {
                 $failures[] = 'scratch base parent not writable: ' . $parent;
-            } elseif (is_dir($scratchBase) && !is_writable($scratchBase)) {
+            } elseif (is_dir($scratchBase) && !is_writable($scratchBase)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
                 $failures[] = 'scratch base not writable: ' . $scratchBase;
             }
         }
@@ -582,7 +584,7 @@ final class BackupCommand implements CommandInterface
         }
         try {
             // @phpstan-ignore-next-line
-            $value = $wpdb->get_var('SELECT @@max_allowed_packet');
+            $value = $wpdb->get_var('SELECT @@max_allowed_packet'); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- preflight max_allowed_packet probe; informational session variable read; no suitable cached alternative
         } catch (\Throwable $e) {
             return null;
         }
@@ -612,7 +614,7 @@ final class BackupCommand implements CommandInterface
         if (is_object($wpdb)) {
             try {
                 // @phpstan-ignore-next-line — runtime wpdb seam.
-                $rows = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A);
+                $rows = $wpdb->get_results('SHOW TABLE STATUS', ARRAY_A); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- preflight size estimate; informational SHOW query; no suitable cached alternative
                 if (is_array($rows)) {
                     foreach ($rows as $row) {
                         if (!is_array($row)) {
@@ -687,7 +689,8 @@ final class BackupCommand implements CommandInterface
         ]);
         try {
             // @phpstan-ignore-next-line
-            $wpdb->query($wpdb->prepare(
+            $wpdb->query($wpdb->prepare( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct INSERT IGNORE on plugin-owned table; no core helper exists
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is prefix+constant (trusted); values bound via placeholders
                 "INSERT IGNORE INTO {$table}
                  (snapshot_id, kind, phase, sub_state, started_at, last_progress_at, resume_count, max_resumes)
                  VALUES (%s, %s, %s, %s, %d, %d, %d, %d)",

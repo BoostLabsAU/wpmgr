@@ -120,7 +120,7 @@ final class DropinInstaller
             return '';
         }
 
-        $export = var_export($config, true);
+        $export = var_export($config, true); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- generating PHP source for the advanced-cache.php drop-in, not debug output
 
         return str_replace(self::CONFIG_PLACEHOLDER, $export, $template);
     }
@@ -161,7 +161,7 @@ final class DropinInstaller
             }
         }
 
-        if (!@is_writable($this->contentDir) && !(@is_file($path) && @is_writable($path))) {
+        if (!@is_writable($this->contentDir) && !(@is_file($path) && @is_writable($path))) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
             return false;
         }
 
@@ -190,6 +190,7 @@ final class DropinInstaller
             return true;
         }
 
-        return @unlink($path);
+        wp_delete_file($path);
+        return !@file_exists($path);
     }
 }

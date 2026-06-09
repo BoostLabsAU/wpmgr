@@ -374,9 +374,7 @@ final class CacheManager
             }
         } catch (\Throwable $e) {
             // Best-effort: whatever we collected is still warmed.
-            if (function_exists('error_log')) {
-                error_log('wpmgr-agent: preload enumeration degraded (' . $e->getMessage() . ')');
-            }
+            \WPMgr\Agent\Support\DebugLog::write('wpmgr-agent: preload enumeration degraded (' . $e->getMessage() . ')');
         } finally {
             if ($suspended && function_exists('wp_suspend_cache_addition')) {
                 wp_suspend_cache_addition(false);
@@ -571,10 +569,10 @@ final class CacheManager
     private function hostname(): string
     {
         if (isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== '') {
-            return $_SERVER['HTTP_HOST'];
+            return sanitize_text_field(wp_unslash($_SERVER['HTTP_HOST'])); // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPress.Security.ValidatedSanitizedInput.MissingUnslash -- sanitize_text_field+wp_unslash applied; cache-key path uses sanitize_text_field (not esc_url_raw) to preserve drop-in key parity
         }
         if (function_exists('home_url')) {
-            $host = (string) (parse_url((string) home_url('/'), PHP_URL_HOST) ?? '');
+            $host = (string) (wp_parse_url((string) home_url('/'), PHP_URL_HOST) ?? '');
             if ($host !== '') {
                 return $host;
             }

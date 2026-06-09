@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.31.2] - 2026-06-09
+
+### Added
+- WordPress.org distribution build ("Fleet Agent for WPMgr") that passes the official Plugin Check with zero errors. A build-time variant excludes the control-plane self-updater from the WordPress.org package, since those builds update through WordPress.org; the self-hosted and SaaS builds keep control-plane self-update.
+- Public Terms of Service and Privacy Policy pages on the control plane (manage.wpmgr.app/terms and /privacy), linked as the external-service disclosure from the agent readme.
+
+### Changed
+- Agent code hygiene for WordPress.org compliance: all diagnostic logging now routes through a debug-gated helper that writes only under WP_DEBUG_LOG or WPMGR_DEBUG; swapped to WordPress wrappers where appropriate (wp_parse_url, wp_delete_file, wp_mkdir_p, wp_rand, wp_remote_get); added request unslashing and sanitization; and annotated the intentional streaming file and plugin-owned table database operations. No behavior change to backups, restore, cache, or performance.
+- The WordPress.org build declares GPLv2 or later. The source stays MIT, which is GPL compatible.
+
 ## [0.31.1] - 2026-06-08
 
 ### Fixed

@@ -99,7 +99,7 @@ final class CdnRewrite
         if (str_starts_with($url, '//')) {
             $url = 'https:' . $url;
         }
-        $host = parse_url($url, PHP_URL_HOST);
+        $host = wp_parse_url($url, PHP_URL_HOST);
         return is_string($host) ? $host : '';
     }
 

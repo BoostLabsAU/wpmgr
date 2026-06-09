@@ -217,7 +217,7 @@ final class ErrorMonitor
         $errorMask = $config['error_level'] & self::HANDLEABLE_NON_FATAL;
 
         if ($errorMask !== 0) {
-            set_error_handler([$this, 'handleError'], $errorMask);
+            set_error_handler([$this, 'handleError'], $errorMask); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- error-monitor feature (Health tab), config-gated; not debug code
         }
 
         // Always register the shutdown handler regardless of config — fatals
@@ -240,7 +240,7 @@ final class ErrorMonitor
             return;
         }
         $queue = $GLOBALS[self::GLOBAL_PENDING];
-        $GLOBALS[self::GLOBAL_PENDING] = [];
+        $GLOBALS[self::GLOBAL_PENDING] = []; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited,WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- false positive: self:: is a class-constant accessor in a $GLOBALS subscript; the global key is the prefixed const wpmgr_agent_pending_errors
         foreach ($queue as $entry) {
             if (!is_array($entry)) {
                 continue;
@@ -365,13 +365,14 @@ final class ErrorMonitor
         // unique index page count.
         $requestPath = '';
         if (isset($_SERVER['REQUEST_URI']) && is_string($_SERVER['REQUEST_URI'])) {
-            $requestPath = substr((string) $_SERVER['REQUEST_URI'], 0, 512);
+            $requestPath = substr(sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI'])), 0, 512);
         }
 
         try {
             // Try to UPDATE first — fast path for repeat occurrences.
-            $updated = $wpdb->query(
+            $updated = $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct update on plugin-owned table; identifier is $wpdb->prefix + class constant, values bound via prepare()
                 $wpdb->prepare(
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                     "UPDATE {$table} SET occurrence_count = occurrence_count + 1, last_seen = %d WHERE md5 = %s",
                     $now,
                     $md5
@@ -381,6 +382,7 @@ final class ErrorMonitor
                 return;
             }
             // First-seen — INSERT.
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery -- direct insert on plugin-owned table; no core helper exists
             $wpdb->insert(
                 $table,
                 [
@@ -447,6 +449,7 @@ final class ErrorMonitor
             return;
         }
         $table = $wpdb->prefix . self::TABLE;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct count on plugin-owned table; identifier is prefix+constant; live read needed
         $count = (int) $wpdb->get_var("SELECT COUNT(*) FROM {$table}");
         if ($count <= self::ROW_CAP) {
             return;
@@ -455,8 +458,9 @@ final class ErrorMonitor
         // DELETE the $overflow oldest rows by last_seen ASC. We cap delete
         // batches at 200 per call to keep the eviction work bounded.
         $batch = min($overflow, 200);
-        $wpdb->query(
+        $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; row-cap enforcement requires a live write
             $wpdb->prepare(
+                // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- interpolated identifier is $wpdb->prefix + class constant (trusted); values are bound via placeholders
                 "DELETE FROM {$table} ORDER BY last_seen ASC LIMIT %d",
                 $batch
             )
@@ -540,8 +544,9 @@ final class ErrorMonitor
         try {
             // Build a safe IN(...) clause using prepare() placeholders.
             $placeholders = implode(', ', array_fill(0, count($md5s), '%s'));
-            $wpdb->query(
+            $wpdb->query( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct delete on plugin-owned table; $table is prefix+constant
                 $wpdb->prepare(
+                    // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- interpolated identifier is $wpdb->prefix + class constant (trusted); placeholders built in a dynamic IN() list via array_fill/argument spread
                     "DELETE FROM {$table} WHERE md5 IN ({$placeholders})",
                     ...$md5s
                 )
@@ -565,6 +570,7 @@ final class ErrorMonitor
             return 0;
         }
         $table = $wpdb->prefix . self::TABLE;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on plugin-owned table; correctness requires a live write
         $result = $wpdb->update(
             $table,
             ['silenced' => $silenced ? 1 : 0],
@@ -597,6 +603,7 @@ final class ErrorMonitor
         $table    = $wpdb->prefix . self::TABLE;
         $sinceId  = (int) (function_exists('get_option') ? get_option(self::OPTION_SHIP_CURSOR, 0) : 0);
         $sinceTs  = (int) (function_exists('get_option') ? get_option(self::OPTION_SHIP_TS, 0) : 0);
+        // phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- direct query on plugin-owned table; identifier is prefix+constant; no caching (live unshipped rows needed)
         $rows = $wpdb->get_results(
             $wpdb->prepare(
                 "SELECT id, md5, code, message, file, line, request_path, request_id,
@@ -612,6 +619,7 @@ final class ErrorMonitor
             ),
             ARRAY_A
         );
+        // phpcs:enable WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.InterpolatedNotPrepared
         if (!is_array($rows)) {
             return [];
         }
@@ -695,7 +703,7 @@ final class ErrorMonitor
         try {
             // 12 raw frames gives headroom to drop the 2 internal ones
             // (captureBacktrace + handleError) and still have up to 10.
-            $raw = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 12);
+            $raw = debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 12); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_debug_backtrace -- error-monitor stack capture (IGNORE_ARGS, depth-capped); intentional feature
             $frames = [];
             foreach ($raw as $frame) {
                 // Drop frames that originate inside this class file.

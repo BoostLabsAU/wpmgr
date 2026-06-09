@@ -283,9 +283,13 @@ final class CacheWriter
      */
     private function resolveContext(string $buffer): array
     {
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- cache-key derivation; sanitize_text_field(wp_unslash()) is intentionally NOT used here to avoid desyncing the cache key from the drop-in CacheKey::build() which reads the raw value
         $uri    = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- cache-key derivation; sanitize_text_field(wp_unslash()) would desync the cache key from the drop-in CacheKey::build()
         $host   = isset($_SERVER['HTTP_HOST']) ? (string) $_SERVER['HTTP_HOST'] : '';
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only request-method string; value filtered by string-comparison cache skip-gate
         $method = isset($_SERVER['REQUEST_METHOD']) ? (string) $_SERVER['REQUEST_METHOD'] : 'GET';
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only UA string for cache mobile-segment matching; no output or state change
         $ua     = isset($_SERVER['HTTP_USER_AGENT']) ? (string) $_SERVER['HTTP_USER_AGENT'] : '';
 
         $loggedIn = function_exists('is_user_logged_in') ? (bool) is_user_logged_in() : false;
@@ -320,7 +324,7 @@ final class CacheWriter
             'method'            => $method,
             'user_agent'        => $ua,
             'cookies'           => $_COOKIE,
-            'query'             => $_GET,
+            'query'             => $_GET, // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- cache-key context assembly; read-only query data passed to cache-key builder; no state change, no form processing
             'is_admin'          => $isAdmin,
             'is_ajax'           => $isAjax,
             'status'            => $status,
@@ -431,18 +435,18 @@ final class CacheWriter
     private function atomicWrite(string $path, string $compressed): bool
     {
         $dir = dirname($path);
-        if (!@is_dir($dir) && !@mkdir($dir, 0o755, true) && !@is_dir($dir)) {
+        if (!@is_dir($dir) && !wp_mkdir_p($dir) && !@is_dir($dir)) {
             return false;
         }
 
-        $tmp = $path . '.tmp-' . getmypid() . '-' . mt_rand();
+        $tmp = $path . '.tmp-' . getmypid() . '-' . wp_rand();
         if (@file_put_contents($tmp, $compressed, LOCK_EX) === false) {
-            @unlink($tmp);
+            wp_delete_file($tmp);
             return false;
         }
 
-        if (!@rename($tmp, $path)) {
-            @unlink($tmp);
+        if (!@rename($tmp, $path)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic same-filesystem swap; WP_Filesystem::move() is copy+delete (non-atomic) and breaks crash-safe write
+            wp_delete_file($tmp);
             return false;
         }
 

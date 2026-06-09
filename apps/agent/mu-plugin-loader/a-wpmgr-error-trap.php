@@ -111,5 +111,6 @@ function wpmgr_mu_error_trap_shutdown(): void
 // Register both handlers immediately. Operating at the mu-plugin layer means
 // these are armed before ANY normal plugin runs, so a fatal in another
 // plugin's bootstrap is captured into our queue.
+// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_set_error_handler -- error-monitor feature (Health tab), config-gated; not debug code
 set_error_handler('wpmgr_mu_error_trap_handle', E_WARNING | E_NOTICE | E_USER_WARNING | E_USER_NOTICE | E_DEPRECATED | E_USER_DEPRECATED);
 register_shutdown_function('wpmgr_mu_error_trap_shutdown');

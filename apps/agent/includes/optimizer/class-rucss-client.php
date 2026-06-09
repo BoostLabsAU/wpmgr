@@ -48,6 +48,7 @@ namespace WPMgr\Agent\Optimizer;
 
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
+use WPMgr\Agent\Support\DebugLog;
 
 /**
  * Fetches used-CSS from the control plane and inlines it (degrades gracefully).
@@ -154,9 +155,7 @@ final class RucssClient
         } catch (\Throwable $e) {
             // The whole point: a RUCSS failure must NEVER break the page. Log a
             // short operational line (no secrets, no CSS) and return the input.
-            if (function_exists('error_log')) {
-                error_log('wpmgr-agent: rucss degraded (' . $e->getMessage() . ')');
-            }
+            DebugLog::write('wpmgr-agent: rucss degraded (' . $e->getMessage() . ')');
             return $html;
         }
     }
@@ -418,19 +417,19 @@ final class RucssClient
             return $ref;
         }
 
-        $scheme = parse_url($base, PHP_URL_SCHEME) ?: 'https';
-        $host   = parse_url($base, PHP_URL_HOST);
+        $scheme = wp_parse_url($base, PHP_URL_SCHEME) ?: 'https';
+        $host   = wp_parse_url($base, PHP_URL_HOST);
         if (!is_string($host) || $host === '') {
             return $ref;
         }
-        $port      = parse_url($base, PHP_URL_PORT);
+        $port      = wp_parse_url($base, PHP_URL_PORT);
         $authority = $scheme . '://' . $host . ($port ? ':' . $port : '');
 
         if ($ref[0] === '/') {
             return $authority . self::removeDotSegments($ref);
         }
 
-        $basePath = parse_url((string) (preg_replace('/[?#].*$/', '', $base) ?? $base), PHP_URL_PATH);
+        $basePath = wp_parse_url((string) (preg_replace('/[?#].*$/', '', $base) ?? $base), PHP_URL_PATH);
         $basePath = is_string($basePath) && $basePath !== '' ? $basePath : '/';
         $dir      = substr($basePath, 0, (int) strrpos($basePath, '/') + 1);
         if ($dir === '') {
@@ -503,7 +502,7 @@ final class RucssClient
         $home = function_exists('home_url') ? (string) home_url('/') : '';
         $base = rtrim($home, '/');
         $uri  = isset($_SERVER['REQUEST_URI']) && is_string($_SERVER['REQUEST_URI'])
-            ? $_SERVER['REQUEST_URI']
+            ? sanitize_text_field(wp_unslash($_SERVER['REQUEST_URI']))
             : '/';
         return $base . '/' . ltrim($uri, '/');
     }

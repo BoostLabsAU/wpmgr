@@ -490,5 +490,7 @@ export const FOOTER = {
     { label: "API reference", href: "/docs/", icon: "FileSearch" },
     { label: "Live dashboard", href: SITE.dashboard, icon: "LayoutDashboard" },
     { label: "License", href: SITE.github + "/blob/main/LICENSE", icon: "Scale" },
+    { label: "Terms", href: SITE.dashboard + "/terms", icon: "ScrollText" },
+    { label: "Privacy", href: SITE.dashboard + "/privacy", icon: "FileLock2" },
   ],
 };

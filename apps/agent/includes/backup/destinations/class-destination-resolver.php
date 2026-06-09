@@ -66,7 +66,7 @@ final class DestinationResolver
                 return new CpDestination($transport, $snapshotId, $presignEp, $manifestEp, $kind);
             default:
                 throw new \InvalidArgumentException(
-                    'WPMgr Destination Resolver: unknown destination kind: ' . $kind
+                    'WPMgr Destination Resolver: unknown destination kind: ' . esc_html($kind) // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- thrown exception; message goes to server log/SSE, not browser output
                 );
         }
     }

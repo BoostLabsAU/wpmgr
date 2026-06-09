@@ -354,8 +354,7 @@ final class DbRewriter
                  LIMIT " . self::POST_LIMIT;
 
         $args = array_merge($likeArgs, $postTypes);
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-        $rows = $wpdb->get_results($wpdb->prepare($sql, $args));
+        $rows = $wpdb->get_results($wpdb->prepare($sql, $args)); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on plugin-operated post table; no caching appropriate for a bounded migration pass; sql is built with $wpdb->prepare(); value is the output of $wpdb->prepare()
 
         if (!is_array($rows)) {
             return ['rows' => 0, 'full' => false];
@@ -368,6 +367,7 @@ final class DbRewriter
             if (!is_string($updated) || $updated === $original) {
                 continue;
             }
+            // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on core posts table; no caching appropriate for a bounded migration pass
             $wpdb->update(
                 $wpdb->posts,
                 ['post_content' => $updated],
@@ -434,8 +434,7 @@ final class DbRewriter
                 LIMIT " . self::META_LIMIT;
 
         $args = array_merge($urlArgs, $postTypes);
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-        $rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A);
+        $rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on postmeta; no caching appropriate for a bounded migration pass; sql is built with $wpdb->prepare(); value is the output of $wpdb->prepare()
 
         if (!is_array($rows)) {
             return ['rows' => 0, 'full' => false];
@@ -448,8 +447,9 @@ final class DbRewriter
             if ($updated === $original) {
                 continue;
             }
-            $wpdb->update(
+            $wpdb->update( // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- direct update on postmeta; bounded migration/rewrite batch, not a request-path query
                 $wpdb->postmeta,
+                // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_value -- bounded migration/rewrite batch, not a request-path query
                 ['meta_value' => $updated],
                 ['meta_id'    => $row['meta_id']]
             );
