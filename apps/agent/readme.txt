@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.4
+Stable tag: 0.33.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.5 =
+* Maintenance: version alignment with the control plane. No plugin functional changes (the fix in this release was control-plane only: the Real User Monitoring dashboard's "All devices" tab now shows data).
+
 = 0.33.4 =
 * Fix: the Real User Monitoring collector script is now loaded from a versioned URL, so a content delivery network or browser cache refetches it whenever the plugin updates. Previously the collector was served from a static filename, so a long-lived edge cache could keep serving the previous collector after an update until the cache was manually purged. This is the control-plane dashboard release that adds Core Web Vitals distribution bars (good / needs improvement / poor) and a 28-day trend chart; the agent change in this version is the cache-busting fix only.
 
@@ -149,6 +152,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.5 =
+Version alignment with the control plane. No plugin functional changes. Safe to update in place.
 
 = 0.33.4 =
 Serves the Real User Monitoring collector from a versioned URL so future collector updates are never masked by a content delivery network or browser cache. Pairs with a control-plane dashboard update that adds Core Web Vitals distribution bars and a 28-day trend. Safe to update in place.

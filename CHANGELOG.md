@@ -6,7 +6,11 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
-## [0.33.4] - 2026-06-09
+## [0.33.5] - 2026-06-09
+
+### Fixed
+
+- The Real User Monitoring dashboard's default "All devices" tab showed "No data" even when the per-device tabs had data. The summary read path returned one row per device and country but never the device-agnostic aggregate the "All" tab reads, so the default view found nothing. The summary now returns, per metric, one country-collapsed row per device plus one all-devices aggregate (device-agnostic, summed across every device and country), and the 28-day trend collapses to a single series per metric for the selected device segment (or across all devices for "All"). The all-devices aggregate also crosses the minimum-sample floor sooner, so the dashboard populates with fewer total pageviews. Per-device tabs now also sum correctly across countries instead of showing a single country's slice. Control-plane only; no agent, migration, or data change.
 
 ### Added
 
