@@ -2,9 +2,17 @@
  * WPMgr RUM collector — Core Web Vitals + TTFB/FCP beacon sender.
  *
  * Reads per-site config from window.__WPMGR_RUM__ injected by the agent at
- * cache-write time, applies client-side sampling, then flushes one
- * navigator.sendBeacon per finalised metric on visibilitychange->hidden and
- * pagehide (standard flush pair; never unload/beforeunload).
+ * cache-write time, applies client-side sampling, then sends one
+ * navigator.sendBeacon per finalised metric immediately inside the metric
+ * callback.
+ *
+ * Why per-callback, not queued-flush: CLS and INP only finalise at
+ * visibilitychange->hidden / pagehide. A queued-flush approach attaches its
+ * own listener to the same events, creating a race: the flush can run and set
+ * the flushed guard BEFORE web-vitals has pushed CLS/INP into the queue,
+ * dropping those two metrics. Sending directly in the callback avoids the race
+ * entirely — web-vitals fires the callback at exactly the right moment, and
+ * navigator.sendBeacon is safe to call during visibilitychange/pagehide.
  *
  * Ingest contract (must match the Go control-plane POST /rum/ingest handler):
  *   key    string  plaintext public beacon key
@@ -45,18 +53,6 @@ declare global {
     };
   }
 }
-
-/** One collected metric waiting to be beaconed on flush. */
-interface QueuedMetric {
-  metric: string;
-  value: number;
-}
-
-/** Queue of metrics collected this page load, flushed once on hide/pagehide. */
-const queue: QueuedMetric[] = [];
-
-/** Ensures the flush runs at most once per page load. */
-let flushed = false;
 
 /**
  * Derive a coarse device class from the UA data API + viewport width.
@@ -103,14 +99,6 @@ function connType(): string {
 }
 
 /**
- * Convert a metric name to the lowercase wire format the ingest endpoint
- * expects. web-vitals emits uppercase names (LCP, INP, CLS, FCP, TTFB).
- */
-function metricName(name: string): string {
-  return name.toLowerCase();
-}
-
-/**
  * Convert a metric value to an integer following the ingest contract:
  * - LCP/INP/FCP/TTFB: Math.round(ms) — already in milliseconds from web-vitals.
  * - CLS: Math.round(value * 1000) — stored as milli-units so the int column
@@ -124,40 +112,23 @@ function metricValue(name: string, value: number): number {
 }
 
 /**
- * Push a finalised metric into the queue.
+ * Build a send-callback bound to a fixed config+context snapshot.
  * Called once per metric type when web-vitals fires its final report.
+ * Sends the beacon immediately — no queue, no flush race.
  */
-function collect(m: Metric): void {
-  queue.push({
-    metric: metricName(m.name),
-    value: metricValue(m.name, m.value),
-  });
-}
-
-/**
- * Send all queued metrics as individual beacons. Guarded by the `flushed`
- * flag so subsequent hide/pagehide events are no-ops.
- *
- * Each beacon is a separate POST so the server processes one metric per
- * request (matching the ingest contract: one metric per call).
- */
-function flush(config: WpmgrRumConfig): void {
-  if (flushed || queue.length === 0) {
-    return;
-  }
-  flushed = true;
-
-  const pageUrl = window.location.href;
-  const device = deviceType();
-  const conn = connType();
-
-  for (const item of queue) {
+function makeSender(
+  config: WpmgrRumConfig,
+  pageUrl: string,
+  device: string,
+  conn: string,
+): (m: Metric) => void {
+  return (m: Metric): void => {
     try {
       const body = JSON.stringify({
         key: config.key,
         url: pageUrl,
-        metric: item.metric,
-        value: item.value,
+        metric: m.name.toLowerCase(),
+        value: metricValue(m.name, m.value),
         device,
         conn,
       });
@@ -167,7 +138,7 @@ function flush(config: WpmgrRumConfig): void {
     } catch {
       // Fire-and-forget: never throw, never block the page.
     }
-  }
+  };
 }
 
 /**
@@ -175,6 +146,9 @@ function flush(config: WpmgrRumConfig): void {
  *
  * Guards: requires sendBeacon, requires PerformanceObserver (feature-detect),
  * requires a valid config object. All failures are silent.
+ *
+ * Sampling is decided once at init. If sampled out, no listeners are registered
+ * and nothing is ever sent for this page load.
  */
 export function init(): void {
   try {
@@ -200,26 +174,23 @@ export function init(): void {
       return;
     }
 
-    // Register all five V1 metrics. web-vitals fires each once when finalized.
-    onLCP(collect);
-    onINP(collect);
-    onCLS(collect);
-    onFCP(collect);
-    onTTFB(collect);
+    // Snapshot context once — these don't change during the page load.
+    const pageUrl = window.location.href;
+    const device = deviceType();
+    const conn = connType();
 
-    // Flush on the standard hide-pair. visibilitychange->hidden fires first on
-    // most browsers; pagehide is the reliable cross-browser fallback and also
-    // fires for bfcache navigations.
-    const flushOnce = (): void => {
-      flush(config);
-    };
+    // Build a single sender bound to this page's context.
+    const send = makeSender(config, pageUrl, device, conn);
 
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') {
-        flushOnce();
-      }
-    });
-    window.addEventListener('pagehide', flushOnce);
+    // Register all five V1 metrics. web-vitals fires each callback exactly
+    // once when the metric is final. CLS and INP finalise at page-hide; the
+    // callback fires at that moment and sendBeacon is safe to call then.
+    // Sending here (not in a separate flush listener) is the race-free pattern.
+    onLCP(send);
+    onINP(send);
+    onCLS(send);
+    onFCP(send);
+    onTTFB(send);
   } catch {
     // Defensive top-level catch: this script must never throw.
   }

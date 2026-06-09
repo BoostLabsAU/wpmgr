@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.1] - 2026-06-09
+
+### Fixed
+
+- Real User Monitoring now collects CLS and INP. The browser collector queued metrics and sent them in one batch when the page was hidden, but CLS and INP only finalize at page-hide and could be dropped by that flush, so only LCP, FCP, and TTFB were reported. The collector now sends each metric the moment it is finalized, so all Core Web Vitals are captured. INP still requires a real visitor interaction to exist, and CLS reports 0 on pages with no layout shift.
+
 ## [0.33.0] - 2026-06-09
 
 ### Added

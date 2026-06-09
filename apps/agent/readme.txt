@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.0
+Stable tag: 0.33.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.1 =
+* Fix: Real User Monitoring now collects CLS and INP. The collector sends each Core Web Vital the moment it is finalized instead of batching at page-hide, so CLS and INP (which finalize at page-hide) are no longer dropped. INP still requires a real visitor interaction; CLS reports 0 on pages with no layout shift.
+
 = 0.33.0 =
 * Performance: Real User Monitoring (RUM), per-site and off by default. When enabled, the agent injects a tiny first-party measurement script into cached pages; the visitor's browser sends anonymous Core Web Vitals (LCP, INP, CLS, FCP, TTFB) and page-load timing directly to your control plane. No cookies, no cross-site identifiers, the page path is stored with the query string stripped, and the visitor IP is never stored. See the Privacy section.
 
@@ -137,6 +140,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.1 =
+Fixes Real User Monitoring so it collects CLS and INP (not just LCP, FCP, TTFB). Update to capture all Core Web Vitals from real visitors. Safe to update in place.
 
 = 0.33.0 =
 Adds opt-in, off-by-default Real User Monitoring (anonymous Core Web Vitals from real visitors). No database changes on the site. Safe to update in place.
