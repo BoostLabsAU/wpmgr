@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.32.1] - 2026-06-09
+
+### Fixed
+
+- The Cache and Optimize settings pages failed to load with an internal server error for every site after 0.32.0. The font-subsetting change in 0.32.0 added three new per-site columns but the read and save queries for the performance config were not regenerated to match, so the database read returned more fields than the query selected and errored. Both queries are now aligned; loading and saving performance settings works again, and the font-subsetting toggle now persists correctly (it was silently not saving in 0.32.0). Control-plane only; no agent, migration, or data change.
+
 ## [0.32.0] - 2026-06-09
 
 ### Added

@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.32.0
+Stable tag: 0.32.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -102,6 +102,12 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.32.1 =
+* Maintenance: version alignment with the control plane. No plugin functional changes (the fix in this release was control-plane only).
+
+= 0.32.0 =
+* Performance: self-hosted font subsetting (experimental, default off). Discovers fonts loaded via external stylesheets in addition to inline font-face rules, and reports per-font conversion progress to the control-plane dashboard. Subsetting and transcoding run on the control-plane service, not inside the plugin.
+
 = 0.31.1 =
 * Onboarding: cancel action hard-deletes a site that was never connected; Disconnected-sites empty-state panel now shows Reconnect and Remove actions.
 * Backup: incremental backup engine v1 with content-addressed chunk store (ADR-048); incremental chain restore (ADR-049).
@@ -110,6 +116,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.32.1 =
+Version alignment with the control plane. No plugin functional changes. Safe to update in place.
 
 = 0.31.1 =
 Adds incremental backup engine, WOFF2 font transcoding, and an onboarding cancel fix that hard-deletes never-connected sites. No database changes required. Safe to update in place.
