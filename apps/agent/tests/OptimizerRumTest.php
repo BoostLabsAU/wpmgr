@@ -14,13 +14,14 @@
  *   9. RumInjector: flag OFF => HTML unchanged.
  *  10. RumInjector: flag ON, empty key => HTML unchanged.
  *  11. RumInjector: flag ON, empty url => HTML unchanged.
- *  12. RumInjector: valid config => injects inline config + external script before </body>.
+ *  12. RumInjector: valid config => injects inline config + async external script into <head>.
  *  13. RumInjector: valid config => snippet not injected twice on second call.
  *  14. RumInjector: sample_rate is clamped to [0,1] in the JSON config.
  *  15. Optimizer pipeline: rum stage runs when ONLY rumEnabled is on.
  *  16. Optimizer pipeline: rum stage is no-op when rumEnabled is off.
  *  17. RumInjector: CSP with nonce and without unsafe-inline => skip injection.
  *  18. RumInjector: CSP with unsafe-inline => allow injection.
+ *  19. RumInjector: no </head> in document => falls back to before </body>.
  *
  * @package WPMgr\Agent\Tests
  */
@@ -214,16 +215,41 @@ final class OptimizerRumTest extends TestCase
         // wp_json_encode encodes '/' as '\/' in its default output; check for the key.
         $this->assertStringContainsString('cp.example.com', $out);
 
-        // External script tag must be present.
+        // External script tag must be present and async (not defer).
         $this->assertStringContainsString('wpmgr-rum.min.js', $out);
-        $this->assertStringContainsString('defer', $out);
+        $this->assertStringContainsString('async', $out);
+        $this->assertStringNotContainsString('defer', $out);
 
-        // Snippet must appear before </body>.
+        // Snippet must appear inside <head> (before </head>), not just before </body>.
+        // Early injection is the fix for the CLS FCP-gate race on view-then-leave pages.
+        $snippetPos = strpos($out, 'data-wpmgr-rum-config');
+        $headPos    = stripos($out, '</head>');
+        $this->assertNotFalse($snippetPos, 'Snippet must be present');
+        $this->assertNotFalse($headPos, 'Document must have </head>');
+        $this->assertLessThan($headPos, $snippetPos, 'Snippet must appear before </head>');
+    }
+
+    public function test_injector_falls_back_to_before_body_when_no_head(): void
+    {
+        if (!defined('WPMGR_AGENT_FILE')) {
+            define('WPMGR_AGENT_FILE', '/path/to/wpmgr-agent.php');
+        }
+
+        // A document with no </head> tag (unconventional but must not break).
+        $noHeadDoc = '<!DOCTYPE html><html><body><p>Hello</p></body></html>';
+        $c         = $this->makeConfig();
+        $out       = (new RumInjector($c))->process($noHeadDoc);
+
+        // Snippet must still be injected.
+        $this->assertStringContainsString('data-wpmgr-rum-config', $out);
+        $this->assertStringContainsString('wpmgr-rum.min.js', $out);
+
+        // Must appear before </body> as the fallback.
         $snippetPos = strpos($out, 'data-wpmgr-rum-config');
         $bodyPos    = stripos($out, '</body>');
-        $this->assertNotFalse($snippetPos);
-        $this->assertNotFalse($bodyPos);
-        $this->assertLessThan($bodyPos, $snippetPos);
+        $this->assertNotFalse($snippetPos, 'Snippet must be present in fallback');
+        $this->assertNotFalse($bodyPos, 'Document must have </body>');
+        $this->assertLessThan($bodyPos, $snippetPos, 'Snippet must appear before </body> in fallback');
     }
 
     public function test_injector_does_not_inject_twice(): void

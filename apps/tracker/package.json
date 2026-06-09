@@ -12,7 +12,7 @@
     "test": "echo 'no unit tests for the tracker bundle'"
   },
   "dependencies": {
-    "web-vitals": "^4.2.4"
+    "web-vitals": "^5.3.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.4",

@@ -1,15 +1,33 @@
 <?php
 /**
- * RumInjector — inject the RUM collector script before </body>.
+ * RumInjector — inject the RUM collector script into <head>.
  *
- * At cache-write time this stage appends two things before </body>:
+ * At cache-write time this stage splices two things before </head>:
  *
  *   1. A tiny inline <script> that sets window.__WPMGR_RUM__ = {key,url,rate}
  *      (the per-site constants baked into the cached HTML; no per-request
  *      variance, no Vary header, no cookie, safe for the static cache layer).
  *
- *   2. An external <script defer src="…/assets/wpmgr-rum.min.js"> tag that
+ *   2. An external <script async src="…/assets/wpmgr-rum.min.js"> tag that
  *      loads the bundled web-vitals collector IIFE from the plugin assets dir.
+ *
+ * Why <head> + async (not defer before </body>):
+ *   web-vitals onCLS is gated on onFCP firing. If the collector is deferred to
+ *   </body>, the page can transition to hidden BEFORE the buffered FCP paint
+ *   entry is observed, so the FCP gate never fires and no CLS beacon is ever
+ *   sent. Loading the script async from <head> means web-vitals registers its
+ *   observers and the onFCP/onCLS hide-handler early — well before the visitor
+ *   can leave — so CLS finalises correctly on stable/view-then-leave pages.
+ *   async (not defer) is used because web-vitals uses buffered PerformanceObserver
+ *   entries and visibility-state history, so exact parse-time ordering relative
+ *   to other scripts does not matter; async avoids blocking the render pipeline.
+ *   If no </head> exists in the document the snippet is inserted before </body>
+ *   as a fallback, preserving the pre-existing behaviour for unconventional HTML.
+ *
+ * JS-delay exclusion: the Optimizer runs RumInjector as the LAST stage (step 11),
+ * after JsDelay (step 8). The RUM script tag is therefore injected after the delay
+ * transform has already processed the document and will never be seen by JsDelay.
+ * No additional exclusion entry is required.
  *
  * The external src approach means the collector never violates a strict
  * no-unsafe-inline CSP on the main document. sendBeacon is governed by
@@ -28,7 +46,7 @@ declare(strict_types=1);
 namespace WPMgr\Agent\Optimizer;
 
 /**
- * Injects the RUM beacon config + collector script before </body>.
+ * Injects the RUM beacon config + collector script into <head>.
  */
 final class RumInjector
 {
@@ -79,6 +97,12 @@ final class RumInjector
 
         $snippet = $this->buildSnippet($key, $url, $this->config->rumSampleRate, $scriptUrl);
 
+        // Primary: splice before </head> so web-vitals registers its observers
+        // before the page paints/hides (fixes CLS FCP-gate race on early-hide pages).
+        if (stripos($html, '</head>') !== false) {
+            return (string) preg_replace('/<\/head>(?![\s\S]*<\/head>)/i', $snippet . '</head>', $html, 1);
+        }
+        // Fallback: no </head> found — insert before </body> (unconventional HTML).
         if (stripos($html, '</body>') !== false) {
             return (string) preg_replace('/<\/body>(?![\s\S]*<\/body>)/i', $snippet . '</body>', $html, 1);
         }
@@ -89,8 +113,11 @@ final class RumInjector
      * Build the inline config + external collector snippet.
      *
      * The inline block sets window.__WPMGR_RUM__ (a plain object, no DOM
-     * interaction); the external script is defer'd so it runs after HTML
-     * parsing without blocking the page.
+     * interaction); the external script is async so it loads without blocking
+     * the render pipeline. async is preferred over defer here because web-vitals
+     * uses buffered PerformanceObserver entries and visibility-state history,
+     * so parse-time ordering relative to other scripts is irrelevant — what
+     * matters is that the observers are registered as early as possible.
      *
      * @param string $key        Plaintext beacon key.
      * @param string $url        Ingest endpoint URL.
@@ -120,7 +147,7 @@ final class RumInjector
             . '</script>';
 
         // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the output buffer after wp_enqueue_script() has already run; WP's enqueue API is inapplicable in this OB callback context (same pattern as all other optimizer stages)
-        $collector = '<script defer src="' . esc_url($scriptUrl) . '"></script>';
+        $collector = '<script async src="' . esc_url($scriptUrl) . '"></script>';
 
         return $inline_config . $collector;
     }

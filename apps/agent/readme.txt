@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.1
+Stable tag: 0.33.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.2 =
+* Fix: Real User Monitoring now collects CLS. The collector is upgraded to web-vitals 5 and loaded early (async, in the head) so the CLS reporter is armed before the page is hidden; previously, on a load-and-leave visit, CLS was never sent. No effect on backups, cache, or other features.
+
 = 0.33.1 =
 * Fix: Real User Monitoring now collects CLS and INP. The collector sends each Core Web Vital the moment it is finalized instead of batching at page-hide, so CLS and INP (which finalize at page-hide) are no longer dropped. INP still requires a real visitor interaction; CLS reports 0 on pages with no layout shift.
 
@@ -140,6 +143,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.2 =
+Fixes Real User Monitoring so it collects CLS (Cumulative Layout Shift), completing Core Web Vitals coverage. Update to capture CLS from real visitors. Safe to update in place.
 
 = 0.33.1 =
 Fixes Real User Monitoring so it collects CLS and INP (not just LCP, FCP, TTFB). Update to capture all Core Web Vitals from real visitors. Safe to update in place.
