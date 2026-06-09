@@ -98,6 +98,20 @@ const SITE_EVENT_TYPES = [
   // Search-replace tool (#188). Synchronous command — two events only.
   "db.search.replace.completed",
   "db.search.replace.failed",
+  // Font processing pipeline (ADR-052 Phase 2 / m55). Published on this SAME
+  // shared tenant bus (filtered by site_id), mirroring the Go constants in
+  // apps/api/internal/site/connection.go. As with rucss.*, any font.* type
+  // MISSING from this array is silently dropped by the z.enum(SITE_EVENT_TYPES)
+  // frame validation before it reaches usePerfEvents — every font event must be
+  // listed. CP emits font.queued on batch enqueue, font.converting/ready/subset/
+  // skipped/failed per font, and font.completed at page-build end.
+  "font.queued",
+  "font.converting",
+  "font.ready",
+  "font.subset",
+  "font.skipped",
+  "font.failed",
+  "font.completed",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

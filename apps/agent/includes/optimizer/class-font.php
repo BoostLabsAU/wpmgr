@@ -12,11 +12,15 @@
  *     the local file, removing the render-blocking cross-origin request.
  *   - preload             : heuristically emit `<link rel=preload as=font>` for
  *     the first few woff2 files referenced by self-hosted/inline font CSS.
- *   - transcode-woff2     : for each self-hosted TTF/OTF/WOFF font, request a
- *     WOFF2 transcode from the media-encoder via the CP, cache the result, and
- *     rewrite the @font-face src to serve WOFF2-first with the original as a
- *     format() fallback. Always serves the original on any miss/failure. Never
- *     blocks the page on a pending transcode.
+ *   - transcode-woff2     : for each self-hosted TTF/OTF/WOFF font found in BOTH
+ *     inline <style> blocks AND enqueued external stylesheets, request a WOFF2
+ *     transcode from the media-encoder via the CP, cache the result, and rewrite
+ *     the @font-face src to serve WOFF2-first with the original as a format()
+ *     fallback. When a latin-ext subset is available (fonts_subset ON), an
+ *     additive @font-face with a unicode-range descriptor is prepended so the
+ *     browser fetches the smaller subset for in-range codepoints and falls back to
+ *     the full WOFF2 for anything else. Always serves the original on any
+ *     miss/failure. Never blocks the page on a pending transcode.
  *
  * Standard font-display optimization technique.
  *
@@ -26,6 +30,8 @@
 declare(strict_types=1);
 
 namespace WPMgr\Agent\Optimizer;
+
+use WPMgr\Agent\Support\Blake3;
 
 /**
  * Applies font-display + Google-Fonts self-host + font preload + woff2 transcode.
@@ -46,6 +52,24 @@ final class Font
         'otf'   => 'opentype',
     ];
 
+    /**
+     * Hosts whose external stylesheets we are allowed to fetch and scan for
+     * font URLs. The site's own host is always allowed (checked dynamically).
+     * Google Fonts has its own self-host pipeline so its CSS is handled
+     * separately and intentionally excluded here.
+     *
+     * @var list<string>
+     */
+    private const ALLOWED_EXTERNAL_CSS_HOSTS = [
+        'fonts.googleapis.com', // handled by the Google self-host path, not the generic scanner
+    ];
+
+    /**
+     * Maximum byte-size of an external CSS file we will fetch and scan.
+     * Protects against fetching giant files from a third-party host.
+     */
+    private const MAX_EXTERNAL_CSS_BYTES = 512 * 1024; // 512 KiB
+
     private PerfConfig $config;
 
     private AssetCache $cache;
@@ -55,6 +79,16 @@ final class Font
 
     /** @var FontTranscodeClientInterface|null Transcode client; null disables the feature. */
     private ?FontTranscodeClientInterface $transcodeClient;
+
+    /**
+     * Per-page accumulator: maps source_hash => discovery metadata for the
+     * fire-and-forget results push. Populated during transcodeWoff2InlineStyles()
+     * and transcodeWoff2ExternalStylesheets() so the results push covers every
+     * font seen on this page build, not just inline <style> blocks.
+     *
+     * @var array<string,array{family:string,source_file:string,source_ext:string,original_size:int}>
+     */
+    private array $discoveredFonts = [];
 
     /**
      * @param PerfConfig|null                    $config          Optimization config.
@@ -93,7 +127,10 @@ final class Font
             $html = $this->preloadFonts($html);
         }
         if ($this->config->fontsTranscodeWoff2 && $this->transcodeClient !== null) {
+            $this->discoveredFonts = [];
             $html = $this->transcodeWoff2InlineStyles($html);
+            $html = $this->transcodeWoff2ExternalStylesheets($html);
+            $this->scanFontLibraryFilesystem();
         }
         return $html;
     }
@@ -252,19 +289,12 @@ final class Font
         return $links . $html;
     }
 
+    // -----------------------------------------------------------------------
+    // WOFF2 transcode — inline <style> blocks
+    // -----------------------------------------------------------------------
+
     /**
      * Attempt WOFF2 transcoding for TTF/OTF/WOFF fonts in inline <style> blocks.
-     *
-     * For each @font-face block that contains a src URL whose extension is in
-     * TRANSCODE_EXTS and whose bytes are locally accessible (via the same
-     * downloader used for self-hosting), request a WOFF2 from the CP transcode
-     * endpoint. On state=="ready", rewrite the src to:
-     *
-     *   src: url('<local-woff2-url>') format('woff2'),
-     *        url('<original-url>') format('<orig-format>');
-     *
-     * On "pending" or "negative" (or any error): leave the original src intact.
-     * On any failure mid-rewrite: abandon the individual rewrite; never corrupt HTML.
      *
      * @param string $html Page HTML.
      * @return string
@@ -276,8 +306,7 @@ final class Font
         }
         return (string) preg_replace_callback(
             '/<style\b[^>]*>(.*?)<\/style>/is',
-            function (array $m) use (&$html): string {
-                // Process the CSS inside the <style> block.
+            function (array $m): string {
                 $newCss = $this->rewriteFontFaceForWoff2($m[1]);
                 return str_replace($m[1], $newCss, $m[0]);
             },
@@ -285,12 +314,343 @@ final class Font
         );
     }
 
+    // -----------------------------------------------------------------------
+    // WOFF2 transcode — external enqueued stylesheets
+    // -----------------------------------------------------------------------
+
+    /**
+     * Attempt WOFF2 transcoding for fonts found in enqueued external <link> stylesheets.
+     *
+     * This closes the classic-theme/plugin gap: fonts loaded via wp_enqueue_style()
+     * produce a <link rel=stylesheet> rather than an inline <style>, so they are
+     * never seen by transcodeWoff2InlineStyles(). We fetch, rewrite, and cache the
+     * stylesheet, then swap its <link> href to the locally-rewritten copy.
+     *
+     * Security: only fetches same-origin stylesheets (or hosts explicitly allowed
+     * by ALLOWED_EXTERNAL_CSS_HOSTS). Google Fonts is excluded because it has its
+     * own self-host pipeline. SSRF mitigated by origin check + MAX_EXTERNAL_CSS_BYTES.
+     *
+     * External stylesheets whose font src URLs are rewritten are cached locally by
+     * hash. The rewritten copy contains absolute woff2 URLs into the agent AssetCache.
+     *
+     * @param string $html Page HTML.
+     * @return string
+     */
+    private function transcodeWoff2ExternalStylesheets(string $html): string
+    {
+        if ($this->transcodeClient === null) {
+            return $html;
+        }
+
+        // Find all external CSS <link> tags.
+        if (!preg_match_all(
+            '/<link\b[^>]*rel=["\']stylesheet["\'][^>]*href=["\']([^"\']+)["\'][^>]*>/i',
+            $html,
+            $byRelFirst,
+            PREG_SET_ORDER
+        )) {
+            // Also try href-first ordering.
+            if (!preg_match_all(
+                '/<link\b[^>]*href=["\']([^"\']+)["\'][^>]*rel=["\']stylesheet["\'][^>]*>/i',
+                $html,
+                $byHrefFirst,
+                PREG_SET_ORDER
+            )) {
+                return $html;
+            }
+            $linkMatches = $byHrefFirst;
+        } else {
+            $linkMatches = $byRelFirst;
+        }
+
+        foreach ($linkMatches as $set) {
+            $tag  = $set[0];
+            $href = html_entity_decode($set[1]);
+
+            if (!$this->isAllowedExternalCssUrl($href)) {
+                continue;
+            }
+
+            $rewrittenUrl = $this->rewriteExternalStylesheet($href);
+            if ($rewrittenUrl === null) {
+                continue;
+            }
+            // Swap the link href to the locally-cached rewritten version.
+            $html = str_replace($tag, TagHelper::setAttr($tag, 'href', $rewrittenUrl), $html);
+        }
+
+        return $html;
+    }
+
+    /**
+     * Fetch an external stylesheet, rewrite any font @font-face blocks for WOFF2,
+     * cache the result, and return the local URL of the rewritten CSS.
+     *
+     * Returns null when no font rewrites were needed (not worth caching) or on
+     * any fetch/write failure.
+     *
+     * @param string $href External stylesheet URL.
+     * @return string|null Local URL of the rewritten stylesheet, or null.
+     */
+    private function rewriteExternalStylesheet(string $href): ?string
+    {
+        // Cache key: hash of the original href. The CSS content-hash is part of
+        // the rewritten file name so stale caches are naturally busted on change.
+        $cacheName = $this->cache->name($href, 'ext-css', 'css');
+        if ($this->cache->exists($cacheName)) {
+            return $this->cache->url($cacheName);
+        }
+
+        $css = ($this->downloader)($href);
+        if (!is_string($css) || $css === '' || strlen($css) > self::MAX_EXTERNAL_CSS_BYTES) {
+            return null;
+        }
+
+        if (stripos($css, '@font-face') === false) {
+            return null; // no fonts — nothing to rewrite
+        }
+
+        $rewritten = $this->rewriteFontFaceForWoff2($css);
+        if ($rewritten === $css) {
+            return null; // no rewrites performed — skip caching
+        }
+
+        if (!$this->cache->write($cacheName, $rewritten)) {
+            return null;
+        }
+
+        return $this->cache->url($cacheName);
+    }
+
+    /**
+     * Determine whether a stylesheet URL is allowed to be fetched and scanned.
+     *
+     * Only same-origin stylesheets are allowed; cross-origin URLs are rejected
+     * to prevent SSRF. Google Fonts is explicitly excluded (handled elsewhere).
+     *
+     * @param string $href Stylesheet URL.
+     * @return bool
+     */
+    private function isAllowedExternalCssUrl(string $href): bool
+    {
+        // Normalise protocol-relative URLs.
+        if (str_starts_with($href, '//')) {
+            $href = 'https:' . $href;
+        }
+
+        // Must be an absolute http/https URL.
+        if (!str_starts_with($href, 'http://') && !str_starts_with($href, 'https://')) {
+            return false;
+        }
+
+        $parsed = wp_parse_url($href);
+        if (!is_array($parsed)) {
+            return false;
+        }
+        $host = isset($parsed['host']) && is_string($parsed['host']) ? strtolower($parsed['host']) : '';
+        if ($host === '') {
+            return false;
+        }
+
+        // Block Google Fonts — its CSS has its own self-host pipeline.
+        foreach (self::ALLOWED_EXTERNAL_CSS_HOSTS as $blockedHost) {
+            if ($host === strtolower($blockedHost)) {
+                return false;
+            }
+        }
+
+        // Allow same-origin only.
+        $siteHost = '';
+        if (function_exists('home_url')) {
+            $siteParsed = wp_parse_url(home_url());
+            if (is_array($siteParsed) && isset($siteParsed['host']) && is_string($siteParsed['host'])) {
+                $siteHost = strtolower($siteParsed['host']);
+            }
+        }
+
+        return $siteHost !== '' && $host === $siteHost;
+    }
+
+    // -----------------------------------------------------------------------
+    // WP Font Library filesystem scan (WP 6.5+)
+    // -----------------------------------------------------------------------
+
+    /**
+     * Walk the WP Font Library directory (wp-content/fonts by default) and
+     * transcode any TTF/OTF/WOFF files found there.
+     *
+     * These fonts are reported to the CP results endpoint but their @font-face
+     * src is NOT rewritten here — only fonts referenced in scanned CSS get their
+     * src rewritten. Filesystem-discovered-but-unreferenced fonts are transcoded
+     * and reported so they appear in the QA dashboard, but serve no @font-face
+     * rewrite output (they may never be referenced in CSS at all). This is
+     * expected and documented.
+     *
+     * Security: the walk stays strictly within the resolved fonts directory.
+     * Symlinks and path traversal are prevented by resolving realpath and
+     * verifying the prefix before descending.
+     *
+     * @return void
+     */
+    private function scanFontLibraryFilesystem(): void
+    {
+        if ($this->transcodeClient === null) {
+            return;
+        }
+
+        $fontsDir = $this->resolveFontLibraryDir();
+        if ($fontsDir === '' || !is_dir($fontsDir)) {
+            return;
+        }
+
+        try {
+            $this->walkFontDir($fontsDir, $fontsDir);
+        } catch (\Throwable $e) {
+            // Never let the filesystem scan break the page build.
+        }
+    }
+
+    /**
+     * Resolve the WP Font Library directory path, honouring the font_dir filter
+     * if it is available (WP 6.5+). Returns '' when the directory is not
+     * accessible or resolves outside wp-content.
+     *
+     * @return string Resolved absolute path with no trailing slash, or ''.
+     */
+    private function resolveFontLibraryDir(): string
+    {
+        // The WordPress 6.5+ Font Library stores fonts under wp-content/fonts by
+        // default, overridable via the 'font_dir' filter. Resolve it WITHOUT calling
+        // wp_get_font_dir() (introduced in 6.5) so the plugin stays compatible with
+        // its declared minimum WordPress version; the 'font_dir' filter is honored
+        // either way, matching what wp_get_font_dir() does internally.
+        $dir          = '';
+        $wpContentDir = defined('WP_CONTENT_DIR') ? (string) constant('WP_CONTENT_DIR') : '';
+        if ($wpContentDir !== '') {
+            $default = ['path' => rtrim($wpContentDir, '/\\') . '/fonts'];
+            /** @var array<string,mixed> $info */
+            // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- 'font_dir' is a WordPress core filter (the one wp_get_font_dir uses); it must stay unprefixed.
+            $info = (array) apply_filters('font_dir', $default);
+            $path = isset($info['path']) && is_string($info['path']) ? $info['path'] : $default['path'];
+            $dir  = rtrim($path, '/\\');
+        }
+
+        if ($dir === '') {
+            return '';
+        }
+
+        // Resolve symlinks and verify the path exists.
+        $resolved = realpath($dir);
+        if ($resolved === false) {
+            return '';
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * Recursively walk $dir (bounded to $baseDir) and transcode font files found.
+     *
+     * @param string $dir     Current directory to scan.
+     * @param string $baseDir Top-level fonts directory (traversal guard).
+     * @return void
+     */
+    private function walkFontDir(string $dir, string $baseDir): void
+    {
+        // @phpstan-ignore-next-line
+        $entries = @scandir($dir);
+        if ($entries === false) {
+            return;
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $dir . '/' . $entry;
+
+            // Resolve to catch symlinks before checking the prefix guard.
+            $realPath = realpath($path);
+            if ($realPath === false) {
+                continue;
+            }
+
+            // Traversal guard: must stay within the base fonts dir. The prefix is
+            // separator-terminated so a sibling directory whose name merely starts
+            // with the base name (e.g. "fonts-secret" vs "fonts") cannot escape.
+            $guardPrefix = rtrim($baseDir, '/\\') . '/';
+            if (strncmp($realPath . '/', $guardPrefix, strlen($guardPrefix)) !== 0) {
+                continue;
+            }
+
+            if (is_dir($realPath)) {
+                $this->walkFontDir($realPath, $baseDir);
+                continue;
+            }
+
+            $ext = strtolower((string) pathinfo($realPath, PATHINFO_EXTENSION));
+            if (!in_array($ext, self::TRANSCODE_EXTS, true)) {
+                continue;
+            }
+
+            $this->transcodeFilesystemFont($realPath, $ext);
+        }
+    }
+
+    /**
+     * Transcode a single font file discovered via the filesystem scan.
+     *
+     * @param string $absolutePath Resolved absolute path to the font file.
+     * @param string $ext          "ttf" | "otf" | "woff".
+     * @return void
+     */
+    private function transcodeFilesystemFont(string $absolutePath, string $ext): void
+    {
+        $sourceBytes = @file_get_contents($absolutePath); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- reading a local file in a headless agent; WP_Filesystem is unavailable in this context
+        if ($sourceBytes === false || strlen($sourceBytes) < 12) {
+            return;
+        }
+
+        $hash = Blake3::hashHex($sourceBytes);
+        if ($hash === '' || isset($this->discoveredFonts[$hash])) {
+            return; // already processed via CSS scan this page build
+        }
+
+        $basename = basename($absolutePath);
+
+        // Record for the results push but don't add a family (no CSS context).
+        $this->discoveredFonts[$hash] = [
+            'family'       => '',
+            'source_file'  => $basename,
+            'source_ext'   => $ext,
+            'original_size' => strlen($sourceBytes),
+        ];
+
+        $subsetMode  = '';
+        $subsetRange = '';
+        if ($this->config->fontsSubset && $this->config->fontsTranscodeWoff2) {
+            $subsetMode  = $this->config->fontsSubsetMode;
+            $subsetRange = $this->config->fontsSubsetRange;
+        }
+
+        $result = $this->transcodeClient !== null
+            ? $this->transcodeClient->resolve($sourceBytes, $ext, $subsetMode, $subsetRange)
+            : null;
+
+        $this->pushDiscoveryResult($hash, '', $basename, $ext, strlen($sourceBytes), $result);
+    }
+
+    // -----------------------------------------------------------------------
+    // @font-face rewrite — shared by inline + external paths
+    // -----------------------------------------------------------------------
+
     /**
      * Rewrite @font-face src declarations in a CSS string for WOFF2-first delivery.
      *
      * Each @font-face block is scanned for a src that contains a URL pointing at
-     * a TTF/OTF/WOFF font. When transcoding succeeds (state=="ready"), the src is
-     * rewritten. Any failure leaves the src unchanged.
+     * a TTF/OTF/WOFF font. When transcoding succeeds (state=="ready" or "subset"),
+     * the src is rewritten. Any failure leaves the src unchanged.
      *
      * @param string $css CSS containing zero or more @font-face blocks.
      * @return string
@@ -301,20 +661,17 @@ final class Font
             return $css;
         }
 
-        // Match each @font-face { ... } block (non-greedy, handles nested braces
-        // defensively by relying on the fact that @font-face blocks contain no
-        // nested rule-sets in valid CSS).
         $result = (string) preg_replace_callback(
             '/@font-face\s*\{([^}]*)\}/is',
             function (array $m): string {
-                $block    = $m[0]; // the full @font-face { ... }
-                $interior = $m[1]; // the interior declarations
+                $block    = $m[0];
+                $interior = $m[1];
 
                 try {
                     $rewritten = $this->tryRewriteFontFaceBlock($block, $interior);
                     return $rewritten ?? $block;
                 } catch (\Throwable $e) {
-                    return $block; // safety: never corrupt the CSS
+                    return $block;
                 }
             },
             $css
@@ -326,7 +683,16 @@ final class Font
     /**
      * Try to rewrite a single @font-face block for WOFF2-first delivery.
      *
-     * Returns the rewritten block on success, or null to signal "keep original".
+     * When a subset is ready (state=="subset"), an additive @font-face rule with a
+     * unicode-range descriptor is prepended to the canonical full-WOFF2 rule:
+     *
+     *   @font-face{unicode-range:U+…;src:url('subset.woff2') format('woff2')}
+     *   @font-face{src:url('full.woff2') format('woff2'),url('orig.ttf') format('truetype')}
+     *
+     * The browser fetches the subset for in-range codepoints and falls back to the
+     * full WOFF2 otherwise. The full WOFF2 is always the canonical fallback.
+     *
+     * Returns the rewritten block(s) on success, or null to signal "keep original".
      *
      * @param string $block    Full @font-face { ... } string.
      * @param string $interior Interior declarations.
@@ -338,16 +704,19 @@ final class Font
             return null;
         }
 
-        // Find the src declaration. We look for `src:` followed by any number
-        // of url() tokens (possibly multi-line). The full src value ends at the
-        // next declaration (identified by a property name + colon) or the closing
-        // brace. This handles both single- and multi-url src values.
+        // Extract font-family name for discovery metadata (informational).
+        $fontFamily = '';
+        if (preg_match('/font-family\s*:\s*["\']?([^"\';\}]+)["\']?\s*;?/i', $interior, $famMatch)) {
+            $fontFamily = trim((string) $famMatch[1]);
+        }
+
+        // Find the src declaration.
         if (!preg_match('/\bsrc\s*:\s*((?:(?:url\s*\([^)]*\)|format\s*\([^)]*\)|local\s*\([^)]*\)|[^;{}]))+)/is', $interior, $srcMatch)) {
             return null;
         }
 
-        $srcDecl    = $srcMatch[0]; // e.g. "src: url('x.ttf') format('truetype')"
-        $srcValue   = $srcMatch[1]; // everything after "src:"
+        $srcDecl  = $srcMatch[0];
+        $srcValue = $srcMatch[1];
 
         // Extract the first URL in the src value.
         if (!preg_match('/url\(\s*["\']?([^"\')\s]+)["\']?\s*\)/i', $srcValue, $urlMatch)) {
@@ -355,40 +724,156 @@ final class Font
         }
         $originalUrl = $urlMatch[1];
 
-        // Determine the extension.
-        $ext = strtolower((string) pathinfo(strtok($originalUrl, '?#') ?: '', PATHINFO_EXTENSION));
+        // Strip query-string and fragment once; reuse throughout this method.
+        $urlNoQuery  = (string) (strtok($originalUrl, '?#') ?: $originalUrl);
+        $ext = strtolower((string) pathinfo($urlNoQuery, PATHINFO_EXTENSION));
         if (!in_array($ext, self::TRANSCODE_EXTS, true)) {
-            return null; // skip woff2/svg/eot/unknown
+            return null;
         }
 
         $formatHint = self::FORMAT_HINTS[$ext] ?? null;
         if ($formatHint === null) {
-            return null; // unknown extension — serve original
+            return null;
         }
 
-        // Fetch the source font bytes for hashing + upload.
         $sourceBytes = ($this->downloader)($originalUrl);
         if (!is_string($sourceBytes) || strlen($sourceBytes) < 12) {
-            return null; // font not accessible — serve original
+            return null;
         }
 
-        // Request transcode from the CP (or serve from local cache if ready).
-        $result = $this->transcodeClient->resolve($sourceBytes, $ext);
-        if ($result === null || $result['state'] !== 'ready' || $result['woff2_url'] === '') {
-            return null; // pending, negative, or any error — serve original
+        $hash       = Blake3::hashHex($sourceBytes);
+        $sourceFile = basename($urlNoQuery);
+
+        // Record discovery metadata for the results push (idempotent by hash).
+        if ($hash !== '' && !isset($this->discoveredFonts[$hash])) {
+            $this->discoveredFonts[$hash] = [
+                'family'        => $fontFamily,
+                'source_file'   => $sourceFile,
+                'source_ext'    => $ext,
+                'original_size' => strlen($sourceBytes),
+            ];
+        }
+
+        // Determine subset spec from config (hard-gated on both flags).
+        $subsetMode  = '';
+        $subsetRange = '';
+        if ($this->config->fontsSubset && $this->config->fontsTranscodeWoff2) {
+            $subsetMode  = $this->config->fontsSubsetMode;
+            $subsetRange = $this->config->fontsSubsetRange;
+        }
+
+        $result = $this->transcodeClient->resolve($sourceBytes, $ext, $subsetMode, $subsetRange);
+
+        // Fire-and-forget results push on first discovery (hash recorded above).
+        if ($hash !== '') {
+            $this->pushDiscoveryResult($hash, $fontFamily, $sourceFile, $ext, strlen($sourceBytes), $result);
+        }
+
+        // 'skipped' means the encoder confirmed it's an icon/variable font and
+        // declined to subset — the full WOFF2 is still available. Treat it like
+        // 'ready' for src rewriting (no subset block emitted).
+        if ($result === null || !in_array($result['state'], ['ready', 'subset', 'skipped'], true) || $result['woff2_url'] === '') {
+            return null;
         }
 
         $woff2Url = $result['woff2_url'];
-
-        // Build the new src value: woff2 first, original as fallback.
         $escapedWoff2    = $this->cssSafeUrl($woff2Url);
         $escapedOriginal = $this->cssSafeUrl($originalUrl);
         $newSrcValue = "url('{$escapedWoff2}') format('woff2'), url('{$escapedOriginal}') format('{$formatHint}')";
 
-        // Rewrite the src declaration in the block, preserving all other descriptors.
         $newSrcDecl = str_replace($srcValue, $newSrcValue, $srcDecl);
-        return str_replace($srcDecl, $newSrcDecl, $block);
+        $rewrittenBlock = str_replace($srcDecl, $newSrcDecl, $block);
+
+        // If a subset WOFF2 is available, prepend an additive @font-face rule that
+        // carries the unicode-range descriptor. The browser fetches the subset for
+        // in-range codepoints and falls back to the full WOFF2 (rewrittenBlock)
+        // for anything outside the range.
+        if ($result['state'] === 'subset' && $result['subset_url'] !== '' && $result['unicode_range'] !== '') {
+            $subsetUrl      = $this->cssSafeUrl($result['subset_url']);
+            $escapedRange   = htmlspecialchars($result['unicode_range'], ENT_QUOTES);
+
+            // Build the subset @font-face: copy all descriptors from the original
+            // block, replace the src with the subset-only URL, and inject unicode-range.
+            $subsetInterior = $interior;
+
+            // Replace the src declaration with the subset URL.
+            $subsetSrc  = "url('{$subsetUrl}') format('woff2')";
+            $subsetSrcDecl = str_replace($srcValue, $subsetSrc, $srcDecl);
+            $subsetInterior = str_replace($srcDecl, $subsetSrcDecl, $subsetInterior);
+
+            // Remove any existing unicode-range descriptor, then append it.
+            $subsetInterior = (string) preg_replace('/unicode-range\s*:[^;]*;?/i', '', $subsetInterior);
+            $subsetInterior = rtrim($subsetInterior, ';') . ';unicode-range:' . $escapedRange . ';';
+
+            $subsetBlock = '@font-face{' . $subsetInterior . '}';
+
+            // Prepend the subset rule; the canonical full-WOFF2 rule follows.
+            return $subsetBlock . $rewrittenBlock;
+        }
+
+        return $rewrittenBlock;
     }
+
+    // -----------------------------------------------------------------------
+    // Results push helper
+    // -----------------------------------------------------------------------
+
+    /**
+     * Fire-and-forget push of a per-font result to the CP catalog endpoint.
+     *
+     * Only called once per (hash, page-build) pair — the $discoveredFonts map
+     * ensures idempotency across multiple @font-face blocks referencing the same
+     * source file.
+     *
+     * @param string $hash
+     * @param string $fontFamily
+     * @param string $sourceFile
+     * @param string $sourceExt
+     * @param int    $originalSize
+     * @param array{state:string,woff2_url:string,subset_url:string,unicode_range:string}|null $result
+     * @return void
+     */
+    private function pushDiscoveryResult(
+        string $hash,
+        string $fontFamily,
+        string $sourceFile,
+        string $sourceExt,
+        int $originalSize,
+        ?array $result
+    ): void {
+        if ($hash === '' || !($this->transcodeClient instanceof FontTranscodeClient)) {
+            return;
+        }
+
+        $state        = 'pending';
+        $unicodeRange = null;
+        $errorDetail  = '';
+
+        if ($result !== null) {
+            $state        = $result['state'];
+            $unicodeRange = ($result['unicode_range'] !== '') ? $result['unicode_range'] : null;
+        }
+
+        // Sizes are best-effort: the CP derives savings_pct from the sizes we send.
+        // We do not have the byte lengths here without re-reading the cache files,
+        // so we send null and let the CP fill them in from the transcode job record.
+        $this->transcodeClient->pushResult(
+            $hash,
+            $fontFamily,
+            $sourceFile,
+            $sourceExt,
+            $originalSize,
+            null,
+            null,
+            $unicodeRange,
+            $state,
+            $errorDetail
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Utilities
+    // -----------------------------------------------------------------------
 
     /**
      * Escape a URL for use inside a CSS url('…') token.

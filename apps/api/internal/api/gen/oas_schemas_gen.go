@@ -294,6 +294,91 @@ func (s *AgentDisconnectOK) SetOk(val OptBool) {
 
 func (*AgentDisconnectOK) agentDisconnectRes() {}
 
+// Batch of font result updates pushed by the agent.
+// Ref: #/components/schemas/AgentFontResultsRequest
+type AgentFontResultsRequest struct {
+	Results []FontResultItem `json:"results"`
+}
+
+// GetResults returns the value of Results.
+func (s *AgentFontResultsRequest) GetResults() []FontResultItem {
+	return s.Results
+}
+
+// SetResults sets the value of Results.
+func (s *AgentFontResultsRequest) SetResults(val []FontResultItem) {
+	s.Results = val
+}
+
+// Ref: #/components/schemas/AgentFontResultsResponse
+type AgentFontResultsResponse struct {
+	Ok bool `json:"ok"`
+	// Number of rows successfully upserted.
+	Stored int `json:"stored"`
+	// Number of items skipped (invalid hash or transient error).
+	Skipped int `json:"skipped"`
+}
+
+// GetOk returns the value of Ok.
+func (s *AgentFontResultsResponse) GetOk() bool {
+	return s.Ok
+}
+
+// GetStored returns the value of Stored.
+func (s *AgentFontResultsResponse) GetStored() int {
+	return s.Stored
+}
+
+// GetSkipped returns the value of Skipped.
+func (s *AgentFontResultsResponse) GetSkipped() int {
+	return s.Skipped
+}
+
+// SetOk sets the value of Ok.
+func (s *AgentFontResultsResponse) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetStored sets the value of Stored.
+func (s *AgentFontResultsResponse) SetStored(val int) {
+	s.Stored = val
+}
+
+// SetSkipped sets the value of Skipped.
+func (s *AgentFontResultsResponse) SetSkipped(val int) {
+	s.Skipped = val
+}
+
+func (*AgentFontResultsResponse) agentFontsResultsRes() {}
+
+type AgentFontsResultsBadRequest Error
+
+func (*AgentFontsResultsBadRequest) agentFontsResultsRes() {}
+
+type AgentFontsResultsUnauthorized Error
+
+func (*AgentFontsResultsUnauthorized) agentFontsResultsRes() {}
+
+type AgentFontsTranscodeBadRequest Error
+
+func (*AgentFontsTranscodeBadRequest) agentFontsTranscodeRes() {}
+
+type AgentFontsTranscodeServiceUnavailable Error
+
+func (*AgentFontsTranscodeServiceUnavailable) agentFontsTranscodeRes() {}
+
+type AgentFontsTranscodeTooManyRequests Error
+
+func (*AgentFontsTranscodeTooManyRequests) agentFontsTranscodeRes() {}
+
+type AgentFontsTranscodeUnauthorized Error
+
+func (*AgentFontsTranscodeUnauthorized) agentFontsTranscodeRes() {}
+
+type AgentFontsTranscodeUnprocessableEntity Error
+
+func (*AgentFontsTranscodeUnprocessableEntity) agentFontsTranscodeRes() {}
+
 // M21 / ADR-039 — the light 60s heartbeat body the WordPress agent sends.
 // All fields are optional and accepted best-effort: the beat is about
 // liveness, not the payload. Forward-compatible (additive) so a future CP
@@ -3365,6 +3450,23 @@ type CancelBackupNotFound Error
 
 func (*CancelBackupNotFound) cancelBackupRes() {}
 
+type CancelEnrollmentConflict Error
+
+func (*CancelEnrollmentConflict) cancelEnrollmentRes() {}
+
+type CancelEnrollmentForbidden Error
+
+func (*CancelEnrollmentForbidden) cancelEnrollmentRes() {}
+
+// CancelEnrollmentNoContent is response for CancelEnrollment operation.
+type CancelEnrollmentNoContent struct{}
+
+func (*CancelEnrollmentNoContent) cancelEnrollmentRes() {}
+
+type CancelEnrollmentNotFound Error
+
+func (*CancelEnrollmentNotFound) cancelEnrollmentRes() {}
+
 type CancelMediaOK struct {
 	Ok             OptBool `json:"ok"`
 	CancelledCount OptInt  `json:"cancelled_count"`
@@ -3923,9 +4025,167 @@ func (s *CreateRestoreAcceptedStatus) UnmarshalText(data []byte) error {
 	}
 }
 
-type CreateSiteConflict Error
+// Merged schema.
+type CreateSiteConflict struct {
+	// Stable machine-readable error code.
+	Code string `json:"code"`
+	// Human-readable error description.
+	Message string `json:"message"`
+	// Merged property.
+	Details OptCreateSiteConflictDetails `json:"details"`
+}
+
+// GetCode returns the value of Code.
+func (s *CreateSiteConflict) GetCode() string {
+	return s.Code
+}
+
+// GetMessage returns the value of Message.
+func (s *CreateSiteConflict) GetMessage() string {
+	return s.Message
+}
+
+// GetDetails returns the value of Details.
+func (s *CreateSiteConflict) GetDetails() OptCreateSiteConflictDetails {
+	return s.Details
+}
+
+// SetCode sets the value of Code.
+func (s *CreateSiteConflict) SetCode(val string) {
+	s.Code = val
+}
+
+// SetMessage sets the value of Message.
+func (s *CreateSiteConflict) SetMessage(val string) {
+	s.Message = val
+}
+
+// SetDetails sets the value of Details.
+func (s *CreateSiteConflict) SetDetails(val OptCreateSiteConflictDetails) {
+	s.Details = val
+}
 
 func (*CreateSiteConflict) createSiteRes() {}
+
+// Merged schema.
+type CreateSiteConflictDetails struct {
+	// ID of the existing site with this URL.
+	SiteID uuid.UUID `json:"site_id"`
+	// Current connection state of the existing site.
+	ConnectionState CreateSiteConflictDetailsConnectionState `json:"connection_state"`
+	AdditionalProps CreateSiteConflictDetailsAdditional
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *CreateSiteConflictDetails) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetConnectionState returns the value of ConnectionState.
+func (s *CreateSiteConflictDetails) GetConnectionState() CreateSiteConflictDetailsConnectionState {
+	return s.ConnectionState
+}
+
+// GetAdditionalProps returns the value of AdditionalProps.
+func (s *CreateSiteConflictDetails) GetAdditionalProps() CreateSiteConflictDetailsAdditional {
+	return s.AdditionalProps
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *CreateSiteConflictDetails) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetConnectionState sets the value of ConnectionState.
+func (s *CreateSiteConflictDetails) SetConnectionState(val CreateSiteConflictDetailsConnectionState) {
+	s.ConnectionState = val
+}
+
+// SetAdditionalProps sets the value of AdditionalProps.
+func (s *CreateSiteConflictDetails) SetAdditionalProps(val CreateSiteConflictDetailsAdditional) {
+	s.AdditionalProps = val
+}
+
+type CreateSiteConflictDetailsAdditional map[string]jx.Raw
+
+func (s *CreateSiteConflictDetailsAdditional) init() CreateSiteConflictDetailsAdditional {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+// Current connection state of the existing site.
+type CreateSiteConflictDetailsConnectionState string
+
+const (
+	CreateSiteConflictDetailsConnectionStatePendingEnrollment CreateSiteConflictDetailsConnectionState = "pending_enrollment"
+	CreateSiteConflictDetailsConnectionStateConnected         CreateSiteConflictDetailsConnectionState = "connected"
+	CreateSiteConflictDetailsConnectionStateDegraded          CreateSiteConflictDetailsConnectionState = "degraded"
+	CreateSiteConflictDetailsConnectionStateDisconnected      CreateSiteConflictDetailsConnectionState = "disconnected"
+	CreateSiteConflictDetailsConnectionStateRevoked           CreateSiteConflictDetailsConnectionState = "revoked"
+	CreateSiteConflictDetailsConnectionStateArchived          CreateSiteConflictDetailsConnectionState = "archived"
+)
+
+// AllValues returns all CreateSiteConflictDetailsConnectionState values.
+func (CreateSiteConflictDetailsConnectionState) AllValues() []CreateSiteConflictDetailsConnectionState {
+	return []CreateSiteConflictDetailsConnectionState{
+		CreateSiteConflictDetailsConnectionStatePendingEnrollment,
+		CreateSiteConflictDetailsConnectionStateConnected,
+		CreateSiteConflictDetailsConnectionStateDegraded,
+		CreateSiteConflictDetailsConnectionStateDisconnected,
+		CreateSiteConflictDetailsConnectionStateRevoked,
+		CreateSiteConflictDetailsConnectionStateArchived,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s CreateSiteConflictDetailsConnectionState) MarshalText() ([]byte, error) {
+	switch s {
+	case CreateSiteConflictDetailsConnectionStatePendingEnrollment:
+		return []byte(s), nil
+	case CreateSiteConflictDetailsConnectionStateConnected:
+		return []byte(s), nil
+	case CreateSiteConflictDetailsConnectionStateDegraded:
+		return []byte(s), nil
+	case CreateSiteConflictDetailsConnectionStateDisconnected:
+		return []byte(s), nil
+	case CreateSiteConflictDetailsConnectionStateRevoked:
+		return []byte(s), nil
+	case CreateSiteConflictDetailsConnectionStateArchived:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *CreateSiteConflictDetailsConnectionState) UnmarshalText(data []byte) error {
+	switch CreateSiteConflictDetailsConnectionState(data) {
+	case CreateSiteConflictDetailsConnectionStatePendingEnrollment:
+		*s = CreateSiteConflictDetailsConnectionStatePendingEnrollment
+		return nil
+	case CreateSiteConflictDetailsConnectionStateConnected:
+		*s = CreateSiteConflictDetailsConnectionStateConnected
+		return nil
+	case CreateSiteConflictDetailsConnectionStateDegraded:
+		*s = CreateSiteConflictDetailsConnectionStateDegraded
+		return nil
+	case CreateSiteConflictDetailsConnectionStateDisconnected:
+		*s = CreateSiteConflictDetailsConnectionStateDisconnected
+		return nil
+	case CreateSiteConflictDetailsConnectionStateRevoked:
+		*s = CreateSiteConflictDetailsConnectionStateRevoked
+		return nil
+	case CreateSiteConflictDetailsConnectionStateArchived:
+		*s = CreateSiteConflictDetailsConnectionStateArchived
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 type CreateSiteDestinationForbidden Error
 
@@ -3999,10 +4259,6 @@ func (*CreateSiteShareUnauthorized) createSiteShareRes() {}
 type CreateSiteShareUnprocessableEntity Error
 
 func (*CreateSiteShareUnprocessableEntity) createSiteShareRes() {}
-
-type CreateSiteUnprocessableEntity Error
-
-func (*CreateSiteUnprocessableEntity) createSiteRes() {}
 
 type CreateTenantConflict Error
 
@@ -4874,6 +5130,7 @@ func (*Error) bulkConfigCacheRes()                {}
 func (*Error) createBackupRes()                   {}
 func (*Error) createPairingCodeRes()              {}
 func (*Error) createRestoreRes()                  {}
+func (*Error) createSiteRes()                     {}
 func (*Error) createUpdateRunRes()                {}
 func (*Error) deleteSiteRes()                     {}
 func (*Error) getBackupRes()                      {}
@@ -4889,6 +5146,8 @@ func (*Error) getSiteRes()                        {}
 func (*Error) getSiteUptimeRes()                  {}
 func (*Error) getTenantRes()                      {}
 func (*Error) getUpdateRunRes()                   {}
+func (*Error) listRestoreRunsRes()                {}
+func (*Error) listScheduleRunsRes()               {}
 func (*Error) listSharedWithMeRes()               {}
 func (*Error) logoutRes()                         {}
 func (*Error) oidcLoginRes()                      {}
@@ -4916,6 +5175,642 @@ func (s *ErrorDetails) init() ErrorDetails {
 		*s = m
 	}
 	return m
+}
+
+// One font_results catalog row — the dashboard view of a processed self-hosted font.
+// Ref: #/components/schemas/FontResult
+type FontResult struct {
+	ID OptString `json:"id"`
+	// 64-char lowercase hex BLAKE3 hash of the source font bytes.
+	SourceHash OptString `json:"source_hash"`
+	Family     OptString `json:"family"`
+	// Basename of the original font URL (e.g. inter.woff).
+	SourceFile OptString `json:"source_file"`
+	// Source format: ttf | otf | woff.
+	OriginalExt OptString `json:"original_ext"`
+	// Byte length of the source font.
+	OriginalSize OptInt `json:"original_size"`
+	// Byte length of the full WOFF2 output. 0 until ready.
+	Woff2Size OptInt `json:"woff2_size"`
+	// Byte length of the subset WOFF2 output. 0 unless subset.
+	SubsetSize OptInt `json:"subset_size"`
+	// CSS unicode-range for the subset; empty unless subset.
+	UnicodeRange OptString `json:"unicode_range"`
+	// Pending = job enqueued, not yet complete. ready = full WOFF2 produced (woff2_size set). subset =
+	// subset WOFF2 also produced (both sizes set). negative = permanent failure; serve the original font
+	// forever.
+	State OptFontResultState `json:"state"`
+	// Non-empty when state=negative.
+	ErrorDetail OptString `json:"error_detail"`
+	// CP-derived: 1 - min(woff2_size, subset_size) / original_size. 0 when sizes unknown.
+	SavingsPct OptFloat64  `json:"savings_pct"`
+	UpdatedAt  OptDateTime `json:"updated_at"`
+}
+
+// GetID returns the value of ID.
+func (s *FontResult) GetID() OptString {
+	return s.ID
+}
+
+// GetSourceHash returns the value of SourceHash.
+func (s *FontResult) GetSourceHash() OptString {
+	return s.SourceHash
+}
+
+// GetFamily returns the value of Family.
+func (s *FontResult) GetFamily() OptString {
+	return s.Family
+}
+
+// GetSourceFile returns the value of SourceFile.
+func (s *FontResult) GetSourceFile() OptString {
+	return s.SourceFile
+}
+
+// GetOriginalExt returns the value of OriginalExt.
+func (s *FontResult) GetOriginalExt() OptString {
+	return s.OriginalExt
+}
+
+// GetOriginalSize returns the value of OriginalSize.
+func (s *FontResult) GetOriginalSize() OptInt {
+	return s.OriginalSize
+}
+
+// GetWoff2Size returns the value of Woff2Size.
+func (s *FontResult) GetWoff2Size() OptInt {
+	return s.Woff2Size
+}
+
+// GetSubsetSize returns the value of SubsetSize.
+func (s *FontResult) GetSubsetSize() OptInt {
+	return s.SubsetSize
+}
+
+// GetUnicodeRange returns the value of UnicodeRange.
+func (s *FontResult) GetUnicodeRange() OptString {
+	return s.UnicodeRange
+}
+
+// GetState returns the value of State.
+func (s *FontResult) GetState() OptFontResultState {
+	return s.State
+}
+
+// GetErrorDetail returns the value of ErrorDetail.
+func (s *FontResult) GetErrorDetail() OptString {
+	return s.ErrorDetail
+}
+
+// GetSavingsPct returns the value of SavingsPct.
+func (s *FontResult) GetSavingsPct() OptFloat64 {
+	return s.SavingsPct
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *FontResult) GetUpdatedAt() OptDateTime {
+	return s.UpdatedAt
+}
+
+// SetID sets the value of ID.
+func (s *FontResult) SetID(val OptString) {
+	s.ID = val
+}
+
+// SetSourceHash sets the value of SourceHash.
+func (s *FontResult) SetSourceHash(val OptString) {
+	s.SourceHash = val
+}
+
+// SetFamily sets the value of Family.
+func (s *FontResult) SetFamily(val OptString) {
+	s.Family = val
+}
+
+// SetSourceFile sets the value of SourceFile.
+func (s *FontResult) SetSourceFile(val OptString) {
+	s.SourceFile = val
+}
+
+// SetOriginalExt sets the value of OriginalExt.
+func (s *FontResult) SetOriginalExt(val OptString) {
+	s.OriginalExt = val
+}
+
+// SetOriginalSize sets the value of OriginalSize.
+func (s *FontResult) SetOriginalSize(val OptInt) {
+	s.OriginalSize = val
+}
+
+// SetWoff2Size sets the value of Woff2Size.
+func (s *FontResult) SetWoff2Size(val OptInt) {
+	s.Woff2Size = val
+}
+
+// SetSubsetSize sets the value of SubsetSize.
+func (s *FontResult) SetSubsetSize(val OptInt) {
+	s.SubsetSize = val
+}
+
+// SetUnicodeRange sets the value of UnicodeRange.
+func (s *FontResult) SetUnicodeRange(val OptString) {
+	s.UnicodeRange = val
+}
+
+// SetState sets the value of State.
+func (s *FontResult) SetState(val OptFontResultState) {
+	s.State = val
+}
+
+// SetErrorDetail sets the value of ErrorDetail.
+func (s *FontResult) SetErrorDetail(val OptString) {
+	s.ErrorDetail = val
+}
+
+// SetSavingsPct sets the value of SavingsPct.
+func (s *FontResult) SetSavingsPct(val OptFloat64) {
+	s.SavingsPct = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *FontResult) SetUpdatedAt(val OptDateTime) {
+	s.UpdatedAt = val
+}
+
+// One font result item in the agent push payload.
+// Ref: #/components/schemas/FontResultItem
+type FontResultItem struct {
+	SourceHash   string              `json:"source_hash"`
+	Family       OptString           `json:"family"`
+	SourceFile   OptString           `json:"source_file"`
+	OriginalExt  OptString           `json:"original_ext"`
+	OriginalSize OptInt              `json:"original_size"`
+	Woff2Size    OptInt              `json:"woff2_size"`
+	SubsetSize   OptInt              `json:"subset_size"`
+	UnicodeRange OptString           `json:"unicode_range"`
+	State        FontResultItemState `json:"state"`
+	ErrorDetail  OptString           `json:"error_detail"`
+}
+
+// GetSourceHash returns the value of SourceHash.
+func (s *FontResultItem) GetSourceHash() string {
+	return s.SourceHash
+}
+
+// GetFamily returns the value of Family.
+func (s *FontResultItem) GetFamily() OptString {
+	return s.Family
+}
+
+// GetSourceFile returns the value of SourceFile.
+func (s *FontResultItem) GetSourceFile() OptString {
+	return s.SourceFile
+}
+
+// GetOriginalExt returns the value of OriginalExt.
+func (s *FontResultItem) GetOriginalExt() OptString {
+	return s.OriginalExt
+}
+
+// GetOriginalSize returns the value of OriginalSize.
+func (s *FontResultItem) GetOriginalSize() OptInt {
+	return s.OriginalSize
+}
+
+// GetWoff2Size returns the value of Woff2Size.
+func (s *FontResultItem) GetWoff2Size() OptInt {
+	return s.Woff2Size
+}
+
+// GetSubsetSize returns the value of SubsetSize.
+func (s *FontResultItem) GetSubsetSize() OptInt {
+	return s.SubsetSize
+}
+
+// GetUnicodeRange returns the value of UnicodeRange.
+func (s *FontResultItem) GetUnicodeRange() OptString {
+	return s.UnicodeRange
+}
+
+// GetState returns the value of State.
+func (s *FontResultItem) GetState() FontResultItemState {
+	return s.State
+}
+
+// GetErrorDetail returns the value of ErrorDetail.
+func (s *FontResultItem) GetErrorDetail() OptString {
+	return s.ErrorDetail
+}
+
+// SetSourceHash sets the value of SourceHash.
+func (s *FontResultItem) SetSourceHash(val string) {
+	s.SourceHash = val
+}
+
+// SetFamily sets the value of Family.
+func (s *FontResultItem) SetFamily(val OptString) {
+	s.Family = val
+}
+
+// SetSourceFile sets the value of SourceFile.
+func (s *FontResultItem) SetSourceFile(val OptString) {
+	s.SourceFile = val
+}
+
+// SetOriginalExt sets the value of OriginalExt.
+func (s *FontResultItem) SetOriginalExt(val OptString) {
+	s.OriginalExt = val
+}
+
+// SetOriginalSize sets the value of OriginalSize.
+func (s *FontResultItem) SetOriginalSize(val OptInt) {
+	s.OriginalSize = val
+}
+
+// SetWoff2Size sets the value of Woff2Size.
+func (s *FontResultItem) SetWoff2Size(val OptInt) {
+	s.Woff2Size = val
+}
+
+// SetSubsetSize sets the value of SubsetSize.
+func (s *FontResultItem) SetSubsetSize(val OptInt) {
+	s.SubsetSize = val
+}
+
+// SetUnicodeRange sets the value of UnicodeRange.
+func (s *FontResultItem) SetUnicodeRange(val OptString) {
+	s.UnicodeRange = val
+}
+
+// SetState sets the value of State.
+func (s *FontResultItem) SetState(val FontResultItemState) {
+	s.State = val
+}
+
+// SetErrorDetail sets the value of ErrorDetail.
+func (s *FontResultItem) SetErrorDetail(val OptString) {
+	s.ErrorDetail = val
+}
+
+type FontResultItemState string
+
+const (
+	FontResultItemStatePending  FontResultItemState = "pending"
+	FontResultItemStateReady    FontResultItemState = "ready"
+	FontResultItemStateSubset   FontResultItemState = "subset"
+	FontResultItemStateNegative FontResultItemState = "negative"
+)
+
+// AllValues returns all FontResultItemState values.
+func (FontResultItemState) AllValues() []FontResultItemState {
+	return []FontResultItemState{
+		FontResultItemStatePending,
+		FontResultItemStateReady,
+		FontResultItemStateSubset,
+		FontResultItemStateNegative,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FontResultItemState) MarshalText() ([]byte, error) {
+	switch s {
+	case FontResultItemStatePending:
+		return []byte(s), nil
+	case FontResultItemStateReady:
+		return []byte(s), nil
+	case FontResultItemStateSubset:
+		return []byte(s), nil
+	case FontResultItemStateNegative:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FontResultItemState) UnmarshalText(data []byte) error {
+	switch FontResultItemState(data) {
+	case FontResultItemStatePending:
+		*s = FontResultItemStatePending
+		return nil
+	case FontResultItemStateReady:
+		*s = FontResultItemStateReady
+		return nil
+	case FontResultItemStateSubset:
+		*s = FontResultItemStateSubset
+		return nil
+	case FontResultItemStateNegative:
+		*s = FontResultItemStateNegative
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/FontResultList
+type FontResultList struct {
+	Items []FontResult `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *FontResultList) GetItems() []FontResult {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *FontResultList) SetItems(val []FontResult) {
+	s.Items = val
+}
+
+// Pending = job enqueued, not yet complete. ready = full WOFF2 produced (woff2_size set). subset =
+// subset WOFF2 also produced (both sizes set). negative = permanent failure; serve the original font
+// forever.
+type FontResultState string
+
+const (
+	FontResultStatePending  FontResultState = "pending"
+	FontResultStateReady    FontResultState = "ready"
+	FontResultStateSubset   FontResultState = "subset"
+	FontResultStateNegative FontResultState = "negative"
+)
+
+// AllValues returns all FontResultState values.
+func (FontResultState) AllValues() []FontResultState {
+	return []FontResultState{
+		FontResultStatePending,
+		FontResultStateReady,
+		FontResultStateSubset,
+		FontResultStateNegative,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FontResultState) MarshalText() ([]byte, error) {
+	switch s {
+	case FontResultStatePending:
+		return []byte(s), nil
+	case FontResultStateReady:
+		return []byte(s), nil
+	case FontResultStateSubset:
+		return []byte(s), nil
+	case FontResultStateNegative:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FontResultState) UnmarshalText(data []byte) error {
+	switch FontResultState(data) {
+	case FontResultStatePending:
+		*s = FontResultStatePending
+		return nil
+	case FontResultStateReady:
+		*s = FontResultStateReady
+		return nil
+	case FontResultStateSubset:
+		*s = FontResultStateSubset
+		return nil
+	case FontResultStateNegative:
+		*s = FontResultStateNegative
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// M54 Phase 1 — body the agent POSTs to /agent/v1/fonts/transcode when
+// it encounters a self-hosted font that needs WOFF2 encoding.
+// The agent MUST NOT supply a storage key; the CP derives all keys
+// server-side from the verified tenant identity + source_hash.
+// Ref: #/components/schemas/FontTranscodeRequest
+type FontTranscodeRequest struct {
+	// Hex-encoded BLAKE3 content hash of the raw source font bytes.
+	// Must be exactly 64 lowercase hex characters. The CP validates this
+	// strictly before deriving any storage keys — malformed values are
+	// rejected with 422.
+	SourceHash string `json:"source_hash"`
+	// Byte length of the source font. Must be > 0. Capped at 10 MiB.
+	SourceSize int64 `json:"source_size"`
+	// File extension hint: "ttf", "otf", or "woff". Informational only; the CP detects the real format
+	// from the magic bytes on the uploaded object. Omit for WOFF2 (transcoding is a no-op for WOFF2).
+	SourceExt OptFontTranscodeRequestSourceExt `json:"source_ext"`
+}
+
+// GetSourceHash returns the value of SourceHash.
+func (s *FontTranscodeRequest) GetSourceHash() string {
+	return s.SourceHash
+}
+
+// GetSourceSize returns the value of SourceSize.
+func (s *FontTranscodeRequest) GetSourceSize() int64 {
+	return s.SourceSize
+}
+
+// GetSourceExt returns the value of SourceExt.
+func (s *FontTranscodeRequest) GetSourceExt() OptFontTranscodeRequestSourceExt {
+	return s.SourceExt
+}
+
+// SetSourceHash sets the value of SourceHash.
+func (s *FontTranscodeRequest) SetSourceHash(val string) {
+	s.SourceHash = val
+}
+
+// SetSourceSize sets the value of SourceSize.
+func (s *FontTranscodeRequest) SetSourceSize(val int64) {
+	s.SourceSize = val
+}
+
+// SetSourceExt sets the value of SourceExt.
+func (s *FontTranscodeRequest) SetSourceExt(val OptFontTranscodeRequestSourceExt) {
+	s.SourceExt = val
+}
+
+// File extension hint: "ttf", "otf", or "woff". Informational only; the CP detects the real format
+// from the magic bytes on the uploaded object. Omit for WOFF2 (transcoding is a no-op for WOFF2).
+type FontTranscodeRequestSourceExt string
+
+const (
+	FontTranscodeRequestSourceExtTtf  FontTranscodeRequestSourceExt = "ttf"
+	FontTranscodeRequestSourceExtOtf  FontTranscodeRequestSourceExt = "otf"
+	FontTranscodeRequestSourceExtWoff FontTranscodeRequestSourceExt = "woff"
+)
+
+// AllValues returns all FontTranscodeRequestSourceExt values.
+func (FontTranscodeRequestSourceExt) AllValues() []FontTranscodeRequestSourceExt {
+	return []FontTranscodeRequestSourceExt{
+		FontTranscodeRequestSourceExtTtf,
+		FontTranscodeRequestSourceExtOtf,
+		FontTranscodeRequestSourceExtWoff,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FontTranscodeRequestSourceExt) MarshalText() ([]byte, error) {
+	switch s {
+	case FontTranscodeRequestSourceExtTtf:
+		return []byte(s), nil
+	case FontTranscodeRequestSourceExtOtf:
+		return []byte(s), nil
+	case FontTranscodeRequestSourceExtWoff:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FontTranscodeRequestSourceExt) UnmarshalText(data []byte) error {
+	switch FontTranscodeRequestSourceExt(data) {
+	case FontTranscodeRequestSourceExtTtf:
+		*s = FontTranscodeRequestSourceExtTtf
+		return nil
+	case FontTranscodeRequestSourceExtOtf:
+		*s = FontTranscodeRequestSourceExtOtf
+		return nil
+	case FontTranscodeRequestSourceExtWoff:
+		*s = FontTranscodeRequestSourceExtWoff
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// M54 Phase 1 — CP's reply to a FontTranscodeRequest.
+// Ref: #/components/schemas/FontTranscodeResponse
+type FontTranscodeResponse struct {
+	// "pending"  — a job is enqueued or in flight. `source_put_url` is
+	// present on the first-enqueue response; absent on polls.
+	// "ready"    — WOFF2 is available. `woff2_get_url` and `woff2_key`
+	// are present.
+	// "negative" — permanent failure; serve the original font forever.
+	State FontTranscodeResponseState `json:"state"`
+	// Presigned S3 PUT URL (15-min TTL) for the raw source font bytes.
+	// Present ONLY when state=="pending" AND the job was just freshly
+	// enqueued. The agent MUST PUT the source bytes here (Content-Type:
+	// application/octet-stream) before the encoder can run.
+	// Absent on subsequent polls (source already uploaded).
+	SourcePutURL OptString `json:"source_put_url"`
+	// Server-derived object-storage key for the WOFF2 output.
+	// Present only when state=="ready". Informational — the agent MUST
+	// NOT presign this key itself; use woff2_get_url instead.
+	Woff2Key OptString `json:"woff2_key"`
+	// Short-TTL presigned GET URL for the WOFF2 object, minted by the
+	// CP using the server-derived, GuardStorageKey-validated,
+	// tenant-scoped key. Present ONLY when state=="ready". The agent
+	// fetches the WOFF2 bytes from this URL. The agent MUST NOT
+	// presign or construct any storage key itself — that would
+	// reintroduce the path-traversal risk this design prevents.
+	Woff2GetURL OptString `json:"woff2_get_url"`
+	// Short diagnostic string. Present only when state=="negative".
+	ErrorDetail OptString `json:"error_detail"`
+}
+
+// GetState returns the value of State.
+func (s *FontTranscodeResponse) GetState() FontTranscodeResponseState {
+	return s.State
+}
+
+// GetSourcePutURL returns the value of SourcePutURL.
+func (s *FontTranscodeResponse) GetSourcePutURL() OptString {
+	return s.SourcePutURL
+}
+
+// GetWoff2Key returns the value of Woff2Key.
+func (s *FontTranscodeResponse) GetWoff2Key() OptString {
+	return s.Woff2Key
+}
+
+// GetWoff2GetURL returns the value of Woff2GetURL.
+func (s *FontTranscodeResponse) GetWoff2GetURL() OptString {
+	return s.Woff2GetURL
+}
+
+// GetErrorDetail returns the value of ErrorDetail.
+func (s *FontTranscodeResponse) GetErrorDetail() OptString {
+	return s.ErrorDetail
+}
+
+// SetState sets the value of State.
+func (s *FontTranscodeResponse) SetState(val FontTranscodeResponseState) {
+	s.State = val
+}
+
+// SetSourcePutURL sets the value of SourcePutURL.
+func (s *FontTranscodeResponse) SetSourcePutURL(val OptString) {
+	s.SourcePutURL = val
+}
+
+// SetWoff2Key sets the value of Woff2Key.
+func (s *FontTranscodeResponse) SetWoff2Key(val OptString) {
+	s.Woff2Key = val
+}
+
+// SetWoff2GetURL sets the value of Woff2GetURL.
+func (s *FontTranscodeResponse) SetWoff2GetURL(val OptString) {
+	s.Woff2GetURL = val
+}
+
+// SetErrorDetail sets the value of ErrorDetail.
+func (s *FontTranscodeResponse) SetErrorDetail(val OptString) {
+	s.ErrorDetail = val
+}
+
+func (*FontTranscodeResponse) agentFontsTranscodeRes() {}
+
+// "pending"  — a job is enqueued or in flight. `source_put_url` is
+// present on the first-enqueue response; absent on polls.
+// "ready"    — WOFF2 is available. `woff2_get_url` and `woff2_key`
+// are present.
+// "negative" — permanent failure; serve the original font forever.
+type FontTranscodeResponseState string
+
+const (
+	FontTranscodeResponseStatePending  FontTranscodeResponseState = "pending"
+	FontTranscodeResponseStateReady    FontTranscodeResponseState = "ready"
+	FontTranscodeResponseStateNegative FontTranscodeResponseState = "negative"
+)
+
+// AllValues returns all FontTranscodeResponseState values.
+func (FontTranscodeResponseState) AllValues() []FontTranscodeResponseState {
+	return []FontTranscodeResponseState{
+		FontTranscodeResponseStatePending,
+		FontTranscodeResponseStateReady,
+		FontTranscodeResponseStateNegative,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FontTranscodeResponseState) MarshalText() ([]byte, error) {
+	switch s {
+	case FontTranscodeResponseStatePending:
+		return []byte(s), nil
+	case FontTranscodeResponseStateReady:
+		return []byte(s), nil
+	case FontTranscodeResponseStateNegative:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FontTranscodeResponseState) UnmarshalText(data []byte) error {
+	switch FontTranscodeResponseState(data) {
+	case FontTranscodeResponseStatePending:
+		*s = FontTranscodeResponseStatePending
+		return nil
+	case FontTranscodeResponseStateReady:
+		*s = FontTranscodeResponseStateReady
+		return nil
+	case FontTranscodeResponseStateNegative:
+		*s = FontTranscodeResponseStateNegative
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
 }
 
 type GetBackupEnvironmentNotFound Error
@@ -4977,6 +5872,22 @@ func (*GetReadyzOK) getReadyzRes() {}
 type GetReadyzServiceUnavailable Readiness
 
 func (*GetReadyzServiceUnavailable) getReadyzRes() {}
+
+type GetRestoreRunForbidden Error
+
+func (*GetRestoreRunForbidden) getRestoreRunRes() {}
+
+type GetRestoreRunNotFound Error
+
+func (*GetRestoreRunNotFound) getRestoreRunRes() {}
+
+type GetScheduleRunForbidden Error
+
+func (*GetScheduleRunForbidden) getScheduleRunRes() {}
+
+type GetScheduleRunNotFound Error
+
+func (*GetScheduleRunNotFound) getScheduleRunRes() {}
 
 type GetSiteDestinationNotFound Error
 
@@ -5181,6 +6092,55 @@ func (*ListMembersForbidden) listMembersRes() {}
 type ListMembersUnauthorized Error
 
 func (*ListMembersUnauthorized) listMembersRes() {}
+
+type ListRestoreRunEventsForbidden Error
+
+func (*ListRestoreRunEventsForbidden) listRestoreRunEventsRes() {}
+
+type ListRestoreRunEventsNotFound Error
+
+func (*ListRestoreRunEventsNotFound) listRestoreRunEventsRes() {}
+
+type ListScheduleRunsStatus string
+
+const (
+	ListScheduleRunsStatusUpcoming ListScheduleRunsStatus = "upcoming"
+	ListScheduleRunsStatusPast     ListScheduleRunsStatus = "past"
+)
+
+// AllValues returns all ListScheduleRunsStatus values.
+func (ListScheduleRunsStatus) AllValues() []ListScheduleRunsStatus {
+	return []ListScheduleRunsStatus{
+		ListScheduleRunsStatusUpcoming,
+		ListScheduleRunsStatusPast,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ListScheduleRunsStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ListScheduleRunsStatusUpcoming:
+		return []byte(s), nil
+	case ListScheduleRunsStatusPast:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ListScheduleRunsStatus) UnmarshalText(data []byte) error {
+	switch ListScheduleRunsStatus(data) {
+	case ListScheduleRunsStatusUpcoming:
+		*s = ListScheduleRunsStatusUpcoming
+		return nil
+	case ListScheduleRunsStatusPast:
+		*s = ListScheduleRunsStatusPast
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 type ListSiteActivitySeverity string
 
@@ -6115,6 +7075,140 @@ func (s *MediaCleanIsolateResult) SetDetail(val OptString) {
 	s.Detail = val
 }
 
+// One attachment record inside a quarantine manifest.
+// Ref: #/components/schemas/MediaCleanQuarantineEntry
+type MediaCleanQuarantineEntry struct {
+	// WordPress attachment post ID.
+	AttachmentID int64 `json:"attachment_id"`
+	// Attachment post title.
+	Title string `json:"title"`
+	// Number of physical files (original + generated sizes) held in quarantine.
+	FileCount int `json:"file_count"`
+}
+
+// GetAttachmentID returns the value of AttachmentID.
+func (s *MediaCleanQuarantineEntry) GetAttachmentID() int64 {
+	return s.AttachmentID
+}
+
+// GetTitle returns the value of Title.
+func (s *MediaCleanQuarantineEntry) GetTitle() string {
+	return s.Title
+}
+
+// GetFileCount returns the value of FileCount.
+func (s *MediaCleanQuarantineEntry) GetFileCount() int {
+	return s.FileCount
+}
+
+// SetAttachmentID sets the value of AttachmentID.
+func (s *MediaCleanQuarantineEntry) SetAttachmentID(val int64) {
+	s.AttachmentID = val
+}
+
+// SetTitle sets the value of Title.
+func (s *MediaCleanQuarantineEntry) SetTitle(val string) {
+	s.Title = val
+}
+
+// SetFileCount sets the value of FileCount.
+func (s *MediaCleanQuarantineEntry) SetFileCount(val int) {
+	s.FileCount = val
+}
+
+// Response body for the list-quarantined-media endpoint.
+// Ref: #/components/schemas/MediaCleanQuarantineList
+type MediaCleanQuarantineList struct {
+	Ok bool `json:"ok"`
+	// All quarantine manifests currently held on the site.
+	Manifests []MediaCleanQuarantineManifest `json:"manifests"`
+}
+
+// GetOk returns the value of Ok.
+func (s *MediaCleanQuarantineList) GetOk() bool {
+	return s.Ok
+}
+
+// GetManifests returns the value of Manifests.
+func (s *MediaCleanQuarantineList) GetManifests() []MediaCleanQuarantineManifest {
+	return s.Manifests
+}
+
+// SetOk sets the value of Ok.
+func (s *MediaCleanQuarantineList) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetManifests sets the value of Manifests.
+func (s *MediaCleanQuarantineList) SetManifests(val []MediaCleanQuarantineManifest) {
+	s.Manifests = val
+}
+
+// One quarantine manifest created by a prior isolate call.
+// Ref: #/components/schemas/MediaCleanQuarantineManifest
+type MediaCleanQuarantineManifest struct {
+	// Opaque quarantine manifest identifier. Pass in quarantine_ids for restore/delete calls.
+	ManifestID string `json:"manifest_id"`
+	// Echoed job_id from the isolate request that created this manifest.
+	JobID string `json:"job_id"`
+	// Unix timestamp (seconds) when the manifest was created.
+	IsolatedAt int64 `json:"isolated_at"`
+	// Total number of physical files held across all entries in this manifest.
+	TotalFiles int `json:"total_files"`
+	// Per-attachment entries in this manifest.
+	Entries []MediaCleanQuarantineEntry `json:"entries"`
+}
+
+// GetManifestID returns the value of ManifestID.
+func (s *MediaCleanQuarantineManifest) GetManifestID() string {
+	return s.ManifestID
+}
+
+// GetJobID returns the value of JobID.
+func (s *MediaCleanQuarantineManifest) GetJobID() string {
+	return s.JobID
+}
+
+// GetIsolatedAt returns the value of IsolatedAt.
+func (s *MediaCleanQuarantineManifest) GetIsolatedAt() int64 {
+	return s.IsolatedAt
+}
+
+// GetTotalFiles returns the value of TotalFiles.
+func (s *MediaCleanQuarantineManifest) GetTotalFiles() int {
+	return s.TotalFiles
+}
+
+// GetEntries returns the value of Entries.
+func (s *MediaCleanQuarantineManifest) GetEntries() []MediaCleanQuarantineEntry {
+	return s.Entries
+}
+
+// SetManifestID sets the value of ManifestID.
+func (s *MediaCleanQuarantineManifest) SetManifestID(val string) {
+	s.ManifestID = val
+}
+
+// SetJobID sets the value of JobID.
+func (s *MediaCleanQuarantineManifest) SetJobID(val string) {
+	s.JobID = val
+}
+
+// SetIsolatedAt sets the value of IsolatedAt.
+func (s *MediaCleanQuarantineManifest) SetIsolatedAt(val int64) {
+	s.IsolatedAt = val
+}
+
+// SetTotalFiles sets the value of TotalFiles.
+func (s *MediaCleanQuarantineManifest) SetTotalFiles(val int) {
+	s.TotalFiles = val
+}
+
+// SetEntries sets the value of Entries.
+func (s *MediaCleanQuarantineManifest) SetEntries(val []MediaCleanQuarantineEntry) {
+	s.Entries = val
+}
+
 // Ref: #/components/schemas/MediaCleanRestoreRequest
 type MediaCleanRestoreRequest struct {
 	// Client-minted UUID v4 for idempotency.
@@ -6197,12 +7291,15 @@ func (s *MediaCleanRestoreResult) SetDetail(val OptString) {
 // Ref: #/components/schemas/MediaCleanScanResult
 type MediaCleanScanResult struct {
 	Ok bool `json:"ok"`
-	// Total number of unused attachments found (for progress/pagination display).
+	// Full unused-candidate count (capped at SCAN_MAX=500). Use this value to drive client-side
+	// pagination of the candidates array.
 	Total int `json:"total"`
-	// Unused attachment candidates in this page.
+	// Unused attachment candidates sliced by the requested offset/limit. The client should fetch once
+	// with offset=0 and limit=SCAN_MAX and paginate the returned array client-side.
 	Candidates []MediaCleanCandidate `json:"candidates"`
-	// True when there are more pages at higher offsets.
-	HasMore bool `json:"has_more"`
+	// True when the library has more unused attachments than SCAN_MAX. The returned candidates and total
+	// are capped at SCAN_MAX.
+	Truncated bool `json:"truncated"`
 	// Human-readable error message when ok=false.
 	Detail OptString `json:"detail"`
 }
@@ -6222,9 +7319,9 @@ func (s *MediaCleanScanResult) GetCandidates() []MediaCleanCandidate {
 	return s.Candidates
 }
 
-// GetHasMore returns the value of HasMore.
-func (s *MediaCleanScanResult) GetHasMore() bool {
-	return s.HasMore
+// GetTruncated returns the value of Truncated.
+func (s *MediaCleanScanResult) GetTruncated() bool {
+	return s.Truncated
 }
 
 // GetDetail returns the value of Detail.
@@ -6247,9 +7344,9 @@ func (s *MediaCleanScanResult) SetCandidates(val []MediaCleanCandidate) {
 	s.Candidates = val
 }
 
-// SetHasMore sets the value of HasMore.
-func (s *MediaCleanScanResult) SetHasMore(val bool) {
-	s.HasMore = val
+// SetTruncated sets the value of Truncated.
+func (s *MediaCleanScanResult) SetTruncated(val bool) {
+	s.Truncated = val
 }
 
 // SetDetail sets the value of Detail.
@@ -8067,6 +9164,52 @@ func (o OptCreateRestoreAcceptedProgress) Or(d CreateRestoreAcceptedProgress) Cr
 	return d
 }
 
+// NewOptCreateSiteConflictDetails returns new OptCreateSiteConflictDetails with value set to v.
+func NewOptCreateSiteConflictDetails(v CreateSiteConflictDetails) OptCreateSiteConflictDetails {
+	return OptCreateSiteConflictDetails{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptCreateSiteConflictDetails is optional CreateSiteConflictDetails.
+type OptCreateSiteConflictDetails struct {
+	Value CreateSiteConflictDetails
+	Set   bool
+}
+
+// IsSet returns true if OptCreateSiteConflictDetails was set.
+func (o OptCreateSiteConflictDetails) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptCreateSiteConflictDetails) Reset() {
+	var v CreateSiteConflictDetails
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptCreateSiteConflictDetails) SetTo(v CreateSiteConflictDetails) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptCreateSiteConflictDetails) Get() (v CreateSiteConflictDetails, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptCreateSiteConflictDetails) Or(d CreateSiteConflictDetails) CreateSiteConflictDetails {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptDateTime returns new OptDateTime with value set to v.
 func NewOptDateTime(v time.Time) OptDateTime {
 	return OptDateTime{
@@ -8435,6 +9578,98 @@ func (o OptFloat64) Or(d float64) float64 {
 	return d
 }
 
+// NewOptFontResultState returns new OptFontResultState with value set to v.
+func NewOptFontResultState(v FontResultState) OptFontResultState {
+	return OptFontResultState{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFontResultState is optional FontResultState.
+type OptFontResultState struct {
+	Value FontResultState
+	Set   bool
+}
+
+// IsSet returns true if OptFontResultState was set.
+func (o OptFontResultState) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFontResultState) Reset() {
+	var v FontResultState
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFontResultState) SetTo(v FontResultState) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFontResultState) Get() (v FontResultState, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFontResultState) Or(d FontResultState) FontResultState {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptFontTranscodeRequestSourceExt returns new OptFontTranscodeRequestSourceExt with value set to v.
+func NewOptFontTranscodeRequestSourceExt(v FontTranscodeRequestSourceExt) OptFontTranscodeRequestSourceExt {
+	return OptFontTranscodeRequestSourceExt{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFontTranscodeRequestSourceExt is optional FontTranscodeRequestSourceExt.
+type OptFontTranscodeRequestSourceExt struct {
+	Value FontTranscodeRequestSourceExt
+	Set   bool
+}
+
+// IsSet returns true if OptFontTranscodeRequestSourceExt was set.
+func (o OptFontTranscodeRequestSourceExt) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFontTranscodeRequestSourceExt) Reset() {
+	var v FontTranscodeRequestSourceExt
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFontTranscodeRequestSourceExt) SetTo(v FontTranscodeRequestSourceExt) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFontTranscodeRequestSourceExt) Get() (v FontTranscodeRequestSourceExt, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFontTranscodeRequestSourceExt) Or(d FontTranscodeRequestSourceExt) FontTranscodeRequestSourceExt {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptGetSiteUptimeWindow returns new OptGetSiteUptimeWindow with value set to v.
 func NewOptGetSiteUptimeWindow(v GetSiteUptimeWindow) OptGetSiteUptimeWindow {
 	return OptGetSiteUptimeWindow{
@@ -8613,6 +9848,52 @@ func (o OptInt64) Get() (v int64, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptInt64) Or(d int64) int64 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptListScheduleRunsStatus returns new OptListScheduleRunsStatus with value set to v.
+func NewOptListScheduleRunsStatus(v ListScheduleRunsStatus) OptListScheduleRunsStatus {
+	return OptListScheduleRunsStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptListScheduleRunsStatus is optional ListScheduleRunsStatus.
+type OptListScheduleRunsStatus struct {
+	Value ListScheduleRunsStatus
+	Set   bool
+}
+
+// IsSet returns true if OptListScheduleRunsStatus was set.
+func (o OptListScheduleRunsStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptListScheduleRunsStatus) Reset() {
+	var v ListScheduleRunsStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptListScheduleRunsStatus) SetTo(v ListScheduleRunsStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptListScheduleRunsStatus) Get() (v ListScheduleRunsStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptListScheduleRunsStatus) Or(d ListScheduleRunsStatus) ListScheduleRunsStatus {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -11228,32 +12509,45 @@ func (*PerfActionResult) purgeCacheRes() {}
 // agent-derived.
 // Ref: #/components/schemas/PerfConfig
 type PerfConfig struct {
-	CacheEnabled              OptBool           `json:"cache_enabled"`
-	CacheLoggedIn             OptBool           `json:"cache_logged_in"`
-	CacheMobile               OptBool           `json:"cache_mobile"`
-	CacheRefresh              OptBool           `json:"cache_refresh"`
-	CacheRefreshInterval      OptString         `json:"cache_refresh_interval"`
-	CacheLinkPrefetch         OptBool           `json:"cache_link_prefetch"`
-	CacheBypassUrls           []string          `json:"cache_bypass_urls"`
-	CacheBypassCookies        []string          `json:"cache_bypass_cookies"`
-	CacheIncludeQueries       []string          `json:"cache_include_queries"`
-	CacheIncludeCookies       []string          `json:"cache_include_cookies"`
-	PreloadConcurrency        OptInt            `json:"preload_concurrency"`
-	PreloadDelayMs            OptInt            `json:"preload_delay_ms"`
-	PreloadBatchSize          OptInt            `json:"preload_batch_size"`
-	PreloadMaxLoad            OptFloat32        `json:"preload_max_load"`
-	CSSJsMinify               OptBool           `json:"css_js_minify"`
-	CSSRucss                  OptBool           `json:"css_rucss"`
-	CSSRucssIncludeSelectors  []string          `json:"css_rucss_include_selectors"`
-	CSSJsSelfHostThirdParty   OptBool           `json:"css_js_self_host_third_party"`
-	JsDelay                   OptBool           `json:"js_delay"`
-	JsDelayMethod             OptString         `json:"js_delay_method"`
-	JsDelayExcludes           []string          `json:"js_delay_excludes"`
-	JsDelayThirdParty         OptBool           `json:"js_delay_third_party"`
-	JsDelayThirdPartyExcludes []string          `json:"js_delay_third_party_excludes"`
-	FontsDisplaySwap          OptBool           `json:"fonts_display_swap"`
-	FontsOptimizeGoogle       OptBool           `json:"fonts_optimize_google"`
-	FontsPreload              OptBool           `json:"fonts_preload"`
+	CacheEnabled              OptBool    `json:"cache_enabled"`
+	CacheLoggedIn             OptBool    `json:"cache_logged_in"`
+	CacheMobile               OptBool    `json:"cache_mobile"`
+	CacheRefresh              OptBool    `json:"cache_refresh"`
+	CacheRefreshInterval      OptString  `json:"cache_refresh_interval"`
+	CacheLinkPrefetch         OptBool    `json:"cache_link_prefetch"`
+	CacheBypassUrls           []string   `json:"cache_bypass_urls"`
+	CacheBypassCookies        []string   `json:"cache_bypass_cookies"`
+	CacheIncludeQueries       []string   `json:"cache_include_queries"`
+	CacheIncludeCookies       []string   `json:"cache_include_cookies"`
+	PreloadConcurrency        OptInt     `json:"preload_concurrency"`
+	PreloadDelayMs            OptInt     `json:"preload_delay_ms"`
+	PreloadBatchSize          OptInt     `json:"preload_batch_size"`
+	PreloadMaxLoad            OptFloat32 `json:"preload_max_load"`
+	CSSJsMinify               OptBool    `json:"css_js_minify"`
+	CSSRucss                  OptBool    `json:"css_rucss"`
+	CSSRucssIncludeSelectors  []string   `json:"css_rucss_include_selectors"`
+	CSSJsSelfHostThirdParty   OptBool    `json:"css_js_self_host_third_party"`
+	JsDelay                   OptBool    `json:"js_delay"`
+	JsDelayMethod             OptString  `json:"js_delay_method"`
+	JsDelayExcludes           []string   `json:"js_delay_excludes"`
+	JsDelayThirdParty         OptBool    `json:"js_delay_third_party"`
+	JsDelayThirdPartyExcludes []string   `json:"js_delay_third_party_excludes"`
+	FontsDisplaySwap          OptBool    `json:"fonts_display_swap"`
+	FontsOptimizeGoogle       OptBool    `json:"fonts_optimize_google"`
+	FontsPreload              OptBool    `json:"fonts_preload"`
+	// Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent
+	// requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the
+	// WOFF2 in object storage. Default false.
+	FontsTranscodeWoff2 OptBool `json:"fonts_transcode_woff2"`
+	// Enable subset-WOFF2 production (Phase 2, experimental). When true the media-encoder also produces
+	// a subset WOFF2 restricted to the unicode range specified by fonts_subset_range. Default false
+	// (opt-in).
+	FontsSubset OptBool `json:"fonts_subset"`
+	// Subsetting strategy. "range" (fixed unicode-range block) is the only supported mode in v1. Stored
+	// for forward compatibility.
+	FontsSubsetMode OptString `json:"fonts_subset_mode"`
+	// Named unicode range to subset to. "latin-ext" is the safe default (U+0000-024F, U+1E00-1EFF).
+	FontsSubsetRange          OptString         `json:"fonts_subset_range"`
 	LazyLoad                  OptBool           `json:"lazy_load"`
 	LazyLoadExclusions        []string          `json:"lazy_load_exclusions"`
 	ProperlySizeImages        OptBool           `json:"properly_size_images"`
@@ -11287,8 +12581,24 @@ type PerfConfig struct {
 	DropinInstalled           OptBool           `json:"dropin_installed"`
 	WpCacheConstantSet        OptBool           `json:"wp_cache_constant_set"`
 	HtaccessManaged           OptBool           `json:"htaccess_managed"`
-	ConfigVersion             OptInt            `json:"config_version"`
-	UpdatedAt                 OptDateTime       `json:"updated_at"`
+	// When true the agent will cache the WooCommerce catalog shell for
+	// anonymous shoppers who have an active cart. The agent additionally
+	// hard-gates on its own theme probe (`woo_theme_fragments_supported`)
+	// before serving cached pages to cart-holding visitors, providing a
+	// defense-in-depth layer independent of this flag.
+	// The API accepts `woo_cacheable_session: true` even when
+	// `woo_theme_fragments_supported` is false — the agent will not act on
+	// it until its own probe passes. This allows operators to pre-enable the
+	// flag before the agent performs its first probe.
+	WooCacheableSession OptBool `json:"woo_cacheable_session"`
+	// Agent-reported (read-only). Set to true by the agent after it probes
+	// the site's active theme and confirms WooCommerce fragment-refresh
+	// compatibility (wc_ajax_get_refreshed_fragments hook availability).
+	// The CP stores this value but never lets an operator write it via PUT.
+	// Old agents that pre-date M53 will leave this field false.
+	WooThemeFragmentsSupported OptBool     `json:"woo_theme_fragments_supported"`
+	ConfigVersion              OptInt      `json:"config_version"`
+	UpdatedAt                  OptDateTime `json:"updated_at"`
 }
 
 // GetCacheEnabled returns the value of CacheEnabled.
@@ -11419,6 +12729,26 @@ func (s *PerfConfig) GetFontsOptimizeGoogle() OptBool {
 // GetFontsPreload returns the value of FontsPreload.
 func (s *PerfConfig) GetFontsPreload() OptBool {
 	return s.FontsPreload
+}
+
+// GetFontsTranscodeWoff2 returns the value of FontsTranscodeWoff2.
+func (s *PerfConfig) GetFontsTranscodeWoff2() OptBool {
+	return s.FontsTranscodeWoff2
+}
+
+// GetFontsSubset returns the value of FontsSubset.
+func (s *PerfConfig) GetFontsSubset() OptBool {
+	return s.FontsSubset
+}
+
+// GetFontsSubsetMode returns the value of FontsSubsetMode.
+func (s *PerfConfig) GetFontsSubsetMode() OptString {
+	return s.FontsSubsetMode
+}
+
+// GetFontsSubsetRange returns the value of FontsSubsetRange.
+func (s *PerfConfig) GetFontsSubsetRange() OptString {
+	return s.FontsSubsetRange
 }
 
 // GetLazyLoad returns the value of LazyLoad.
@@ -11586,6 +12916,16 @@ func (s *PerfConfig) GetHtaccessManaged() OptBool {
 	return s.HtaccessManaged
 }
 
+// GetWooCacheableSession returns the value of WooCacheableSession.
+func (s *PerfConfig) GetWooCacheableSession() OptBool {
+	return s.WooCacheableSession
+}
+
+// GetWooThemeFragmentsSupported returns the value of WooThemeFragmentsSupported.
+func (s *PerfConfig) GetWooThemeFragmentsSupported() OptBool {
+	return s.WooThemeFragmentsSupported
+}
+
 // GetConfigVersion returns the value of ConfigVersion.
 func (s *PerfConfig) GetConfigVersion() OptInt {
 	return s.ConfigVersion
@@ -11724,6 +13064,26 @@ func (s *PerfConfig) SetFontsOptimizeGoogle(val OptBool) {
 // SetFontsPreload sets the value of FontsPreload.
 func (s *PerfConfig) SetFontsPreload(val OptBool) {
 	s.FontsPreload = val
+}
+
+// SetFontsTranscodeWoff2 sets the value of FontsTranscodeWoff2.
+func (s *PerfConfig) SetFontsTranscodeWoff2(val OptBool) {
+	s.FontsTranscodeWoff2 = val
+}
+
+// SetFontsSubset sets the value of FontsSubset.
+func (s *PerfConfig) SetFontsSubset(val OptBool) {
+	s.FontsSubset = val
+}
+
+// SetFontsSubsetMode sets the value of FontsSubsetMode.
+func (s *PerfConfig) SetFontsSubsetMode(val OptString) {
+	s.FontsSubsetMode = val
+}
+
+// SetFontsSubsetRange sets the value of FontsSubsetRange.
+func (s *PerfConfig) SetFontsSubsetRange(val OptString) {
+	s.FontsSubsetRange = val
 }
 
 // SetLazyLoad sets the value of LazyLoad.
@@ -11889,6 +13249,16 @@ func (s *PerfConfig) SetWpCacheConstantSet(val OptBool) {
 // SetHtaccessManaged sets the value of HtaccessManaged.
 func (s *PerfConfig) SetHtaccessManaged(val OptBool) {
 	s.HtaccessManaged = val
+}
+
+// SetWooCacheableSession sets the value of WooCacheableSession.
+func (s *PerfConfig) SetWooCacheableSession(val OptBool) {
+	s.WooCacheableSession = val
+}
+
+// SetWooThemeFragmentsSupported sets the value of WooThemeFragmentsSupported.
+func (s *PerfConfig) SetWooThemeFragmentsSupported(val OptBool) {
+	s.WooThemeFragmentsSupported = val
 }
 
 // SetConfigVersion sets the value of ConfigVersion.
@@ -12334,6 +13704,483 @@ func (s *RestoreCreateComponentsItem) UnmarshalText(data []byte) error {
 	}
 }
 
+// A single restore attempt, created when the operator calls
+// `POST /backups/{snapshotId}/restore`. The run advances through
+// phases as the agent executes the restore; `current_phase` reflects
+// the latest phase received from the agent. `triggered_by_email` and
+// `triggered_by_name` are resolved from the tenant user directory
+// when the actor is a known user; they are `null` for API-key or
+// system-triggered restores.
+// Ref: #/components/schemas/RestoreRun
+type RestoreRun struct {
+	// Unique restore run ID.
+	ID uuid.UUID `json:"id"`
+	// ID of the site being restored.
+	SiteID uuid.UUID `json:"site_id"`
+	// ID of the backup snapshot used as the restore source.
+	SnapshotID uuid.UUID `json:"snapshot_id"`
+	// Restore mode. `full` means all components were requested;
+	// `partial` means a subset was specified.
+	Mode RestoreRunMode `json:"mode"`
+	// Which backup components were restored (e.g. `files`, `db`).
+	Components []RestoreRunComponentsItem `json:"components"`
+	// Current status of the restore run.
+	Status RestoreRunStatus `json:"status"`
+	// The last phase reported by the agent runner (absent when queued).
+	CurrentPhase OptString `json:"current_phase"`
+	// Human-readable error message when status is `failed` or `rolled_back`.
+	Error OptString `json:"error"`
+	// Raw actor identifier (user UUID or `api-key:<id>` or `system`).
+	TriggeredBy OptString `json:"triggered_by"`
+	// Email of the triggering user (null for non-user actors or unresolvable IDs).
+	TriggeredByEmail OptNilString `json:"triggered_by_email"`
+	// Display name of the triggering user (null for non-user actors or unresolvable IDs).
+	TriggeredByName OptNilString `json:"triggered_by_name"`
+	// When the restore run was created.
+	CreatedAt time.Time `json:"created_at"`
+	// When the agent began executing the restore (absent until running).
+	StartedAt OptDateTime `json:"started_at"`
+	// When the restore run reached a terminal state.
+	FinishedAt OptDateTime `json:"finished_at"`
+}
+
+// GetID returns the value of ID.
+func (s *RestoreRun) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *RestoreRun) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSnapshotID returns the value of SnapshotID.
+func (s *RestoreRun) GetSnapshotID() uuid.UUID {
+	return s.SnapshotID
+}
+
+// GetMode returns the value of Mode.
+func (s *RestoreRun) GetMode() RestoreRunMode {
+	return s.Mode
+}
+
+// GetComponents returns the value of Components.
+func (s *RestoreRun) GetComponents() []RestoreRunComponentsItem {
+	return s.Components
+}
+
+// GetStatus returns the value of Status.
+func (s *RestoreRun) GetStatus() RestoreRunStatus {
+	return s.Status
+}
+
+// GetCurrentPhase returns the value of CurrentPhase.
+func (s *RestoreRun) GetCurrentPhase() OptString {
+	return s.CurrentPhase
+}
+
+// GetError returns the value of Error.
+func (s *RestoreRun) GetError() OptString {
+	return s.Error
+}
+
+// GetTriggeredBy returns the value of TriggeredBy.
+func (s *RestoreRun) GetTriggeredBy() OptString {
+	return s.TriggeredBy
+}
+
+// GetTriggeredByEmail returns the value of TriggeredByEmail.
+func (s *RestoreRun) GetTriggeredByEmail() OptNilString {
+	return s.TriggeredByEmail
+}
+
+// GetTriggeredByName returns the value of TriggeredByName.
+func (s *RestoreRun) GetTriggeredByName() OptNilString {
+	return s.TriggeredByName
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *RestoreRun) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *RestoreRun) GetStartedAt() OptDateTime {
+	return s.StartedAt
+}
+
+// GetFinishedAt returns the value of FinishedAt.
+func (s *RestoreRun) GetFinishedAt() OptDateTime {
+	return s.FinishedAt
+}
+
+// SetID sets the value of ID.
+func (s *RestoreRun) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *RestoreRun) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSnapshotID sets the value of SnapshotID.
+func (s *RestoreRun) SetSnapshotID(val uuid.UUID) {
+	s.SnapshotID = val
+}
+
+// SetMode sets the value of Mode.
+func (s *RestoreRun) SetMode(val RestoreRunMode) {
+	s.Mode = val
+}
+
+// SetComponents sets the value of Components.
+func (s *RestoreRun) SetComponents(val []RestoreRunComponentsItem) {
+	s.Components = val
+}
+
+// SetStatus sets the value of Status.
+func (s *RestoreRun) SetStatus(val RestoreRunStatus) {
+	s.Status = val
+}
+
+// SetCurrentPhase sets the value of CurrentPhase.
+func (s *RestoreRun) SetCurrentPhase(val OptString) {
+	s.CurrentPhase = val
+}
+
+// SetError sets the value of Error.
+func (s *RestoreRun) SetError(val OptString) {
+	s.Error = val
+}
+
+// SetTriggeredBy sets the value of TriggeredBy.
+func (s *RestoreRun) SetTriggeredBy(val OptString) {
+	s.TriggeredBy = val
+}
+
+// SetTriggeredByEmail sets the value of TriggeredByEmail.
+func (s *RestoreRun) SetTriggeredByEmail(val OptNilString) {
+	s.TriggeredByEmail = val
+}
+
+// SetTriggeredByName sets the value of TriggeredByName.
+func (s *RestoreRun) SetTriggeredByName(val OptNilString) {
+	s.TriggeredByName = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *RestoreRun) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *RestoreRun) SetStartedAt(val OptDateTime) {
+	s.StartedAt = val
+}
+
+// SetFinishedAt sets the value of FinishedAt.
+func (s *RestoreRun) SetFinishedAt(val OptDateTime) {
+	s.FinishedAt = val
+}
+
+func (*RestoreRun) getRestoreRunRes() {}
+
+type RestoreRunComponentsItem string
+
+const (
+	RestoreRunComponentsItemFiles RestoreRunComponentsItem = "files"
+	RestoreRunComponentsItemDb    RestoreRunComponentsItem = "db"
+)
+
+// AllValues returns all RestoreRunComponentsItem values.
+func (RestoreRunComponentsItem) AllValues() []RestoreRunComponentsItem {
+	return []RestoreRunComponentsItem{
+		RestoreRunComponentsItemFiles,
+		RestoreRunComponentsItemDb,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RestoreRunComponentsItem) MarshalText() ([]byte, error) {
+	switch s {
+	case RestoreRunComponentsItemFiles:
+		return []byte(s), nil
+	case RestoreRunComponentsItemDb:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RestoreRunComponentsItem) UnmarshalText(data []byte) error {
+	switch RestoreRunComponentsItem(data) {
+	case RestoreRunComponentsItemFiles:
+		*s = RestoreRunComponentsItemFiles
+		return nil
+	case RestoreRunComponentsItemDb:
+		*s = RestoreRunComponentsItemDb
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// A single phase-log entry emitted by the restore engine.
+// Ref: #/components/schemas/RestoreRunEvent
+type RestoreRunEvent struct {
+	// Monotonically increasing event ID (use as cursor for `?after=`).
+	ID int64 `json:"id"`
+	// The restore phase that produced this event.
+	Phase string `json:"phase"`
+	// Outcome of the phase at the time of this event.
+	Status RestoreRunEventStatus `json:"status"`
+	// Optional human-readable detail from the agent.
+	Message OptString `json:"message"`
+	// Wall-clock time at which the event was recorded.
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// GetID returns the value of ID.
+func (s *RestoreRunEvent) GetID() int64 {
+	return s.ID
+}
+
+// GetPhase returns the value of Phase.
+func (s *RestoreRunEvent) GetPhase() string {
+	return s.Phase
+}
+
+// GetStatus returns the value of Status.
+func (s *RestoreRunEvent) GetStatus() RestoreRunEventStatus {
+	return s.Status
+}
+
+// GetMessage returns the value of Message.
+func (s *RestoreRunEvent) GetMessage() OptString {
+	return s.Message
+}
+
+// GetOccurredAt returns the value of OccurredAt.
+func (s *RestoreRunEvent) GetOccurredAt() time.Time {
+	return s.OccurredAt
+}
+
+// SetID sets the value of ID.
+func (s *RestoreRunEvent) SetID(val int64) {
+	s.ID = val
+}
+
+// SetPhase sets the value of Phase.
+func (s *RestoreRunEvent) SetPhase(val string) {
+	s.Phase = val
+}
+
+// SetStatus sets the value of Status.
+func (s *RestoreRunEvent) SetStatus(val RestoreRunEventStatus) {
+	s.Status = val
+}
+
+// SetMessage sets the value of Message.
+func (s *RestoreRunEvent) SetMessage(val OptString) {
+	s.Message = val
+}
+
+// SetOccurredAt sets the value of OccurredAt.
+func (s *RestoreRunEvent) SetOccurredAt(val time.Time) {
+	s.OccurredAt = val
+}
+
+// Ref: #/components/schemas/RestoreRunEventList
+type RestoreRunEventList struct {
+	Items []RestoreRunEvent `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *RestoreRunEventList) GetItems() []RestoreRunEvent {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *RestoreRunEventList) SetItems(val []RestoreRunEvent) {
+	s.Items = val
+}
+
+func (*RestoreRunEventList) listRestoreRunEventsRes() {}
+
+// Outcome of the phase at the time of this event.
+type RestoreRunEventStatus string
+
+const (
+	RestoreRunEventStatusStarted   RestoreRunEventStatus = "started"
+	RestoreRunEventStatusCompleted RestoreRunEventStatus = "completed"
+	RestoreRunEventStatusFailed    RestoreRunEventStatus = "failed"
+)
+
+// AllValues returns all RestoreRunEventStatus values.
+func (RestoreRunEventStatus) AllValues() []RestoreRunEventStatus {
+	return []RestoreRunEventStatus{
+		RestoreRunEventStatusStarted,
+		RestoreRunEventStatusCompleted,
+		RestoreRunEventStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RestoreRunEventStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case RestoreRunEventStatusStarted:
+		return []byte(s), nil
+	case RestoreRunEventStatusCompleted:
+		return []byte(s), nil
+	case RestoreRunEventStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RestoreRunEventStatus) UnmarshalText(data []byte) error {
+	switch RestoreRunEventStatus(data) {
+	case RestoreRunEventStatusStarted:
+		*s = RestoreRunEventStatusStarted
+		return nil
+	case RestoreRunEventStatusCompleted:
+		*s = RestoreRunEventStatusCompleted
+		return nil
+	case RestoreRunEventStatusFailed:
+		*s = RestoreRunEventStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/RestoreRunList
+type RestoreRunList struct {
+	Items []RestoreRun `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *RestoreRunList) GetItems() []RestoreRun {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *RestoreRunList) SetItems(val []RestoreRun) {
+	s.Items = val
+}
+
+func (*RestoreRunList) listRestoreRunsRes() {}
+
+// Restore mode. `full` means all components were requested;
+// `partial` means a subset was specified.
+type RestoreRunMode string
+
+const (
+	RestoreRunModeFull    RestoreRunMode = "full"
+	RestoreRunModePartial RestoreRunMode = "partial"
+)
+
+// AllValues returns all RestoreRunMode values.
+func (RestoreRunMode) AllValues() []RestoreRunMode {
+	return []RestoreRunMode{
+		RestoreRunModeFull,
+		RestoreRunModePartial,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RestoreRunMode) MarshalText() ([]byte, error) {
+	switch s {
+	case RestoreRunModeFull:
+		return []byte(s), nil
+	case RestoreRunModePartial:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RestoreRunMode) UnmarshalText(data []byte) error {
+	switch RestoreRunMode(data) {
+	case RestoreRunModeFull:
+		*s = RestoreRunModeFull
+		return nil
+	case RestoreRunModePartial:
+		*s = RestoreRunModePartial
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Current status of the restore run.
+type RestoreRunStatus string
+
+const (
+	RestoreRunStatusQueued     RestoreRunStatus = "queued"
+	RestoreRunStatusRunning    RestoreRunStatus = "running"
+	RestoreRunStatusCompleted  RestoreRunStatus = "completed"
+	RestoreRunStatusFailed     RestoreRunStatus = "failed"
+	RestoreRunStatusRolledBack RestoreRunStatus = "rolled_back"
+)
+
+// AllValues returns all RestoreRunStatus values.
+func (RestoreRunStatus) AllValues() []RestoreRunStatus {
+	return []RestoreRunStatus{
+		RestoreRunStatusQueued,
+		RestoreRunStatusRunning,
+		RestoreRunStatusCompleted,
+		RestoreRunStatusFailed,
+		RestoreRunStatusRolledBack,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RestoreRunStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case RestoreRunStatusQueued:
+		return []byte(s), nil
+	case RestoreRunStatusRunning:
+		return []byte(s), nil
+	case RestoreRunStatusCompleted:
+		return []byte(s), nil
+	case RestoreRunStatusFailed:
+		return []byte(s), nil
+	case RestoreRunStatusRolledBack:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RestoreRunStatus) UnmarshalText(data []byte) error {
+	switch RestoreRunStatus(data) {
+	case RestoreRunStatusQueued:
+		*s = RestoreRunStatusQueued
+		return nil
+	case RestoreRunStatusRunning:
+		*s = RestoreRunStatusRunning
+		return nil
+	case RestoreRunStatusCompleted:
+		*s = RestoreRunStatusCompleted
+		return nil
+	case RestoreRunStatusFailed:
+		*s = RestoreRunStatusFailed
+		return nil
+	case RestoreRunStatusRolledBack:
+		*s = RestoreRunStatusRolledBack
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 type RevokeApiKeyForbidden Error
 
 func (*RevokeApiKeyForbidden) revokeApiKeyRes() {}
@@ -12539,6 +14386,339 @@ func (s *RucssResultList) GetItems() []RucssResult {
 // SetItems sets the value of Items.
 func (s *RucssResultList) SetItems(val []RucssResult) {
 	s.Items = val
+}
+
+// A single scheduled-backup fire. Pre-inserted as `scheduled` before
+// the run window opens, then advanced to `queued` (dispatched to River),
+// `running` (agent executing), and finally a terminal status
+// (`completed`, `failed`, `skipped`, or `canceled`).
+// `triggered_by_email` and `triggered_by_name` are resolved from the
+// tenant user directory when the actor is a known user (schedule-fired
+// runs carry `triggered_by="schedule"` and leave these null).
+// Ref: #/components/schemas/ScheduleRun
+type ScheduleRun struct {
+	// Unique schedule run ID.
+	ID uuid.UUID `json:"id"`
+	// ID of the site this run targets.
+	SiteID uuid.UUID `json:"site_id"`
+	// ID of the backup schedule that generated this run.
+	ScheduleID uuid.UUID `json:"schedule_id"`
+	// ID of the backup snapshot created by this run (absent until the snapshot is created).
+	SnapshotID OptUUID `json:"snapshot_id"`
+	// The scheduled fire time for this run.
+	ScheduledFor time.Time `json:"scheduled_for"`
+	// Current status of the schedule run.
+	Status ScheduleRunStatus `json:"status"`
+	// Backup kind that will be (or was) created by this run.
+	Kind ScheduleRunKind `json:"kind"`
+	// Human-readable error message when status is `failed`.
+	Error OptString `json:"error"`
+	// Actor that triggered this run (`schedule` for automatic fires; user UUID for manual).
+	TriggeredBy OptString `json:"triggered_by"`
+	// Email of the triggering user (null for schedule-fired or unresolvable actors).
+	TriggeredByEmail OptNilString `json:"triggered_by_email"`
+	// Display name of the triggering user (null for schedule-fired or unresolvable actors).
+	TriggeredByName OptNilString `json:"triggered_by_name"`
+	// When the schedule run row was created.
+	CreatedAt time.Time `json:"created_at"`
+	// When the run transitioned to `running` (absent until then).
+	StartedAt OptDateTime `json:"started_at"`
+	// When the run reached a terminal state.
+	FinishedAt OptDateTime `json:"finished_at"`
+}
+
+// GetID returns the value of ID.
+func (s *ScheduleRun) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *ScheduleRun) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetScheduleID returns the value of ScheduleID.
+func (s *ScheduleRun) GetScheduleID() uuid.UUID {
+	return s.ScheduleID
+}
+
+// GetSnapshotID returns the value of SnapshotID.
+func (s *ScheduleRun) GetSnapshotID() OptUUID {
+	return s.SnapshotID
+}
+
+// GetScheduledFor returns the value of ScheduledFor.
+func (s *ScheduleRun) GetScheduledFor() time.Time {
+	return s.ScheduledFor
+}
+
+// GetStatus returns the value of Status.
+func (s *ScheduleRun) GetStatus() ScheduleRunStatus {
+	return s.Status
+}
+
+// GetKind returns the value of Kind.
+func (s *ScheduleRun) GetKind() ScheduleRunKind {
+	return s.Kind
+}
+
+// GetError returns the value of Error.
+func (s *ScheduleRun) GetError() OptString {
+	return s.Error
+}
+
+// GetTriggeredBy returns the value of TriggeredBy.
+func (s *ScheduleRun) GetTriggeredBy() OptString {
+	return s.TriggeredBy
+}
+
+// GetTriggeredByEmail returns the value of TriggeredByEmail.
+func (s *ScheduleRun) GetTriggeredByEmail() OptNilString {
+	return s.TriggeredByEmail
+}
+
+// GetTriggeredByName returns the value of TriggeredByName.
+func (s *ScheduleRun) GetTriggeredByName() OptNilString {
+	return s.TriggeredByName
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ScheduleRun) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *ScheduleRun) GetStartedAt() OptDateTime {
+	return s.StartedAt
+}
+
+// GetFinishedAt returns the value of FinishedAt.
+func (s *ScheduleRun) GetFinishedAt() OptDateTime {
+	return s.FinishedAt
+}
+
+// SetID sets the value of ID.
+func (s *ScheduleRun) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *ScheduleRun) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetScheduleID sets the value of ScheduleID.
+func (s *ScheduleRun) SetScheduleID(val uuid.UUID) {
+	s.ScheduleID = val
+}
+
+// SetSnapshotID sets the value of SnapshotID.
+func (s *ScheduleRun) SetSnapshotID(val OptUUID) {
+	s.SnapshotID = val
+}
+
+// SetScheduledFor sets the value of ScheduledFor.
+func (s *ScheduleRun) SetScheduledFor(val time.Time) {
+	s.ScheduledFor = val
+}
+
+// SetStatus sets the value of Status.
+func (s *ScheduleRun) SetStatus(val ScheduleRunStatus) {
+	s.Status = val
+}
+
+// SetKind sets the value of Kind.
+func (s *ScheduleRun) SetKind(val ScheduleRunKind) {
+	s.Kind = val
+}
+
+// SetError sets the value of Error.
+func (s *ScheduleRun) SetError(val OptString) {
+	s.Error = val
+}
+
+// SetTriggeredBy sets the value of TriggeredBy.
+func (s *ScheduleRun) SetTriggeredBy(val OptString) {
+	s.TriggeredBy = val
+}
+
+// SetTriggeredByEmail sets the value of TriggeredByEmail.
+func (s *ScheduleRun) SetTriggeredByEmail(val OptNilString) {
+	s.TriggeredByEmail = val
+}
+
+// SetTriggeredByName sets the value of TriggeredByName.
+func (s *ScheduleRun) SetTriggeredByName(val OptNilString) {
+	s.TriggeredByName = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ScheduleRun) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *ScheduleRun) SetStartedAt(val OptDateTime) {
+	s.StartedAt = val
+}
+
+// SetFinishedAt sets the value of FinishedAt.
+func (s *ScheduleRun) SetFinishedAt(val OptDateTime) {
+	s.FinishedAt = val
+}
+
+func (*ScheduleRun) getScheduleRunRes() {}
+
+// Backup kind that will be (or was) created by this run.
+type ScheduleRunKind string
+
+const (
+	ScheduleRunKindFull        ScheduleRunKind = "full"
+	ScheduleRunKindIncremental ScheduleRunKind = "incremental"
+)
+
+// AllValues returns all ScheduleRunKind values.
+func (ScheduleRunKind) AllValues() []ScheduleRunKind {
+	return []ScheduleRunKind{
+		ScheduleRunKindFull,
+		ScheduleRunKindIncremental,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ScheduleRunKind) MarshalText() ([]byte, error) {
+	switch s {
+	case ScheduleRunKindFull:
+		return []byte(s), nil
+	case ScheduleRunKindIncremental:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ScheduleRunKind) UnmarshalText(data []byte) error {
+	switch ScheduleRunKind(data) {
+	case ScheduleRunKindFull:
+		*s = ScheduleRunKindFull
+		return nil
+	case ScheduleRunKindIncremental:
+		*s = ScheduleRunKindIncremental
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Split view of schedule runs for a site. `upcoming` contains
+// non-terminal runs (bounded to 10); `past` contains terminal runs
+// (paginated). One or both lists may be empty.
+// Ref: #/components/schemas/ScheduleRunList
+type ScheduleRunList struct {
+	// Non-terminal schedule runs (scheduled/queued/running), newest-fire-time first.
+	Upcoming []ScheduleRun `json:"upcoming"`
+	// Terminal schedule runs (completed/failed/skipped/canceled), newest first.
+	Past []ScheduleRun `json:"past"`
+}
+
+// GetUpcoming returns the value of Upcoming.
+func (s *ScheduleRunList) GetUpcoming() []ScheduleRun {
+	return s.Upcoming
+}
+
+// GetPast returns the value of Past.
+func (s *ScheduleRunList) GetPast() []ScheduleRun {
+	return s.Past
+}
+
+// SetUpcoming sets the value of Upcoming.
+func (s *ScheduleRunList) SetUpcoming(val []ScheduleRun) {
+	s.Upcoming = val
+}
+
+// SetPast sets the value of Past.
+func (s *ScheduleRunList) SetPast(val []ScheduleRun) {
+	s.Past = val
+}
+
+func (*ScheduleRunList) listScheduleRunsRes() {}
+
+// Current status of the schedule run.
+type ScheduleRunStatus string
+
+const (
+	ScheduleRunStatusScheduled ScheduleRunStatus = "scheduled"
+	ScheduleRunStatusQueued    ScheduleRunStatus = "queued"
+	ScheduleRunStatusRunning   ScheduleRunStatus = "running"
+	ScheduleRunStatusCompleted ScheduleRunStatus = "completed"
+	ScheduleRunStatusFailed    ScheduleRunStatus = "failed"
+	ScheduleRunStatusSkipped   ScheduleRunStatus = "skipped"
+	ScheduleRunStatusCanceled  ScheduleRunStatus = "canceled"
+)
+
+// AllValues returns all ScheduleRunStatus values.
+func (ScheduleRunStatus) AllValues() []ScheduleRunStatus {
+	return []ScheduleRunStatus{
+		ScheduleRunStatusScheduled,
+		ScheduleRunStatusQueued,
+		ScheduleRunStatusRunning,
+		ScheduleRunStatusCompleted,
+		ScheduleRunStatusFailed,
+		ScheduleRunStatusSkipped,
+		ScheduleRunStatusCanceled,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ScheduleRunStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ScheduleRunStatusScheduled:
+		return []byte(s), nil
+	case ScheduleRunStatusQueued:
+		return []byte(s), nil
+	case ScheduleRunStatusRunning:
+		return []byte(s), nil
+	case ScheduleRunStatusCompleted:
+		return []byte(s), nil
+	case ScheduleRunStatusFailed:
+		return []byte(s), nil
+	case ScheduleRunStatusSkipped:
+		return []byte(s), nil
+	case ScheduleRunStatusCanceled:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ScheduleRunStatus) UnmarshalText(data []byte) error {
+	switch ScheduleRunStatus(data) {
+	case ScheduleRunStatusScheduled:
+		*s = ScheduleRunStatusScheduled
+		return nil
+	case ScheduleRunStatusQueued:
+		*s = ScheduleRunStatusQueued
+		return nil
+	case ScheduleRunStatusRunning:
+		*s = ScheduleRunStatusRunning
+		return nil
+	case ScheduleRunStatusCompleted:
+		*s = ScheduleRunStatusCompleted
+		return nil
+	case ScheduleRunStatusFailed:
+		*s = ScheduleRunStatusFailed
+		return nil
+	case ScheduleRunStatusSkipped:
+		*s = ScheduleRunStatusSkipped
+		return nil
+	case ScheduleRunStatusCanceled:
+		*s = ScheduleRunStatusCanceled
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
 }
 
 // Request body for the serialization-safe database search-replace command.

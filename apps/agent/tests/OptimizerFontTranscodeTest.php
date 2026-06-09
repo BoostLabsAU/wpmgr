@@ -21,6 +21,14 @@
  *  16.  FontTranscodeClient: PUT failure (non-2xx) => still caches pending, serves original.
  *  17.  FontTranscodeClient: GET woff2 failure (non-2xx / empty) => null (serve original).
  *  18.  FontTranscodeClient: no source_key / presign-put / presign-get fields ever sent or read.
+ *  19.  Phase 2: state=="subset" => additive unicode-range @font-face prepended + full WOFF2 canonical.
+ *  20.  Phase 2: state=="skipped" (icon/variable) => full WOFF2 served, no subset block.
+ *  21.  Phase 2: PerfConfig fonts_subset / fonts_subset_mode / fonts_subset_range round-trips.
+ *  22.  Phase 2: subset flag OFF => resolve() called without subset spec (mode="").
+ *  23.  Phase 2: both flags required — subset flag alone does not activate subsetting.
+ *  24.  Phase 2: external stylesheet with @font-face => fonts transcoded + link href rewritten.
+ *  25.  Phase 2: external stylesheet cross-origin => skipped (SSRF guard).
+ *  26.  Phase 2: external stylesheet Google Fonts host => skipped (handled by own path).
  *
  * @package WPMgr\Agent\Tests
  */
@@ -101,6 +109,22 @@ final class OptimizerFontTranscodeTest extends TestCase
         Functions\when('is_wp_error')->justReturn(false);
         Functions\when('wp_remote_retrieve_response_code')->justReturn(200);
         Functions\when('wp_remote_retrieve_body')->justReturn('{}');
+        // WP utility functions needed by AssetCache::write() and Font::isAllowedExternalCssUrl().
+        Functions\when('wp_rand')->alias(static fn (): int => random_int(1000, 9999));
+        Functions\when('wp_mkdir_p')->alias(static function (string $dir): bool {
+            if (!@is_dir($dir)) {
+                return @mkdir($dir, 0o755, true);
+            }
+            return true;
+        });
+        Functions\when('wp_delete_file')->alias(static function (string $path): void {
+            if (file_exists($path)) {
+                @unlink($path);
+            }
+        });
+        Functions\when('wp_parse_url')->alias(static function (string $url, int $component = -1) {
+            return $component === -1 ? parse_url($url) : parse_url($url, $component);
+        });
     }
 
     protected function tear_down(): void
@@ -246,7 +270,7 @@ final class OptimizerFontTranscodeTest extends TestCase
      * A stub FontTranscodeClientInterface using a callable for resolve() — allows
      * precise per-test control without touching the network layer.
      *
-     * @param callable(string,string):(?array{state:string,woff2_url:string}) $resolver
+     * @param callable(string,string,string,string):(?array{state:string,woff2_url:string,subset_url:string,unicode_range:string}) $resolver
      */
     private function makeStubClient(callable $resolver): FontTranscodeClientInterface
     {
@@ -259,9 +283,13 @@ final class OptimizerFontTranscodeTest extends TestCase
                 $this->resolver = $resolver;
             }
 
-            public function resolve(string $sourceBytes, string $ext): ?array
-            {
-                return ($this->resolver)($sourceBytes, $ext);
+            public function resolve(
+                string $sourceBytes,
+                string $ext,
+                string $subsetMode = '',
+                string $subsetRange = ''
+            ): ?array {
+                return ($this->resolver)($sourceBytes, $ext, $subsetMode, $subsetRange);
             }
         };
     }
@@ -320,9 +348,11 @@ final class OptimizerFontTranscodeTest extends TestCase
     {
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(
-            static fn (string $b, string $ext): ?array => [
-                'state'     => 'ready',
-                'woff2_url' => 'https://example.com/cache/wpmgr/assets/abc123.woff2',
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'ready',
+                'woff2_url'     => 'https://example.com/cache/wpmgr/assets/abc123.woff2',
+                'subset_url'    => '',
+                'unicode_range' => '',
             ]
         );
         $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
@@ -346,9 +376,11 @@ final class OptimizerFontTranscodeTest extends TestCase
     {
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(
-            static fn (string $b, string $ext): ?array => [
-                'state'     => 'ready',
-                'woff2_url' => 'https://example.com/cache/wpmgr/assets/def456.woff2',
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'ready',
+                'woff2_url'     => 'https://example.com/cache/wpmgr/assets/def456.woff2',
+                'subset_url'    => '',
+                'unicode_range' => '',
             ]
         );
         $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
@@ -368,9 +400,11 @@ final class OptimizerFontTranscodeTest extends TestCase
     {
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(
-            static fn (string $b, string $ext): ?array => [
-                'state'     => 'ready',
-                'woff2_url' => 'https://example.com/cache/wpmgr/assets/ghi789.woff2',
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'ready',
+                'woff2_url'     => 'https://example.com/cache/wpmgr/assets/ghi789.woff2',
+                'subset_url'    => '',
+                'unicode_range' => '',
             ]
         );
         $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
@@ -461,7 +495,7 @@ final class OptimizerFontTranscodeTest extends TestCase
         $called = false;
         $client = $this->makeStubClient(static function () use (&$called): ?array {
             $called = true;
-            return ['state' => 'ready', 'woff2_url' => 'https://example.com/fake.woff2'];
+            return ['state' => 'ready', 'woff2_url' => 'https://example.com/fake.woff2', 'subset_url' => '', 'unicode_range' => ''];
         });
         // Downloader returns null — font bytes unavailable.
         $font = $this->makeFont($cfg, null, $client);
@@ -485,7 +519,7 @@ final class OptimizerFontTranscodeTest extends TestCase
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(static function () use (&$called): ?array {
             $called = true;
-            return ['state' => 'ready', 'woff2_url' => 'https://example.com/fake.woff2'];
+            return ['state' => 'ready', 'woff2_url' => 'https://example.com/fake.woff2', 'subset_url' => '', 'unicode_range' => ''];
         });
         $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
 
@@ -506,9 +540,9 @@ final class OptimizerFontTranscodeTest extends TestCase
     {
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(
-            static fn (string $b, string $ext): ?array =>
+            static fn (string $b, string $ext, string $m, string $r): ?array =>
                 $ext === 'ttf'
-                    ? ['state' => 'ready', 'woff2_url' => 'https://example.com/cache/wpmgr/assets/mixed.woff2']
+                    ? ['state' => 'ready', 'woff2_url' => 'https://example.com/cache/wpmgr/assets/mixed.woff2', 'subset_url' => '', 'unicode_range' => '']
                     : null
         );
         $downloader = static fn (string $url): ?string =>
@@ -856,7 +890,7 @@ final class OptimizerFontTranscodeTest extends TestCase
     {
         $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
         $client = $this->makeStubClient(
-            static fn (string $b, string $ext): ?array => ['state' => 'ready', 'woff2_url' => '']
+            static fn (string $b, string $ext, string $m, string $r): ?array => ['state' => 'ready', 'woff2_url' => '', 'subset_url' => '', 'unicode_range' => '']
         );
         $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
 
@@ -867,5 +901,319 @@ final class OptimizerFontTranscodeTest extends TestCase
 
         $this->assertStringContainsString('src:url("https://example.com/font.ttf")', $out);
         $this->assertStringNotContainsString('woff2_url', $out);
+    }
+
+    // -----------------------------------------------------------------------
+    // 19. state=="subset" => additive unicode-range @font-face prepended
+    // -----------------------------------------------------------------------
+
+    public function test_subset_state_prepends_additive_unicode_range_font_face(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $cfg    = new PerfConfig([
+            'fonts_transcode_woff2' => true,
+            'fonts_subset'          => true,
+            'fonts_subset_mode'     => 'range',
+            'fonts_subset_range'    => 'latin-ext',
+        ]);
+        $subsetUrl    = 'https://example.com/cache/wpmgr/assets/abc.latin-ext.woff2';
+        $fullWoff2Url = 'https://example.com/cache/wpmgr/assets/abc.woff2';
+        $unicodeRange = 'U+0020-00FF,U+0100-024F,U+1E00-1EFF';
+
+        $client = $this->makeStubClient(
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'subset',
+                'woff2_url'     => $fullWoff2Url,
+                'subset_url'    => $subsetUrl,
+                'unicode_range' => $unicodeRange,
+            ]
+        );
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+
+        $html = '<html><head><style>'
+            . '@font-face{font-family:Roboto;src:url("https://example.com/roboto.ttf") format("truetype")}'
+            . '</style></head></html>';
+        $out = $font->process($html);
+
+        // The subset @font-face block must come before the full WOFF2 block.
+        $subsetPos = strpos($out, 'latin-ext.woff2') ?: 0;
+        $fullPos   = strpos($out, 'abc.woff2') ?: 0;
+        $this->assertGreaterThan(0, $subsetPos, 'Subset URL must appear in output');
+        $this->assertGreaterThan(0, $fullPos, 'Full WOFF2 URL must appear in output');
+        $this->assertLessThan($fullPos, $subsetPos, 'Subset @font-face must precede full WOFF2 @font-face');
+
+        // The subset block must carry unicode-range.
+        $this->assertStringContainsString('unicode-range', $out);
+        $this->assertStringContainsString('U+0020-00FF', $out);
+
+        // The full WOFF2 block must still contain the original TTF fallback.
+        $this->assertStringContainsString('roboto.ttf', $out);
+        $this->assertStringContainsString("format('truetype')", $out);
+
+        // The full WOFF2 must appear as WOFF2-first in the canonical block.
+        $this->assertStringContainsString("format('woff2')", $out);
+    }
+
+    public function test_subset_resolve_receives_subset_spec_from_config(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $capturedMode  = null;
+        $capturedRange = null;
+
+        $cfg    = new PerfConfig([
+            'fonts_transcode_woff2' => true,
+            'fonts_subset'          => true,
+            'fonts_subset_mode'     => 'range',
+            'fonts_subset_range'    => 'latin-ext',
+        ]);
+        $client = $this->makeStubClient(
+            static function (string $b, string $ext, string $m, string $r) use (&$capturedMode, &$capturedRange): ?array {
+                $capturedMode  = $m;
+                $capturedRange = $r;
+                return ['state' => 'ready', 'woff2_url' => 'https://example.com/cache/wpmgr/assets/x.woff2', 'subset_url' => '', 'unicode_range' => ''];
+            }
+        );
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+
+        $html = '<html><head><style>'
+            . '@font-face{font-family:X;src:url("https://example.com/font.ttf") format("truetype")}'
+            . '</style></head></html>';
+        $font->process($html);
+
+        $this->assertSame('range', $capturedMode, 'resolve() must receive subset_mode=range');
+        $this->assertSame('latin-ext', $capturedRange, 'resolve() must receive subset_range=latin-ext');
+    }
+
+    // -----------------------------------------------------------------------
+    // 20. state=="skipped" => full WOFF2 served, no subset block
+    // -----------------------------------------------------------------------
+
+    public function test_skipped_state_serves_full_woff2_without_subset_block(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $cfg    = new PerfConfig([
+            'fonts_transcode_woff2' => true,
+            'fonts_subset'          => true,
+        ]);
+        $client = $this->makeStubClient(
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'skipped',
+                'woff2_url'     => 'https://example.com/cache/wpmgr/assets/icon.woff2',
+                'subset_url'    => '',
+                'unicode_range' => '',
+            ]
+        );
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+
+        $html = '<html><head><style>'
+            . '@font-face{font-family:Icons;src:url("https://example.com/icons.ttf") format("truetype")}'
+            . '</style></head></html>';
+        $out = $font->process($html);
+
+        // The full WOFF2 should be served (state "skipped" maps to "ready" result).
+        $this->assertStringContainsString('icon.woff2', $out);
+        // No unicode-range descriptor (no subset block emitted).
+        $this->assertStringNotContainsString('unicode-range', $out);
+        // Original TTF fallback must still be present.
+        $this->assertStringContainsString('icons.ttf', $out);
+    }
+
+    // -----------------------------------------------------------------------
+    // 21. PerfConfig: fonts_subset fields round-trip correctly
+    // -----------------------------------------------------------------------
+
+    public function test_perf_config_fonts_subset_defaults_off(): void
+    {
+        $cfg = new PerfConfig([]);
+        $this->assertFalse($cfg->fontsSubset);
+        $this->assertSame('range', $cfg->fontsSubsetMode);
+        $this->assertSame('latin-ext', $cfg->fontsSubsetRange);
+    }
+
+    public function test_perf_config_fonts_subset_round_trips(): void
+    {
+        $cfg = new PerfConfig([
+            'fonts_subset'       => true,
+            'fonts_subset_mode'  => 'range',
+            'fonts_subset_range' => 'latin-ext',
+        ]);
+        $arr = $cfg->toArray();
+        $this->assertTrue($arr['fonts_subset']);
+        $this->assertSame('range', $arr['fonts_subset_mode']);
+        $this->assertSame('latin-ext', $arr['fonts_subset_range']);
+
+        $cfg2 = new PerfConfig($arr);
+        $this->assertTrue($cfg2->fontsSubset);
+        $this->assertSame('range', $cfg2->fontsSubsetMode);
+        $this->assertSame('latin-ext', $cfg2->fontsSubsetRange);
+    }
+
+    // -----------------------------------------------------------------------
+    // 22. subset flag OFF => resolve() receives empty subset mode
+    // -----------------------------------------------------------------------
+
+    public function test_subset_flag_off_resolve_called_with_empty_subset_mode(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $capturedMode = 'NOT_SET';
+        $cfg    = new PerfConfig([
+            'fonts_transcode_woff2' => true,
+            'fonts_subset'          => false, // OFF
+        ]);
+        $client = $this->makeStubClient(
+            static function (string $b, string $ext, string $m, string $r) use (&$capturedMode): ?array {
+                $capturedMode = $m;
+                return ['state' => 'ready', 'woff2_url' => 'https://example.com/cache/wpmgr/assets/z.woff2', 'subset_url' => '', 'unicode_range' => ''];
+            }
+        );
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+        $html = '<html><head><style>'
+            . '@font-face{font-family:Z2;src:url("https://example.com/font2.ttf") format("truetype")}'
+            . '</style></head></html>';
+        $font->process($html);
+
+        $this->assertSame('', $capturedMode, 'resolve() must receive empty subset_mode when fonts_subset is off');
+    }
+
+    // -----------------------------------------------------------------------
+    // 23. Both flags required — subset alone does not activate subsetting
+    // -----------------------------------------------------------------------
+
+    public function test_subset_without_transcode_flag_resolve_receives_empty_mode(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $capturedMode = 'NOT_SET';
+        $cfg    = new PerfConfig([
+            'fonts_transcode_woff2' => true,
+            'fonts_subset'          => true,
+            'fonts_subset_mode'     => 'range',
+        ]);
+        // Simulate: CP sets fonts_subset but transcodeWoff2 is conceptually both needed.
+        // The guard is: fontsSubset && fontsTranscodeWoff2. Both are true here,
+        // so mode should be 'range'. Test the negative case: transcode OFF.
+        $cfgTranscodeOff = new PerfConfig([
+            'fonts_transcode_woff2' => false,
+            'fonts_subset'          => true,
+        ]);
+        // With transcodeWoff2=false, the transcode path never runs at all.
+        $called = false;
+        $client = $this->makeStubClient(
+            static function () use (&$called): ?array {
+                $called = true;
+                return null;
+            }
+        );
+        $font = new Font($cfgTranscodeOff, $this->assetCache(), static fn (string $url): ?string => self::FAKE_TTF_BYTES, $client);
+        $html = '<html><head><style>'
+            . '@font-face{font-family:Z3;src:url("https://example.com/font3.ttf") format("truetype")}'
+            . '</style></head></html>';
+        $font->process($html);
+
+        $this->assertFalse($called, 'TranscodeClient must not be called when fonts_transcode_woff2 is off');
+    }
+
+    // -----------------------------------------------------------------------
+    // 24. External stylesheet with @font-face => fonts transcoded + link rewritten
+    // -----------------------------------------------------------------------
+
+    public function test_external_same_origin_stylesheet_with_font_is_rewritten(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
+        $client = $this->makeStubClient(
+            static fn (string $b, string $ext, string $m, string $r): ?array => [
+                'state'         => 'ready',
+                'woff2_url'     => 'https://example.com/cache/wpmgr/assets/ext.woff2',
+                'subset_url'    => '',
+                'unicode_range' => '',
+            ]
+        );
+
+        $externalCss = '@font-face{font-family:ExtFont;src:url("https://example.com/fonts/ext.ttf") format("truetype")}';
+
+        // Downloader: return font bytes for TTF URL, CSS for stylesheet URL.
+        $downloader = static function (string $url) use ($externalCss): ?string {
+            if (str_ends_with($url, '.css')) {
+                return $externalCss;
+            }
+            if (str_ends_with($url, '.ttf')) {
+                return self::FAKE_TTF_BYTES;
+            }
+            return null;
+        };
+
+        $cache = $this->assetCache();
+        $font  = new Font($cfg, $cache, $downloader, $client);
+
+        // HTML with an external same-origin stylesheet link.
+        $html = '<html><head>'
+            . '<link rel="stylesheet" href="https://example.com/css/theme.css">'
+            . '</head><body>Test</body></html>';
+        $out = $font->process($html);
+
+        // The link href should have been rewritten to a local cached URL.
+        $this->assertStringNotContainsString('href="https://example.com/css/theme.css"', $out);
+        $this->assertStringContainsString('cache', $out);
+    }
+
+    // -----------------------------------------------------------------------
+    // 25. External stylesheet cross-origin => skipped (SSRF guard)
+    // -----------------------------------------------------------------------
+
+    public function test_external_cross_origin_stylesheet_is_skipped(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
+        $called = false;
+        $client = $this->makeStubClient(static function () use (&$called): ?array {
+            $called = true;
+            return null;
+        });
+
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+
+        // The stylesheet is served from a different origin.
+        $html = '<html><head>'
+            . '<link rel="stylesheet" href="https://otherdomain.com/fonts.css">'
+            . '</head><body>Test</body></html>';
+        $out = $font->process($html);
+
+        // Link must be unchanged.
+        $this->assertStringContainsString('href="https://otherdomain.com/fonts.css"', $out);
+        $this->assertFalse($called, 'TranscodeClient must not be called for cross-origin stylesheets');
+    }
+
+    // -----------------------------------------------------------------------
+    // 26. External stylesheet Google Fonts host => skipped (handled elsewhere)
+    // -----------------------------------------------------------------------
+
+    public function test_external_google_fonts_stylesheet_is_skipped_by_generic_scanner(): void
+    {
+        Functions\when('home_url')->justReturn('https://example.com');
+
+        $cfg    = new PerfConfig(['fonts_transcode_woff2' => true]);
+        $called = false;
+        $client = $this->makeStubClient(static function () use (&$called): ?array {
+            $called = true;
+            return null;
+        });
+
+        $font = $this->makeFont($cfg, self::FAKE_TTF_BYTES, $client);
+
+        $html = '<html><head>'
+            . '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Roboto">'
+            . '</head><body>Test</body></html>';
+        $out = $font->process($html);
+
+        // Link must be unchanged by the external-scanner path.
+        $this->assertStringContainsString('fonts.googleapis.com', $out);
+        $this->assertFalse($called, 'TranscodeClient must not be called for Google Fonts stylesheets');
     }
 }

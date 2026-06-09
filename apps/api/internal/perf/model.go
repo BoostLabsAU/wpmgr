@@ -62,6 +62,17 @@ type Config struct {
 	// enqueues a font_transcode River job which produces <hash>.woff2 in object
 	// storage. Default false. Pinned contract field name: fonts_transcode_woff2.
 	FontsTranscodeWOFF2 bool
+	// FontsSubset enables the subset-WOFF2 path (Phase 2). When true the CP
+	// instructs the media-encoder to also produce a subset WOFF2 restricted to
+	// FontsSubsetRange. Default false (opt-in, experimental).
+	FontsSubset bool
+	// FontsSubsetMode is the subsetting strategy: "range" (fixed unicode-range
+	// block) is the only mode supported in v1. The field is stored for forward
+	// compat but the CP ignores any value other than "range".
+	FontsSubsetMode string
+	// FontsSubsetRange is the named unicode range to subset to. "latin-ext" is
+	// the safe default (U+0000-024F,U+1E00-1EFF).
+	FontsSubsetRange string
 
 	// Media / lazy-load
 	LazyLoad           bool
@@ -154,6 +165,42 @@ type FontTranscodeResult struct {
 	State       FontTranscodeState
 	Woff2Key    string // empty unless State==FontTranscodeReady
 	ErrorDetail string // non-empty when State==FontTranscodeNegative
+}
+
+// FontResultState enumerates the lifecycle states for a font_results row.
+type FontResultState string
+
+const (
+	// FontResultPending means the transcode/subset job is enqueued but not complete.
+	FontResultPending FontResultState = "pending"
+	// FontResultReady means the full WOFF2 is available (woff2_size set, subset_size nil).
+	FontResultReady FontResultState = "ready"
+	// FontResultSubset means both the full WOFF2 and the subset WOFF2 are available.
+	FontResultSubset FontResultState = "subset"
+	// FontResultNegative means a permanent failure; the agent must serve the original font.
+	FontResultNegative FontResultState = "negative"
+)
+
+// FontResult is the domain view of one font_results row — the per-site dashboard
+// catalog. It is distinct from FontTranscodeResult (job-control layer). The
+// savings_pct is CP-derived at upsert: 1 - min(woff2_size, subset_size) / original_size.
+type FontResult struct {
+	ID           uuid.UUID
+	TenantID     uuid.UUID
+	SiteID       uuid.UUID
+	SourceHash   string
+	Family       string  // empty until the agent reports it
+	SourceFile   string  // basename of the original font URL
+	OriginalExt  string  // ttf | otf | woff
+	OriginalSize int     // bytes
+	Woff2Size    int     // bytes; 0 until ready
+	SubsetSize   int     // bytes; 0 unless subset
+	UnicodeRange string  // CSS unicode-range for the subset; "" unless subset
+	State        FontResultState
+	ErrorDetail  string  // non-empty when State == FontResultNegative
+	SavingsPct   float64 // 0..100; 0 when sizes unknown
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // CacheStats is the latest cache gauge set the agent reported for one site.

@@ -44,6 +44,8 @@ func findAuthorization(h http.Header, prefix string) (string, bool) {
 var operationRolesAgentSignature = map[string][]string{
 	AgentAutologinConsumeOperation:   []string{},
 	AgentDisconnectOperation:         []string{},
+	AgentFontsResultsOperation:       []string{},
+	AgentFontsTranscodeOperation:     []string{},
 	AgentHeartbeatOperation:          []string{},
 	AgentMediaAssetDeletedOperation:  []string{},
 	AgentMediaEncodeReadyOperation:   []string{},

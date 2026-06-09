@@ -491,9 +491,38 @@ type SitePerfConfig struct {
 	// FontsTranscodeWOFF2 is operator-writable (default false). When true the
 	// CP includes this flag in the perf-config push so the agent requests
 	// server-side WOFF2 transcoding for self-hosted fonts.
-	FontsTranscodeWoff2 bool      `json:"fonts_transcode_woff2"`
-	CreatedAt           time.Time `json:"created_at"`
-	UpdatedAt           time.Time `json:"updated_at"`
+	FontsTranscodeWoff2 bool `json:"fonts_transcode_woff2"`
+	// M55 — Font subsetting flags (experimental, default OFF).
+	// FontsSubset enables the subset-WOFF2 path in the media-encoder worker.
+	// FontsSubsetMode: "range" (fixed unicode-range) or "used" (aggressive opt-in).
+	// FontsSubsetRange: the named range to subset to; "latin-ext" is the safe default.
+	FontsSubset      bool      `json:"fonts_subset"`
+	FontsSubsetMode  string    `json:"fonts_subset_mode"`
+	FontsSubsetRange string    `json:"fonts_subset_range"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+}
+
+// FontResult is one row of font_results — the per-site dashboard catalog for
+// font processing (m55). Distinct from FontTranscodeResult (job control).
+// State: pending|ready|subset|negative. SavingsPct is CP-derived.
+type FontResult struct {
+	ID           uuid.UUID          `json:"id"`
+	TenantID     uuid.UUID          `json:"tenant_id"`
+	SiteID       uuid.UUID          `json:"site_id"`
+	SourceHash   string             `json:"source_hash"`
+	Family       *string            `json:"family"`
+	SourceFile   *string            `json:"source_file"`
+	OriginalExt  *string            `json:"original_ext"`
+	OriginalSize *int32             `json:"original_size"`
+	Woff2Size    *int32             `json:"woff2_size"`
+	SubsetSize   *int32             `json:"subset_size"`
+	UnicodeRange *string            `json:"unicode_range"`
+	State        string             `json:"state"`
+	ErrorDetail  *string            `json:"error_detail"`
+	SavingsPct   pgtype.Numeric     `json:"savings_pct"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
 }
 
 // FontTranscodeResult is one row of font_transcode_results. It records the

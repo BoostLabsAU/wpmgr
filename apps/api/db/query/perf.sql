@@ -35,7 +35,9 @@ INSERT INTO site_perf_config (
     bloat_disable_jquery_migrate, bloat_disable_xml_rpc, bloat_disable_rss_feed,
     bloat_disable_oembeds, bloat_heartbeat_control, bloat_post_revisions_control,
     preload_concurrency, preload_delay_ms, preload_batch_size, preload_max_load,
-    config_version, updated_at
+    config_version, woo_cacheable_session, fonts_transcode_woff2,
+    fonts_subset, fonts_subset_mode, fonts_subset_range,
+    updated_at
 ) VALUES (
     @site_id, @tenant_id,
     @cache_enabled, @cache_logged_in, @cache_mobile, @cache_refresh,
@@ -55,7 +57,9 @@ INSERT INTO site_perf_config (
     @bloat_disable_jquery_migrate, @bloat_disable_xml_rpc, @bloat_disable_rss_feed,
     @bloat_disable_oembeds, @bloat_heartbeat_control, @bloat_post_revisions_control,
     @preload_concurrency, @preload_delay_ms, @preload_batch_size, @preload_max_load,
-    @config_version, now()
+    @config_version, @woo_cacheable_session, @fonts_transcode_woff2,
+    @fonts_subset, @fonts_subset_mode, @fonts_subset_range,
+    now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
     cache_enabled                 = EXCLUDED.cache_enabled,
@@ -113,6 +117,11 @@ ON CONFLICT (site_id) DO UPDATE SET
     preload_batch_size            = EXCLUDED.preload_batch_size,
     preload_max_load              = EXCLUDED.preload_max_load,
     config_version                = EXCLUDED.config_version,
+    woo_cacheable_session         = EXCLUDED.woo_cacheable_session,
+    fonts_transcode_woff2         = EXCLUDED.fonts_transcode_woff2,
+    fonts_subset                  = EXCLUDED.fonts_subset,
+    fonts_subset_mode             = EXCLUDED.fonts_subset_mode,
+    fonts_subset_range            = EXCLUDED.fonts_subset_range,
     updated_at                    = now()
 RETURNING *;
 
@@ -472,3 +481,62 @@ JOIN sites s ON s.id = r.site_id
 LEFT JOIN size_bounds sb ON sb.site_id = r.site_id
 WHERE r.tenant_id = @tenant_id
 ORDER BY r.db_size_bytes DESC;
+
+-- ---------------------------------------------------------------------------
+-- font_results (m55 — per-site dashboard catalog)
+-- ---------------------------------------------------------------------------
+
+-- name: UpsertFontResult :one
+-- Agent -> CP results push. Inserts or updates the per-(site,source_hash)
+-- catalog row. savings_pct is CP-derived: 1 - min(woff2_size, subset_size) / original_size.
+-- Runs under app.agent (InAgentTx). tenant_id + site_id ALWAYS come from the
+-- VERIFIED agent identity, never from the body.
+INSERT INTO font_results (
+    tenant_id, site_id, source_hash,
+    family, source_file, original_ext, original_size,
+    woff2_size, subset_size, unicode_range,
+    state, error_detail, savings_pct,
+    updated_at
+) VALUES (
+    @tenant_id, @site_id, @source_hash,
+    @family, @source_file, @original_ext, @original_size,
+    @woff2_size, @subset_size, @unicode_range,
+    @state, @error_detail,
+    -- savings_pct: CP-derived from best output size vs original.
+    -- Uses LEAST(woff2_size, subset_size) ignoring NULLs. NULL when original unknown.
+    CASE
+        WHEN @original_size::integer > 0 AND (
+             @woff2_size::integer IS NOT NULL OR @subset_size::integer IS NOT NULL
+        ) THEN ROUND(
+            (1.0 - LEAST(
+                COALESCE(@woff2_size::integer, @original_size::integer),
+                COALESCE(@subset_size::integer, @original_size::integer)
+            )::numeric / GREATEST(@original_size::integer, 1)),
+            4
+        ) * 100
+        ELSE NULL
+    END,
+    now()
+)
+ON CONFLICT (site_id, source_hash) DO UPDATE SET
+    family        = COALESCE(EXCLUDED.family,       font_results.family),
+    source_file   = COALESCE(EXCLUDED.source_file,  font_results.source_file),
+    original_ext  = COALESCE(EXCLUDED.original_ext, font_results.original_ext),
+    original_size = COALESCE(EXCLUDED.original_size, font_results.original_size),
+    woff2_size    = COALESCE(EXCLUDED.woff2_size,   font_results.woff2_size),
+    subset_size   = COALESCE(EXCLUDED.subset_size,  font_results.subset_size),
+    unicode_range = COALESCE(EXCLUDED.unicode_range, font_results.unicode_range),
+    state         = EXCLUDED.state,
+    error_detail  = EXCLUDED.error_detail,
+    savings_pct   = EXCLUDED.savings_pct,
+    updated_at    = now()
+RETURNING *;
+
+-- name: ListFontResultsForSite :many
+-- Dashboard list: ordered by updated_at DESC, id DESC (standing `, id` tiebreaker
+-- convention; batch inserts share updated_at so id breaks ties deterministically).
+-- Runs under InTenantTx (operator path).
+SELECT * FROM font_results
+WHERE tenant_id = @tenant_id AND site_id = @site_id
+ORDER BY updated_at DESC, id DESC
+LIMIT @row_limit OFFSET @row_offset;

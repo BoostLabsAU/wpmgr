@@ -137,6 +137,9 @@ type Deps struct {
 	// may be nil.
 	PerfH      *perf.Handler
 	PerfAgentH *perf.AgentHandler
+	// FontResultsAgentH serves POST /agent/v1/fonts/results (M55 — font results
+	// catalog push from the media-encoder). nil ⇒ route not mounted.
+	FontResultsAgentH *perf.FontResultsAgentHandler
 	// AdminH serves the superadmin instance-management area under
 	// /api/v1/admin. nil ⇒ routes not mounted.
 	AdminH      *admin.Handler
@@ -243,6 +246,10 @@ func New(deps Deps) *Server {
 		// site_id matches the JWT-bound site.
 		if deps.PerfAgentH != nil {
 			deps.PerfAgentH.Register(agentGroup)
+		}
+		// M55 — Font results catalog push from the media-encoder/agent.
+		if deps.FontResultsAgentH != nil {
+			deps.FontResultsAgentH.Register(agentGroup)
 		}
 	}
 

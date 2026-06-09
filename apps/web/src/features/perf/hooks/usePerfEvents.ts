@@ -17,6 +17,7 @@ import {
   type DbScanCategoryResult,
   type DbScanTableInventoryRow,
 } from "../stores/dbScanStore";
+import { useFontsStore, type FontRowPhase } from "../fonts-store";
 
 // usePerfEvents — projects the shared `/sites/events` SSE stream onto the perf
 // caches + the live preload/purge progress store. The cache.*/rucss.*/db.*/
@@ -139,6 +140,18 @@ export interface DbOrphanDeleteActions {
   onFailed: (siteId: string, job_id: string, detail: string) => void;
 }
 
+/** The slice of the fonts store the reducer drives. */
+export interface FontsActions {
+  setPhase: (
+    siteId: string,
+    phase: import("../fonts-store").FontsPhase,
+    extra?: { processed?: number; total?: number; savings_pct?: number },
+  ) => void;
+  setFontRowPhase: (siteId: string, sourceHash: string, rowPhase: FontRowPhase) => void;
+  incrementProcessed: (siteId: string) => void;
+  reset: (siteId: string) => void;
+}
+
 /** No-op implementation used when no orphan-delete listener is mounted. */
 const noopOrphanDelete: DbOrphanDeleteActions = {
   onStarted: () => undefined,
@@ -155,6 +168,7 @@ export interface PerfEventDeps {
   dbClean: DbCleanActions;
   dbScan: DbScanActions;
   dbOrphanDelete?: DbOrphanDeleteActions;
+  fonts: FontsActions;
 }
 
 /**
@@ -171,6 +185,7 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
     dbClean,
     dbScan,
     dbOrphanDelete = noopOrphanDelete,
+    fonts,
   } = deps;
   const data = asRecord(ev.data);
 
@@ -391,6 +406,61 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
       void queryClient.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
       break;
 
+    // ── Font processing lifecycle (ADR-052 Phase 2) ──────────────────────────
+    // font.queued: a batch of font transcode jobs was enqueued for this site.
+    case "font.queued": {
+      const total = num(data.total) ?? 0;
+      fonts.setPhase(siteId, "queued", { total, processed: 0 });
+      break;
+    }
+    // font.converting: one specific font is now being processed.
+    case "font.converting": {
+      const sourceHash = typeof data.source_hash === "string" ? data.source_hash : "";
+      fonts.setPhase(siteId, "converting");
+      if (sourceHash) fonts.setFontRowPhase(siteId, sourceHash, "converting");
+      break;
+    }
+    // font.ready: full WOFF2 produced for one font (no subset, or subset not
+    // requested). Row transitions to ready in DB; invalidate to pick up sizes.
+    // We do NOT set an SSE row-phase here — the DB state "ready" is the
+    // authority, and Query invalidation surfaces it without an overlay.
+    case "font.ready": {
+      fonts.incrementProcessed(siteId);
+      void queryClient.invalidateQueries({ queryKey: perfKeys.fonts(siteId) });
+      break;
+    }
+    // font.subset: subset WOFF2 also produced for one font.
+    case "font.subset": {
+      fonts.incrementProcessed(siteId);
+      void queryClient.invalidateQueries({ queryKey: perfKeys.fonts(siteId) });
+      break;
+    }
+    // font.skipped: font was skipped (variable font, icon font, or guard).
+    case "font.skipped": {
+      const sourceHash = typeof data.source_hash === "string" ? data.source_hash : "";
+      fonts.incrementProcessed(siteId);
+      if (sourceHash) fonts.setFontRowPhase(siteId, sourceHash, "skipped");
+      break;
+    }
+    // font.failed: permanent negative for one font (variable, icon, subset error,
+    // panic). The DB row will be marked negative; invalidate + set SSE overlay.
+    case "font.failed": {
+      const sourceHash = typeof data.source_hash === "string" ? data.source_hash : "";
+      fonts.incrementProcessed(siteId);
+      if (sourceHash) fonts.setFontRowPhase(siteId, sourceHash, "failed");
+      void queryClient.invalidateQueries({ queryKey: perfKeys.fonts(siteId) });
+      break;
+    }
+    // font.completed: all fonts for the current page-build pass are done.
+    // savings_pct = 1 - sum(best_output) / sum(original) from the CP.
+    case "font.completed": {
+      const savingsPct = num(data.savings_pct);
+      const total = num(data.total) ?? 0;
+      fonts.setPhase(siteId, "done", { savings_pct: savingsPct, total });
+      void queryClient.invalidateQueries({ queryKey: perfKeys.fonts(siteId) });
+      break;
+    }
+
     default:
       break;
   }
@@ -402,7 +472,8 @@ function isPerfEvent(type: string): boolean {
     type.startsWith("cache.") ||
     type.startsWith("rucss.") ||
     type.startsWith("db.") ||
-    type.startsWith("perf.")
+    type.startsWith("perf.") ||
+    type.startsWith("font.")
   );
 }
 
@@ -424,6 +495,10 @@ export function usePerfEvents(siteId: string): void {
   const dbScanStartScan = useDbScanStore((s) => s.startScan);
   const dbScanComplete = useDbScanStore((s) => s.completeScan);
   const dbScanFail = useDbScanStore((s) => s.failScan);
+  const fontsSetPhase = useFontsStore((s) => s.setPhase);
+  const fontsSetFontRowPhase = useFontsStore((s) => s.setFontRowPhase);
+  const fontsIncrementProcessed = useFontsStore((s) => s.incrementProcessed);
+  const fontsReset = useFontsStore((s) => s.reset);
 
   const handler = useCallback(
     (ev: SiteEvent) => {
@@ -445,6 +520,12 @@ export function usePerfEvents(siteId: string): void {
           completeScan: dbScanComplete,
           failScan: dbScanFail,
         },
+        fonts: {
+          setPhase: fontsSetPhase,
+          setFontRowPhase: fontsSetFontRowPhase,
+          incrementProcessed: fontsIncrementProcessed,
+          reset: fontsReset,
+        },
       });
     },
     [
@@ -462,6 +543,10 @@ export function usePerfEvents(siteId: string): void {
       dbScanStartScan,
       dbScanComplete,
       dbScanFail,
+      fontsSetPhase,
+      fontsSetFontRowPhase,
+      fontsIncrementProcessed,
+      fontsReset,
     ],
   );
 

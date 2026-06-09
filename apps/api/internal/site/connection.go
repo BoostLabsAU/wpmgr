@@ -164,6 +164,24 @@ const (
 	EventDbSearchReplaceCompleted = "db.search.replace.completed"
 	EventDbSearchReplaceFailed    = "db.search.replace.failed"
 
+	// Font processing events (M55 — Phase 2 font subsetting). Published on the
+	// shared tenant SSE bus and filtered by site_id. The frontend must add these
+	// strings to SITE_EVENT_TYPES in use-site-events.ts to receive them.
+	// font.queued     — a new font_results row was created (state=pending).
+	// font.converting — the media-encoder has picked up the job (state=pending, in progress).
+	// font.ready      — the full WOFF2 is available (state=ready).
+	// font.subset     — the subset WOFF2 is also available (state=subset).
+	// font.skipped    — the font was skipped (e.g. already in negative state).
+	// font.failed     — permanent failure (state=negative; error_detail set).
+	// font.completed  — the batch of font results for this build is complete.
+	EventFontQueued     = "font.queued"
+	EventFontConverting = "font.converting"
+	EventFontReady      = "font.ready"
+	EventFontSubset     = "font.subset"
+	EventFontSkipped    = "font.skipped"
+	EventFontFailed     = "font.failed"
+	EventFontCompleted  = "font.completed"
+
 	// Media Cleaner tool events (#190). Four lifecycle events:
 	// media.clean.scan.completed  — scan page returned ok=true; includes candidate count.
 	// media.clean.scan.failed     — transport error or ok=false on a scan request.

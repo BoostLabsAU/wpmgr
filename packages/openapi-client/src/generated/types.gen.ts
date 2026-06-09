@@ -2333,6 +2333,21 @@ export type PerfConfig = {
    *
    */
   fonts_transcode_woff2?: boolean;
+  /**
+   * Enable subset-WOFF2 production (Phase 2, experimental). When true the media-encoder also produces a subset WOFF2 restricted to the unicode range specified by fonts_subset_range. Default false (opt-in).
+   *
+   */
+  fonts_subset?: boolean;
+  /**
+   * Subsetting strategy. "range" (fixed unicode-range block) is the only supported mode in v1. Stored for forward compatibility.
+   *
+   */
+  fonts_subset_mode?: string;
+  /**
+   * Named unicode range to subset to. "latin-ext" is the safe default (U+0000-024F, U+1E00-1EFF).
+   *
+   */
+  fonts_subset_range?: string;
   lazy_load?: boolean;
   lazy_load_exclusions?: Array<string>;
   properly_size_images?: boolean;
@@ -2713,6 +2728,95 @@ export type RucssResultList = {
   items?: Array<RucssResult>;
 };
 
+/**
+ * One font_results catalog row — the dashboard view of a processed self-hosted font.
+ */
+export type FontResult = {
+  id?: string;
+  /**
+   * 64-char lowercase hex BLAKE3 hash of the source font bytes.
+   */
+  source_hash?: string;
+  family?: string;
+  /**
+   * Basename of the original font URL (e.g. inter.woff).
+   */
+  source_file?: string;
+  /**
+   * Source format: ttf | otf | woff.
+   */
+  original_ext?: string;
+  /**
+   * Byte length of the source font.
+   */
+  original_size?: number;
+  /**
+   * Byte length of the full WOFF2 output. 0 until ready.
+   */
+  woff2_size?: number;
+  /**
+   * Byte length of the subset WOFF2 output. 0 unless subset.
+   */
+  subset_size?: number;
+  /**
+   * CSS unicode-range for the subset; empty unless subset.
+   */
+  unicode_range?: string;
+  /**
+   * pending = job enqueued, not yet complete. ready = full WOFF2 produced (woff2_size set). subset = subset WOFF2 also produced (both sizes set). negative = permanent failure; serve the original font forever.
+   *
+   */
+  state?: "pending" | "ready" | "subset" | "negative";
+  /**
+   * Non-empty when state=negative.
+   */
+  error_detail?: string;
+  /**
+   * CP-derived: 1 - min(woff2_size, subset_size) / original_size. 0 when sizes unknown.
+   */
+  savings_pct?: number;
+  updated_at?: string;
+};
+
+export type FontResultList = {
+  items?: Array<FontResult>;
+};
+
+/**
+ * One font result item in the agent push payload.
+ */
+export type FontResultItem = {
+  source_hash: string;
+  family?: string;
+  source_file?: string;
+  original_ext?: string;
+  original_size?: number;
+  woff2_size?: number;
+  subset_size?: number;
+  unicode_range?: string;
+  state: "pending" | "ready" | "subset" | "negative";
+  error_detail?: string;
+};
+
+/**
+ * Batch of font result updates pushed by the agent.
+ */
+export type AgentFontResultsRequest = {
+  results: Array<FontResultItem>;
+};
+
+export type AgentFontResultsResponse = {
+  ok: boolean;
+  /**
+   * Number of rows successfully upserted.
+   */
+  stored: number;
+  /**
+   * Number of items skipped (invalid hash or transient error).
+   */
+  skipped: number;
+};
+
 export type RucssClearResult = {
   ok: boolean;
   cleared: number;
@@ -2974,6 +3078,21 @@ export type PerfConfigWritable = {
    *
    */
   fonts_transcode_woff2?: boolean;
+  /**
+   * Enable subset-WOFF2 production (Phase 2, experimental). When true the media-encoder also produces a subset WOFF2 restricted to the unicode range specified by fonts_subset_range. Default false (opt-in).
+   *
+   */
+  fonts_subset?: boolean;
+  /**
+   * Subsetting strategy. "range" (fixed unicode-range block) is the only supported mode in v1. Stored for forward compatibility.
+   *
+   */
+  fonts_subset_mode?: string;
+  /**
+   * Named unicode range to subset to. "latin-ext" is the safe default (U+0000-024F, U+1E00-1EFF).
+   *
+   */
+  fonts_subset_range?: string;
   lazy_load?: boolean;
   lazy_load_exclusions?: Array<string>;
   properly_size_images?: boolean;
@@ -5034,6 +5153,37 @@ export type AgentFontsTranscodeResponses = {
 export type AgentFontsTranscodeResponse =
   AgentFontsTranscodeResponses[keyof AgentFontsTranscodeResponses];
 
+export type AgentFontsResultsData = {
+  body: AgentFontResultsRequest;
+  path?: never;
+  query?: never;
+  url: "/agent/v1/fonts/results";
+};
+
+export type AgentFontsResultsErrors = {
+  /**
+   * Invalid body or empty results array
+   */
+  400: Error;
+  /**
+   * Agent authentication failed
+   */
+  401: Error;
+};
+
+export type AgentFontsResultsError =
+  AgentFontsResultsErrors[keyof AgentFontsResultsErrors];
+
+export type AgentFontsResultsResponses = {
+  /**
+   * Results stored (partially or fully)
+   */
+  200: AgentFontResultsResponse;
+};
+
+export type AgentFontsResultsResponse =
+  AgentFontsResultsResponses[keyof AgentFontsResultsResponses];
+
 export type DeleteSiteData = {
   body?: never;
   path: {
@@ -6860,6 +7010,28 @@ export type ListQuarantinedMediaResponses = {
 
 export type ListQuarantinedMediaResponse =
   ListQuarantinedMediaResponses[keyof ListQuarantinedMediaResponses];
+
+export type ListFontResultsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    limit?: number;
+    offset?: number;
+  };
+  url: "/api/v1/sites/{siteId}/perf/fonts";
+};
+
+export type ListFontResultsResponses = {
+  /**
+   * A page of font results
+   */
+  200: FontResultList;
+};
+
+export type ListFontResultsResponse =
+  ListFontResultsResponses[keyof ListFontResultsResponses];
 
 export type ListRucssResultsData = {
   body?: never;

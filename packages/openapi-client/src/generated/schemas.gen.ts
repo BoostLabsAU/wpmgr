@@ -4411,6 +4411,23 @@ export const PerfConfigSchema = {
       description:
         "Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.\n",
     },
+    fonts_subset: {
+      type: "boolean",
+      description:
+        "Enable subset-WOFF2 production (Phase 2, experimental). When true the media-encoder also produces a subset WOFF2 restricted to the unicode range specified by fonts_subset_range. Default false (opt-in).\n",
+    },
+    fonts_subset_mode: {
+      type: "string",
+      description:
+        'Subsetting strategy. "range" (fixed unicode-range block) is the only supported mode in v1. Stored for forward compatibility.\n',
+      default: "range",
+    },
+    fonts_subset_range: {
+      type: "string",
+      description:
+        'Named unicode range to subset to. "latin-ext" is the safe default (U+0000-024F, U+1E00-1EFF).\n',
+      default: "latin-ext",
+    },
     lazy_load: {
       type: "boolean",
     },
@@ -4987,6 +5004,152 @@ export const RucssResultListSchema = {
   },
 } as const;
 
+export const FontResultSchema = {
+  type: "object",
+  description:
+    "One font_results catalog row — the dashboard view of a processed self-hosted font.",
+  properties: {
+    id: {
+      type: "string",
+    },
+    source_hash: {
+      type: "string",
+      description:
+        "64-char lowercase hex BLAKE3 hash of the source font bytes.",
+    },
+    family: {
+      type: "string",
+    },
+    source_file: {
+      type: "string",
+      description: "Basename of the original font URL (e.g. inter.woff).",
+    },
+    original_ext: {
+      type: "string",
+      description: "Source format: ttf | otf | woff.",
+    },
+    original_size: {
+      type: "integer",
+      description: "Byte length of the source font.",
+    },
+    woff2_size: {
+      type: "integer",
+      description: "Byte length of the full WOFF2 output. 0 until ready.",
+    },
+    subset_size: {
+      type: "integer",
+      description: "Byte length of the subset WOFF2 output. 0 unless subset.",
+    },
+    unicode_range: {
+      type: "string",
+      description: "CSS unicode-range for the subset; empty unless subset.",
+    },
+    state: {
+      type: "string",
+      enum: ["pending", "ready", "subset", "negative"],
+      description:
+        "pending = job enqueued, not yet complete. ready = full WOFF2 produced (woff2_size set). subset = subset WOFF2 also produced (both sizes set). negative = permanent failure; serve the original font forever.\n",
+    },
+    error_detail: {
+      type: "string",
+      description: "Non-empty when state=negative.",
+    },
+    savings_pct: {
+      type: "number",
+      format: "double",
+      description:
+        "CP-derived: 1 - min(woff2_size, subset_size) / original_size. 0 when sizes unknown.",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const FontResultListSchema = {
+  type: "object",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FontResult",
+      },
+    },
+  },
+} as const;
+
+export const FontResultItemSchema = {
+  type: "object",
+  description: "One font result item in the agent push payload.",
+  required: ["source_hash", "state"],
+  properties: {
+    source_hash: {
+      type: "string",
+    },
+    family: {
+      type: "string",
+    },
+    source_file: {
+      type: "string",
+    },
+    original_ext: {
+      type: "string",
+    },
+    original_size: {
+      type: "integer",
+    },
+    woff2_size: {
+      type: "integer",
+    },
+    subset_size: {
+      type: "integer",
+    },
+    unicode_range: {
+      type: "string",
+    },
+    state: {
+      type: "string",
+      enum: ["pending", "ready", "subset", "negative"],
+    },
+    error_detail: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const AgentFontResultsRequestSchema = {
+  type: "object",
+  required: ["results"],
+  description: "Batch of font result updates pushed by the agent.",
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FontResultItem",
+      },
+    },
+  },
+} as const;
+
+export const AgentFontResultsResponseSchema = {
+  type: "object",
+  required: ["ok", "stored", "skipped"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    stored: {
+      type: "integer",
+      description: "Number of rows successfully upserted.",
+    },
+    skipped: {
+      type: "integer",
+      description: "Number of items skipped (invalid hash or transient error).",
+    },
+  },
+} as const;
+
 export const RucssClearResultSchema = {
   type: "object",
   required: ["ok", "cleared"],
@@ -5463,6 +5626,23 @@ export const PerfConfigWritableSchema = {
       type: "boolean",
       description:
         "Enable server-side TTF/OTF/WOFF → WOFF2 transcoding for self-hosted fonts. When true the agent requests transcode jobs from the CP; the CP enqueues a font_transcode River job which produces the WOFF2 in object storage. Default false.\n",
+    },
+    fonts_subset: {
+      type: "boolean",
+      description:
+        "Enable subset-WOFF2 production (Phase 2, experimental). When true the media-encoder also produces a subset WOFF2 restricted to the unicode range specified by fonts_subset_range. Default false (opt-in).\n",
+    },
+    fonts_subset_mode: {
+      type: "string",
+      description:
+        'Subsetting strategy. "range" (fixed unicode-range block) is the only supported mode in v1. Stored for forward compatibility.\n',
+      default: "range",
+    },
+    fonts_subset_range: {
+      type: "string",
+      description:
+        'Named unicode range to subset to. "latin-ext" is the safe default (U+0000-024F, U+1E00-1EFF).\n',
+      default: "latin-ext",
     },
     lazy_load: {
       type: "boolean",

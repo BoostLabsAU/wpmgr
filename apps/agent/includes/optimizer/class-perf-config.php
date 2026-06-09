@@ -75,6 +75,30 @@ final class PerfConfig
      */
     public bool $fontsTranscodeWoff2;
 
+    /**
+     * Experimental: produce a latin-ext unicode-range subset WOFF2 alongside the
+     * full WOFF2 and inject it as an additive @font-face with a unicode-range
+     * descriptor so the browser fetches the smaller subset for in-range codepoints.
+     * The full WOFF2 always remains as the canonical src fallback — this is purely
+     * additive and never replaces the full font.
+     *
+     * DEFAULT-OFF. Only takes effect when fontsTranscodeWoff2 is also true.
+     * Subsetting is skipped for icon/variable fonts (media-encoder returns "skipped").
+     */
+    public bool $fontsSubset;
+
+    /**
+     * Subset mode: "range" = fixed unicode-range (the only supported mode in Phase 2).
+     * An empty string disables subsetting even when fontsSubset is true.
+     */
+    public string $fontsSubsetMode;
+
+    /**
+     * Unicode range name to subset to: "latin-ext" (U+0020-00FF, U+0100-024F,
+     * U+1E00-1EFF). Only consulted when fontsSubsetMode == "range".
+     */
+    public string $fontsSubsetRange;
+
     // -- Images / iframe ---------------------------------------------------
     /** Add loading=lazy + width/height + srcset + fetchpriority to <img>. */
     public bool $lazyLoad;
@@ -198,6 +222,10 @@ final class PerfConfig
         $this->fontsOptimizeGoogle   = (bool) ($data['fonts_optimize_google'] ?? false);
         $this->fontsPreload          = (bool) ($data['fonts_preload'] ?? false);
         $this->fontsTranscodeWoff2   = (bool) ($data['fonts_transcode_woff2'] ?? false);
+        // fontsSubset requires fontsTranscodeWoff2; the agent hard-gates below.
+        $this->fontsSubset           = (bool) ($data['fonts_subset'] ?? false);
+        $this->fontsSubsetMode       = self::subsetMode($data['fonts_subset_mode'] ?? 'range');
+        $this->fontsSubsetRange      = self::subsetRange($data['fonts_subset_range'] ?? 'latin-ext');
 
         $this->lazyLoad              = (bool) ($data['lazy_load'] ?? false);
         $this->properlySizeImages    = (bool) ($data['properly_size_images'] ?? false);
@@ -311,6 +339,9 @@ final class PerfConfig
             'fonts_optimize_google'        => $this->fontsOptimizeGoogle,
             'fonts_preload'                => $this->fontsPreload,
             'fonts_transcode_woff2'        => $this->fontsTranscodeWoff2,
+            'fonts_subset'                 => $this->fontsSubset,
+            'fonts_subset_mode'            => $this->fontsSubsetMode,
+            'fonts_subset_range'           => $this->fontsSubsetRange,
             'lazy_load'                    => $this->lazyLoad,
             'properly_size_images'         => $this->properlySizeImages,
             'lazy_load_exclusions'         => $this->lazyLoadExclusions,
@@ -342,6 +373,30 @@ final class PerfConfig
             'preload_batch_size'           => $this->preloadBatchSize,
             'preload_max_load'             => $this->preloadMaxLoad,
         ];
+    }
+
+    /**
+     * Clamp the subset mode to the known set ("range" only in Phase 2).
+     *
+     * @param mixed $value Candidate mode.
+     * @return string
+     */
+    private static function subsetMode($value): string
+    {
+        $v = is_string($value) ? strtolower(trim($value)) : '';
+        return in_array($v, ['range'], true) ? $v : 'range';
+    }
+
+    /**
+     * Clamp the subset range name to the known set.
+     *
+     * @param mixed $value Candidate range.
+     * @return string
+     */
+    private static function subsetRange($value): string
+    {
+        $v = is_string($value) ? strtolower(trim($value)) : '';
+        return in_array($v, ['latin-ext', 'latin'], true) ? $v : 'latin-ext';
     }
 
     /**

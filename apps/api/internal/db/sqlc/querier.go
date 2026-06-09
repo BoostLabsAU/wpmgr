@@ -636,6 +636,8 @@ type Querier interface {
 	// htaccess_managed) are NOT touched here — those are reported by the agent via
 	// UpdatePerfInstallState — so an operator config save never clobbers them.
 	UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigParams) (SitePerfConfig, error)
+	UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error)
+	ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error)
 	UpsertRucssResult(ctx context.Context, arg UpsertRucssResultParams) (RucssResult, error)
 	// Insert-or-update the singleton row. password_enc uses a nil-sentinel:
 	// when @set_password is false the existing ciphertext is preserved, so editing

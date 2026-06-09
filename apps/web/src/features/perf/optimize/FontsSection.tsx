@@ -2,8 +2,8 @@ import { SettingRow } from "../components/SettingRow";
 import { SettingsCard } from "../components/SettingsCard";
 import type { PerfConfig } from "../types";
 
-// Font loading optimization: font-display swap, self-host Google Fonts, and
-// preload critical fonts.
+// Font loading optimization: font-display swap, self-host Google Fonts,
+// preload critical fonts, WOFF2 transcoding, and subset production (Phase 2).
 
 export interface FontsSectionProps {
   config: PerfConfig;
@@ -18,6 +18,11 @@ export function FontsSection({
   disabled,
   saving,
 }: FontsSectionProps) {
+  // fonts_subset requires fonts_transcode_woff2 to be on. The API accepts it
+  // independently (per the woo_cacheable_session precedent), but the toggle is
+  // disabled until the prerequisite is on so the UX is clear.
+  const subsetGated = !config.fonts_transcode_woff2;
+
   return (
     <SettingsCard
       title="Fonts"
@@ -53,6 +58,18 @@ export function FontsSection({
         checked={config.fonts_transcode_woff2}
         onChange={(v) => save({ fonts_transcode_woff2: v })}
         disabled={disabled}
+        saving={saving}
+      />
+      <SettingRow
+        label="Subset fonts (experimental)"
+        description={
+          subsetGated
+            ? "Requires WOFF2 conversion to be on. Once enabled, a subset WOFF2 restricted to the latin-ext unicode range is produced alongside the full WOFF2, typically cutting size by another 60 to 90 percent. Variable fonts and icon fonts are skipped automatically. OpenType shaping features such as ligatures and small-caps are not preserved in the subset."
+            : "Produce a subset WOFF2 restricted to the latin-ext unicode range alongside the full WOFF2. Typically cuts size by another 60 to 90 percent. Variable fonts and icon fonts are skipped automatically. OpenType shaping features such as ligatures and small-caps are not preserved in the subset; the full WOFF2 remains as a browser fallback for any out-of-range codepoints."
+        }
+        checked={config.fonts_subset ?? false}
+        onChange={(v) => save({ fonts_subset: v })}
+        disabled={disabled || subsetGated}
         saving={saving}
       />
     </SettingsCard>

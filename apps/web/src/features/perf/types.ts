@@ -54,6 +54,17 @@ export interface PerfConfig {
   fonts_optimize_google: boolean;
   fonts_preload: boolean;
   fonts_transcode_woff2: boolean;
+  /**
+   * Phase-2 experimental: produce a subset WOFF2 in addition to the full WOFF2.
+   * Default false (opt-in). Requires fonts_transcode_woff2 to be useful (the
+   * agent hard-gates subsetting on WOFF2 transcoding being active), but the API
+   * accepts it independently per the woo_cacheable_session precedent.
+   */
+  fonts_subset?: boolean;
+  /** Subset mode: "range" (fixed unicode range, default) or "used" (used-glyphs, aggressive). */
+  fonts_subset_mode?: string;
+  /** Unicode range preset for range mode: "latin" or "latin-ext" (default). */
+  fonts_subset_range?: string;
 
   // Media / lazy-load
   lazy_load: boolean;
@@ -122,6 +133,15 @@ export interface CacheStats {
   preload_total: number;
   reported_at?: string;
 }
+
+/**
+ * One font_results catalog row (GET /perf/fonts).
+ * Re-exported from @wpmgr/api — single source of truth is the generated client.
+ * state values from DB: pending | ready | subset | negative.
+ * Per-row badge also renders SSE-ephemeral states (converting / skipped / failed)
+ * overlaid from fonts-store.
+ */
+export type { FontResult } from "@wpmgr/api";
 
 /** One cached RUCSS result row (GET /rucss/results). */
 export interface RucssResult {

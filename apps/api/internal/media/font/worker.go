@@ -33,15 +33,20 @@ type FontPresigner interface {
 // For each job it:
 //  1. Validates the server-derived storage keys before any presign call.
 //  2. Presigned-GETs the source font bytes from object storage.
-//  3. Calls TranscodeToWOFF2 (pure-Go, no CGO) inside a panic-recovery
+//  3. Calls TranscodeToWOFF2WithSubset (pure-Go, no CGO) inside a panic-recovery
 //     wrapper so malformed font bytes cannot crash the worker process.
-//  4. Presigned-PUTs the WOFF2 output.
-//  5. Records a ready result in font_transcode_results.
+//  4. Presigned-PUTs the full WOFF2 output.
+//  5. If a subset was produced, Presigned-PUTs the subset WOFF2 output.
+//  6. Records a ready result in font_transcode_results.
 //
 // On a permanent error (ErrUnsupportedFormat, ErrAlreadyWOFF2, malformed
 // input including any panic from the font library), it records a negative-result
 // marker so the job is never retried. On a transient error (storage, network),
 // River retries normally.
+//
+// Subset-only failures (ErrVariableFont, ErrIconFont, ErrSubsetEmpty,
+// ErrSubsetFailed) mark the subset as permanently negative but leave the full
+// WOFF2 result intact — the full WOFF2 job is never failed by a subset error.
 type TranscodeWorker struct {
 	river.WorkerDefaults[TranscodeArgs]
 	repo       FontTranscodeRepo
@@ -81,7 +86,9 @@ func (w *TranscodeWorker) Timeout(*river.Job[TranscodeArgs]) time.Duration {
 	return 3 * time.Minute
 }
 
-// Work transcodes one font from its source format to WOFF2.
+// Work transcodes one font from its source format to WOFF2, and optionally
+// also produces a unicode-range subset WOFF2 when the job carries a SubsetSpec
+// with Mode != "".
 func (w *TranscodeWorker) Work(ctx context.Context, job *river.Job[TranscodeArgs]) error {
 	a := job.Args
 
@@ -91,6 +98,17 @@ func (w *TranscodeWorker) Work(ctx context.Context, job *river.Job[TranscodeArgs
 	if !ValidSourceHash(a.SourceHash) {
 		reason := "invalid source_hash: must be 64 lowercase hex chars"
 		w.logger.WarnContext(ctx, "font transcode: permanent failure",
+			slog.String("source_hash", a.SourceHash),
+			slog.String("reason", reason))
+		_ = w.repo.MarkFontTranscodeNegative(ctx, a.TenantID, a.SourceHash, reason)
+		return river.JobCancel(errors.New(reason))
+	}
+
+	// Validate SubsetSpec if present. An invalid spec is a programming error
+	// (the handler must validate at enqueue); cancel without retry.
+	if err := ValidSubsetSpec(a.Subset); err != nil {
+		reason := fmt.Sprintf("invalid subset spec: %v", err)
+		w.logger.WarnContext(ctx, "font transcode: permanent failure (bad subset spec)",
 			slog.String("source_hash", a.SourceHash),
 			slog.String("reason", reason))
 		_ = w.repo.MarkFontTranscodeNegative(ctx, a.TenantID, a.SourceHash, reason)
@@ -111,19 +129,28 @@ func (w *TranscodeWorker) Work(ctx context.Context, job *river.Job[TranscodeArgs
 		return river.JobCancel(fmt.Errorf("font transcode: woff2 key guard: %w", err))
 	}
 
+	// Guard the subset key only when a subset is requested (Mode != "").
+	var subsetKey string
+	if a.Subset.Mode != SubsetModeNone {
+		subsetKey = DeriveSubsetWoff2Key(a.TenantID, a.SourceHash, a.Subset)
+		if err := GuardStorageKey(subsetKey); err != nil {
+			return river.JobCancel(fmt.Errorf("font transcode: subset key guard: %w", err))
+		}
+	}
+
 	// 1. Fetch source bytes via presigned GET.
 	src, err := w.fetchPresigned(ctx, sourceKey)
 	if err != nil {
 		return fmt.Errorf("font transcode: fetch source %q: %w", sourceKey, err)
 	}
 
-	// 2. Transcode to WOFF2 inside a panic-recovery wrapper.
-	//    tdewolff/font may panic on sufficiently malformed input; any such panic
-	//    is converted to a permanent negative result so the job is never retried.
-	woff2, encErr := safeTranscode(src)
+	// 2. Transcode to WOFF2 (and optionally subset) inside a panic-recovery
+	//    wrapper. Any panic from tdewolff/font is caught and converted into a
+	//    permanent ErrUnsupportedFormat-flavored error.
+	result, encErr := safeTranscodeWithSubset(src, a.Subset)
 	if encErr != nil {
-		// Permanent failures: record a negative marker and cancel the River job
-		// so it is not retried.
+		// Permanent failures on the FULL transcode path: record a negative
+		// marker and cancel the River job so it is not retried.
 		if isPermanent(encErr) {
 			reason := encErr.Error()
 			w.logger.WarnContext(ctx, "font transcode: permanent failure",
@@ -138,12 +165,34 @@ func (w *TranscodeWorker) Work(ctx context.Context, job *river.Job[TranscodeArgs
 		return fmt.Errorf("font transcode: encode %q: %w", a.SourceHash, encErr)
 	}
 
-	// 3. Upload WOFF2 via presigned PUT.
-	if putErr := w.putPresigned(ctx, woff2Key, woff2); putErr != nil {
+	// 3. Upload full WOFF2 via presigned PUT.
+	if putErr := w.putPresigned(ctx, woff2Key, result.FullWOFF2); putErr != nil {
 		return fmt.Errorf("font transcode: upload WOFF2 %q: %w", woff2Key, putErr)
 	}
 
-	// 4. Record the ready result.
+	// 4. Upload subset WOFF2 if produced.
+	if result.SubsetWOFF2 != nil {
+		if putErr := w.putPresigned(ctx, subsetKey, result.SubsetWOFF2); putErr != nil {
+			// Subset upload failure is transient — return for retry. The full
+			// WOFF2 is already in storage and will be re-uploaded idempotently.
+			return fmt.Errorf("font transcode: upload subset WOFF2 %q: %w", subsetKey, putErr)
+		}
+		w.logger.InfoContext(ctx, "font transcode: subset complete",
+			slog.String("source_hash", a.SourceHash),
+			slog.String("subset_key", subsetKey),
+			slog.Int("subset_bytes", len(result.SubsetWOFF2)),
+			slog.String("unicode_range", result.UnicodeRange),
+		)
+	} else if result.SubsetErr != nil {
+		// Subset-only permanent failure: log it. The full WOFF2 is still valid;
+		// only the per-spec row is negative. We do NOT cancel the whole job.
+		w.logger.WarnContext(ctx, "font transcode: subset skipped (permanent)",
+			slog.String("source_hash", a.SourceHash),
+			slog.String("reason", result.SubsetErr.Error()),
+		)
+	}
+
+	// 5. Record the ready result.
 	if readyErr := w.repo.MarkFontTranscodeReady(ctx, a.TenantID, a.SourceHash, woff2Key); readyErr != nil {
 		// The WOFF2 is in storage; a failure here is survivable — the agent
 		// will poll again and the CP can recover it. Log and return for retry.
@@ -154,7 +203,7 @@ func (w *TranscodeWorker) Work(ctx context.Context, job *river.Job[TranscodeArgs
 		slog.String("source_hash", a.SourceHash),
 		slog.String("woff2_key", woff2Key),
 		slog.Int("src_bytes", len(src)),
-		slog.Int("woff2_bytes", len(woff2)),
+		slog.Int("woff2_bytes", len(result.FullWOFF2)),
 	)
 	return nil
 }
@@ -171,14 +220,42 @@ func safeTranscode(src []byte) (out []byte, err error) {
 	return TranscodeToWOFF2(src)
 }
 
+// safeTranscodeWithSubset wraps TranscodeToWOFF2WithSubset with a
+// panic-recovery guard. Any panic is caught and converted into a permanent
+// ErrUnsupportedFormat-flavored error (same convention as safeTranscode).
+func safeTranscodeWithSubset(src []byte, spec SubsetSpec) (result SubsetResult, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("%w: panic in font parser: %v", ErrUnsupportedFormat, r)
+		}
+	}()
+	return TranscodeToWOFF2WithSubset(src, spec)
+}
+
 // isPermanent returns true for errors that mean the font can never be
 // transcoded regardless of retries (unsupported format, already WOFF2,
 // size cap exceeded, or decoded output too large).
+//
+// Subset-only sentinels (ErrVariableFont, ErrIconFont, ErrSubsetEmpty,
+// ErrSubsetFailed) are intentionally NOT included here. When those errors
+// appear in SubsetResult.SubsetErr the caller handles them directly —
+// they do not fail the overall River job. This function is only called
+// on the top-level transcode error, which represents a full-WOFF2 failure.
 func isPermanent(err error) bool {
 	return errors.Is(err, ErrUnsupportedFormat) ||
 		errors.Is(err, ErrAlreadyWOFF2) ||
 		errors.Is(err, ErrFontTooLarge) ||
 		errors.Is(err, ErrDecodedTooLarge)
+}
+
+// isSubsetPermanent returns true for errors that represent a permanent
+// negative result for a specific (source_hash, subset_spec) pair.
+// These never fail the River job itself; they only mark the subset row negative.
+func isSubsetPermanent(err error) bool {
+	return errors.Is(err, ErrVariableFont) ||
+		errors.Is(err, ErrIconFont) ||
+		errors.Is(err, ErrSubsetEmpty) ||
+		errors.Is(err, ErrSubsetFailed)
 }
 
 // fetchPresigned mints a presigned GET URL for key and fetches the bytes.

@@ -209,6 +209,23 @@ agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fl
 	rm -rf release/fleet-agent-for-wpmgr
 	@echo "agent wporg zip: $$(du -sh release/fleet-agent-for-wpmgr.zip | cut -f1)"
 
+.PHONY: agent-check
+agent-check: ## Fast phpcs pass over apps/agent (committed phpcs.xml.dist). NOT the authoritative gate.
+	cd apps/agent && (composer install --no-interaction --quiet --ignore-platform-reqs 2>/dev/null \
+		|| composer update --no-interaction --quiet --ignore-platform-reqs)
+	cd apps/agent && vendor/bin/phpcs -d memory_limit=1G
+
+.PHONY: agent-format
+agent-format: ## phpcbf auto-fix over apps/agent, then re-lint
+	cd apps/agent && vendor/bin/phpcbf -d memory_limit=1G --report-summary --report-source || true
+	cd apps/agent && vendor/bin/phpcs -d memory_limit=1G
+
+.PHONY: agent-plugincheck
+agent-plugincheck: agent-zip-wporg ## AUTHORITATIVE: `wp plugin check` on real WordPress via Docker (mariadb + wordpress:cli)
+	# Always tests the wp.org-identity build (fleet-agent-for-wpmgr) so the META
+	# trademark/updater/readme checks key off the right slug. Exits non-zero on any ERROR row.
+	cd tools/plugincheck && PLUGIN_ZIP="$(PWD)/release/fleet-agent-for-wpmgr.zip" ./run.sh
+
 .PHONY: agent-release
 agent-release: agent-zip ## Publish the agent release (zip + latest.json) to object storage for CP-driven self-update (ADR-042)
 	# Uploads the versioned package FIRST, then latest.json LAST, so the CP

@@ -17,6 +17,14 @@ type AgentDisconnectRes interface {
 	agentDisconnectRes()
 }
 
+type AgentFontsResultsRes interface {
+	agentFontsResultsRes()
+}
+
+type AgentFontsTranscodeRes interface {
+	agentFontsTranscodeRes()
+}
+
 type AgentHeartbeatRes interface {
 	agentHeartbeatRes()
 }
@@ -67,6 +75,10 @@ type BulkConfigCacheRes interface {
 
 type CancelBackupRes interface {
 	cancelBackupRes()
+}
+
+type CancelEnrollmentRes interface {
+	cancelEnrollmentRes()
 }
 
 type CreateApiKeyRes interface {
@@ -169,6 +181,14 @@ type GetReadyzRes interface {
 	getReadyzRes()
 }
 
+type GetRestoreRunRes interface {
+	getRestoreRunRes()
+}
+
+type GetScheduleRunRes interface {
+	getScheduleRunRes()
+}
+
 type GetSiteAvailableUpdatesRes interface {
 	getSiteAvailableUpdatesRes()
 }
@@ -215,6 +235,18 @@ type ListAuditRes interface {
 
 type ListMembersRes interface {
 	listMembersRes()
+}
+
+type ListRestoreRunEventsRes interface {
+	listRestoreRunEventsRes()
+}
+
+type ListRestoreRunsRes interface {
+	listRestoreRunsRes()
+}
+
+type ListScheduleRunsRes interface {
+	listScheduleRunsRes()
 }
 
 type ListSharedWithMeRes interface {

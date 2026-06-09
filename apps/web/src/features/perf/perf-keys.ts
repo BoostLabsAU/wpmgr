@@ -12,4 +12,6 @@ export const perfKeys = {
   dbOrphans: (siteId: string) => [...perfKeys.all, "dbOrphans", siteId] as const,
   // Tenant-level fleet aggregate — no siteId (cross-site).
   fleetDbHealth: () => [...perfKeys.all, "fleetDbHealth"] as const,
+  // Font results catalog (ADR-052 Phase 2 / m55).
+  fonts: (siteId: string) => [...perfKeys.all, "fonts", siteId] as const,
 } as const;

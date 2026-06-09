@@ -64,6 +64,22 @@ func (s *PerfConfig) setDefaults() {
 		val := float32(0)
 		s.PreloadMaxLoad.SetTo(val)
 	}
+	{
+		val := string("range")
+		s.FontsSubsetMode.SetTo(val)
+	}
+	{
+		val := string("latin-ext")
+		s.FontsSubsetRange.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.WooCacheableSession.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.WooThemeFragmentsSupported.SetTo(val)
+	}
 }
 
 // setDefaults set default value of fields.

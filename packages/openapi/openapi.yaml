@@ -2102,6 +2102,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /agent/v1/fonts/results:
+    post:
+      operationId: agentFontsResults
+      summary: Push font processing results (agent-authenticated)
+      description: |
+        Font Results Catalog (M55 / Phase 2) — the agent POSTs after
+        transcoding or subsetting completes (or permanently fails) for one or
+        more self-hosted fonts. The CP upserts the font_results catalog row for
+        each item and derives savings_pct from the reported sizes.
+
+        **Security:** tenant_id + site_id ALWAYS come from the VERIFIED agent
+        identity (Ed25519 signed-request middleware), NEVER from the body.
+        source_hash items that are not valid 64-char lowercase hex BLAKE3
+        digests are skipped (not rejected) so a bad item never blocks the batch.
+
+        **Response:** `{"ok": true, "stored": N, "skipped": M}` where N is the
+        count of successfully upserted rows and M is the count of skipped items
+        (invalid hash or transient DB error).
+      tags: [agent, perf]
+      security:
+        - AgentSignature: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AgentFontResultsRequest"
+      responses:
+        "200":
+          description: Results stored (partially or fully)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentFontResultsResponse"
+        "400":
+          description: Invalid body or empty results array
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Agent authentication failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /api/v1/sites/{siteId}:
     get:
       operationId: getSite
@@ -4011,6 +4058,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaCleanQuarantineList"
+  /api/v1/sites/{siteId}/perf/fonts:
+    get:
+      operationId: listFontResults
+      summary: List font processing results for a site
+      description: |
+        Returns a page of the site's font_results catalog rows — the per-site
+        dashboard view of every self-hosted font that has been discovered and
+        processed (or is pending processing). Each row includes the source hash,
+        font family, sizes, state (pending|ready|subset|negative), and the
+        CP-derived savings_pct.
+
+        Requires the `site:read` permission. Ordered by updated_at DESC, id DESC.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Offset"
+      responses:
+        "200":
+          description: A page of font results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FontResultList"
+
   /api/v1/sites/{siteId}/perf/rucss/results:
     get:
       operationId: listRucssResults
@@ -7284,6 +7356,24 @@ components:
             self-hosted fonts. When true the agent requests transcode jobs from
             the CP; the CP enqueues a font_transcode River job which produces
             the WOFF2 in object storage. Default false.
+        fonts_subset:
+          type: boolean
+          description: >
+            Enable subset-WOFF2 production (Phase 2, experimental). When true
+            the media-encoder also produces a subset WOFF2 restricted to the
+            unicode range specified by fonts_subset_range. Default false (opt-in).
+        fonts_subset_mode:
+          type: string
+          description: >
+            Subsetting strategy. "range" (fixed unicode-range block) is the
+            only supported mode in v1. Stored for forward compatibility.
+          default: range
+        fonts_subset_range:
+          type: string
+          description: >
+            Named unicode range to subset to. "latin-ext" is the safe default
+            (U+0000-024F, U+1E00-1EFF).
+          default: latin-ext
         # Media / lazy-load
         lazy_load: { type: boolean }
         lazy_load_exclusions: { type: array, items: { type: string } }
@@ -7644,6 +7734,71 @@ components:
         items:
           type: array
           items: { $ref: "#/components/schemas/RucssResult" }
+    FontResult:
+      type: object
+      description: One font_results catalog row — the dashboard view of a processed self-hosted font.
+      properties:
+        id: { type: string }
+        source_hash: { type: string, description: "64-char lowercase hex BLAKE3 hash of the source font bytes." }
+        family: { type: string }
+        source_file: { type: string, description: "Basename of the original font URL (e.g. inter.woff)." }
+        original_ext: { type: string, description: "Source format: ttf | otf | woff." }
+        original_size: { type: integer, description: "Byte length of the source font." }
+        woff2_size: { type: integer, description: "Byte length of the full WOFF2 output. 0 until ready." }
+        subset_size: { type: integer, description: "Byte length of the subset WOFF2 output. 0 unless subset." }
+        unicode_range: { type: string, description: "CSS unicode-range for the subset; empty unless subset." }
+        state:
+          type: string
+          enum: [pending, ready, subset, negative]
+          description: >
+            pending = job enqueued, not yet complete.
+            ready = full WOFF2 produced (woff2_size set).
+            subset = subset WOFF2 also produced (both sizes set).
+            negative = permanent failure; serve the original font forever.
+        error_detail: { type: string, description: "Non-empty when state=negative." }
+        savings_pct:
+          type: number
+          format: double
+          description: "CP-derived: 1 - min(woff2_size, subset_size) / original_size. 0 when sizes unknown."
+        updated_at: { type: string, format: date-time }
+    FontResultList:
+      type: object
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/FontResult" }
+    FontResultItem:
+      type: object
+      description: One font result item in the agent push payload.
+      required: [source_hash, state]
+      properties:
+        source_hash: { type: string }
+        family: { type: string }
+        source_file: { type: string }
+        original_ext: { type: string }
+        original_size: { type: integer }
+        woff2_size: { type: integer }
+        subset_size: { type: integer }
+        unicode_range: { type: string }
+        state:
+          type: string
+          enum: [pending, ready, subset, negative]
+        error_detail: { type: string }
+    AgentFontResultsRequest:
+      type: object
+      required: [results]
+      description: Batch of font result updates pushed by the agent.
+      properties:
+        results:
+          type: array
+          items: { $ref: "#/components/schemas/FontResultItem" }
+    AgentFontResultsResponse:
+      type: object
+      required: [ok, stored, skipped]
+      properties:
+        ok: { type: boolean }
+        stored: { type: integer, description: "Number of rows successfully upserted." }
+        skipped: { type: integer, description: "Number of items skipped (invalid hash or transient error)." }
     RucssClearResult:
       type: object
       required: [ok, cleared]

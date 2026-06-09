@@ -373,6 +373,9 @@ func (q *Queries) GetPerfConfig(ctx context.Context, siteID uuid.UUID) (SitePerf
 		&i.WooCacheableSession,
 		&i.WooThemeFragmentsSupported,
 		&i.FontsTranscodeWoff2,
+		&i.FontsSubset,
+		&i.FontsSubsetMode,
+		&i.FontsSubsetRange,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1353,6 +1356,10 @@ type UpsertPerfConfigParams struct {
 	WooCacheableSession bool `json:"woo_cacheable_session"`
 	// M54 — Font transcode to WOFF2 flag (operator-writable).
 	FontsTranscodeWoff2 bool `json:"fonts_transcode_woff2"`
+	// M55 — Font subsetting flags (experimental, default OFF).
+	FontsSubset      bool   `json:"fonts_subset"`
+	FontsSubsetMode  string `json:"fonts_subset_mode"`
+	FontsSubsetRange string `json:"fonts_subset_range"`
 }
 
 // Insert-or-update the per-site performance config. The agent install-state
@@ -1420,6 +1427,9 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		arg.ConfigVersion,
 		arg.WooCacheableSession,
 		arg.FontsTranscodeWoff2,
+		arg.FontsSubset,
+		arg.FontsSubsetMode,
+		arg.FontsSubsetRange,
 	)
 	var i SitePerfConfig
 	err := row.Scan(
@@ -1492,6 +1502,9 @@ func (q *Queries) UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigPara
 		&i.WooCacheableSession,
 		&i.WooThemeFragmentsSupported,
 		&i.FontsTranscodeWoff2,
+		&i.FontsSubset,
+		&i.FontsSubsetMode,
+		&i.FontsSubsetRange,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1718,4 +1731,161 @@ func (q *Queries) PruneCacheHitRatioHistory(ctx context.Context, cutoff time.Tim
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+// ---------------------------------------------------------------------------
+// font_results (m55)
+// ---------------------------------------------------------------------------
+
+const upsertFontResult = `-- name: UpsertFontResult :one
+INSERT INTO font_results (
+    tenant_id, site_id, source_hash,
+    family, source_file, original_ext, original_size,
+    woff2_size, subset_size, unicode_range,
+    state, error_detail, savings_pct,
+    updated_at
+) VALUES (
+    $1, $2, $3,
+    $4, $5, $6, $7,
+    $8, $9, $10,
+    $11, $12,
+    CASE
+        WHEN $7::integer > 0 AND (
+             $8::integer IS NOT NULL OR $9::integer IS NOT NULL
+        ) THEN ROUND(
+            (1.0 - LEAST(
+                COALESCE($8::integer, $7::integer),
+                COALESCE($9::integer, $7::integer)
+            )::numeric / GREATEST($7::integer, 1)),
+            4
+        ) * 100
+        ELSE NULL
+    END,
+    now()
+)
+ON CONFLICT (site_id, source_hash) DO UPDATE SET
+    family        = COALESCE(EXCLUDED.family,       font_results.family),
+    source_file   = COALESCE(EXCLUDED.source_file,  font_results.source_file),
+    original_ext  = COALESCE(EXCLUDED.original_ext, font_results.original_ext),
+    original_size = COALESCE(EXCLUDED.original_size, font_results.original_size),
+    woff2_size    = COALESCE(EXCLUDED.woff2_size,   font_results.woff2_size),
+    subset_size   = COALESCE(EXCLUDED.subset_size,  font_results.subset_size),
+    unicode_range = COALESCE(EXCLUDED.unicode_range, font_results.unicode_range),
+    state         = EXCLUDED.state,
+    error_detail  = EXCLUDED.error_detail,
+    savings_pct   = EXCLUDED.savings_pct,
+    updated_at    = now()
+RETURNING id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at
+`
+
+// UpsertFontResultParams are the parameters for UpsertFontResult.
+// tenant_id + site_id ALWAYS come from the verified agent identity.
+type UpsertFontResultParams struct {
+	TenantID     uuid.UUID `json:"tenant_id"`
+	SiteID       uuid.UUID `json:"site_id"`
+	SourceHash   string    `json:"source_hash"`
+	Family       *string   `json:"family"`
+	SourceFile   *string   `json:"source_file"`
+	OriginalExt  *string   `json:"original_ext"`
+	OriginalSize *int32    `json:"original_size"`
+	Woff2Size    *int32    `json:"woff2_size"`
+	SubsetSize   *int32    `json:"subset_size"`
+	UnicodeRange *string   `json:"unicode_range"`
+	State        string    `json:"state"`
+	ErrorDetail  *string   `json:"error_detail"`
+}
+
+// UpsertFontResult inserts or updates a per-(site,source_hash) font result row.
+// savings_pct is CP-derived from best output size vs original_size.
+// Runs under InAgentTx. tenant_id + site_id come from the verified agent identity.
+func (q *Queries) UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error) {
+	row := q.db.QueryRow(ctx, upsertFontResult,
+		arg.TenantID,
+		arg.SiteID,
+		arg.SourceHash,
+		arg.Family,
+		arg.SourceFile,
+		arg.OriginalExt,
+		arg.OriginalSize,
+		arg.Woff2Size,
+		arg.SubsetSize,
+		arg.UnicodeRange,
+		arg.State,
+		arg.ErrorDetail,
+	)
+	var i FontResult
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.SiteID,
+		&i.SourceHash,
+		&i.Family,
+		&i.SourceFile,
+		&i.OriginalExt,
+		&i.OriginalSize,
+		&i.Woff2Size,
+		&i.SubsetSize,
+		&i.UnicodeRange,
+		&i.State,
+		&i.ErrorDetail,
+		&i.SavingsPct,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const listFontResultsForSite = `-- name: ListFontResultsForSite :many
+SELECT id, tenant_id, site_id, source_hash, family, source_file, original_ext, original_size, woff2_size, subset_size, unicode_range, state, error_detail, savings_pct, created_at, updated_at FROM font_results
+WHERE tenant_id = $1 AND site_id = $2
+ORDER BY updated_at DESC, id DESC
+LIMIT $3 OFFSET $4
+`
+
+// ListFontResultsForSiteParams are the parameters for ListFontResultsForSite.
+type ListFontResultsForSiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	SiteID    uuid.UUID `json:"site_id"`
+	RowLimit  int32     `json:"row_limit"`
+	RowOffset int32     `json:"row_offset"`
+}
+
+// ListFontResultsForSite returns a page of font catalog rows for the dashboard.
+// Ordered by updated_at DESC, id DESC (standing tiebreaker convention).
+// Runs under InTenantTx (operator path).
+func (q *Queries) ListFontResultsForSite(ctx context.Context, arg ListFontResultsForSiteParams) ([]FontResult, error) {
+	rows, err := q.db.Query(ctx, listFontResultsForSite, arg.TenantID, arg.SiteID, arg.RowLimit, arg.RowOffset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FontResult
+	for rows.Next() {
+		var i FontResult
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.SiteID,
+			&i.SourceHash,
+			&i.Family,
+			&i.SourceFile,
+			&i.OriginalExt,
+			&i.OriginalSize,
+			&i.Woff2Size,
+			&i.SubsetSize,
+			&i.UnicodeRange,
+			&i.State,
+			&i.ErrorDetail,
+			&i.SavingsPct,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
