@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.2
+Stable tag: 0.33.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.3 =
+* Fix: Real User Monitoring now reliably collects CLS on cached pages. The Core Web Vital collectors are registered in the order recommended by the web-vitals library (paint metrics before layout shift) so the CLS reporter is always armed before a load-and-leave visitor can hide the page. Previously, on an already-cached page, the CLS measurement could be dropped in a brief timing window. No effect on backups, cache, or other features.
+
 = 0.33.2 =
 * Fix: Real User Monitoring now collects CLS. The collector is upgraded to web-vitals 5 and loaded early (async, in the head) so the CLS reporter is armed before the page is hidden; previously, on a load-and-leave visit, CLS was never sent. No effect on backups, cache, or other features.
 
@@ -143,6 +146,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.3 =
+Fixes Real User Monitoring so it reliably collects CLS on cached pages by registering the Web Vitals collectors in the recommended order. Update to capture CLS from real visitors. Safe to update in place.
 
 = 0.33.2 =
 Fixes Real User Monitoring so it collects CLS (Cumulative Layout Shift), completing Core Web Vitals coverage. Update to capture CLS from real visitors. Safe to update in place.

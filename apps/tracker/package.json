@@ -9,13 +9,15 @@
     "build": "node build.mjs",
     "lint": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "test": "echo 'no unit tests for the tracker bundle'"
+    "test": "echo 'no unit tests for the tracker bundle'",
+    "test:cls": "node tests/cls-beacon.test.mjs"
   },
   "dependencies": {
     "web-vitals": "^5.3.0"
   },
   "devDependencies": {
     "esbuild": "^0.25.4",
+    "playwright": "^1.60.0",
     "typescript": "^5.6.3"
   }
 }

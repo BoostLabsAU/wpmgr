@@ -186,11 +186,23 @@ export function init(): void {
     // once when the metric is final. CLS and INP finalise at page-hide; the
     // callback fires at that moment and sendBeacon is safe to call then.
     // Sending here (not in a separate flush listener) is the race-free pattern.
-    onLCP(send);
-    onINP(send);
-    onCLS(send);
-    onFCP(send);
+    //
+    // Registration order: onFCP before onCLS (canonical web-vitals order).
+    // onCLS internally calls onFCP(runOnce(armCLS)). armCLS registers the
+    // visibilityWatcher.onHidden hook that fires CLS measurement on page-hide.
+    // On a cached page where FCP has already occurred, both observers use
+    // PerformanceObserver({buffered:true}) and receive the FCP entry in the
+    // same async delivery task (~15 ms after observer creation). By the time
+    // that task fires, both microtasks — our FCP send and armCLS — are queued
+    // and drain together before any browser-dispatched visibilitychange can
+    // interrupt them. Registering onFCP first follows the canonical order
+    // shown in the web-vitals documentation and keeps the two related FCP
+    // observers adjacent in the delivery task's microtask queue.
     onTTFB(send);
+    onFCP(send);
+    onLCP(send);
+    onCLS(send);
+    onINP(send);
   } catch {
     // Defensive top-level catch: this script must never throw.
   }
