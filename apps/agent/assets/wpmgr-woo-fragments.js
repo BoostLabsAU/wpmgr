@@ -73,9 +73,19 @@
         }
 
         // Replay buffered events on the jQuery bus so fragment handlers fire.
+        // The 'load' event is captured on window, so it must be replayed on
+        // $(window) — not just $(document) — so $(window).on('load', ...) handlers
+        // (including WooCommerce cart-fragments' own load listener) actually fire.
+        var $win = $(window);
+        var $doc = $(document);
         for (var i = 0; i < buffered.length; i++) {
             try {
-                $(document).trigger(buffered[i]);
+                if (buffered[i] === 'load') {
+                    $win.trigger('load');
+                    $doc.trigger('load'); // also fire on document for broad compat
+                } else {
+                    $doc.trigger(buffered[i]); // DOMContentLoaded, readystatechange
+                }
             } catch (e) { /* ignored — never break the page */ }
         }
         buffered = [];

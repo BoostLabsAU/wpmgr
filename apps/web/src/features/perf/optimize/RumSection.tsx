@@ -26,14 +26,14 @@ export interface RumSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
 export function RumSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
 }: RumSectionProps) {
   return (
     <SettingsCard
@@ -51,20 +51,20 @@ export function RumSection({
         }
         checked={config.rum_enabled ?? false}
         onChange={(v) => save({ rum_enabled: v })}
-        disabled={disabled}
-        saving={saving}
+        disabled={disabled || isSaving("rum_enabled")}
+        saving={isSaving("rum_enabled")}
       >
         <SampleRateRow
           value={config.rum_sample_rate ?? 1.0}
           onChange={(v) => save({ rum_sample_rate: v })}
           disabled={disabled}
-          saving={saving}
+          saving={isSaving("rum_sample_rate")}
         />
         <MinSampleCountRow
           value={config.min_sample_count ?? 30}
           onCommit={(v) => save({ min_sample_count: v })}
           disabled={disabled}
-          saving={saving}
+          saving={isSaving("min_sample_count")}
         />
       </SettingRow>
     </SettingsCard>

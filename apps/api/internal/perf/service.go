@@ -2097,17 +2097,23 @@ func (s *Service) MediaCleanScan(ctx context.Context, tenantID, siteID uuid.UUID
 		return MediaCleanScanOutput{}, fmt.Errorf("media_clean scan refused by agent: %s", res.Detail)
 	}
 
+	// Sanitize URL fields: only http/https links are forwarded to the web client.
+	// Any other scheme (e.g. javascript:, data:) is nil'd here as a defense-in-
+	// depth guard; the agent is an untrusted boundary.
+	// - edit_url on usages: guards the anchor href sink.
+	// - thumb on candidates and referenced: guards the <img src> sink.
 	candidates := res.Candidates
 	if candidates == nil {
 		candidates = []agentcmd.MediaCleanCandidate{}
 	}
+	for i, c := range candidates {
+		candidates[i].Thumb = sanitizeEditURL(c.Thumb)
+	}
 
-	// Sanitize edit_url values: only http/https links are forwarded to the web
-	// client. Any other scheme (e.g. javascript:, data:) is set to nil here as
-	// a defense-in-depth guard; the agent is an untrusted boundary.
 	rawReferenced := res.Referenced
 	referenced := make([]agentcmd.MediaCleanReferenced, len(rawReferenced))
 	for i, ref := range rawReferenced {
+		ref.Thumb = sanitizeEditURL(ref.Thumb)
 		sanitized := make([]agentcmd.MediaCleanUsage, len(ref.Usages))
 		for j, u := range ref.Usages {
 			u.EditURL = sanitizeEditURL(u.EditURL)

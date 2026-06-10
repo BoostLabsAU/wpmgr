@@ -91,6 +91,22 @@ function safeHref(u: string | null | undefined): string | undefined {
   }
 }
 
+// Returns a sanitized src only when the URL scheme is http or https.
+// Agent-supplied thumb URLs are forwarded verbatim by the CP; while modern
+// browsers do not execute scripts from <img src>, non-http(s) schemes (e.g.
+// data:) are unexpected from an agent boundary and should be dropped.
+function safeImgSrc(u: string | null | undefined): string | undefined {
+  if (!u) return undefined;
+  try {
+    const parsed = new URL(u, window.location.origin);
+    return parsed.protocol === "http:" || parsed.protocol === "https:"
+      ? parsed.href
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 // Derives a display basename from a URL string that may be malformed.
 // item.url is the raw WP guid (site-controlled), not guaranteed to be a valid
 // absolute URL; new URL() throws on bad input, which would unmount the subtree.
@@ -807,14 +823,15 @@ interface ReferencedRowProps {
 
 function ReferencedRow({ item }: ReferencedRowProps) {
   const title = item.title || basenameFromMaybeUrl(item.url) || "Untitled";
+  const thumbSrc = safeImgSrc(item.thumb);
 
   return (
     <li className="flex items-start gap-3 px-4 py-3">
       {/* Thumbnail */}
       <div className="mt-0.5 size-10 shrink-0 overflow-hidden rounded border bg-muted">
-        {item.thumb ? (
+        {thumbSrc ? (
           <img
-            src={item.thumb}
+            src={thumbSrc}
             alt=""
             aria-hidden="true"
             className="size-full object-cover"
@@ -908,6 +925,7 @@ function CandidateRow({
   const checkId = useId();
   const title = candidate.title || basenameFromMaybeUrl(candidate.url) || "Untitled";
   const size = formatBytes(candidate.file_size);
+  const thumbSrc = safeImgSrc(candidate.thumb);
 
   return (
     <li
@@ -927,9 +945,9 @@ function CandidateRow({
 
       {/* Thumbnail */}
       <div className="size-12 shrink-0 overflow-hidden rounded border bg-muted">
-        {candidate.thumb ? (
+        {thumbSrc ? (
           <img
-            src={candidate.thumb}
+            src={thumbSrc}
             alt=""
             aria-hidden="true"
             className="size-full object-cover"

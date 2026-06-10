@@ -9,7 +9,7 @@ export interface BloatSectionProps {
   config: PerfConfig;
   save: (patch: Partial<PerfConfig>) => void;
   disabled: boolean;
-  saving: boolean;
+  isSaving: (key: string) => boolean;
 }
 
 interface BloatToggle {
@@ -70,7 +70,7 @@ export function BloatSection({
   config,
   save,
   disabled,
-  saving,
+  isSaving,
 }: BloatSectionProps) {
   return (
     <SettingsCard
@@ -84,8 +84,8 @@ export function BloatSection({
           description={t.description}
           checked={Boolean(config[t.key])}
           onChange={(v) => save({ [t.key]: v })}
-          disabled={disabled}
-          saving={saving}
+          disabled={disabled || isSaving(t.key)}
+          saving={isSaving(t.key)}
         />
       ))}
     </SettingsCard>

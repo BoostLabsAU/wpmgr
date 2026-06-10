@@ -13,6 +13,11 @@ import { toError } from "@/features/auth/use-auth";
 import { perfKeys } from "../perf-keys";
 import type { PerfConfig } from "../types";
 
+/** The keys that were changed in a single optimistic PUT. */
+export interface PendingMutation {
+  keys: ReadonlySet<string>;
+}
+
 // Server-state hooks for the per-site Performance Suite config (Phase 7 / m36).
 //
 // Routes are now described in packages/openapi/openapi.yaml and called through
@@ -63,7 +68,7 @@ export function useUpdatePerfConfig(
   PerfConfig,
   Error,
   PerfConfig,
-  { previous: PerfConfig | undefined }
+  { previous: PerfConfig | undefined; patchKeys: Set<string> }
 > {
   const qc = useQueryClient();
   return useMutation({
@@ -79,6 +84,14 @@ export function useUpdatePerfConfig(
     onMutate: async (next) => {
       await qc.cancelQueries({ queryKey: perfKeys.config(siteId) });
       const previous = qc.getQueryData<PerfConfig>(perfKeys.config(siteId));
+      // Infer which keys this mutation changed so onSuccess can do a safe merge.
+      const patchKeys = new Set<string>(
+        previous
+          ? (Object.keys(next) as (keyof PerfConfig)[]).filter(
+              (k) => next[k] !== previous[k],
+            )
+          : Object.keys(next),
+      );
       // Never let the write-only credentials object leak into the read cache.
       const { cdn_credentials: _omit, ...optimistic } = next;
       qc.setQueryData<PerfConfig>(perfKeys.config(siteId), {
@@ -86,7 +99,7 @@ export function useUpdatePerfConfig(
         cdn_has_credentials:
           previous?.cdn_has_credentials || Boolean(next.cdn_credentials),
       });
-      return { previous };
+      return { previous, patchKeys };
     },
     onError: (err, _next, context) => {
       if (context?.previous) {
@@ -94,14 +107,23 @@ export function useUpdatePerfConfig(
       }
       toast.error("Could not save setting.", { description: err.message });
     },
-    onSuccess: (saved) => {
-      // Authoritative: the PUT returns the persisted config, so the read cache is
-      // already correct here. We deliberately do NOT invalidate the config query
-      // afterwards — a background refetch re-renders all 30+ Optimize toggles on
-      // every single save, which reads as a flicker / momentary revert of the
-      // switch you just flipped. Server-side reconciliation (e.g. an agent
-      // config-ack) still arrives via the perf.config SSE handler in usePerfEvents.
-      qc.setQueryData(perfKeys.config(siteId), saved);
+    onSuccess: (saved, _next, context) => {
+      // Merge: use the server's authoritative response as the base, but for keys
+      // that were NOT part of this mutation, preserve the current cache value.
+      // This prevents a concurrent later optimistic write from being reverted when
+      // an earlier mutation's PUT response arrives with stale values for those keys.
+      qc.setQueryData<PerfConfig>(perfKeys.config(siteId), (current) => {
+        if (!current) return saved;
+        const merged: PerfConfig = { ...saved };
+        for (const key of Object.keys(current) as (keyof PerfConfig)[]) {
+          if (!context.patchKeys.has(key)) {
+            // Key was not changed by this mutation -- keep the current cache
+            // value, which may reflect a later concurrent optimistic write.
+            (merged as unknown as Record<string, unknown>)[key] = current[key];
+          }
+        }
+        return merged;
+      });
     },
   });
 }

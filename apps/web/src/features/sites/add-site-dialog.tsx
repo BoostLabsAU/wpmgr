@@ -615,10 +615,17 @@ function AwaitingStep({
             </li>
           </ol>
           {/* Direct download of the latest published agent plugin zip (GitHub
-              release asset). The browser downloads it as an attachment, so this
-              never navigates the dashboard away. */}
+              release asset). The link is cross-origin and the GitHub 302 redirect
+              causes browsers to ignore the `download` attribute per spec. Using
+              target="_blank" opens a throwaway tab so a failed download never
+              navigates the dashboard away and the operator keeps the pairing code. */}
           <Button asChild variant="outline" className="w-full">
-            <a href={AGENT_PLUGIN_DOWNLOAD_URL} download rel="noreferrer">
+            <a
+              href={AGENT_PLUGIN_DOWNLOAD_URL}
+              download
+              target="_blank"
+              rel="noopener noreferrer"
+            >
               <Download aria-hidden="true" />
               Download the plugin (.zip)
             </a>

@@ -245,9 +245,12 @@ type Querier interface {
 	// Runs tenant-scoped (the caller sets app.tenant_id before this query).
 	GetBackupSiteInfo(ctx context.Context, arg GetBackupSiteInfoParams) (GetBackupSiteInfoRow, error)
 	GetBackupSnapshot(ctx context.Context, arg GetBackupSnapshotParams) (BackupSnapshot, error)
-	// Returns up to 366 hit-ratio data points for a site since @since, ordered
-	// oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
-	GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error)
+	// Returns up to 366 daily-aggregated hit-ratio data points for a site since
+	// @since, ordered oldest-first. Each point is one calendar day (UTC) of data:
+	// avg(ratio_pct), sum(hit_count), sum(miss_count). Daily downsampling ensures a
+	// 365-day window fits within 366 points regardless of hourly sampling density.
+	// Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+	GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]GetCacheHitRatioHistoryRow, error)
 	// ---------------------------------------------------------------------------
 	// site_cache_stats
 	// ---------------------------------------------------------------------------

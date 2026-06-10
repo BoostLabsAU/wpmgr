@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.5
+Stable tag: 0.33.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -120,6 +120,12 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 
 == Changelog ==
 
+= 0.33.8 =
+* Fix: WooCommerce cart-fragments now inject reliably on themes whose body tag has attributes (e.g. `<body class="...">`); previously the shim only matched a bare body tag and skipped injection. Cart totals refresh correctly on cached catalog pages.
+* Fix: cache hit-ratio now counts 304 Not Modified and HEAD responses served from cache, so the dashboard hit ratio is no longer under-reported.
+* Fix: cache hit/miss counts are no longer lost if a stats upload to the control plane fails; counts are staged and only cleared after a confirmed send, and any interrupted batch is recovered on the next cycle.
+* Performance: the cache stats consumer no longer reads whole tally files into memory, and the Unused Image Cleaner bounds its in-use list to keep memory flat on very large media libraries.
+
 = 0.33.5 =
 * Maintenance: version alignment with the control plane. No plugin functional changes (the fix in this release was control-plane only: the Real User Monitoring dashboard's "All devices" tab now shows data).
 
@@ -152,6 +158,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.8 =
+Reliability fixes for WooCommerce cart-fragments injection on themed body tags and for cache hit-ratio accuracy (304/HEAD now counted, stats no longer lost on a failed upload). Safe to update in place.
 
 = 0.33.5 =
 Version alignment with the control plane. No plugin functional changes. Safe to update in place.
