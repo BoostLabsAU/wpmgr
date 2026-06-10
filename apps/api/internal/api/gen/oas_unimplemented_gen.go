@@ -610,6 +610,15 @@ func (UnimplementedHandler) DeleteClient(ctx context.Context, params DeleteClien
 	return r, ht.ErrNotImplemented
 }
 
+// DeleteClientReport implements deleteClientReport operation.
+//
+// Deletes the report record and its stored blobs (HTML + PDF) from object storage.
+//
+// DELETE /api/v1/clients/{clientId}/reports/{reportId}
+func (UnimplementedHandler) DeleteClientReport(ctx context.Context, params DeleteClientReportParams) (r DeleteClientReportRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DeleteDbSnapshot implements deleteDbSnapshot operation.
 //
 // Removes a snapshot from the WP server's local store. This is
@@ -774,6 +783,16 @@ func (UnimplementedHandler) ForgotPassword(ctx context.Context, req *ForgotPassw
 	return r, ht.ErrNotImplemented
 }
 
+// GenerateClientReport implements generateClientReport operation.
+//
+// Enqueues a report generation job. Returns 202 Accepted immediately; poll GET /reports/{reportId}
+// for status. When notify=true and the schedule has recipients, an email is sent on completion.
+//
+// POST /api/v1/clients/{clientId}/reports
+func (UnimplementedHandler) GenerateClientReport(ctx context.Context, req OptGenerateClientReportRequest, params GenerateClientReportParams) (r GenerateClientReportRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetAlertConfig implements getAlertConfig operation.
 //
 // Returns the tenant's downtime/recovery alert channel: email recipients,
@@ -872,6 +891,26 @@ func (UnimplementedHandler) GetCacheStats(ctx context.Context, params GetCacheSt
 //
 // GET /api/v1/clients/{clientId}
 func (UnimplementedHandler) GetClient(ctx context.Context, params GetClientParams) (r GetClientRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetClientReport implements getClientReport operation.
+//
+// Returns the report record. When status is `completed`, `html_url` and `pdf_url` are pre-signed
+// download links (valid 7 days).
+//
+// GET /api/v1/clients/{clientId}/reports/{reportId}
+func (UnimplementedHandler) GetClientReport(ctx context.Context, params GetClientReportParams) (r GetClientReportRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetClientReportSchedule implements getClientReportSchedule operation.
+//
+// Returns the current report schedule configuration. If no schedule has been saved yet, returns
+// sensible defaults (disabled, monthly).
+//
+// GET /api/v1/clients/{clientId}/report-schedule
+func (UnimplementedHandler) GetClientReportSchedule(ctx context.Context, params GetClientReportScheduleParams) (r GetClientReportScheduleRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1219,6 +1258,16 @@ func (UnimplementedHandler) ListAudit(ctx context.Context, params ListAuditParam
 //
 // GET /api/v1/sites/{siteId}/backups
 func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsParams) (r *BackupSnapshotList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListClientReports implements listClientReports operation.
+//
+// Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
+// pagination.
+//
+// GET /api/v1/clients/{clientId}/reports
+func (UnimplementedHandler) ListClientReports(ctx context.Context, params ListClientReportsParams) (r ListClientReportsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1688,6 +1737,15 @@ func (UnimplementedHandler) PutBackupSettingsContents(ctx context.Context, req *
 //
 // PUT /api/v1/sites/{siteId}/backup-settings/notifications
 func (UnimplementedHandler) PutBackupSettingsNotifications(ctx context.Context, req *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (r PutBackupSettingsNotificationsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutClientReportSchedule implements putClientReportSchedule operation.
+//
+// Create or update the report schedule for a client.
+//
+// PUT /api/v1/clients/{clientId}/report-schedule
+func (UnimplementedHandler) PutClientReportSchedule(ctx context.Context, req *ClientReportScheduleUpdate, params PutClientReportScheduleParams) (r PutClientReportScheduleRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

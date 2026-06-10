@@ -153,6 +153,10 @@ type DeleteBackupRes interface {
 	deleteBackupRes()
 }
 
+type DeleteClientReportRes interface {
+	deleteClientReportRes()
+}
+
 type DeleteClientRes interface {
 	deleteClientRes()
 }
@@ -193,6 +197,10 @@ type ExportSiteEmailLogRes interface {
 	exportSiteEmailLogRes()
 }
 
+type GenerateClientReportRes interface {
+	generateClientReportRes()
+}
+
 type GetBackupEnvironmentRes interface {
 	getBackupEnvironmentRes()
 }
@@ -215,6 +223,14 @@ type GetBackupSettingsNotificationsRes interface {
 
 type GetBackupSqlInspectionRes interface {
 	getBackupSqlInspectionRes()
+}
+
+type GetClientReportRes interface {
+	getClientReportRes()
+}
+
+type GetClientReportScheduleRes interface {
+	getClientReportScheduleRes()
 }
 
 type GetClientRes interface {
@@ -303,6 +319,10 @@ type ListApiKeysRes interface {
 
 type ListAuditRes interface {
 	listAuditRes()
+}
+
+type ListClientReportsRes interface {
+	listClientReportsRes()
 }
 
 type ListClientsRes interface {
@@ -407,6 +427,10 @@ type PutBackupSettingsContentsRes interface {
 
 type PutBackupSettingsNotificationsRes interface {
 	putBackupSettingsNotificationsRes()
+}
+
+type PutClientReportScheduleRes interface {
+	putClientReportScheduleRes()
 }
 
 type PutEmailConnectionRes interface {

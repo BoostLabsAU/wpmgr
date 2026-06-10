@@ -117,6 +117,91 @@ func TestCreateValidColorAccepted(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// FIX-1: logo_url validation (defense-in-depth)
+// ---------------------------------------------------------------------------
+
+func TestCreateLogoURLHttpRejected(t *testing.T) {
+	svc := newTestService()
+	bad := "http://example.com/logo.png" // http scheme not allowed
+	_, err := svc.Create(context.Background(), CreateInput{
+		TenantID: tenant1,
+		Name:     "Acme",
+		LogoURL:  &bad,
+	})
+	assertDomainCode(t, err, "invalid_logo_url")
+}
+
+func TestCreateLogoURLLiteralIPRejected(t *testing.T) {
+	svc := newTestService()
+	tests := []string{
+		"https://10.0.0.1/logo.png",
+		"https://192.168.1.1/logo.png",
+		"https://127.0.0.1/logo.png",
+		"https://[::1]/logo.png",
+	}
+	for _, bad := range tests {
+		bad := bad
+		t.Run(bad, func(t *testing.T) {
+			_, err := svc.Create(context.Background(), CreateInput{
+				TenantID: tenant1,
+				Name:     "Acme",
+				LogoURL:  &bad,
+			})
+			assertDomainCode(t, err, "invalid_logo_url")
+		})
+	}
+}
+
+func TestCreateLogoURLTooLongRejected(t *testing.T) {
+	svc := newTestService()
+	long := "https://example.com/" + string(make([]byte, 2040)) + ".png"
+	_, err := svc.Create(context.Background(), CreateInput{
+		TenantID: tenant1,
+		Name:     "Acme",
+		LogoURL:  &long,
+	})
+	assertDomainCode(t, err, "logo_url_too_long")
+}
+
+func TestCreateLogoURLValidAccepted(t *testing.T) {
+	svc := newTestService()
+	good := "https://cdn.example.com/logos/acme.png"
+	_, err := svc.Create(context.Background(), CreateInput{
+		TenantID: tenant1,
+		Name:     "Acme",
+		LogoURL:  &good,
+	})
+	if err != nil {
+		t.Fatalf("expected valid logo_url to be accepted, got: %v", err)
+	}
+}
+
+func TestCreateLogoURLEmptyAccepted(t *testing.T) {
+	svc := newTestService()
+	empty := ""
+	_, err := svc.Create(context.Background(), CreateInput{
+		TenantID: tenant1,
+		Name:     "Acme",
+		LogoURL:  &empty,
+	})
+	if err != nil {
+		t.Fatalf("empty logo_url should be accepted, got: %v", err)
+	}
+}
+
+func TestCreateLogoURLNilAccepted(t *testing.T) {
+	svc := newTestService()
+	_, err := svc.Create(context.Background(), CreateInput{
+		TenantID: tenant1,
+		Name:     "Acme",
+		LogoURL:  nil,
+	})
+	if err != nil {
+		t.Fatalf("nil logo_url should be accepted, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // AssignSites validation
 // ---------------------------------------------------------------------------
 

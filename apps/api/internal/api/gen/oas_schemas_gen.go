@@ -307,6 +307,8 @@ type AgencyClient struct {
 	LogoURL OptURI `json:"logo_url"`
 	// Number of non-archived sites currently assigned to this client.
 	SiteCount int64 `json:"site_count"`
+	// IANA timezone name governing report send time (e.g. "America/New_York"). Defaults to "UTC".
+	Timezone string `json:"timezone"`
 	// Set when the client is soft-deleted (archived). Absent for active clients.
 	ArchivedAt OptDateTime `json:"archived_at"`
 	CreatedAt  time.Time   `json:"created_at"`
@@ -361,6 +363,11 @@ func (s *AgencyClient) GetLogoURL() OptURI {
 // GetSiteCount returns the value of SiteCount.
 func (s *AgencyClient) GetSiteCount() int64 {
 	return s.SiteCount
+}
+
+// GetTimezone returns the value of Timezone.
+func (s *AgencyClient) GetTimezone() string {
+	return s.Timezone
 }
 
 // GetArchivedAt returns the value of ArchivedAt.
@@ -426,6 +433,11 @@ func (s *AgencyClient) SetLogoURL(val OptURI) {
 // SetSiteCount sets the value of SiteCount.
 func (s *AgencyClient) SetSiteCount(val int64) {
 	s.SiteCount = val
+}
+
+// SetTimezone sets the value of Timezone.
+func (s *AgencyClient) SetTimezone(val string) {
+	s.Timezone = val
 }
 
 // SetArchivedAt sets the value of ArchivedAt.
@@ -3948,6 +3960,652 @@ func (s *CdnCredentials) SetZone(val OptString) {
 	s.Zone = val
 }
 
+// A generated client report record.
+// Ref: #/components/schemas/ClientReport
+type ClientReport struct {
+	ID       uuid.UUID `json:"id"`
+	ClientID uuid.UUID `json:"client_id"`
+	// Set when the report was triggered by a schedule; absent for on-demand.
+	ScheduleID  OptUUID            `json:"schedule_id"`
+	PeriodStart time.Time          `json:"period_start"`
+	PeriodEnd   time.Time          `json:"period_end"`
+	Status      ClientReportStatus `json:"status"`
+	// Human-readable error message. Present only when status is "failed".
+	Error OptString `json:"error"`
+	// Pre-signed URL for the HTML report (valid 7 days). Present only when status is "completed" and
+	// object storage is configured.
+	HTMLURL OptURI `json:"html_url"`
+	// Pre-signed URL for the PDF report (valid 7 days). Present only when status is "completed" and
+	// object storage is configured.
+	PdfURL    OptURI    `json:"pdf_url"`
+	CreatedAt time.Time `json:"created_at"`
+	// When the generation job finished (success or failure).
+	CompletedAt OptDateTime `json:"completed_at"`
+}
+
+// GetID returns the value of ID.
+func (s *ClientReport) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetClientID returns the value of ClientID.
+func (s *ClientReport) GetClientID() uuid.UUID {
+	return s.ClientID
+}
+
+// GetScheduleID returns the value of ScheduleID.
+func (s *ClientReport) GetScheduleID() OptUUID {
+	return s.ScheduleID
+}
+
+// GetPeriodStart returns the value of PeriodStart.
+func (s *ClientReport) GetPeriodStart() time.Time {
+	return s.PeriodStart
+}
+
+// GetPeriodEnd returns the value of PeriodEnd.
+func (s *ClientReport) GetPeriodEnd() time.Time {
+	return s.PeriodEnd
+}
+
+// GetStatus returns the value of Status.
+func (s *ClientReport) GetStatus() ClientReportStatus {
+	return s.Status
+}
+
+// GetError returns the value of Error.
+func (s *ClientReport) GetError() OptString {
+	return s.Error
+}
+
+// GetHTMLURL returns the value of HTMLURL.
+func (s *ClientReport) GetHTMLURL() OptURI {
+	return s.HTMLURL
+}
+
+// GetPdfURL returns the value of PdfURL.
+func (s *ClientReport) GetPdfURL() OptURI {
+	return s.PdfURL
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ClientReport) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetCompletedAt returns the value of CompletedAt.
+func (s *ClientReport) GetCompletedAt() OptDateTime {
+	return s.CompletedAt
+}
+
+// SetID sets the value of ID.
+func (s *ClientReport) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetClientID sets the value of ClientID.
+func (s *ClientReport) SetClientID(val uuid.UUID) {
+	s.ClientID = val
+}
+
+// SetScheduleID sets the value of ScheduleID.
+func (s *ClientReport) SetScheduleID(val OptUUID) {
+	s.ScheduleID = val
+}
+
+// SetPeriodStart sets the value of PeriodStart.
+func (s *ClientReport) SetPeriodStart(val time.Time) {
+	s.PeriodStart = val
+}
+
+// SetPeriodEnd sets the value of PeriodEnd.
+func (s *ClientReport) SetPeriodEnd(val time.Time) {
+	s.PeriodEnd = val
+}
+
+// SetStatus sets the value of Status.
+func (s *ClientReport) SetStatus(val ClientReportStatus) {
+	s.Status = val
+}
+
+// SetError sets the value of Error.
+func (s *ClientReport) SetError(val OptString) {
+	s.Error = val
+}
+
+// SetHTMLURL sets the value of HTMLURL.
+func (s *ClientReport) SetHTMLURL(val OptURI) {
+	s.HTMLURL = val
+}
+
+// SetPdfURL sets the value of PdfURL.
+func (s *ClientReport) SetPdfURL(val OptURI) {
+	s.PdfURL = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ClientReport) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetCompletedAt sets the value of CompletedAt.
+func (s *ClientReport) SetCompletedAt(val OptDateTime) {
+	s.CompletedAt = val
+}
+
+func (*ClientReport) generateClientReportRes() {}
+func (*ClientReport) getClientReportRes()      {}
+
+// Ref: #/components/schemas/ClientReportList
+type ClientReportList struct {
+	Items []ClientReport `json:"items"`
+	// Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when
+	// there are no more pages.
+	NextCursor OptString `json:"next_cursor"`
+}
+
+// GetItems returns the value of Items.
+func (s *ClientReportList) GetItems() []ClientReport {
+	return s.Items
+}
+
+// GetNextCursor returns the value of NextCursor.
+func (s *ClientReportList) GetNextCursor() OptString {
+	return s.NextCursor
+}
+
+// SetItems sets the value of Items.
+func (s *ClientReportList) SetItems(val []ClientReport) {
+	s.Items = val
+}
+
+// SetNextCursor sets the value of NextCursor.
+func (s *ClientReportList) SetNextCursor(val OptString) {
+	s.NextCursor = val
+}
+
+func (*ClientReportList) listClientReportsRes() {}
+
+// Report schedule configuration for an agency client.
+// Ref: #/components/schemas/ClientReportSchedule
+type ClientReportSchedule struct {
+	ClientID uuid.UUID `json:"client_id"`
+	// Whether scheduled sending is active.
+	Enabled bool `json:"enabled"`
+	// How often to send. "monthly" sends on the Nth day of the month; "weekly" sends on the Nth day of
+	// the week (0=Sunday).
+	Cadence ClientReportScheduleCadence `json:"cadence"`
+	// For monthly: day-of-month (1–28). For weekly: day-of-week (0=Sunday … 6=Saturday).
+	SendDay int `json:"send_day"`
+	// Hour-of-day in the client's timezone at which the report is sent.
+	SendHour int `json:"send_hour"`
+	// IANA timezone name inherited from the client record. Informational only; update via PUT
+	// /clients/{clientId}.
+	Timezone OptString `json:"timezone"`
+	// Email addresses to deliver the report to.
+	Recipients []string                 `json:"recipients"`
+	Sections   ClientReportSectionFlags `json:"sections"`
+	// Optional opening paragraph for the report body (supports plain text).
+	IntroText string `json:"intro_text"`
+	// Optional closing paragraph for the report body.
+	ClosingText string `json:"closing_text"`
+	// When true, the "Powered by WPMgr" footer is omitted (white-label plan).
+	PoweredByRemoved bool `json:"powered_by_removed"`
+	// Next scheduled execution time. Absent when disabled.
+	NextRunAt OptDateTime `json:"next_run_at"`
+	// Most recent execution time. Absent when never run.
+	LastRunAt OptDateTime `json:"last_run_at"`
+	// Whether the instance-level SMTP mailer is configured. When false, recipients will not receive
+	// emails even if the schedule is enabled.
+	InstanceMailerConfigured bool `json:"instance_mailer_configured"`
+}
+
+// GetClientID returns the value of ClientID.
+func (s *ClientReportSchedule) GetClientID() uuid.UUID {
+	return s.ClientID
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *ClientReportSchedule) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetCadence returns the value of Cadence.
+func (s *ClientReportSchedule) GetCadence() ClientReportScheduleCadence {
+	return s.Cadence
+}
+
+// GetSendDay returns the value of SendDay.
+func (s *ClientReportSchedule) GetSendDay() int {
+	return s.SendDay
+}
+
+// GetSendHour returns the value of SendHour.
+func (s *ClientReportSchedule) GetSendHour() int {
+	return s.SendHour
+}
+
+// GetTimezone returns the value of Timezone.
+func (s *ClientReportSchedule) GetTimezone() OptString {
+	return s.Timezone
+}
+
+// GetRecipients returns the value of Recipients.
+func (s *ClientReportSchedule) GetRecipients() []string {
+	return s.Recipients
+}
+
+// GetSections returns the value of Sections.
+func (s *ClientReportSchedule) GetSections() ClientReportSectionFlags {
+	return s.Sections
+}
+
+// GetIntroText returns the value of IntroText.
+func (s *ClientReportSchedule) GetIntroText() string {
+	return s.IntroText
+}
+
+// GetClosingText returns the value of ClosingText.
+func (s *ClientReportSchedule) GetClosingText() string {
+	return s.ClosingText
+}
+
+// GetPoweredByRemoved returns the value of PoweredByRemoved.
+func (s *ClientReportSchedule) GetPoweredByRemoved() bool {
+	return s.PoweredByRemoved
+}
+
+// GetNextRunAt returns the value of NextRunAt.
+func (s *ClientReportSchedule) GetNextRunAt() OptDateTime {
+	return s.NextRunAt
+}
+
+// GetLastRunAt returns the value of LastRunAt.
+func (s *ClientReportSchedule) GetLastRunAt() OptDateTime {
+	return s.LastRunAt
+}
+
+// GetInstanceMailerConfigured returns the value of InstanceMailerConfigured.
+func (s *ClientReportSchedule) GetInstanceMailerConfigured() bool {
+	return s.InstanceMailerConfigured
+}
+
+// SetClientID sets the value of ClientID.
+func (s *ClientReportSchedule) SetClientID(val uuid.UUID) {
+	s.ClientID = val
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *ClientReportSchedule) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetCadence sets the value of Cadence.
+func (s *ClientReportSchedule) SetCadence(val ClientReportScheduleCadence) {
+	s.Cadence = val
+}
+
+// SetSendDay sets the value of SendDay.
+func (s *ClientReportSchedule) SetSendDay(val int) {
+	s.SendDay = val
+}
+
+// SetSendHour sets the value of SendHour.
+func (s *ClientReportSchedule) SetSendHour(val int) {
+	s.SendHour = val
+}
+
+// SetTimezone sets the value of Timezone.
+func (s *ClientReportSchedule) SetTimezone(val OptString) {
+	s.Timezone = val
+}
+
+// SetRecipients sets the value of Recipients.
+func (s *ClientReportSchedule) SetRecipients(val []string) {
+	s.Recipients = val
+}
+
+// SetSections sets the value of Sections.
+func (s *ClientReportSchedule) SetSections(val ClientReportSectionFlags) {
+	s.Sections = val
+}
+
+// SetIntroText sets the value of IntroText.
+func (s *ClientReportSchedule) SetIntroText(val string) {
+	s.IntroText = val
+}
+
+// SetClosingText sets the value of ClosingText.
+func (s *ClientReportSchedule) SetClosingText(val string) {
+	s.ClosingText = val
+}
+
+// SetPoweredByRemoved sets the value of PoweredByRemoved.
+func (s *ClientReportSchedule) SetPoweredByRemoved(val bool) {
+	s.PoweredByRemoved = val
+}
+
+// SetNextRunAt sets the value of NextRunAt.
+func (s *ClientReportSchedule) SetNextRunAt(val OptDateTime) {
+	s.NextRunAt = val
+}
+
+// SetLastRunAt sets the value of LastRunAt.
+func (s *ClientReportSchedule) SetLastRunAt(val OptDateTime) {
+	s.LastRunAt = val
+}
+
+// SetInstanceMailerConfigured sets the value of InstanceMailerConfigured.
+func (s *ClientReportSchedule) SetInstanceMailerConfigured(val bool) {
+	s.InstanceMailerConfigured = val
+}
+
+func (*ClientReportSchedule) getClientReportScheduleRes() {}
+func (*ClientReportSchedule) putClientReportScheduleRes() {}
+
+// How often to send. "monthly" sends on the Nth day of the month; "weekly" sends on the Nth day of
+// the week (0=Sunday).
+type ClientReportScheduleCadence string
+
+const (
+	ClientReportScheduleCadenceWeekly  ClientReportScheduleCadence = "weekly"
+	ClientReportScheduleCadenceMonthly ClientReportScheduleCadence = "monthly"
+)
+
+// AllValues returns all ClientReportScheduleCadence values.
+func (ClientReportScheduleCadence) AllValues() []ClientReportScheduleCadence {
+	return []ClientReportScheduleCadence{
+		ClientReportScheduleCadenceWeekly,
+		ClientReportScheduleCadenceMonthly,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ClientReportScheduleCadence) MarshalText() ([]byte, error) {
+	switch s {
+	case ClientReportScheduleCadenceWeekly:
+		return []byte(s), nil
+	case ClientReportScheduleCadenceMonthly:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ClientReportScheduleCadence) UnmarshalText(data []byte) error {
+	switch ClientReportScheduleCadence(data) {
+	case ClientReportScheduleCadenceWeekly:
+		*s = ClientReportScheduleCadenceWeekly
+		return nil
+	case ClientReportScheduleCadenceMonthly:
+		*s = ClientReportScheduleCadenceMonthly
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// All fields are required (full replace).
+// Ref: #/components/schemas/ClientReportScheduleUpdate
+type ClientReportScheduleUpdate struct {
+	Enabled          bool                              `json:"enabled"`
+	Cadence          ClientReportScheduleUpdateCadence `json:"cadence"`
+	SendDay          int                               `json:"send_day"`
+	SendHour         int                               `json:"send_hour"`
+	Recipients       []string                          `json:"recipients"`
+	Sections         OptClientReportSectionFlags       `json:"sections"`
+	IntroText        OptString                         `json:"intro_text"`
+	ClosingText      OptString                         `json:"closing_text"`
+	PoweredByRemoved OptBool                           `json:"powered_by_removed"`
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *ClientReportScheduleUpdate) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetCadence returns the value of Cadence.
+func (s *ClientReportScheduleUpdate) GetCadence() ClientReportScheduleUpdateCadence {
+	return s.Cadence
+}
+
+// GetSendDay returns the value of SendDay.
+func (s *ClientReportScheduleUpdate) GetSendDay() int {
+	return s.SendDay
+}
+
+// GetSendHour returns the value of SendHour.
+func (s *ClientReportScheduleUpdate) GetSendHour() int {
+	return s.SendHour
+}
+
+// GetRecipients returns the value of Recipients.
+func (s *ClientReportScheduleUpdate) GetRecipients() []string {
+	return s.Recipients
+}
+
+// GetSections returns the value of Sections.
+func (s *ClientReportScheduleUpdate) GetSections() OptClientReportSectionFlags {
+	return s.Sections
+}
+
+// GetIntroText returns the value of IntroText.
+func (s *ClientReportScheduleUpdate) GetIntroText() OptString {
+	return s.IntroText
+}
+
+// GetClosingText returns the value of ClosingText.
+func (s *ClientReportScheduleUpdate) GetClosingText() OptString {
+	return s.ClosingText
+}
+
+// GetPoweredByRemoved returns the value of PoweredByRemoved.
+func (s *ClientReportScheduleUpdate) GetPoweredByRemoved() OptBool {
+	return s.PoweredByRemoved
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *ClientReportScheduleUpdate) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetCadence sets the value of Cadence.
+func (s *ClientReportScheduleUpdate) SetCadence(val ClientReportScheduleUpdateCadence) {
+	s.Cadence = val
+}
+
+// SetSendDay sets the value of SendDay.
+func (s *ClientReportScheduleUpdate) SetSendDay(val int) {
+	s.SendDay = val
+}
+
+// SetSendHour sets the value of SendHour.
+func (s *ClientReportScheduleUpdate) SetSendHour(val int) {
+	s.SendHour = val
+}
+
+// SetRecipients sets the value of Recipients.
+func (s *ClientReportScheduleUpdate) SetRecipients(val []string) {
+	s.Recipients = val
+}
+
+// SetSections sets the value of Sections.
+func (s *ClientReportScheduleUpdate) SetSections(val OptClientReportSectionFlags) {
+	s.Sections = val
+}
+
+// SetIntroText sets the value of IntroText.
+func (s *ClientReportScheduleUpdate) SetIntroText(val OptString) {
+	s.IntroText = val
+}
+
+// SetClosingText sets the value of ClosingText.
+func (s *ClientReportScheduleUpdate) SetClosingText(val OptString) {
+	s.ClosingText = val
+}
+
+// SetPoweredByRemoved sets the value of PoweredByRemoved.
+func (s *ClientReportScheduleUpdate) SetPoweredByRemoved(val OptBool) {
+	s.PoweredByRemoved = val
+}
+
+type ClientReportScheduleUpdateCadence string
+
+const (
+	ClientReportScheduleUpdateCadenceWeekly  ClientReportScheduleUpdateCadence = "weekly"
+	ClientReportScheduleUpdateCadenceMonthly ClientReportScheduleUpdateCadence = "monthly"
+)
+
+// AllValues returns all ClientReportScheduleUpdateCadence values.
+func (ClientReportScheduleUpdateCadence) AllValues() []ClientReportScheduleUpdateCadence {
+	return []ClientReportScheduleUpdateCadence{
+		ClientReportScheduleUpdateCadenceWeekly,
+		ClientReportScheduleUpdateCadenceMonthly,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ClientReportScheduleUpdateCadence) MarshalText() ([]byte, error) {
+	switch s {
+	case ClientReportScheduleUpdateCadenceWeekly:
+		return []byte(s), nil
+	case ClientReportScheduleUpdateCadenceMonthly:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ClientReportScheduleUpdateCadence) UnmarshalText(data []byte) error {
+	switch ClientReportScheduleUpdateCadence(data) {
+	case ClientReportScheduleUpdateCadenceWeekly:
+		*s = ClientReportScheduleUpdateCadenceWeekly
+		return nil
+	case ClientReportScheduleUpdateCadenceMonthly:
+		*s = ClientReportScheduleUpdateCadenceMonthly
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Controls which data sections are included in a report.
+// Ref: #/components/schemas/ClientReportSectionFlags
+type ClientReportSectionFlags struct {
+	Uptime      OptBool `json:"uptime"`
+	Backups     OptBool `json:"backups"`
+	Updates     OptBool `json:"updates"`
+	Performance OptBool `json:"performance"`
+	Email       OptBool `json:"email"`
+}
+
+// GetUptime returns the value of Uptime.
+func (s *ClientReportSectionFlags) GetUptime() OptBool {
+	return s.Uptime
+}
+
+// GetBackups returns the value of Backups.
+func (s *ClientReportSectionFlags) GetBackups() OptBool {
+	return s.Backups
+}
+
+// GetUpdates returns the value of Updates.
+func (s *ClientReportSectionFlags) GetUpdates() OptBool {
+	return s.Updates
+}
+
+// GetPerformance returns the value of Performance.
+func (s *ClientReportSectionFlags) GetPerformance() OptBool {
+	return s.Performance
+}
+
+// GetEmail returns the value of Email.
+func (s *ClientReportSectionFlags) GetEmail() OptBool {
+	return s.Email
+}
+
+// SetUptime sets the value of Uptime.
+func (s *ClientReportSectionFlags) SetUptime(val OptBool) {
+	s.Uptime = val
+}
+
+// SetBackups sets the value of Backups.
+func (s *ClientReportSectionFlags) SetBackups(val OptBool) {
+	s.Backups = val
+}
+
+// SetUpdates sets the value of Updates.
+func (s *ClientReportSectionFlags) SetUpdates(val OptBool) {
+	s.Updates = val
+}
+
+// SetPerformance sets the value of Performance.
+func (s *ClientReportSectionFlags) SetPerformance(val OptBool) {
+	s.Performance = val
+}
+
+// SetEmail sets the value of Email.
+func (s *ClientReportSectionFlags) SetEmail(val OptBool) {
+	s.Email = val
+}
+
+type ClientReportStatus string
+
+const (
+	ClientReportStatusQueued     ClientReportStatus = "queued"
+	ClientReportStatusGenerating ClientReportStatus = "generating"
+	ClientReportStatusCompleted  ClientReportStatus = "completed"
+	ClientReportStatusFailed     ClientReportStatus = "failed"
+)
+
+// AllValues returns all ClientReportStatus values.
+func (ClientReportStatus) AllValues() []ClientReportStatus {
+	return []ClientReportStatus{
+		ClientReportStatusQueued,
+		ClientReportStatusGenerating,
+		ClientReportStatusCompleted,
+		ClientReportStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ClientReportStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ClientReportStatusQueued:
+		return []byte(s), nil
+	case ClientReportStatusGenerating:
+		return []byte(s), nil
+	case ClientReportStatusCompleted:
+		return []byte(s), nil
+	case ClientReportStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ClientReportStatus) UnmarshalText(data []byte) error {
+	switch ClientReportStatus(data) {
+	case ClientReportStatusQueued:
+		*s = ClientReportStatusQueued
+		return nil
+	case ClientReportStatusGenerating:
+		*s = ClientReportStatusGenerating
+		return nil
+	case ClientReportStatusCompleted:
+		*s = ClientReportStatusCompleted
+		return nil
+	case ClientReportStatusFailed:
+		*s = ClientReportStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 type ComputeRucssReq struct {
 	// Same-host URLs to compute; empty computes the home page.
 	Urls []string `json:"urls"`
@@ -3973,6 +4631,8 @@ type CreateAgencyClientRequest struct {
 	// Hex color code (e.g. "#3b82f6").
 	Color   OptString `json:"color"`
 	LogoURL OptURI    `json:"logo_url"`
+	// IANA timezone name (e.g. "America/New_York"). Defaults to "UTC" when absent.
+	Timezone OptString `json:"timezone"`
 }
 
 // GetName returns the value of Name.
@@ -4010,6 +4670,11 @@ func (s *CreateAgencyClientRequest) GetLogoURL() OptURI {
 	return s.LogoURL
 }
 
+// GetTimezone returns the value of Timezone.
+func (s *CreateAgencyClientRequest) GetTimezone() OptString {
+	return s.Timezone
+}
+
 // SetName sets the value of Name.
 func (s *CreateAgencyClientRequest) SetName(val string) {
 	s.Name = val
@@ -4043,6 +4708,11 @@ func (s *CreateAgencyClientRequest) SetColor(val OptString) {
 // SetLogoURL sets the value of LogoURL.
 func (s *CreateAgencyClientRequest) SetLogoURL(val OptURI) {
 	s.LogoURL = val
+}
+
+// SetTimezone sets the value of Timezone.
+func (s *CreateAgencyClientRequest) SetTimezone(val OptString) {
+	s.Timezone = val
 }
 
 type CreateApiKeyForbidden Error
@@ -5350,6 +6020,23 @@ func (*DeleteClientNoContent) deleteClientRes() {}
 type DeleteClientNotFound Error
 
 func (*DeleteClientNotFound) deleteClientRes() {}
+
+type DeleteClientReportForbidden Error
+
+func (*DeleteClientReportForbidden) deleteClientReportRes() {}
+
+// DeleteClientReportNoContent is response for DeleteClientReport operation.
+type DeleteClientReportNoContent struct{}
+
+func (*DeleteClientReportNoContent) deleteClientReportRes() {}
+
+type DeleteClientReportNotFound Error
+
+func (*DeleteClientReportNotFound) deleteClientReportRes() {}
+
+type DeleteClientReportUnauthorized Error
+
+func (*DeleteClientReportUnauthorized) deleteClientReportRes() {}
 
 type DeleteClientUnauthorized Error
 
@@ -7556,6 +8243,74 @@ func (s *ForgotPasswordReq) SetEmail(val string) {
 	s.Email = val
 }
 
+type GenerateClientReportBadRequest Error
+
+func (*GenerateClientReportBadRequest) generateClientReportRes() {}
+
+type GenerateClientReportForbidden Error
+
+func (*GenerateClientReportForbidden) generateClientReportRes() {}
+
+type GenerateClientReportNotFound Error
+
+func (*GenerateClientReportNotFound) generateClientReportRes() {}
+
+// Optional overrides for an on-demand report. Omit entirely to use schedule defaults.
+// Ref: #/components/schemas/GenerateClientReportRequest
+type GenerateClientReportRequest struct {
+	// Start of the data window (inclusive). Defaults to 30 days ago when absent.
+	PeriodStart OptDateTime `json:"period_start"`
+	// End of the data window (exclusive). Defaults to now when absent.
+	PeriodEnd OptDateTime                 `json:"period_end"`
+	Sections  OptClientReportSectionFlags `json:"sections"`
+	// When true, the report is emailed to the schedule's recipients on completion.
+	Notify OptBool `json:"notify"`
+}
+
+// GetPeriodStart returns the value of PeriodStart.
+func (s *GenerateClientReportRequest) GetPeriodStart() OptDateTime {
+	return s.PeriodStart
+}
+
+// GetPeriodEnd returns the value of PeriodEnd.
+func (s *GenerateClientReportRequest) GetPeriodEnd() OptDateTime {
+	return s.PeriodEnd
+}
+
+// GetSections returns the value of Sections.
+func (s *GenerateClientReportRequest) GetSections() OptClientReportSectionFlags {
+	return s.Sections
+}
+
+// GetNotify returns the value of Notify.
+func (s *GenerateClientReportRequest) GetNotify() OptBool {
+	return s.Notify
+}
+
+// SetPeriodStart sets the value of PeriodStart.
+func (s *GenerateClientReportRequest) SetPeriodStart(val OptDateTime) {
+	s.PeriodStart = val
+}
+
+// SetPeriodEnd sets the value of PeriodEnd.
+func (s *GenerateClientReportRequest) SetPeriodEnd(val OptDateTime) {
+	s.PeriodEnd = val
+}
+
+// SetSections sets the value of Sections.
+func (s *GenerateClientReportRequest) SetSections(val OptClientReportSectionFlags) {
+	s.Sections = val
+}
+
+// SetNotify sets the value of Notify.
+func (s *GenerateClientReportRequest) SetNotify(val OptBool) {
+	s.Notify = val
+}
+
+type GenerateClientReportUnauthorized Error
+
+func (*GenerateClientReportUnauthorized) generateClientReportRes() {}
+
 type GetBackupEnvironmentNotFound Error
 
 func (*GetBackupEnvironmentNotFound) getBackupEnvironmentRes() {}
@@ -7601,6 +8356,30 @@ func (*GetClientForbidden) getClientRes() {}
 type GetClientNotFound Error
 
 func (*GetClientNotFound) getClientRes() {}
+
+type GetClientReportForbidden Error
+
+func (*GetClientReportForbidden) getClientReportRes() {}
+
+type GetClientReportNotFound Error
+
+func (*GetClientReportNotFound) getClientReportRes() {}
+
+type GetClientReportScheduleForbidden Error
+
+func (*GetClientReportScheduleForbidden) getClientReportScheduleRes() {}
+
+type GetClientReportScheduleNotFound Error
+
+func (*GetClientReportScheduleNotFound) getClientReportScheduleRes() {}
+
+type GetClientReportScheduleUnauthorized Error
+
+func (*GetClientReportScheduleUnauthorized) getClientReportScheduleRes() {}
+
+type GetClientReportUnauthorized Error
+
+func (*GetClientReportUnauthorized) getClientReportRes() {}
 
 type GetClientUnauthorized Error
 
@@ -7899,6 +8678,18 @@ func (*ListAuditForbidden) listAuditRes() {}
 type ListAuditUnauthorized Error
 
 func (*ListAuditUnauthorized) listAuditRes() {}
+
+type ListClientReportsForbidden Error
+
+func (*ListClientReportsForbidden) listClientReportsRes() {}
+
+type ListClientReportsNotFound Error
+
+func (*ListClientReportsNotFound) listClientReportsRes() {}
+
+type ListClientReportsUnauthorized Error
+
+func (*ListClientReportsUnauthorized) listClientReportsRes() {}
 
 type ListClientsForbidden Error
 
@@ -10968,6 +11759,52 @@ func (o OptCdnCredentials) Or(d CdnCredentials) CdnCredentials {
 	return d
 }
 
+// NewOptClientReportSectionFlags returns new OptClientReportSectionFlags with value set to v.
+func NewOptClientReportSectionFlags(v ClientReportSectionFlags) OptClientReportSectionFlags {
+	return OptClientReportSectionFlags{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptClientReportSectionFlags is optional ClientReportSectionFlags.
+type OptClientReportSectionFlags struct {
+	Value ClientReportSectionFlags
+	Set   bool
+}
+
+// IsSet returns true if OptClientReportSectionFlags was set.
+func (o OptClientReportSectionFlags) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptClientReportSectionFlags) Reset() {
+	var v ClientReportSectionFlags
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptClientReportSectionFlags) SetTo(v ClientReportSectionFlags) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptClientReportSectionFlags) Get() (v ClientReportSectionFlags, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptClientReportSectionFlags) Or(d ClientReportSectionFlags) ClientReportSectionFlags {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptComputeRucssReq returns new OptComputeRucssReq with value set to v.
 func NewOptComputeRucssReq(v ComputeRucssReq) OptComputeRucssReq {
 	return OptComputeRucssReq{
@@ -11652,6 +12489,52 @@ func (o OptFontTranscodeRequestSourceExt) Get() (v FontTranscodeRequestSourceExt
 
 // Or returns value if set, or given parameter if does not.
 func (o OptFontTranscodeRequestSourceExt) Or(d FontTranscodeRequestSourceExt) FontTranscodeRequestSourceExt {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptGenerateClientReportRequest returns new OptGenerateClientReportRequest with value set to v.
+func NewOptGenerateClientReportRequest(v GenerateClientReportRequest) OptGenerateClientReportRequest {
+	return OptGenerateClientReportRequest{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGenerateClientReportRequest is optional GenerateClientReportRequest.
+type OptGenerateClientReportRequest struct {
+	Value GenerateClientReportRequest
+	Set   bool
+}
+
+// IsSet returns true if OptGenerateClientReportRequest was set.
+func (o OptGenerateClientReportRequest) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGenerateClientReportRequest) Reset() {
+	var v GenerateClientReportRequest
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGenerateClientReportRequest) SetTo(v GenerateClientReportRequest) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGenerateClientReportRequest) Get() (v GenerateClientReportRequest, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGenerateClientReportRequest) Or(d GenerateClientReportRequest) GenerateClientReportRequest {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -15879,6 +16762,22 @@ func (s *PurgeRequestScope) UnmarshalText(data []byte) error {
 		return errors.Errorf("invalid value: %q", data)
 	}
 }
+
+type PutClientReportScheduleBadRequest Error
+
+func (*PutClientReportScheduleBadRequest) putClientReportScheduleRes() {}
+
+type PutClientReportScheduleForbidden Error
+
+func (*PutClientReportScheduleForbidden) putClientReportScheduleRes() {}
+
+type PutClientReportScheduleNotFound Error
+
+func (*PutClientReportScheduleNotFound) putClientReportScheduleRes() {}
+
+type PutClientReportScheduleUnauthorized Error
+
+func (*PutClientReportScheduleUnauthorized) putClientReportScheduleRes() {}
 
 // Request body for PUT /email/org-config and PUT /sites/{siteId}/email/config. All fields are
 // optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting
@@ -23333,6 +24232,8 @@ type UpdateAgencyClientRequest struct {
 	// Hex color code (e.g. "#3b82f6"). Pass empty string to clear.
 	Color   OptString `json:"color"`
 	LogoURL OptURI    `json:"logo_url"`
+	// IANA timezone name (e.g. "America/New_York"). Omit to leave unchanged.
+	Timezone OptString `json:"timezone"`
 }
 
 // GetName returns the value of Name.
@@ -23370,6 +24271,11 @@ func (s *UpdateAgencyClientRequest) GetLogoURL() OptURI {
 	return s.LogoURL
 }
 
+// GetTimezone returns the value of Timezone.
+func (s *UpdateAgencyClientRequest) GetTimezone() OptString {
+	return s.Timezone
+}
+
 // SetName sets the value of Name.
 func (s *UpdateAgencyClientRequest) SetName(val OptString) {
 	s.Name = val
@@ -23403,6 +24309,11 @@ func (s *UpdateAgencyClientRequest) SetColor(val OptString) {
 // SetLogoURL sets the value of LogoURL.
 func (s *UpdateAgencyClientRequest) SetLogoURL(val OptURI) {
 	s.LogoURL = val
+}
+
+// SetTimezone sets the value of Timezone.
+func (s *UpdateAgencyClientRequest) SetTimezone(val OptString) {
+	s.Timezone = val
 }
 
 type UpdateClientBadRequest Error

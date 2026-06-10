@@ -2,14 +2,19 @@ package client
 
 import (
 	"context"
+	"net"
+	"net/url"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
+
+const maxLogoURLLen = 2048
 
 const (
 	maxSiteAssignBatch = 500
@@ -48,7 +53,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (Client, error) {
 	if in.TenantID == uuid.Nil {
 		return Client{}, domain.Forbidden("tenant_required", "a tenant context is required")
 	}
-	if err := validateClientFields(in.Name, in.ContactEmail, in.Color); err != nil {
+	if err := validateClientFields(in.Name, in.ContactEmail, in.Color, in.Timezone, in.LogoURL); err != nil {
 		return Client{}, err
 	}
 	return s.repo.Create(ctx, in)
@@ -60,11 +65,11 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (Client, error) {
 		return Client{}, domain.Forbidden("tenant_required", "a tenant context is required")
 	}
 	if in.Name != nil {
-		if err := validateClientFields(*in.Name, in.ContactEmail, in.Color); err != nil {
+		if err := validateClientFields(*in.Name, in.ContactEmail, in.Color, in.Timezone, in.LogoURL); err != nil {
 			return Client{}, err
 		}
 	} else {
-		if err := validateClientFields("", in.ContactEmail, in.Color); err != nil {
+		if err := validateClientFields("", in.ContactEmail, in.Color, in.Timezone, in.LogoURL); err != nil {
 			return Client{}, err
 		}
 	}
@@ -127,7 +132,7 @@ func (s *Service) AssignSites(ctx context.Context, in AssignInput) (AssignResult
 // validation helpers
 // ---------------------------------------------------------------------------
 
-func validateClientFields(name string, email, color *string) error {
+func validateClientFields(name string, email, color, timezone, logoURL *string) error {
 	trimmed := strings.TrimSpace(name)
 	if name != "" {
 		if trimmed == "" {
@@ -147,5 +152,45 @@ func validateClientFields(name string, email, color *string) error {
 			return domain.Validation("invalid_color", "color must be a 6-digit hex code (e.g. #1a2b3c)")
 		}
 	}
+	if timezone != nil && *timezone != "" {
+		if _, err := time.LoadLocation(*timezone); err != nil {
+			return domain.Validation("invalid_timezone", "timezone must be a valid IANA timezone name (e.g. America/New_York)")
+		}
+	}
+	// FIX-1 defense-in-depth: validate logo_url at write time so invalid URLs
+	// never reach the fetch path. The SSRF-safe httpclient is the real boundary;
+	// this is belt-and-braces. Checks: non-empty → parseable, https-only scheme,
+	// host must not be a literal IP, length cap.
+	if logoURL != nil && *logoURL != "" {
+		if len(*logoURL) > maxLogoURLLen {
+			return domain.Validation("logo_url_too_long", "logo_url must be 2048 characters or fewer")
+		}
+		u, err := url.Parse(*logoURL)
+		if err != nil {
+			return domain.Validation("invalid_logo_url", "logo_url must be a valid URL")
+		}
+		if strings.ToLower(u.Scheme) != "https" {
+			return domain.Validation("invalid_logo_url", "logo_url scheme must be https")
+		}
+		// Reject literal IP hosts (e.g. https://10.0.0.1/...) — these bypass
+		// the hostname-based SSRF check at DNS resolution time.
+		host := u.Hostname()
+		if host == "" {
+			return domain.Validation("invalid_logo_url", "logo_url must include a hostname")
+		}
+		// net.ParseIP returns non-nil for a literal IP address.
+		if isLiteralIP(host) {
+			return domain.Validation("invalid_logo_url", "logo_url host must not be a literal IP address")
+		}
+	}
 	return nil
+}
+
+// isLiteralIP reports whether host is a bare IP address (v4, v6, or
+// IPv4-mapped v6 like ::ffff:127.0.0.1). url.Hostname() strips brackets from
+// IPv6 literals, so the bare form is what arrives here. This write-time check
+// is defense-in-depth only; the SSRF-safe httpclient dialer is the real
+// boundary at fetch time.
+func isLiteralIP(host string) bool {
+	return net.ParseIP(host) != nil
 }

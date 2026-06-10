@@ -18,7 +18,7 @@ UPDATE clients
 SET archived_at = now(),
     updated_at  = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at
+RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, timezone
 `
 
 type ArchiveClientParams struct {
@@ -44,6 +44,7 @@ func (q *Queries) ArchiveClient(ctx context.Context, arg ArchiveClientParams) (C
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Timezone,
 	)
 	return i, err
 }
@@ -97,12 +98,12 @@ func (q *Queries) CountSitesForClient(ctx context.Context, arg CountSitesForClie
 const createClient = `-- name: CreateClient :one
 INSERT INTO clients (
     tenant_id, name, contact_email, company, phone, notes, color, logo_url,
-    updated_at
+    timezone, updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7, $8,
-    now()
+    COALESCE($9::text, 'UTC'), now()
 )
-RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at
+RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, timezone
 `
 
 type CreateClientParams struct {
@@ -114,6 +115,7 @@ type CreateClientParams struct {
 	Notes        *string   `json:"notes"`
 	Color        *string   `json:"color"`
 	LogoUrl      *string   `json:"logo_url"`
+	Timezone     *string   `json:"timezone"`
 }
 
 func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Client, error) {
@@ -126,6 +128,7 @@ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Cli
 		arg.Notes,
 		arg.Color,
 		arg.LogoUrl,
+		arg.Timezone,
 	)
 	var i Client
 	err := row.Scan(
@@ -141,12 +144,13 @@ func (q *Queries) CreateClient(ctx context.Context, arg CreateClientParams) (Cli
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Timezone,
 	)
 	return i, err
 }
 
 const getClient = `-- name: GetClient :one
-SELECT id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, (
+SELECT id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, timezone, (
     SELECT COUNT(*)::bigint
     FROM sites s
     WHERE s.client_id = c.id
@@ -175,6 +179,7 @@ type GetClientRow struct {
 	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
+	Timezone     string             `json:"timezone"`
 	SiteCount    int64              `json:"site_count"`
 }
 
@@ -194,6 +199,7 @@ func (q *Queries) GetClient(ctx context.Context, arg GetClientParams) (GetClient
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Timezone,
 		&i.SiteCount,
 	)
 	return i, err
@@ -221,7 +227,7 @@ func (q *Queries) HardDeleteClient(ctx context.Context, arg HardDeleteClientPara
 
 const listClients = `-- name: ListClients :many
 
-SELECT id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, (
+SELECT id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, timezone, (
     SELECT COUNT(*)::bigint
     FROM sites s
     WHERE s.client_id = c.id
@@ -255,6 +261,7 @@ type ListClientsRow struct {
 	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
+	Timezone     string             `json:"timezone"`
 	SiteCount    int64              `json:"site_count"`
 }
 
@@ -286,6 +293,7 @@ func (q *Queries) ListClients(ctx context.Context, arg ListClientsParams) ([]Lis
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.Timezone,
 			&i.SiteCount,
 		); err != nil {
 			return nil, err
@@ -307,9 +315,10 @@ SET name          = COALESCE($1::text, name),
     notes         = COALESCE($5::text, notes),
     color         = COALESCE($6::text, color),
     logo_url      = COALESCE($7::text, logo_url),
+    timezone      = COALESCE($8::text, timezone),
     updated_at    = now()
-WHERE id = $8 AND tenant_id = $9
-RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at
+WHERE id = $9 AND tenant_id = $10
+RETURNING id, tenant_id, name, contact_email, company, phone, notes, color, logo_url, archived_at, created_at, updated_at, timezone
 `
 
 type UpdateClientParams struct {
@@ -320,6 +329,7 @@ type UpdateClientParams struct {
 	Notes        *string   `json:"notes"`
 	Color        *string   `json:"color"`
 	LogoUrl      *string   `json:"logo_url"`
+	Timezone     *string   `json:"timezone"`
 	ID           uuid.UUID `json:"id"`
 	TenantID     uuid.UUID `json:"tenant_id"`
 }
@@ -335,6 +345,7 @@ func (q *Queries) UpdateClient(ctx context.Context, arg UpdateClientParams) (Cli
 		arg.Notes,
 		arg.Color,
 		arg.LogoUrl,
+		arg.Timezone,
 		arg.ID,
 		arg.TenantID,
 	)
@@ -352,6 +363,7 @@ func (q *Queries) UpdateClient(ctx context.Context, arg UpdateClientParams) (Cli
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.Timezone,
 	)
 	return i, err
 }

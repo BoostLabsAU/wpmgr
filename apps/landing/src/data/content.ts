@@ -150,9 +150,9 @@ export const FEATURES = {
     },
     {
       icon: "Briefcase",
-      title: "Clients",
+      title: "Clients and white-label reports",
       desc:
-        "Organize your fleet by customer. Group any number of sites under a named client record (name, company, contact email, phone, brand color, logo URL, and notes), then bulk-assign sites from the fleet view in one action. Filter the sites list to a single client and jump straight to their dedicated page showing every assigned site. Clients are the foundation for white-label maintenance reports and a read-only client portal, both coming in the next phases. Clients are tenant-isolated; site-scoped collaborators cannot see the client roster.",
+        "Organize your fleet by customer and send branded maintenance reports on a schedule or on demand. Group any number of sites under a named client record (name, company, contact email, phone, brand color, logo URL, and notes), bulk-assign sites from the fleet view, and filter or jump straight to a client's dedicated page. From the Reports tab, enable a monthly or weekly schedule in the client's own timezone or generate a report instantly for any period up to 92 days. Each report covers uptime and response time, backups completed, updates applied, Core Web Vitals real-user p75, and email deliverability, with per-section on/off toggles and custom intro and closing text. Reports deliver as a branded HTML email digest, a print-optimized page, and a downloadable PDF with vector charts and full Unicode support. The client's brand color and logo appear throughout; the powered-by footer is free to remove on any plan. Delivery uses the instance mailer and falls back to download-only when email is not configured. A read-only client portal is the next phase. Clients are tenant-isolated; site-scoped collaborators cannot see the client roster.",
     },
     {
       icon: "Mail",

@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
@@ -34,6 +35,9 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
 	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
+	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
+	reporthtml "github.com/mosamlife/wpmgr/apps/api/internal/report/render/html"
+	reportpdf "github.com/mosamlife/wpmgr/apps/api/internal/report/render/pdf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
@@ -632,6 +636,33 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	clientSvc := clientpkg.NewService(clientRepo)
 	clientH := clientpkg.NewHandler(clientSvc, auditRec)
 
+	// m64 — white-label client reports. Object storage is required to store HTML/PDF
+	// blobs and mint presigned URLs. When S3 is not configured the service degrades
+	// gracefully (GenerateNow returns 503 "object_storage_required").
+	var reportBlobStore reportpkg.BlobStorer
+	if cfg.S3.Enabled() {
+		rs, rerr := blobstore.New(blobstore.Config{
+			Endpoint:       cfg.S3.Endpoint,
+			Region:         cfg.S3.Region,
+			Bucket:         cfg.S3.Bucket,
+			AccessKey:      cfg.S3.AccessKey,
+			SecretKey:      cfg.S3.SecretKey,
+			ForcePathStyle: cfg.S3.ForcePathStyle,
+		})
+		if rerr != nil {
+			return fmt.Errorf("report blobstore init: %w", rerr)
+		}
+		reportBlobStore = rs
+	}
+	reportRepo := reportpkg.NewRepo(pool)
+	reportSvc := reportpkg.NewService(reportRepo, reportBlobStore)
+	reportHTMLRenderer, rerr := reporthtml.NewRenderer()
+	if rerr != nil {
+		return fmt.Errorf("report html renderer init: %w", rerr)
+	}
+	reportPDFRenderer := reportpdf.NewFpdfRenderer()
+	reportH := reportpkg.NewHandler(reportSvc, auditRec)
+
 	if backupSvc != nil {
 		registry := blobstore.NewRegistry(nil, siteDestSvc) // defaultStore wired below
 		// Bind the legacy CP-global store as the registry's default. Built
@@ -952,6 +983,74 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// before this point (line ~701) and satisfies rum.EventPublisher.
 	rumH := rum.NewHandlerWithPublisher(rumStore, rumBeaconRepo, siteEventsPub, logger)
 
+	// m64 — build report workers now that rumStore and other sources are available.
+	// Both workers are nil when S3 is not configured (reports require object storage).
+	var reportGenerateWorker *reportpkg.GenerateWorker
+	reportScheduleScanWorker := reportpkg.NewScheduleScanWorker(reportRepo, logger)
+	if reportBlobStore != nil {
+		// Build aggregator Sources — adapters that bridge the report aggregator's
+		// from/to range API onto the existing metrics/rum/email stores.
+		reportSources := reportpkg.Sources{
+			ListClientSites: func(ctx context.Context, tenantID, clientID uuid.UUID) ([]site.Site, error) {
+				return siteSvc.List(ctx, site.ListInput{TenantID: tenantID, ClientID: &clientID})
+			},
+			QueryUptimeAggregateRange: func(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time) (metrics.Aggregate, error) {
+				return metricsStore.QueryAggregate(ctx, tenantID, siteID, to.Sub(from))
+			},
+			QueryUptimeSeriesRange: func(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time) ([]metrics.Point, error) {
+				buckets := int(to.Sub(from).Hours())
+				if buckets < 1 {
+					buckets = 1
+				}
+				if buckets > 720 {
+					buckets = 720
+				}
+				return metricsStore.QuerySeries(ctx, tenantID, siteID, to.Sub(from), buckets)
+			},
+			QueryUptimeLatest: metricsStore.QueryLatest,
+			GetBackupReportStats: func(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time) (sqlc.GetBackupReportStatsRow, error) {
+				var row sqlc.GetBackupReportStatsRow
+				err := pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+					var qerr error
+					row, qerr = sqlc.New(tx).GetBackupReportStats(ctx, sqlc.GetBackupReportStatsParams{
+						TenantID: tenantID,
+						SiteID:   siteID,
+						FromTime: pgtype.Timestamptz{Time: from, Valid: true},
+						ToTime:   pgtype.Timestamptz{Time: to, Valid: true},
+					})
+					return qerr
+				})
+				return row, err
+			},
+			GetUpdateReportStats: func(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time) ([]sqlc.GetUpdateReportStatsRow, error) {
+				var rows []sqlc.GetUpdateReportStatsRow
+				err := pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+					var qerr error
+					rows, qerr = sqlc.New(tx).GetUpdateReportStats(ctx, sqlc.GetUpdateReportStatsParams{
+						TenantID: tenantID,
+						SiteID:   siteID,
+						FromTime: pgtype.Timestamptz{Time: from, Valid: true},
+						ToTime:   pgtype.Timestamptz{Time: to, Valid: true},
+					})
+					return qerr
+				})
+				return rows, err
+			},
+			GetDailyRollups: rumStore.GetDailyRollups,
+			GetFleetStatsBySite: func(ctx context.Context, tenantID uuid.UUID, from, to time.Time, limit int32) ([]email.SiteStatsRow, error) {
+				return emailRepo.GetFleetStatsBySite(ctx, tenantID, from, to, limit)
+			},
+		}
+		// FIX-1: build a dedicated SSRF-hardened client for logo fetching.
+		// A 5s timeout is enough for an image fetch; retries are off because the
+		// worker already retries the whole job on failure (MaxAttempts=3).
+		logoSSRFClient := httpclient.New(httpclient.Config{
+			Timeout:    5 * time.Second,
+			MaxRetries: 0,
+		})
+		reportGenerateWorker = reportpkg.NewGenerateWorker(reportRepo, reportSvc, reportSources, reportHTMLRenderer, reportPDFRenderer, logoSSRFClient, logger)
+	}
+
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
 		healthInterval:         cfg.Agent.HealthInterval,
@@ -1000,6 +1099,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m62 — org-config propagation + hourly digest workers (always wired).
 		emailOrgPropagateWorker: email.NewOrgConfigPropagateWorker(emailSvc, logger),
 		emailDigestWorker:       email.NewDigestWorker(emailSvc, logger),
+		// m64 — report generation + schedule-scan workers (nil when S3 not configured).
+		reportGenerateWorker:     reportGenerateWorker,
+		reportScheduleScanWorker: reportScheduleScanWorker,
 	})
 	if err != nil {
 		return err
@@ -1172,6 +1274,18 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if emailPublicBase != "" {
 		emailSvc.SetPublicBase(emailPublicBase)
 	}
+
+	// m64 — wire the report service's post-River dependencies.
+	// The ScheduleScanWorker gets the started River client so it can Insert
+	// GenerateArgs jobs.
+	reportScheduleScanWorker.SetRiverClient(riverClient)
+	// FIX-4: wire the enqueuer so GenerateNow actually inserts the River job.
+	reportSvc.SetEnqueuer(reportpkg.NewRiverEnqueuer(riverClient))
+	// Wire the mailer enqueuer + status so completed reports send notifications.
+	reportSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient))
+	reportSvc.SetMailerStatus(mailerSvc)
+	// Wire the SSE publisher so completed reports fan out report.completed events.
+	reportSvc.SetPublisher(siteEventsPub)
 
 	defer func() {
 		stopCtx, cancel := context.WithTimeout(context.Background(), cfg.Shutdown.Timeout)
@@ -1473,7 +1587,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// M56 — RUM ingest endpoint (public, no auth).
 		RumH: rumH,
 		// m63 — agency clients.
-		ClientH:     clientH,
+		ClientH: clientH,
+		// m64 — white-label client reports.
+		ReportH:     reportH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})
@@ -1806,6 +1922,10 @@ type riverDeps struct {
 	// m62 — org-config propagation worker + hourly digest worker (always wired).
 	emailOrgPropagateWorker *email.OrgConfigPropagateWorker
 	emailDigestWorker       *email.DigestWorker
+	// m64 — client report generation + schedule-scan workers.
+	// Both are nil when object storage is not configured (reports require S3).
+	reportGenerateWorker     *reportpkg.GenerateWorker
+	reportScheduleScanWorker *reportpkg.ScheduleScanWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2118,6 +2238,22 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics, river.NewPeriodicJob(
 			river.PeriodicInterval(1*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return email.DigestArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// m64 — report generation worker (enqueued on-demand + by schedule scanner).
+	// Both workers are nil when S3 is not configured (reports require blob storage).
+	if d.reportGenerateWorker != nil {
+		river.AddWorker(workers, d.reportGenerateWorker)
+	}
+	if d.reportScheduleScanWorker != nil {
+		river.AddWorker(workers, d.reportScheduleScanWorker)
+		// Scan every 5 minutes for due report schedules, mirroring the email digest
+		// cadence. RunOnStart: false — avoids kicking off reports on every restart.
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(5*time.Minute),
+			func() (river.JobArgs, *river.InsertOpts) { return reportpkg.ScheduleScanArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
 	}

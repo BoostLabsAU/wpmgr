@@ -164,6 +164,13 @@ export {
   deleteClient,
   getClient,
   assignSitesToClient,
+  // client reports (m64 Phase 2)
+  getClientReportSchedule,
+  putClientReportSchedule,
+  listClientReports,
+  generateClientReport,
+  getClientReport,
+  deleteClientReport,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -556,4 +563,23 @@ export type {
   GetClientResponse,
   UpdateClientData,
   UpdateClientResponse,
+  // client reports (m64 Phase 2)
+  ClientReport,
+  ClientReportList,
+  ClientReportSchedule,
+  ClientReportScheduleUpdate,
+  ClientReportSectionFlags,
+  GenerateClientReportRequest,
+  GetClientReportScheduleData,
+  GetClientReportScheduleResponse,
+  PutClientReportScheduleData,
+  PutClientReportScheduleResponse,
+  ListClientReportsData,
+  ListClientReportsResponse,
+  GenerateClientReportData,
+  GenerateClientReportResponse,
+  GetClientReportData,
+  GetClientReportResponse,
+  DeleteClientReportData,
+  DeleteClientReportResponse,
 } from "./generated/types.gen";

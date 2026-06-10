@@ -219,6 +219,7 @@ type Client struct {
 	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt    time.Time          `json:"created_at"`
 	UpdatedAt    time.Time          `json:"updated_at"`
+	Timezone     string             `json:"timezone"`
 }
 
 type EmailAlertState struct {
@@ -323,6 +324,22 @@ type FontTranscodeResult struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
+type GeneratedReport struct {
+	ID           uuid.UUID          `json:"id"`
+	TenantID     uuid.UUID          `json:"tenant_id"`
+	ClientID     uuid.UUID          `json:"client_id"`
+	ScheduleID   pgtype.UUID        `json:"schedule_id"`
+	PeriodStart  time.Time          `json:"period_start"`
+	PeriodEnd    time.Time          `json:"period_end"`
+	Status       string             `json:"status"`
+	DataSnapshot []byte             `json:"data_snapshot"`
+	HtmlBlobKey  string             `json:"html_blob_key"`
+	PdfBlobKey   string             `json:"pdf_blob_key"`
+	Error        string             `json:"error"`
+	CreatedAt    time.Time          `json:"created_at"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+}
+
 type Invitation struct {
 	ID             uuid.UUID          `json:"id"`
 	TenantID       uuid.UUID          `json:"tenant_id"`
@@ -384,6 +401,25 @@ type PluginSignature struct {
 	TablePatterns     []byte    `json:"table_patterns"`
 	CronHookPatterns  []byte    `json:"cron_hook_patterns"`
 	UpdatedAt         time.Time `json:"updated_at"`
+}
+
+type ReportSchedule struct {
+	ID               uuid.UUID          `json:"id"`
+	TenantID         uuid.UUID          `json:"tenant_id"`
+	ClientID         uuid.UUID          `json:"client_id"`
+	Enabled          bool               `json:"enabled"`
+	Cadence          string             `json:"cadence"`
+	SendDay          int32              `json:"send_day"`
+	SendHour         int32              `json:"send_hour"`
+	Recipients       []byte             `json:"recipients"`
+	Sections         []byte             `json:"sections"`
+	IntroText        string             `json:"intro_text"`
+	ClosingText      string             `json:"closing_text"`
+	PoweredByRemoved bool               `json:"powered_by_removed"`
+	NextRunAt        pgtype.Timestamptz `json:"next_run_at"`
+	LastRunAt        pgtype.Timestamptz `json:"last_run_at"`
+	CreatedAt        time.Time          `json:"created_at"`
+	UpdatedAt        time.Time          `json:"updated_at"`
 }
 
 type RucssJob struct {

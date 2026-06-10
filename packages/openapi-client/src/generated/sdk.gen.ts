@@ -131,6 +131,9 @@ import type {
   DeleteBackupResponses,
   DeleteClientData,
   DeleteClientErrors,
+  DeleteClientReportData,
+  DeleteClientReportErrors,
+  DeleteClientReportResponses,
   DeleteClientResponses,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponses,
@@ -171,6 +174,9 @@ import type {
   ExportSiteEmailLogResponses,
   ForgotPasswordData,
   ForgotPasswordResponses,
+  GenerateClientReportData,
+  GenerateClientReportErrors,
+  GenerateClientReportResponses,
   GetAlertConfigData,
   GetAlertConfigResponses,
   GetBackupData,
@@ -195,6 +201,12 @@ import type {
   GetCacheStatsResponses,
   GetClientData,
   GetClientErrors,
+  GetClientReportData,
+  GetClientReportErrors,
+  GetClientReportResponses,
+  GetClientReportScheduleData,
+  GetClientReportScheduleErrors,
+  GetClientReportScheduleResponses,
   GetClientResponses,
   GetDbScanResultData,
   GetDbScanResultResponses,
@@ -279,6 +291,9 @@ import type {
   ListAuditResponses,
   ListBackupsData,
   ListBackupsResponses,
+  ListClientReportsData,
+  ListClientReportsErrors,
+  ListClientReportsResponses,
   ListClientsData,
   ListClientsErrors,
   ListClientsResponses,
@@ -386,6 +401,9 @@ import type {
   PutBackupSettingsNotificationsData,
   PutBackupSettingsNotificationsErrors,
   PutBackupSettingsNotificationsResponses,
+  PutClientReportScheduleData,
+  PutClientReportScheduleErrors,
+  PutClientReportScheduleResponses,
   PutEmailConnectionData,
   PutEmailConnectionErrors,
   PutEmailConnectionResponses,
@@ -4264,3 +4282,99 @@ export const updateClient = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   });
+
+/**
+ * Get the report schedule for a client
+ *
+ * Returns the current report schedule configuration. If no schedule has been saved yet, returns sensible defaults (disabled, monthly).
+ */
+export const getClientReportSchedule = <ThrowOnError extends boolean = false>(
+  options: Options<GetClientReportScheduleData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetClientReportScheduleResponses,
+    GetClientReportScheduleErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/report-schedule", ...options });
+
+/**
+ * Create or update the report schedule for a client
+ */
+export const putClientReportSchedule = <ThrowOnError extends boolean = false>(
+  options: Options<PutClientReportScheduleData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutClientReportScheduleResponses,
+    PutClientReportScheduleErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}/report-schedule",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List generated reports for a client
+ *
+ * Returns generated reports in reverse chronological order (newest first). Supports keyset cursor pagination.
+ */
+export const listClientReports = <ThrowOnError extends boolean = false>(
+  options: Options<ListClientReportsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListClientReportsResponses,
+    ListClientReportsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/reports", ...options });
+
+/**
+ * Trigger an on-demand report for a client
+ *
+ * Enqueues a report generation job. Returns 202 Accepted immediately; poll GET /reports/{reportId} for status. When notify=true and the schedule has recipients, an email is sent on completion.
+ */
+export const generateClientReport = <ThrowOnError extends boolean = false>(
+  options: Options<GenerateClientReportData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    GenerateClientReportResponses,
+    GenerateClientReportErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}/reports",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete a generated report
+ *
+ * Deletes the report record and its stored blobs (HTML + PDF) from object storage.
+ */
+export const deleteClientReport = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteClientReportData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteClientReportResponses,
+    DeleteClientReportErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/reports/{reportId}", ...options });
+
+/**
+ * Get a generated report by ID
+ *
+ * Returns the report record. When status is `completed`, `html_url` and `pdf_url` are pre-signed download links (valid 7 days).
+ */
+export const getClientReport = <ThrowOnError extends boolean = false>(
+  options: Options<GetClientReportData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetClientReportResponses,
+    GetClientReportErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/reports/{reportId}", ...options });

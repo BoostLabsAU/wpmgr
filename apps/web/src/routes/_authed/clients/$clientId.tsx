@@ -24,7 +24,7 @@ interface TabDef {
 
 const TABS: TabDef[] = [
   { label: "Sites", path: "sites" },
-  { label: "Reports", path: "reports", disabled: true, disabledLabel: "Reports arrive with the next phase" },
+  { label: "Reports", path: "reports" },
 ];
 
 function ClientDetailLayout() {
@@ -109,7 +109,9 @@ function ClientDetailLayout() {
           return (
             <Link
               key={tab.path}
-              to="/clients/$clientId/sites"
+              // Cast so the router accepts any registered path. The route tree
+              // registers both /clients/$clientId/sites and /clients/$clientId/reports.
+              to={`/clients/$clientId/${tab.path}` as "/clients/$clientId/sites"}
               params={{ clientId }}
               className={cn(
                 "relative px-4 py-2.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",

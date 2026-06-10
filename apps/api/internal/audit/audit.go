@@ -174,6 +174,12 @@ const (
 	ActionClientUpdated      = "client.updated"
 	ActionClientDeleted      = "client.deleted"
 	ActionClientSitesAssigned = "client.sites.assigned"
+
+	// Agency Client Reports (m64). Recorded on schedule update and report
+	// lifecycle events.
+	ActionClientReportScheduleUpdated = "client.report_schedule.updated"
+	ActionClientReportGenerated       = "client.report.generated"
+	ActionClientReportDeleted         = "client.report.deleted"
 )
 
 // Entry is one audit record.

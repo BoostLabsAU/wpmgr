@@ -234,6 +234,11 @@ const (
 	// SiteID=uuid.Nil (NULL) → tenant-wide fan-out to all active streams.
 	// Payload: {"synced": int, "failed": int, "total": int}
 	EventEmailConfigPropagated = "email.config_propagated"
+
+	// report.completed — emitted when a generated report reaches a terminal
+	// state (completed or failed). SiteID=uuid.Nil (NULL) → tenant-wide fan-out.
+	// Payload: {"report_id": string, "client_id": string, "status": string}
+	EventReportCompleted = "report.completed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

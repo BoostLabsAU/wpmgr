@@ -1,0 +1,51 @@
+{{/* report_ready — brand-stripped notification email. NO _partials header (plan line 35). */}}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body{margin:0;padding:0;background:#f4f6f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;}
+    .wrap{max-width:580px;margin:32px auto;background:#fff;border-radius:8px;padding:32px 28px;box-shadow:0 1px 4px rgba(0,0,0,.07);}
+    h1{font-size:22px;font-weight:700;color:#0f172a;margin:0 0 8px 0;}
+    p{font-size:15px;line-height:1.6;color:#374151;margin:0 0 12px 0;}
+    .meta-row{background:#f8f9fa;border:1px solid #e5e7eb;border-radius:6px;padding:14px 16px;margin:16px 0;font-size:14px;color:#374151;}
+    .meta-row td{padding:3px 0;vertical-align:top;}
+    .meta-row .lbl{color:#6b7280;width:130px;}
+    .btn{display:inline-block;padding:10px 22px;background:#0a6675;color:#fff!important;text-decoration:none;border-radius:6px;font-size:14px;font-weight:600;margin:4px 8px 4px 0;}
+    .btn-outline{background:#fff;border:1.5px solid #0a6675;color:#0a6675!important;}
+    .footer{margin-top:24px;font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:14px;}
+    .intro{white-space:pre-wrap;font-size:14px;color:#374151;margin:12px 0;}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{{.agency_name}}{{if .client_name}} — {{.client_name}}{{end}}</h1>
+  <p>Your website maintenance report for <strong>{{.period_label}}</strong> is ready.</p>
+
+  {{if .intro_text}}<div class="intro">{{.intro_text}}</div>{{end}}
+
+  <table role="presentation" class="meta-row" width="100%">
+    <tr><td class="lbl">Period</td><td>{{.period_label}}</td></tr>
+    <tr><td class="lbl">Sites</td><td>{{.site_count}}</td></tr>
+    <tr><td class="lbl">Avg Uptime</td><td>{{.avg_uptime_pct}}%</td></tr>
+    <tr><td class="lbl">Backups completed</td><td>{{.backups_count}}</td></tr>
+    <tr><td class="lbl">Updates applied</td><td>{{.updates_applied}}</td></tr>
+    <tr><td class="lbl">Emails sent</td><td>{{.emails_sent}}</td></tr>
+    {{if .emails_failed}}<tr><td class="lbl">Emails failed</td><td>{{.emails_failed}}</td></tr>{{end}}
+  </table>
+
+  <p>
+    {{if .html_url}}<a href="{{.html_url}}" class="btn">View report</a>{{end}}
+    {{if .pdf_url}}<a href="{{.pdf_url}}" class="btn btn-outline">Download PDF</a>{{end}}
+  </p>
+  <p style="font-size:12px;color:#9ca3af;">Report links expire in 7 days.</p>
+
+  {{if .closing_text}}<div class="intro">{{.closing_text}}</div>{{end}}
+
+  <div class="footer">
+    {{if .show_powered_by}}Prepared with WPMgr · {{end}}Contact {{.SupportEmail}} for support.
+  </div>
+</div>
+</body>
+</html>

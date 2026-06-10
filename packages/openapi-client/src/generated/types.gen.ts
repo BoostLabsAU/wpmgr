@@ -3893,6 +3893,10 @@ export type AgencyClient = {
    */
   site_count: number;
   /**
+   * IANA timezone name governing report send time (e.g. "America/New_York"). Defaults to "UTC".
+   */
+  timezone: string;
+  /**
    * Set when the client is soft-deleted (archived). Absent for active clients.
    */
   archived_at?: string;
@@ -3915,6 +3919,10 @@ export type CreateAgencyClientRequest = {
    */
   color?: string;
   logo_url?: string;
+  /**
+   * IANA timezone name (e.g. "America/New_York"). Defaults to "UTC" when absent.
+   */
+  timezone?: string;
 };
 
 /**
@@ -3931,6 +3939,10 @@ export type UpdateAgencyClientRequest = {
    */
   color?: string;
   logo_url?: string;
+  /**
+   * IANA timezone name (e.g. "America/New_York"). Omit to leave unchanged.
+   */
+  timezone?: string;
 };
 
 export type AssignSitesRequest = {
@@ -3949,6 +3961,147 @@ export type AssignSitesResponse = {
    * Number of sites whose client assignment was changed.
    */
   updated: number;
+};
+
+/**
+ * Controls which data sections are included in a report.
+ */
+export type ClientReportSectionFlags = {
+  uptime?: boolean;
+  backups?: boolean;
+  updates?: boolean;
+  performance?: boolean;
+  email?: boolean;
+};
+
+/**
+ * Report schedule configuration for an agency client.
+ */
+export type ClientReportSchedule = {
+  client_id: string;
+  /**
+   * Whether scheduled sending is active.
+   */
+  enabled: boolean;
+  /**
+   * How often to send. "monthly" sends on the Nth day of the month; "weekly" sends on the Nth day of the week (0=Sunday).
+   */
+  cadence: "weekly" | "monthly";
+  /**
+   * For monthly: day-of-month (1–28). For weekly: day-of-week (0=Sunday … 6=Saturday).
+   */
+  send_day: number;
+  /**
+   * Hour-of-day in the client's timezone at which the report is sent.
+   */
+  send_hour: number;
+  /**
+   * IANA timezone name inherited from the client record. Informational only; update via PUT /clients/{clientId}.
+   */
+  timezone?: string;
+  /**
+   * Email addresses to deliver the report to.
+   */
+  recipients: Array<string>;
+  sections: ClientReportSectionFlags;
+  /**
+   * Optional opening paragraph for the report body (supports plain text).
+   */
+  intro_text: string;
+  /**
+   * Optional closing paragraph for the report body.
+   */
+  closing_text: string;
+  /**
+   * When true, the "Powered by WPMgr" footer is omitted (white-label plan).
+   */
+  powered_by_removed: boolean;
+  /**
+   * Next scheduled execution time. Absent when disabled.
+   */
+  next_run_at?: string;
+  /**
+   * Most recent execution time. Absent when never run.
+   */
+  last_run_at?: string;
+  /**
+   * Whether the instance-level SMTP mailer is configured. When false, recipients will not receive emails even if the schedule is enabled.
+   */
+  instance_mailer_configured: boolean;
+};
+
+/**
+ * All fields are required (full replace).
+ */
+export type ClientReportScheduleUpdate = {
+  enabled: boolean;
+  cadence: "weekly" | "monthly";
+  send_day: number;
+  send_hour: number;
+  recipients: Array<string>;
+  sections?: ClientReportSectionFlags;
+  intro_text?: string;
+  closing_text?: string;
+  powered_by_removed?: boolean;
+};
+
+/**
+ * Optional overrides for an on-demand report. Omit entirely to use schedule defaults.
+ */
+export type GenerateClientReportRequest = {
+  /**
+   * Start of the data window (inclusive). Defaults to 30 days ago when absent.
+   */
+  period_start?: string;
+  /**
+   * End of the data window (exclusive). Defaults to now when absent.
+   */
+  period_end?: string;
+  sections?: ClientReportSectionFlags;
+  /**
+   * When true, the report is emailed to the schedule's recipients on completion.
+   */
+  notify?: boolean;
+};
+
+/**
+ * A generated client report record.
+ */
+export type ClientReport = {
+  id: string;
+  client_id: string;
+  /**
+   * Set when the report was triggered by a schedule; absent for on-demand.
+   */
+  schedule_id?: string;
+  period_start: string;
+  period_end: string;
+  status: "queued" | "generating" | "completed" | "failed";
+  /**
+   * Human-readable error message. Present only when status is "failed".
+   */
+  error?: string;
+  /**
+   * Pre-signed URL for the HTML report (valid 7 days). Present only when status is "completed" and object storage is configured.
+   */
+  html_url?: string;
+  /**
+   * Pre-signed URL for the PDF report (valid 7 days). Present only when status is "completed" and object storage is configured.
+   */
+  pdf_url?: string;
+  created_at: string;
+  /**
+   * When the generation job finished (success or failure).
+   */
+  completed_at?: string;
+};
+
+export type ClientReportList = {
+  items: Array<ClientReport>;
+  /**
+   * Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when there are no more pages.
+   */
+  next_cursor?: string;
 };
 
 /**
@@ -9583,3 +9736,244 @@ export type UpdateClientResponses = {
 
 export type UpdateClientResponse =
   UpdateClientResponses[keyof UpdateClientResponses];
+
+export type GetClientReportScheduleData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/report-schedule";
+};
+
+export type GetClientReportScheduleErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetClientReportScheduleError =
+  GetClientReportScheduleErrors[keyof GetClientReportScheduleErrors];
+
+export type GetClientReportScheduleResponses = {
+  /**
+   * The report schedule
+   */
+  200: ClientReportSchedule;
+};
+
+export type GetClientReportScheduleResponse =
+  GetClientReportScheduleResponses[keyof GetClientReportScheduleResponses];
+
+export type PutClientReportScheduleData = {
+  body: ClientReportScheduleUpdate;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/report-schedule";
+};
+
+export type PutClientReportScheduleErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type PutClientReportScheduleError =
+  PutClientReportScheduleErrors[keyof PutClientReportScheduleErrors];
+
+export type PutClientReportScheduleResponses = {
+  /**
+   * The saved report schedule
+   */
+  200: ClientReportSchedule;
+};
+
+export type PutClientReportScheduleResponse =
+  PutClientReportScheduleResponses[keyof PutClientReportScheduleResponses];
+
+export type ListClientReportsData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: {
+    /**
+     * Opaque keyset cursor returned by a previous call.
+     */
+    cursor?: string;
+    /**
+     * Maximum number of items to return (1–100, default 20).
+     */
+    limit?: number;
+  };
+  url: "/api/v1/clients/{clientId}/reports";
+};
+
+export type ListClientReportsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListClientReportsError =
+  ListClientReportsErrors[keyof ListClientReportsErrors];
+
+export type ListClientReportsResponses = {
+  /**
+   * Paginated list of generated reports
+   */
+  200: ClientReportList;
+};
+
+export type ListClientReportsResponse =
+  ListClientReportsResponses[keyof ListClientReportsResponses];
+
+export type GenerateClientReportData = {
+  body?: GenerateClientReportRequest;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/reports";
+};
+
+export type GenerateClientReportErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GenerateClientReportError =
+  GenerateClientReportErrors[keyof GenerateClientReportErrors];
+
+export type GenerateClientReportResponses = {
+  /**
+   * Report job accepted — poll the returned report for status
+   */
+  202: ClientReport;
+};
+
+export type GenerateClientReportResponse =
+  GenerateClientReportResponses[keyof GenerateClientReportResponses];
+
+export type DeleteClientReportData = {
+  body?: never;
+  path: {
+    clientId: string;
+    reportId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/reports/{reportId}";
+};
+
+export type DeleteClientReportErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteClientReportError =
+  DeleteClientReportErrors[keyof DeleteClientReportErrors];
+
+export type DeleteClientReportResponses = {
+  /**
+   * No Content
+   */
+  204: void;
+};
+
+export type DeleteClientReportResponse =
+  DeleteClientReportResponses[keyof DeleteClientReportResponses];
+
+export type GetClientReportData = {
+  body?: never;
+  path: {
+    clientId: string;
+    reportId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/reports/{reportId}";
+};
+
+export type GetClientReportErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetClientReportError =
+  GetClientReportErrors[keyof GetClientReportErrors];
+
+export type GetClientReportResponses = {
+  /**
+   * The report record
+   */
+  200: ClientReport;
+};
+
+export type GetClientReportResponse =
+  GetClientReportResponses[keyof GetClientReportResponses];
