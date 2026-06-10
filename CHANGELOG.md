@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.34.2] - 2026-06-10
+
+### Fixed
+
+- **One-click wp-admin login could still 502 on a second click while already signed in.** The 0.34.0 fast-path relied on `is_user_logged_in()`, which returns false inside a REST request reached by a plain browser navigation (no nonce), so it never fired and the login was re-issued over the live session and crashed the worker. The agent now detects the existing session by validating the `logged_in` cookie directly (nonce-independent), so the re-click just redirects. A shutdown-trap also converts any uncatchable fatal during login into a clean redirect instead of a 502.
+
 ## [0.34.1] - 2026-06-10
 
 ### Fixed

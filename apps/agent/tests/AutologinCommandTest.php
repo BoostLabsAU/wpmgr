@@ -133,6 +133,9 @@ final class AutologinCommandTest extends TestCase
         Functions\when('is_user_logged_in')->justReturn(false);
         Functions\when('get_current_user_id')->justReturn(0);
         Functions\when('get_user_meta')->justReturn('');
+        // Default: no valid logged_in cookie in the request. Individual tests
+        // that need a specific return value override this via Functions\when().
+        Functions\when('wp_validate_auth_cookie')->justReturn(0);
         Functions\when('add_filter')->justReturn(true);
         Functions\when('remove_filter')->justReturn(true);
         Functions\when('is_ssl')->justReturn(true);
@@ -671,6 +674,92 @@ final class AutologinCommandTest extends TestCase
         $this->assertInstanceOf(\WP_REST_Response::class, $res);
         $this->assertSame(302, $res->get_status());
         $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued for account-switch.');
+    }
+
+    /**
+     * Regression: second click (browser already logged in as the target user)
+     * must take the fast-path and NOT call issueAuthCookie() even when
+     * is_user_logged_in() returns FALSE — the REST-nonce-less re-click scenario.
+     *
+     * In a browser GET with no X-WP-Nonce header WordPress does not set the
+     * current user from the cookie, so is_user_logged_in() / get_current_user_id()
+     * return false/0 inside the REST handler even though the browser sent a valid
+     * logged_in cookie.  wp_validate_auth_cookie('', 'logged_in') reads
+     * $_COOKIE[LOGGED_IN_COOKIE] directly and bypasses the nonce-gated path, so
+     * it returns the real user ID.  The handler must use that as the primary signal.
+     */
+    public function test_cookie_auth_fast_path_when_is_user_logged_in_is_false(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // Simulate the REST-nonce-less case: WP has NOT set the current user,
+        // but the logged_in cookie IS valid for the target user (ID 7).
+        Functions\when('is_user_logged_in')->justReturn(false);
+        Functions\when('get_current_user_id')->justReturn(0);
+        Functions\when('wp_validate_auth_cookie')->alias(
+            static function (string $cookie, string $scheme): int|false {
+                // Returns the target user's ID when called with the logged_in scheme.
+                if ($scheme === 'logged_in') {
+                    return 7;
+                }
+                return 0;
+            }
+        );
+
+        $token = $this->jwt($this->uniqueJti('rest-nonce-less'), time(), ['tgt' => 'alice']);
+        $req   = new \WP_REST_Request([
+            'token'       => $token,
+            'redirect_to' => '/wp-admin/plugins.php',
+        ]);
+
+        $res = $this->command()->handle($req);
+
+        // Must still return 302.
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        // issueAuthCookie must NOT have been called — fast-path taken.
+        $this->assertCount(0, $this->authCookieCalls, 'issueAuthCookie must be skipped on re-click fast-path.');
+        $this->assertSame(0, $this->clearAuthCount, 'wp_clear_auth_cookie must not be called.');
+        $this->assertCount(0, $this->currentUserCalls, 'wp_set_current_user must not be called.');
+
+        // wp_login must NOT fire (this is the exact 502-causing event).
+        $hooks = array_column($this->hookCalls, 0);
+        $this->assertNotContains('wp_login', $hooks, 'wp_login must NOT re-fire on re-click fast-path.');
+
+        // wpmgr_autologin_success and the redirect must still happen.
+        $this->assertContains('wpmgr_autologin_success', $hooks);
+        $this->assertCount(1, $this->redirectCalls);
+        $this->assertSame('https://example.test/wp-admin/plugins.php', $this->redirectCalls[0][0]);
+    }
+
+    /**
+     * When neither wp_validate_auth_cookie nor is_user_logged_in identifies the
+     * target user as the current user, issueAuthCookie() must still run (standard
+     * fresh-login and account-switch paths are not broken by the new detection).
+     *
+     * set_up stubs wp_validate_auth_cookie to return 0 (no session) by default.
+     * This test relies on that default, plus the is_user_logged_in default of false.
+     */
+    public function test_no_matching_cookie_still_issues_cookie(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // set_up already stubs wp_validate_auth_cookie->justReturn(0) and
+        // is_user_logged_in->justReturn(false) / get_current_user_id->justReturn(0).
+        // Neither check matches user ID 7, so issueAuthCookie() must run.
+
+        $token = $this->jwt($this->uniqueJti('no-match-cookie'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+        $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued when no valid session is detected.');
+
+        $hooks = array_column($this->hookCalls, 0);
+        $this->assertContains('wp_login', $hooks, 'wp_login must fire for a genuine first login.');
     }
 
     // -----------------------------------------------------------------------

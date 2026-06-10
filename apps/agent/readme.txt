@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.34.0
+Stable tag: 0.34.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -158,6 +158,9 @@ This plugin ships two minified JavaScript files. Their human-readable source and
 4. Performance settings -- page cache, Remove Unused CSS, self-hosted fonts, and image optimization controls.
 
 == Changelog ==
+
+= 0.34.2 =
+* Fix a rare "502" when clicking "Log in to wp-admin" a second time while already signed in. The agent now detects the existing browser session reliably (independent of the REST nonce) and simply redirects instead of re-issuing the login, and any unexpected fatal during login is turned into a clean redirect rather than a server error.
 
 = 0.34.0 =
 * One-click wp-admin login is more reliable and now lands past common two-factor prompts. Clicking "Login to wp-admin" while already signed in no longer errors; the login token still expires, is single-use, and is bound to the site and your role.
