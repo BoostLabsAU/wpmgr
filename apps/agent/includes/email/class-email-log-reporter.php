@@ -249,13 +249,15 @@ final class EmailLogReporter {
 			$mail_to_raw  = (string) ( $row['mail_to'] ?? '' );
 			$to_addresses = $this->splitAddresses( $mail_to_raw );
 
-			// Decode the response column: stored as a JSON string by the provider
-			// handlers; surface as an object/null. Fall back to null on bad JSON.
+			// Decode the response column: stored as either a JSON object string or a
+			// plain provider-response string. The CP contract requires an object (never
+			// a bare scalar), so wrap a non-array decode into { "summary": "<value>" }.
+			// null is sent when the raw value is empty (CP maps null/absent to {}).
 			$response_raw    = isset( $row['response'] ) ? (string) $row['response'] : '';
 			$response_decoded = null;
 			if ( $response_raw !== '' ) {
 				$maybe = json_decode( $response_raw, true );
-				$response_decoded = is_array( $maybe ) ? $maybe : $response_raw;
+				$response_decoded = is_array( $maybe ) ? $maybe : array( 'summary' => $response_raw );
 			}
 
 			$entry = [
@@ -308,21 +310,22 @@ final class EmailLogReporter {
 
 	/**
 	 * Convert a MySQL UTC DATETIME string (Y-m-d H:i:s) to an RFC3339 UTC
-	 * timestamp (e.g. 2026-06-10T12:34:56Z). Returns the raw value if the
-	 * conversion fails so the CP can still attempt ingest.
+	 * timestamp (e.g. 2026-06-10T12:34:56Z). Falls back to the current UTC time
+	 * in RFC3339 on empty input or parse failure so the CP always receives a
+	 * valid RFC3339 string — never a bare MySQL datetime or an empty string.
 	 *
 	 * @param string $mysql MySQL DATETIME string.
 	 * @return string RFC3339 UTC timestamp.
 	 */
 	private function toRfc3339( string $mysql ): string {
 		if ( $mysql === '' ) {
-			return '';
+			return gmdate( 'Y-m-d\TH:i:s\Z' );
 		}
 		try {
 			$dt = new \DateTimeImmutable( $mysql, new \DateTimeZone( 'UTC' ) );
 			return $dt->format( \DateTime::RFC3339 );
 		} catch ( \Throwable $e ) {
-			return $mysql;
+			return gmdate( 'Y-m-d\TH:i:s\Z' );
 		}
 	}
 }

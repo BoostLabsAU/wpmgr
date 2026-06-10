@@ -1,12 +1,23 @@
 package email
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 )
+
+func init() {
+	gin.SetMode(gin.TestMode)
+}
 
 // ---------------------------------------------------------------------------
 // Ingest idempotency
@@ -187,16 +198,16 @@ func TestCompositeKeyset_NoSkipOnSharedTimestamp(t *testing.T) {
 func TestToLogEntryDTO_BodyNotInList(t *testing.T) {
 	bodyText := "sensitive email content"
 	entry := LogEntry{
-		ID:         uuid.New(),
-		TenantID:   uuid.New(),
-		SiteID:     uuid.New(),
-		BodyStored: true,
-		Body:       &bodyText,
-		Status:     "sent",
+		ID:          uuid.New(),
+		TenantID:    uuid.New(),
+		SiteID:      uuid.New(),
+		BodyStored:  true,
+		Body:        &bodyText,
+		Status:      "sent",
 		ToAddresses: []string{},
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-		Response:   map[string]any{},
+		CreatedAt:   time.Now(),
+		UpdatedAt:   time.Now(),
+		Response:    map[string]any{},
 	}
 	dto := toLogEntryDTO(entry, false /* list view */)
 	if dto.Body != nil {
@@ -276,6 +287,303 @@ func TestService_ListFleetLog_TenantScoped(t *testing.T) {
 // ---------------------------------------------------------------------------
 // resolveRange sentinel defaults
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// coerceResponse unit tests
+// ---------------------------------------------------------------------------
+
+func TestCoerceResponse_PlainString(t *testing.T) {
+	raw := json.RawMessage(`"SMTP send OK"`)
+	got := coerceResponse(raw)
+	if got["summary"] != "SMTP send OK" {
+		t.Errorf("expected summary='SMTP send OK', got %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected exactly one key, got %d: %v", len(got), got)
+	}
+}
+
+func TestCoerceResponse_Object(t *testing.T) {
+	raw := json.RawMessage(`{"code":250,"message":"OK"}`)
+	got := coerceResponse(raw)
+	if got["code"] != float64(250) {
+		t.Errorf("expected code=250, got %v", got["code"])
+	}
+	if got["message"] != "OK" {
+		t.Errorf("expected message='OK', got %v", got["message"])
+	}
+}
+
+func TestCoerceResponse_Null(t *testing.T) {
+	raw := json.RawMessage(`null`)
+	got := coerceResponse(raw)
+	if len(got) != 0 {
+		t.Errorf("expected empty map for null, got %v", got)
+	}
+}
+
+func TestCoerceResponse_Empty(t *testing.T) {
+	got := coerceResponse(json.RawMessage(nil))
+	if len(got) != 0 {
+		t.Errorf("expected empty map for nil raw, got %v", got)
+	}
+	got2 := coerceResponse(json.RawMessage(""))
+	if len(got2) != 0 {
+		t.Errorf("expected empty map for empty raw, got %v", got2)
+	}
+}
+
+func TestCoerceResponse_Number(t *testing.T) {
+	raw := json.RawMessage(`250`)
+	got := coerceResponse(raw)
+	if got["summary"] != "250" {
+		t.Errorf("expected summary='250' for number, got %v", got)
+	}
+}
+
+func TestCoerceResponse_Array(t *testing.T) {
+	raw := json.RawMessage(`["a","b"]`)
+	got := coerceResponse(raw)
+	if _, ok := got["summary"]; !ok {
+		t.Errorf("expected 'summary' key for array, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// parseCreatedAt unit tests
+// ---------------------------------------------------------------------------
+
+func TestParseCreatedAt_RFC3339(t *testing.T) {
+	ts := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)
+	raw := json.RawMessage(`"2026-06-10T14:00:00Z"`)
+	got := parseCreatedAt(raw)
+	if !got.Equal(ts) {
+		t.Errorf("RFC3339: got %v, want %v", got, ts)
+	}
+}
+
+func TestParseCreatedAt_RFC3339Nano(t *testing.T) {
+	raw := json.RawMessage(`"2026-06-10T14:00:00.123456789Z"`)
+	got := parseCreatedAt(raw)
+	if got.IsZero() {
+		t.Error("expected non-zero time for RFC3339Nano")
+	}
+	if got.Year() != 2026 || got.Month() != 6 || got.Day() != 10 {
+		t.Errorf("unexpected parsed date: %v", got)
+	}
+}
+
+func TestParseCreatedAt_MySQLFormat(t *testing.T) {
+	// MySQL UTC format: no T, no Z.
+	raw := json.RawMessage(`"2026-06-10 14:00:00"`)
+	got := parseCreatedAt(raw)
+	want := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("MySQL format: got %v, want %v", got, want)
+	}
+}
+
+func TestParseCreatedAt_MySQLTFormat(t *testing.T) {
+	// MySQL-T format: T separator but no Z.
+	raw := json.RawMessage(`"2026-06-10T14:00:00"`)
+	got := parseCreatedAt(raw)
+	want := time.Date(2026, 6, 10, 14, 0, 0, 0, time.UTC)
+	if !got.Equal(want) {
+		t.Errorf("MySQL-T format: got %v, want %v", got, want)
+	}
+}
+
+func TestParseCreatedAt_Empty(t *testing.T) {
+	before := time.Now().UTC()
+	got := parseCreatedAt(json.RawMessage(""))
+	after := time.Now().UTC()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("empty raw: expected ~now, got %v", got)
+	}
+}
+
+func TestParseCreatedAt_Unparseable(t *testing.T) {
+	before := time.Now().UTC()
+	raw := json.RawMessage(`"not-a-date"`)
+	got := parseCreatedAt(raw)
+	after := time.Now().UTC()
+	if got.Before(before) || got.After(after) {
+		t.Errorf("unparseable: expected ~now fallback, got %v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// AgentHandler ingest HTTP-level tests
+// ---------------------------------------------------------------------------
+
+// newTestAgentEngine builds a minimal Gin engine that injects the given
+// agent identity onto the context before routing to the handler.
+func newTestAgentEngine(h *AgentHandler, id agent.Identity) *gin.Engine {
+	engine := gin.New()
+	group := engine.Group("/agent/v1")
+	group.Use(func(c *gin.Context) {
+		c.Request = c.Request.WithContext(agent.WithIdentity(c.Request.Context(), id))
+		c.Next()
+	})
+	h.Register(group)
+	return engine
+}
+
+func TestAgentHandler_IngestLog_StringResponse(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(&Repo{}, nil, nil)
+	svc.repo = repo
+	h := NewAgentHandler(svc)
+
+	id := agent.Identity{TenantID: uuid.New(), SiteID: uuid.New()}
+	engine := newTestAgentEngine(h, id)
+
+	body := `{"entries":[{
+		"agent_seq":1,
+		"status":"sent",
+		"provider":"smtp",
+		"to_addresses":["a@b.com"],
+		"response":"SMTP send OK",
+		"created_at":"2026-06-10T14:00:00Z"
+	}]}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/email/log", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["acked_through"] != float64(1) {
+		t.Errorf("expected acked_through=1, got %v", resp["acked_through"])
+	}
+}
+
+func TestAgentHandler_IngestLog_ObjectResponse(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(&Repo{}, nil, nil)
+	svc.repo = repo
+	h := NewAgentHandler(svc)
+
+	id := agent.Identity{TenantID: uuid.New(), SiteID: uuid.New()}
+	engine := newTestAgentEngine(h, id)
+
+	body := `{"entries":[{
+		"agent_seq":2,
+		"status":"sent",
+		"provider":"ses",
+		"to_addresses":["c@d.com"],
+		"response":{"code":250},
+		"created_at":"2026-06-10T14:00:00Z"
+	}]}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/email/log", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentHandler_IngestLog_NullResponseAndEmptyCreatedAt(t *testing.T) {
+	repo := newFakeRepo()
+	svc := NewService(&Repo{}, nil, nil)
+	svc.repo = repo
+	h := NewAgentHandler(svc)
+
+	id := agent.Identity{TenantID: uuid.New(), SiteID: uuid.New()}
+	engine := newTestAgentEngine(h, id)
+
+	// response=null, created_at omitted entirely.
+	body := `{"entries":[{
+		"agent_seq":3,
+		"status":"failed",
+		"provider":"smtp",
+		"to_addresses":["e@f.com"],
+		"response":null
+	}]}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/email/log", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentHandler_IngestLog_MySQLCreatedAt(t *testing.T) {
+	// Verifies that a MySQL-format timestamp is accepted (parsed, not defaulted).
+	repo := newFakeRepo()
+	svc := NewService(&Repo{}, nil, nil)
+	svc.repo = repo
+	h := NewAgentHandler(svc)
+
+	id := agent.Identity{TenantID: uuid.New(), SiteID: uuid.New()}
+	engine := newTestAgentEngine(h, id)
+
+	body := `{"entries":[{
+		"agent_seq":4,
+		"status":"sent",
+		"provider":"sendgrid",
+		"to_addresses":["g@h.com"],
+		"response":{"id":"abc"},
+		"created_at":"2026-06-10 14:00:00"
+	}]}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/email/log", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestAgentHandler_IngestLog_MixedBatch(t *testing.T) {
+	// A batch mixing string response, object response, null response, and MySQL
+	// timestamp must all succeed and acked_through must be the max seq (5).
+	repo := newFakeRepo()
+	svc := NewService(&Repo{}, nil, nil)
+	svc.repo = repo
+	h := NewAgentHandler(svc)
+
+	id := agent.Identity{TenantID: uuid.New(), SiteID: uuid.New()}
+	engine := newTestAgentEngine(h, id)
+
+	body := `{"entries":[
+		{"agent_seq":1,"status":"sent","provider":"smtp","to_addresses":["a@b.com"],"response":"SMTP send OK","created_at":"2026-06-10T14:00:00Z"},
+		{"agent_seq":2,"status":"sent","provider":"ses","to_addresses":["b@c.com"],"response":{"code":250},"created_at":"2026-06-10T14:00:01Z"},
+		{"agent_seq":3,"status":"failed","provider":"smtp","to_addresses":["c@d.com"],"response":null,"created_at":"2026-06-10 14:00:02"},
+		{"agent_seq":4,"status":"sent","provider":"sendgrid","to_addresses":["d@e.com"],"created_at":"2026-06-10 14:00:03"},
+		{"agent_seq":5,"status":"failed","provider":"mailgun","to_addresses":["e@f.com"],"response":"connection refused"}
+	]}`
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/email/log", bytes.NewBufferString(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for mixed batch, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp["acked_through"] != float64(5) {
+		t.Errorf("expected acked_through=5, got %v", resp["acked_through"])
+	}
+}
 
 // TestResolveRange verifies that zero times are replaced with epochStart /
 // farFuture respectively so no IS NULL logic is needed in SQL.

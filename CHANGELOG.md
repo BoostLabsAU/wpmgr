@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.35.3] - 2026-06-10
+
+### Fixed
+
+- **Email logs never reached the dashboard** even though the site was logging sends locally. The agent pushes each batch to the control plane, but the ingest endpoint rejected every push with HTTP 422 because a provider `response` value that was a plain string (for example an SMTP "send OK" summary) did not match the expected JSON object shape, which failed the whole batch. Because the failed batch never advanced the agent's cursor, it retried the same rejected batch indefinitely and no logs were ever accepted. The ingest endpoint is now tolerant: a string, array, or scalar `response` is wrapped into an object, a missing or non-standard timestamp falls back gracefully, and a single odd entry can no longer block the batch. Existing buffered logs flow in automatically on the next push. The agent also now sends a clean object-shaped `response` and always-valid timestamps.
+
 ## [0.35.2] - 2026-06-10
 
 ### Fixed
