@@ -3,7 +3,13 @@
 # ---- build stage ----
 # Build the @wpmgr/web Vite React SPA with Node 22 + pnpm.
 # Build context is the repo root (pnpm workspace).
-FROM node:22-alpine AS build
+#
+# --platform=$BUILDPLATFORM pins this (slow) Node/Vite build stage to the
+# runner's native platform (always linux/amd64 on GitHub Actions). The
+# compiled SPA output (apps/web/dist) is pure static HTML/JS/CSS — it is
+# completely arch-independent and is simply copied into the multi-arch
+# final nginx stage. No cross-compiler or QEMU needed here.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS build
 
 # Enable the pinned pnpm via corepack.
 RUN corepack enable

@@ -47,12 +47,15 @@ jobs:
           - name: api
             file: infra/Dockerfile.api
             build_arg: VERSION
+            platforms: linux/amd64,linux/arm64
           - name: web
             file: infra/Dockerfile.web
             build_arg: BUILD_VERSION
+            platforms: linux/amd64,linux/arm64
           - name: media-encoder
             file: infra/Dockerfile.media-encoder
             build_arg: VERSION
+            platforms: linux/amd64
     steps:
       - uses: actions/checkout@v4
 
@@ -61,6 +64,12 @@ jobs:
         run: |
           echo "version=${{ github.event.inputs.version || github.ref_name }}" >> "$GITHUB_OUTPUT"
           echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      # QEMU lets buildx assemble arm64 layers on the amd64 runner.
+      # For api/web the Go compile and Node/Vite build both run natively on the
+      # build platform (--platform=$BUILDPLATFORM in the build stage), so QEMU
+      # overhead is limited to resolving the multi-arch final-stage base images.
+      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -85,6 +94,7 @@ jobs:
         with:
           context: .
           file: ${{ matrix.file }}
+          platforms: ${{ matrix.platforms }}
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}

@@ -5,11 +5,23 @@
 # Build context is the repo root so the Go workspace (go.work + sibling
 # modules) is available; we build the apps/api module with the workspace
 # disabled (GOWORK=off) so only its own go.mod/go.sum are needed.
-FROM golang:1.26 AS build
+#
+# --platform=$BUILDPLATFORM pins the build stage to the runner's native
+# platform (always linux/amd64 on GitHub Actions). Go cross-compilation via
+# GOOS/GOARCH means the compile itself is fully native — no QEMU needed in
+# this stage. BUILDPLATFORM/TARGETOS/TARGETARCH are injected by BuildKit;
+# when building without --platform (e.g. prod Cloud Build on amd64) they
+# all default to the host, so the amd64-only path is unchanged.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS build
+
+# TARGETOS / TARGETARCH are populated by BuildKit to match the target
+# platform being built (e.g. linux/arm64). CGO_ENABLED=0 means pure Go
+# cross-compilation with no C toolchain involvement.
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
 
 ENV CGO_ENABLED=0 \
-    GOWORK=off \
-    GOOS=linux
+    GOWORK=off
 
 WORKDIR /src
 
@@ -26,9 +38,12 @@ COPY apps/api ./apps/api
 ARG VERSION=0.0.0-dev
 
 # Build a static binary. -trimpath + stripped symbols for a lean image.
+# GOOS/GOARCH are set from the BuildKit-injected ARGs so the binary targets
+# the correct platform for each matrix leg of a multi-arch build.
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     cd apps/api && \
+    GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -trimpath \
         -ldflags "-s -w -X main.version=${VERSION}" \
         -o /out/wpmgr ./cmd/wpmgr
