@@ -57,6 +57,9 @@ import type {
   ArchiveSiteData,
   ArchiveSiteErrors,
   ArchiveSiteResponses,
+  AssignSitesToClientData,
+  AssignSitesToClientErrors,
+  AssignSitesToClientResponses,
   BeginReEnrollmentData,
   BeginReEnrollmentErrors,
   BeginReEnrollmentResponses,
@@ -94,6 +97,9 @@ import type {
   CreateBackupData,
   CreateBackupErrors,
   CreateBackupResponses,
+  CreateClientData,
+  CreateClientErrors,
+  CreateClientResponses,
   CreateDbSnapshotData,
   CreateDbSnapshotResponses,
   CreateOrgData,
@@ -123,6 +129,9 @@ import type {
   DeleteBackupData,
   DeleteBackupErrors,
   DeleteBackupResponses,
+  DeleteClientData,
+  DeleteClientErrors,
+  DeleteClientResponses,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponses,
   DeleteEmailConnectionData,
@@ -184,6 +193,9 @@ import type {
   GetBackupSqlInspectionResponses,
   GetCacheStatsData,
   GetCacheStatsResponses,
+  GetClientData,
+  GetClientErrors,
+  GetClientResponses,
   GetDbScanResultData,
   GetDbScanResultResponses,
   GetEmailNotifySettingsData,
@@ -267,6 +279,9 @@ import type {
   ListAuditResponses,
   ListBackupsData,
   ListBackupsResponses,
+  ListClientsData,
+  ListClientsErrors,
+  ListClientsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
   ListEmailConnectionsData,
@@ -470,6 +485,9 @@ import type {
   UnlockBackupData,
   UnlockBackupErrors,
   UnlockBackupResponses,
+  UpdateClientData,
+  UpdateClientErrors,
+  UpdateClientResponses,
   UpdateSiteDestinationData,
   UpdateSiteDestinationErrors,
   UpdateSiteDestinationResponses,
@@ -4141,6 +4159,105 @@ export const bulkConfigCache = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/api/v1/cache/bulk-config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List agency clients
+ *
+ * Returns the list of agency clients for the current tenant, ordered by name. Archived clients are excluded unless include_archived=true is passed.
+ */
+export const listClients = <ThrowOnError extends boolean = false>(
+  options?: Options<ListClientsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListClientsResponses,
+    ListClientsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients", ...options });
+
+/**
+ * Create an agency client
+ */
+export const createClient = <ThrowOnError extends boolean = false>(
+  options: Options<CreateClientData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CreateClientResponses,
+    CreateClientErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Assign (or unassign) a batch of sites to a client
+ *
+ * Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+ */
+export const assignSitesToClient = <ThrowOnError extends boolean = false>(
+  options: Options<AssignSitesToClientData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    AssignSitesToClientResponses,
+    AssignSitesToClientErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/assignments",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete an agency client
+ *
+ * Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL) but not deleted.
+ */
+export const deleteClient = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteClientData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteClientResponses,
+    DeleteClientErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}", ...options });
+
+/**
+ * Get a single agency client
+ */
+export const getClient = <ThrowOnError extends boolean = false>(
+  options: Options<GetClientData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetClientResponses,
+    GetClientErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}", ...options });
+
+/**
+ * Update an agency client
+ */
+export const updateClient = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateClientData, ThrowOnError>,
+) =>
+  (options.client ?? client).patch<
+    UpdateClientResponses,
+    UpdateClientErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}",
     ...options,
     headers: {
       "Content-Type": "application/json",

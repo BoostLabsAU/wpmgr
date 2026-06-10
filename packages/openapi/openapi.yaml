@@ -5674,6 +5674,155 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/clients:
+    get:
+      operationId: listClients
+      summary: List agency clients
+      description: Returns the list of agency clients for the current tenant, ordered by name. Archived clients are excluded unless include_archived=true is passed.
+      tags: [clients]
+      parameters:
+        - name: include_archived
+          in: query
+          schema:
+            type: boolean
+          description: When true, includes archived clients in the response.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyClientList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: createClient
+      summary: Create an agency client
+      tags: [clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAgencyClientRequest"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyClient"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/clients/assignments:
+    put:
+      operationId: assignSitesToClient
+      summary: Assign (or unassign) a batch of sites to a client
+      description: Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+      tags: [clients]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AssignSitesRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AssignSitesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+  /api/v1/clients/{clientId}:
+    get:
+      operationId: getClient
+      summary: Get a single agency client
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyClient"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    patch:
+      operationId: updateClient
+      summary: Update an agency client
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAgencyClientRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgencyClient"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteClient
+      summary: Delete an agency client
+      description: Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL) but not deleted.
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: No Content
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
 components:
   responses:
     Unauthorized:
@@ -5967,6 +6116,13 @@ components:
           type: string
           enum: [success, running, failed]
           description: Normalized status of the most recent backup snapshot (DB 'completed'→'success', 'pending'→'running').
+        client_id:
+          type: string
+          format: uuid
+          description: UUID of the agency client this site is grouped under (m63). Absent when the site has no client.
+        client_name:
+          type: string
+          description: Display name of the agency client this site is grouped under (m63). Absent when the site has no client.
         created_at:
           type: string
           format: date-time
@@ -10534,3 +10690,148 @@ components:
             type: string
             format: email
           description: Replace the digest recipients list.
+
+    # -------------------------------------------------------------------------
+    # Clients (m63 Foundation)
+    # -------------------------------------------------------------------------
+
+    AgencyClient:
+      type: object
+      required: [id, tenant_id, name, site_count, created_at, updated_at]
+      description: An agency client record that groups sites under a customer entity.
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Display name for the client.
+        company:
+          type: string
+          description: Optional company / business name.
+        contact_email:
+          type: string
+          format: email
+          description: Optional primary contact email address.
+        phone:
+          type: string
+          description: Optional contact phone number.
+        notes:
+          type: string
+          description: Internal operator notes (not shown to the client).
+        color:
+          type: string
+          description: Hex color for the color badge (e.g. "#3b82f6"). Empty when unset.
+        logo_url:
+          type: string
+          format: uri
+          description: URL of the client's logo. Empty when unset.
+        site_count:
+          type: integer
+          format: int64
+          description: Number of non-archived sites currently assigned to this client.
+        archived_at:
+          type: string
+          format: date-time
+          description: Set when the client is soft-deleted (archived). Absent for active clients.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    AgencyClientList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgencyClient"
+
+    CreateAgencyClientRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        company:
+          type: string
+          maxLength: 200
+        contact_email:
+          type: string
+          format: email
+          maxLength: 320
+        phone:
+          type: string
+          maxLength: 80
+        notes:
+          type: string
+          maxLength: 2000
+        color:
+          type: string
+          description: Hex color code (e.g. "#3b82f6").
+        logo_url:
+          type: string
+          format: uri
+
+    UpdateAgencyClientRequest:
+      type: object
+      description: All fields are optional (PATCH semantics).
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        company:
+          type: string
+          maxLength: 200
+        contact_email:
+          type: string
+          format: email
+          maxLength: 320
+        phone:
+          type: string
+          maxLength: 80
+        notes:
+          type: string
+          maxLength: 2000
+        color:
+          type: string
+          description: Hex color code (e.g. "#3b82f6"). Pass empty string to clear.
+        logo_url:
+          type: string
+          format: uri
+
+    AssignSitesRequest:
+      type: object
+      required: [site_ids]
+      properties:
+        client_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: UUID of the client to assign. Omit or pass null to unassign the sites.
+        site_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          minItems: 1
+          maxItems: 500
+          description: List of site UUIDs to assign (or unassign).
+
+    AssignSitesResponse:
+      type: object
+      required: [updated]
+      properties:
+        updated:
+          type: integer
+          format: int64
+          description: Number of sites whose client assignment was changed.

@@ -75,6 +75,11 @@ type Site struct {
 	// nil when the site has no backups. Populated by repo.List's batched lookup.
 	LastBackupStatus string
 	LastBackupAt     *time.Time
+	// m63 — agency client assignment. ClientID is nil when unassigned;
+	// ClientName is populated in the list by a batched JOIN lookup (same pattern
+	// as LastBackupStatus). Absent on detail (not needed by the detail view).
+	ClientID   *uuid.UUID
+	ClientName string
 }
 
 // CreateInput is the validated input for creating a site under a tenant.
@@ -114,6 +119,8 @@ type ListInput struct {
 	Limit     int32
 	Offset    int32
 	Principal ScopedPrincipal // optional; nil → plain InTenantTx (org-scoped)
+	// ClientID, when set, filters to sites assigned to that client (m63).
+	ClientID *uuid.UUID
 }
 
 // SetTagsInput sets the full tag set on a tenant-scoped site.

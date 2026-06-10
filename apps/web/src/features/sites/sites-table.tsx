@@ -184,14 +184,15 @@ function rowOf(site: Site): SiteRow {
 // ---------------------------------------------------------------------------
 
 const COL_CHECKBOX_PX = 40;
-const COL_URL_MIN_PX = 320;
-const COL_TAGS_PX = 160;
-const COL_WP_PX = 90;
-const COL_PHP_PX = 90;
-const COL_AGENT_PX = 110;
-const COL_UPDATES_PX = 130;
-const COL_BACKUP_PX = 180;
-const COL_UPTIME_PX = 80;
+const COL_URL_MIN_PX = 280;
+const COL_CLIENT_PX = 120;
+const COL_TAGS_PX = 140;
+const COL_WP_PX = 80;
+const COL_PHP_PX = 80;
+const COL_AGENT_PX = 100;
+const COL_UPDATES_PX = 120;
+const COL_BACKUP_PX = 160;
+const COL_UPTIME_PX = 70;
 const COL_ACTIONS_PX = 80;
 
 // ---------------------------------------------------------------------------
@@ -274,9 +275,38 @@ function buildColumns(
       },
     },
     {
+      id: "client",
+      accessorFn: (row) => row.site.client_name ?? "",
+      header: "Client",
+      enableSorting: false,
+      size: COL_CLIENT_PX,
+      cell: ({ row }) => {
+        const name = row.original.site.client_name;
+        if (!name) {
+          return (
+            <span
+              aria-hidden="true"
+              className="text-xs text-[var(--color-muted-foreground)]/50"
+            >
+              —
+            </span>
+          );
+        }
+        return (
+          <div className="flex min-w-0 items-center gap-1.5">
+            <span
+              aria-hidden="true"
+              className="inline-block size-2 shrink-0 rounded-full border border-[var(--color-border)] bg-[var(--color-muted)]"
+            />
+            <span className="truncate text-sm">{name}</span>
+          </div>
+        );
+      },
+    },
+    {
       id: "tags",
       accessorFn: (row) => row.site.tags.join(","),
-      header: "Client",
+      header: "Tags",
       enableSorting: false,
       size: COL_TAGS_PX,
       cell: ({ row }) => {

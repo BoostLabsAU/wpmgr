@@ -242,6 +242,12 @@ func (r *pgRepo) List(ctx context.Context, in ListInput) ([]Site, error) {
 		}
 		return r.pool.InTenantTx(ctx, in.TenantID, fn)
 	}
+	// Build the optional client_id filter for the DB query.
+	var clientIDParam pgtype.UUID
+	if in.ClientID != nil {
+		clientIDParam = pgtype.UUID{Bytes: [16]byte(*in.ClientID), Valid: true}
+	}
+
 	err := runTx(func(tx pgx.Tx) error {
 		rows, err := sqlc.New(tx).ListSites(ctx, sqlc.ListSitesParams{
 			TenantID: in.TenantID,
@@ -249,6 +255,7 @@ func (r *pgRepo) List(ctx context.Context, in ListInput) ([]Site, error) {
 			State:    state,
 			Limit:    in.Limit,
 			Offset:   in.Offset,
+			ClientID: clientIDParam,
 		})
 		if err != nil {
 			return domain.Internal("site_list_failed", "failed to list sites").WithCause(err)
@@ -289,6 +296,25 @@ func (r *pgRepo) List(ctx context.Context, in ListInput) ([]Site, error) {
 				} else {
 					t := b.CreatedAt
 					out[i].LastBackupAt = &t
+				}
+			}
+
+			// m63 — enrich with client names: one JOIN for all sites that have a
+			// client_id set (zero-cost for tenants with no clients).
+			clientRows, cerr := sqlc.New(tx).ListClientNamesForSites(ctx, sqlc.ListClientNamesForSitesParams{
+				TenantID: in.TenantID,
+				Column2:  ids,
+			})
+			if cerr != nil {
+				return domain.Internal("site_list_clients_failed", "failed to fetch client names").WithCause(cerr)
+			}
+			clientByID := make(map[uuid.UUID]string, len(clientRows))
+			for _, cr := range clientRows {
+				clientByID[cr.SiteID] = cr.ClientName
+			}
+			for i := range out {
+				if name, ok := clientByID[out[i].ID]; ok {
+					out[i].ClientName = name
 				}
 			}
 		}
@@ -657,6 +683,10 @@ func toModel(s sqlc.Site) Site {
 	}
 	if m.Tags == nil {
 		m.Tags = []string{}
+	}
+	if s.ClientID.Valid {
+		id := uuid.UUID(s.ClientID.Bytes)
+		m.ClientID = &id
 	}
 	return m
 }

@@ -266,6 +266,20 @@ func encodeArchiveSiteRequest(
 	return nil
 }
 
+func encodeAssignSitesToClientRequest(
+	req *AssignSitesRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeBulkConfigCacheRequest(
 	req *BulkConfigRequest,
 	r *http.Request,
@@ -378,6 +392,20 @@ func encodeCreateAutologinRequest(
 
 func encodeCreateBackupRequest(
 	req *BackupCreate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeCreateClientRequest(
+	req *CreateAgencyClientRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -1084,6 +1112,20 @@ func encodeTriggerDbScanRequest(
 
 func encodeUnblockSiteIPRequest(
 	req *UnblockIPRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeUpdateClientRequest(
+	req *UpdateAgencyClientRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

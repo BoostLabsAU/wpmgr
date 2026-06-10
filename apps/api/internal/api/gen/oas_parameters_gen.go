@@ -1251,6 +1251,71 @@ func decodeDeleteBackupParams(args [1]string, argsEscaped bool, r *http.Request)
 	return params, nil
 }
 
+// DeleteClientParams is parameters of deleteClient operation.
+type DeleteClientParams struct {
+	ClientId uuid.UUID
+}
+
+func unpackDeleteClientParams(packed middleware.Parameters) (params DeleteClientParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "clientId",
+			In:   "path",
+		}
+		params.ClientId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeDeleteClientParams(args [1]string, argsEscaped bool, r *http.Request) (params DeleteClientParams, _ error) {
+	// Decode path: clientId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "clientId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.ClientId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "clientId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // DeleteDbSnapshotParams is parameters of deleteDbSnapshot operation.
 type DeleteDbSnapshotParams struct {
 	SiteId     uuid.UUID
@@ -3087,6 +3152,71 @@ func decodeGetCacheStatsParams(args [1]string, argsEscaped bool, r *http.Request
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// GetClientParams is parameters of getClient operation.
+type GetClientParams struct {
+	ClientId uuid.UUID
+}
+
+func unpackGetClientParams(packed middleware.Parameters) (params GetClientParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "clientId",
+			In:   "path",
+		}
+		params.ClientId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeGetClientParams(args [1]string, argsEscaped bool, r *http.Request) (params GetClientParams, _ error) {
+	// Decode path: clientId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "clientId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.ClientId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "clientId",
 			In:   "path",
 			Err:  err,
 		}
@@ -5500,6 +5630,71 @@ func decodeListBackupsParams(args [1]string, argsEscaped bool, r *http.Request) 
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "offset",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// ListClientsParams is parameters of listClients operation.
+type ListClientsParams struct {
+	// When true, includes archived clients in the response.
+	IncludeArchived OptBool `json:",omitempty,omitzero"`
+}
+
+func unpackListClientsParams(packed middleware.Parameters) (params ListClientsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "include_archived",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.IncludeArchived = v.(OptBool)
+		}
+	}
+	return params
+}
+
+func decodeListClientsParams(args [0]string, argsEscaped bool, r *http.Request) (params ListClientsParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Decode query: include_archived.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "include_archived",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotIncludeArchivedVal bool
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToBool(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotIncludeArchivedVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.IncludeArchived.SetTo(paramsDotIncludeArchivedVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "include_archived",
 			In:   "query",
 			Err:  err,
 		}
@@ -13729,6 +13924,71 @@ func decodeUnlockBackupParams(args [1]string, argsEscaped bool, r *http.Request)
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "snapshotId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// UpdateClientParams is parameters of updateClient operation.
+type UpdateClientParams struct {
+	ClientId uuid.UUID
+}
+
+func unpackUpdateClientParams(packed middleware.Parameters) (params UpdateClientParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "clientId",
+			In:   "path",
+		}
+		params.ClientId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeUpdateClientParams(args [1]string, argsEscaped bool, r *http.Request) (params UpdateClientParams, _ error) {
+	// Decode path: clientId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "clientId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.ClientId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "clientId",
 			In:   "path",
 			Err:  err,
 		}

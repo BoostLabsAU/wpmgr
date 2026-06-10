@@ -265,6 +265,15 @@ func (UnimplementedHandler) ArchiveSite(ctx context.Context, req OptSiteLifecycl
 	return r, ht.ErrNotImplemented
 }
 
+// AssignSitesToClient implements assignSitesToClient operation.
+//
+// Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+//
+// PUT /api/v1/clients/assignments
+func (UnimplementedHandler) AssignSitesToClient(ctx context.Context, req *AssignSitesRequest) (r AssignSitesToClientRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // BeginReEnrollment implements beginReEnrollment operation.
 //
 // M21 / ADR-041 — moves an existing revoked/disconnected/archived site back
@@ -455,6 +464,15 @@ func (UnimplementedHandler) CreateBackup(ctx context.Context, req *BackupCreate,
 	return r, ht.ErrNotImplemented
 }
 
+// CreateClient implements createClient operation.
+//
+// Create an agency client.
+//
+// POST /api/v1/clients
+func (UnimplementedHandler) CreateClient(ctx context.Context, req *CreateAgencyClientRequest) (r CreateClientRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // CreateDbSnapshot implements createDbSnapshot operation.
 //
 // Dumps the site's database to a local `.sql.gz` file on the WP server
@@ -579,6 +597,16 @@ func (UnimplementedHandler) CreateUpdateRun(ctx context.Context, req *UpdateRunC
 //
 // DELETE /api/v1/backups/{snapshotId}
 func (UnimplementedHandler) DeleteBackup(ctx context.Context, params DeleteBackupParams) (r DeleteBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// DeleteClient implements deleteClient operation.
+//
+// Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL)
+// but not deleted.
+//
+// DELETE /api/v1/clients/{clientId}
+func (UnimplementedHandler) DeleteClient(ctx context.Context, params DeleteClientParams) (r DeleteClientRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -835,6 +863,15 @@ func (UnimplementedHandler) GetBackupSqlInspection(ctx context.Context, params G
 //
 // GET /api/v1/sites/{siteId}/perf/cache/stats
 func (UnimplementedHandler) GetCacheStats(ctx context.Context, params GetCacheStatsParams) (r *CacheStats, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetClient implements getClient operation.
+//
+// Get a single agency client.
+//
+// GET /api/v1/clients/{clientId}
+func (UnimplementedHandler) GetClient(ctx context.Context, params GetClientParams) (r GetClientRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1182,6 +1219,16 @@ func (UnimplementedHandler) ListAudit(ctx context.Context, params ListAuditParam
 //
 // GET /api/v1/sites/{siteId}/backups
 func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsParams) (r *BackupSnapshotList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListClients implements listClients operation.
+//
+// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
+// excluded unless include_archived=true is passed.
+//
+// GET /api/v1/clients
+func (UnimplementedHandler) ListClients(ctx context.Context, params ListClientsParams) (r ListClientsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2080,6 +2127,15 @@ func (UnimplementedHandler) UnblockSiteIP(ctx context.Context, req *UnblockIPReq
 //
 // DELETE /api/v1/backups/{snapshotId}/lock
 func (UnimplementedHandler) UnlockBackup(ctx context.Context, params UnlockBackupParams) (r UnlockBackupRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// UpdateClient implements updateClient operation.
+//
+// Update an agency client.
+//
+// PATCH /api/v1/clients/{clientId}
+func (UnimplementedHandler) UpdateClient(ctx context.Context, req *UpdateAgencyClientRequest, params UpdateClientParams) (r UpdateClientRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

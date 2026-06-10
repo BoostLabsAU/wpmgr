@@ -206,6 +206,12 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/archive
 	ArchiveSite(ctx context.Context, req OptSiteLifecycleReason, params ArchiveSiteParams) (ArchiveSiteRes, error)
+	// AssignSitesToClient implements assignSitesToClient operation.
+	//
+	// Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+	//
+	// PUT /api/v1/clients/assignments
+	AssignSitesToClient(ctx context.Context, req *AssignSitesRequest) (AssignSitesToClientRes, error)
 	// BeginReEnrollment implements beginReEnrollment operation.
 	//
 	// M21 / ADR-041 — moves an existing revoked/disconnected/archived site back
@@ -354,6 +360,12 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/backups
 	CreateBackup(ctx context.Context, req *BackupCreate, params CreateBackupParams) (CreateBackupRes, error)
+	// CreateClient implements createClient operation.
+	//
+	// Create an agency client.
+	//
+	// POST /api/v1/clients
+	CreateClient(ctx context.Context, req *CreateAgencyClientRequest) (CreateClientRes, error)
 	// CreateDbSnapshot implements createDbSnapshot operation.
 	//
 	// Dumps the site's database to a local `.sql.gz` file on the WP server
@@ -451,6 +463,13 @@ type Handler interface {
 	//
 	// DELETE /api/v1/backups/{snapshotId}
 	DeleteBackup(ctx context.Context, params DeleteBackupParams) (DeleteBackupRes, error)
+	// DeleteClient implements deleteClient operation.
+	//
+	// Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL)
+	// but not deleted.
+	//
+	// DELETE /api/v1/clients/{clientId}
+	DeleteClient(ctx context.Context, params DeleteClientParams) (DeleteClientRes, error)
 	// DeleteDbSnapshot implements deleteDbSnapshot operation.
 	//
 	// Removes a snapshot from the WP server's local store. This is
@@ -638,6 +657,12 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/cache/stats
 	GetCacheStats(ctx context.Context, params GetCacheStatsParams) (*CacheStats, error)
+	// GetClient implements getClient operation.
+	//
+	// Get a single agency client.
+	//
+	// GET /api/v1/clients/{clientId}
+	GetClient(ctx context.Context, params GetClientParams) (GetClientRes, error)
 	// GetDbScanResult implements getDbScanResult operation.
 	//
 	// Returns the most recently persisted db_scan result including the
@@ -892,6 +917,13 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListClients implements listClients operation.
+	//
+	// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
+	// excluded unless include_archived=true is passed.
+	//
+	// GET /api/v1/clients
+	ListClients(ctx context.Context, params ListClientsParams) (ListClientsRes, error)
 	// ListDbSnapshots implements listDbSnapshots operation.
 	//
 	// Returns the manifest of local database snapshots stored on the WP server.
@@ -1571,6 +1603,12 @@ type Handler interface {
 	//
 	// DELETE /api/v1/backups/{snapshotId}/lock
 	UnlockBackup(ctx context.Context, params UnlockBackupParams) (UnlockBackupRes, error)
+	// UpdateClient implements updateClient operation.
+	//
+	// Update an agency client.
+	//
+	// PATCH /api/v1/clients/{clientId}
+	UpdateClient(ctx context.Context, req *UpdateAgencyClientRequest, params UpdateClientParams) (UpdateClientRes, error)
 	// UpdateSiteDestination implements updateSiteDestination operation.
 	//
 	// Update a configured destination (omit secret_key to keep it).

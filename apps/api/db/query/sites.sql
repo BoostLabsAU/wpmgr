@@ -13,6 +13,7 @@ WHERE id = $1 AND tenant_id = $2;
 -- Defaults to hiding archived sites (ADR-041). When sqlc.narg('state') is set
 -- the list is filtered to exactly that connection_state (e.g. 'archived' for
 -- the archived chip); when it is NULL every non-archived site is returned.
+-- When sqlc.narg('client_id') is set only sites belonging to that client are returned (m63).
 SELECT * FROM sites
 WHERE tenant_id = $1
   AND (sqlc.narg('tag')::text IS NULL OR sqlc.narg('tag')::text = ANY (tags))
@@ -20,8 +21,19 @@ WHERE tenant_id = $1
         (sqlc.narg('state')::text IS NULL AND connection_state <> 'archived')
         OR sqlc.narg('state')::text = connection_state
       )
+  AND (sqlc.narg('client_id')::uuid IS NULL OR client_id = sqlc.narg('client_id')::uuid)
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
+
+-- name: ListClientNamesForSites :many
+-- Returns the client id + name for sites that have a client_id set (m63).
+-- Used to enrich the sites-list DTO with client_name in a single batched join.
+SELECT s.id AS site_id, c.id AS client_id, c.name AS client_name
+FROM sites s
+JOIN clients c ON c.id = s.client_id AND c.tenant_id = s.tenant_id
+WHERE s.tenant_id = $1
+  AND s.id = ANY($2::uuid[])
+  AND s.client_id IS NOT NULL;
 
 -- name: ListLatestBackupsForSites :many
 -- The most-recent backup snapshot per site, for the sites-table "Backup" column.

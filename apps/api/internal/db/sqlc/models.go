@@ -206,6 +206,21 @@ type CachePurgeAudit struct {
 	CreatedAt       time.Time   `json:"created_at"`
 }
 
+type Client struct {
+	ID           uuid.UUID          `json:"id"`
+	TenantID     uuid.UUID          `json:"tenant_id"`
+	Name         string             `json:"name"`
+	ContactEmail *string            `json:"contact_email"`
+	Company      *string            `json:"company"`
+	Phone        *string            `json:"phone"`
+	Notes        *string            `json:"notes"`
+	Color        *string            `json:"color"`
+	LogoUrl      *string            `json:"logo_url"`
+	ArchivedAt   pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
+}
+
 type EmailAlertState struct {
 	TenantID           uuid.UUID          `json:"tenant_id"`
 	SiteID             uuid.UUID          `json:"site_id"`
@@ -478,6 +493,7 @@ type Site struct {
 	DisconnectedReason    *string            `json:"disconnected_reason"`
 	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
 	MissedHeartbeats      int32              `json:"missed_heartbeats"`
+	ClientID              pgtype.UUID        `json:"client_id"`
 	CreatedAt             time.Time          `json:"created_at"`
 	UpdatedAt             time.Time          `json:"updated_at"`
 }

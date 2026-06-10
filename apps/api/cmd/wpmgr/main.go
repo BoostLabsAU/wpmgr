@@ -33,6 +33,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/autologin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
+	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
@@ -625,6 +626,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// m61: webhook handler — now safe to mount (cross-tenant forgery fixed).
 	// Uses the same svc and publicBase; no instance-wide signing keys.
 	emailWebhookH := email.NewWebhookHandler(emailSvc, emailPublicBase, logger)
+
+	// m63 — agency clients. Stateless service + handler; no background workers.
+	clientRepo := clientpkg.NewRepo(pool)
+	clientSvc := clientpkg.NewService(clientRepo)
+	clientH := clientpkg.NewHandler(clientSvc, auditRec)
+
 	if backupSvc != nil {
 		registry := blobstore.NewRegistry(nil, siteDestSvc) // defaultStore wired below
 		// Bind the legacy CP-global store as the registry's default. Built
@@ -1464,7 +1471,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m33 — superadmin instance-management area.
 		AdminH: adminH,
 		// M56 — RUM ingest endpoint (public, no auth).
-		RumH:        rumH,
+		RumH: rumH,
+		// m63 — agency clients.
+		ClientH:     clientH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})

@@ -117,6 +117,14 @@ export type Site = {
    * Normalized status of the most recent backup snapshot (DB 'completed'→'success', 'pending'→'running').
    */
   last_backup_status?: "success" | "running" | "failed";
+  /**
+   * UUID of the agency client this site is grouped under (m63). Absent when the site has no client.
+   */
+  client_id?: string;
+  /**
+   * Display name of the agency client this site is grouped under (m63). Absent when the site has no client.
+   */
+  client_name?: string;
   created_at: string;
   updated_at: string;
 };
@@ -3844,6 +3852,103 @@ export type PutEmailNotifySettingsRequest = {
    * Replace the digest recipients list.
    */
   digest_recipients?: Array<string>;
+};
+
+/**
+ * An agency client record that groups sites under a customer entity.
+ */
+export type AgencyClient = {
+  id: string;
+  tenant_id: string;
+  /**
+   * Display name for the client.
+   */
+  name: string;
+  /**
+   * Optional company / business name.
+   */
+  company?: string;
+  /**
+   * Optional primary contact email address.
+   */
+  contact_email?: string;
+  /**
+   * Optional contact phone number.
+   */
+  phone?: string;
+  /**
+   * Internal operator notes (not shown to the client).
+   */
+  notes?: string;
+  /**
+   * Hex color for the color badge (e.g. "#3b82f6"). Empty when unset.
+   */
+  color?: string;
+  /**
+   * URL of the client's logo. Empty when unset.
+   */
+  logo_url?: string;
+  /**
+   * Number of non-archived sites currently assigned to this client.
+   */
+  site_count: number;
+  /**
+   * Set when the client is soft-deleted (archived). Absent for active clients.
+   */
+  archived_at?: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgencyClientList = {
+  items: Array<AgencyClient>;
+};
+
+export type CreateAgencyClientRequest = {
+  name: string;
+  company?: string;
+  contact_email?: string;
+  phone?: string;
+  notes?: string;
+  /**
+   * Hex color code (e.g. "#3b82f6").
+   */
+  color?: string;
+  logo_url?: string;
+};
+
+/**
+ * All fields are optional (PATCH semantics).
+ */
+export type UpdateAgencyClientRequest = {
+  name?: string;
+  company?: string;
+  contact_email?: string;
+  phone?: string;
+  notes?: string;
+  /**
+   * Hex color code (e.g. "#3b82f6"). Pass empty string to clear.
+   */
+  color?: string;
+  logo_url?: string;
+};
+
+export type AssignSitesRequest = {
+  /**
+   * UUID of the client to assign. Omit or pass null to unassign the sites.
+   */
+  client_id?: string;
+  /**
+   * List of site UUIDs to assign (or unassign).
+   */
+  site_ids: Array<string>;
+};
+
+export type AssignSitesResponse = {
+  /**
+   * Number of sites whose client assignment was changed.
+   */
+  updated: number;
 };
 
 /**
@@ -9263,3 +9368,218 @@ export type BulkConfigCacheResponses = {
 
 export type BulkConfigCacheResponse =
   BulkConfigCacheResponses[keyof BulkConfigCacheResponses];
+
+export type ListClientsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * When true, includes archived clients in the response.
+     */
+    include_archived?: boolean;
+  };
+  url: "/api/v1/clients";
+};
+
+export type ListClientsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListClientsError = ListClientsErrors[keyof ListClientsErrors];
+
+export type ListClientsResponses = {
+  /**
+   * OK
+   */
+  200: AgencyClientList;
+};
+
+export type ListClientsResponse =
+  ListClientsResponses[keyof ListClientsResponses];
+
+export type CreateClientData = {
+  body: CreateAgencyClientRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/clients";
+};
+
+export type CreateClientErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type CreateClientError = CreateClientErrors[keyof CreateClientErrors];
+
+export type CreateClientResponses = {
+  /**
+   * Created
+   */
+  201: AgencyClient;
+};
+
+export type CreateClientResponse =
+  CreateClientResponses[keyof CreateClientResponses];
+
+export type AssignSitesToClientData = {
+  body: AssignSitesRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/clients/assignments";
+};
+
+export type AssignSitesToClientErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type AssignSitesToClientError =
+  AssignSitesToClientErrors[keyof AssignSitesToClientErrors];
+
+export type AssignSitesToClientResponses = {
+  /**
+   * OK
+   */
+  200: AssignSitesResponse;
+};
+
+export type AssignSitesToClientResponse =
+  AssignSitesToClientResponses[keyof AssignSitesToClientResponses];
+
+export type DeleteClientData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}";
+};
+
+export type DeleteClientErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteClientError = DeleteClientErrors[keyof DeleteClientErrors];
+
+export type DeleteClientResponses = {
+  /**
+   * No Content
+   */
+  204: void;
+};
+
+export type DeleteClientResponse =
+  DeleteClientResponses[keyof DeleteClientResponses];
+
+export type GetClientData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}";
+};
+
+export type GetClientErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetClientError = GetClientErrors[keyof GetClientErrors];
+
+export type GetClientResponses = {
+  /**
+   * OK
+   */
+  200: AgencyClient;
+};
+
+export type GetClientResponse = GetClientResponses[keyof GetClientResponses];
+
+export type UpdateClientData = {
+  body: UpdateAgencyClientRequest;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}";
+};
+
+export type UpdateClientErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type UpdateClientError = UpdateClientErrors[keyof UpdateClientErrors];
+
+export type UpdateClientResponses = {
+  /**
+   * OK
+   */
+  200: AgencyClient;
+};
+
+export type UpdateClientResponse =
+  UpdateClientResponses[keyof UpdateClientResponses];

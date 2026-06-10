@@ -48,9 +48,15 @@ type Querier interface {
 	// that tenant's scope (the per-tenant isolation policy permits the UPDATE).
 	AdvanceBackupScheduleRun(ctx context.Context, arg AdvanceBackupScheduleRunParams) (BackupSchedule, error)
 	AllPluginSignatures(ctx context.Context) ([]PluginSignature, error)
+	// Soft-delete: sets archived_at without removing the row. Sites retain their
+	// client_id after archiving (they still show which client they were under).
+	ArchiveClient(ctx context.Context, arg ArchiveClientParams) (Client, error)
 	// any-non-archived → archived (operator terminal soft-delete). Sets archived_at;
 	// hidden from the default list (connection_state <> 'archived').
 	ArchiveSite(ctx context.Context, arg ArchiveSiteParams) (Site, error)
+	// Bulk-assign (or unassign when @client_id is NULL) a set of sites to a client.
+	// RLS + the composite FK guarantee cross-tenant assignment is impossible.
+	AssignSitesClient(ctx context.Context, arg AssignSitesClientParams) (int64, error)
 	// Enroll path (app.enroll GUC): the site-first consume transition. Stores the
 	// agent key on the pre-existing pending_enrollment site and moves it to
 	// connected in one statement. The generation was already advanced at re-enroll
@@ -110,6 +116,9 @@ type Querier interface {
 	// Best-effort per-tenant in-flight task count, used by the parallelism guard so
 	// one tenant cannot saturate the worker pool. Runs in the tenant's RLS scope.
 	CountRunningTasksForTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
+	// How many non-archived sites are currently assigned to this client?
+	// Used for the delete-confirmation dialog.
+	CountSitesForClient(ctx context.Context, arg CountSitesForClientParams) (int64, error)
 	// Counts tasks not yet in a terminal state, used to decide when a run completes.
 	CountUnfinishedTasksForRun(ctx context.Context, arg CountUnfinishedTasksForRunParams) (int64, error)
 	CountUsers(ctx context.Context) (int64, error)
@@ -120,6 +129,7 @@ type Querier interface {
 	// backup_snapshots
 	// ---------------------------------------------------------------------------
 	CreateBackupSnapshot(ctx context.Context, arg CreateBackupSnapshotParams) (BackupSnapshot, error)
+	CreateClient(ctx context.Context, arg CreateClientParams) (Client, error)
 	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (Invitation, error)
 	// ---------------------------------------------------------------------------
 	// backup_manifest_entries
@@ -287,6 +297,7 @@ type Querier interface {
 	// site_cache_stats
 	// ---------------------------------------------------------------------------
 	GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCacheStat, error)
+	GetClient(ctx context.Context, arg GetClientParams) (GetClientRow, error)
 	// Fetch (connection_key, provider_secret_encrypted) for all connections under a
 	// config row. Used by buildAgentConfigReq to decrypt and build the connections
 	// registry. Runs under InTenantTx.
@@ -469,6 +480,9 @@ type Querier interface {
 	GetUserByOIDC(ctx context.Context, arg GetUserByOIDCParams) (User, error)
 	// Lightweight per-request lookup for the session reject-stale check.
 	GetUserPasswordChangedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error)
+	// Permanently removes the client row. ON DELETE SET NULL on sites.client_id
+	// handles the unassignment automatically in the same statement.
+	HardDeleteClient(ctx context.Context, arg HardDeleteClientParams) (int64, error)
 	IncrEmailAttempts(ctx context.Context, id uuid.UUID) error
 	// Increment resent_count on a specific log entry. Runs under InTenantTx.
 	IncrEmailLogResentCount(ctx context.Context, arg IncrEmailLogResentCountParams) error
@@ -582,6 +596,16 @@ type Querier interface {
 	ListBackupSiteIDsForTenant(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 	ListBackupSnapshotsForSite(ctx context.Context, arg ListBackupSnapshotsForSiteParams) ([]BackupSnapshot, error)
 	ListCachePurgeAuditForSite(ctx context.Context, arg ListCachePurgeAuditForSiteParams) ([]CachePurgeAudit, error)
+	// Returns the client id + name for sites that have a client_id set (m63).
+	// Used to enrich the sites-list DTO with client_name in a single batched join.
+	ListClientNamesForSites(ctx context.Context, arg ListClientNamesForSitesParams) ([]ListClientNamesForSitesRow, error)
+	// Clients Foundation queries (M63). Every statement is tenant-scoped both
+	// explicitly (tenant_id in the WHERE/VALUES) and by RLS (app.tenant_id /
+	// app.agent policies). The repo wraps each call in InTenantTx — these
+	// queries never set GUCs themselves. updated_at is set by now() in mutations.
+	// Lists clients for the tenant, ordered by name.
+	// When include_archived is false (the default) archived clients are excluded.
+	ListClients(ctx context.Context, arg ListClientsParams) ([]ListClientsRow, error)
 	// Completed snapshots for a site, newest first, used to compute the retention
 	// archive set (newest per calendar month). ADR-050 widened the projection to
 	// carry the chain columns so the mark-and-sweep GC can do chain-aware
@@ -712,6 +736,7 @@ type Querier interface {
 	// Defaults to hiding archived sites (ADR-041). When sqlc.narg('state') is set
 	// the list is filtered to exactly that connection_state (e.g. 'archived' for
 	// the archived chip); when it is NULL every non-archived site is returned.
+	// When sqlc.narg('client_id') is set only sites belonging to that client are returned (m63).
 	ListSites(ctx context.Context, arg ListSitesParams) ([]Site, error)
 	// connected sites whose last heartbeat is older than the degrade cutoff.
 	ListSitesToDegrade(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDegradeRow, error)
@@ -909,6 +934,9 @@ type Querier interface {
 	// handler injects the tenant from the verified Ed25519 identity, never from
 	// the body.
 	UpdateBackupSnapshotProgress(ctx context.Context, arg UpdateBackupSnapshotProgressParams) (BackupSnapshot, error)
+	// Partial update: each field uses COALESCE so an absent narg leaves the
+	// stored value unchanged. updated_at is always refreshed.
+	UpdateClient(ctx context.Context, arg UpdateClientParams) (Client, error)
 	UpdateMembershipRole(ctx context.Context, arg UpdateMembershipRoleParams) (Membership, error)
 	// Advance the next_db_clean_at timestamp after a clean job is dispatched.
 	// Runs under app.agent (the scheduled-dispatch path is cross-tenant).

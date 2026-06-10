@@ -226,6 +226,12 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/archive
 	ArchiveSite(ctx context.Context, request OptSiteLifecycleReason, params ArchiveSiteParams) (ArchiveSiteRes, error)
+	// AssignSitesToClient invokes assignSitesToClient operation.
+	//
+	// Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+	//
+	// PUT /api/v1/clients/assignments
+	AssignSitesToClient(ctx context.Context, request *AssignSitesRequest) (AssignSitesToClientRes, error)
 	// BeginReEnrollment invokes beginReEnrollment operation.
 	//
 	// M21 / ADR-041 — moves an existing revoked/disconnected/archived site back
@@ -374,6 +380,12 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/backups
 	CreateBackup(ctx context.Context, request *BackupCreate, params CreateBackupParams) (CreateBackupRes, error)
+	// CreateClient invokes createClient operation.
+	//
+	// Create an agency client.
+	//
+	// POST /api/v1/clients
+	CreateClient(ctx context.Context, request *CreateAgencyClientRequest) (CreateClientRes, error)
 	// CreateDbSnapshot invokes createDbSnapshot operation.
 	//
 	// Dumps the site's database to a local `.sql.gz` file on the WP server
@@ -471,6 +483,13 @@ type Invoker interface {
 	//
 	// DELETE /api/v1/backups/{snapshotId}
 	DeleteBackup(ctx context.Context, params DeleteBackupParams) (DeleteBackupRes, error)
+	// DeleteClient invokes deleteClient operation.
+	//
+	// Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL)
+	// but not deleted.
+	//
+	// DELETE /api/v1/clients/{clientId}
+	DeleteClient(ctx context.Context, params DeleteClientParams) (DeleteClientRes, error)
 	// DeleteDbSnapshot invokes deleteDbSnapshot operation.
 	//
 	// Removes a snapshot from the WP server's local store. This is
@@ -658,6 +677,12 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/cache/stats
 	GetCacheStats(ctx context.Context, params GetCacheStatsParams) (*CacheStats, error)
+	// GetClient invokes getClient operation.
+	//
+	// Get a single agency client.
+	//
+	// GET /api/v1/clients/{clientId}
+	GetClient(ctx context.Context, params GetClientParams) (GetClientRes, error)
 	// GetDbScanResult invokes getDbScanResult operation.
 	//
 	// Returns the most recently persisted db_scan result including the
@@ -912,6 +937,13 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListClients invokes listClients operation.
+	//
+	// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
+	// excluded unless include_archived=true is passed.
+	//
+	// GET /api/v1/clients
+	ListClients(ctx context.Context, params ListClientsParams) (ListClientsRes, error)
 	// ListDbSnapshots invokes listDbSnapshots operation.
 	//
 	// Returns the manifest of local database snapshots stored on the WP server.
@@ -1591,6 +1623,12 @@ type Invoker interface {
 	//
 	// DELETE /api/v1/backups/{snapshotId}/lock
 	UnlockBackup(ctx context.Context, params UnlockBackupParams) (UnlockBackupRes, error)
+	// UpdateClient invokes updateClient operation.
+	//
+	// Update an agency client.
+	//
+	// PATCH /api/v1/clients/{clientId}
+	UpdateClient(ctx context.Context, request *UpdateAgencyClientRequest, params UpdateClientParams) (UpdateClientRes, error)
 	// UpdateSiteDestination invokes updateSiteDestination operation.
 	//
 	// Update a configured destination (omit secret_key to keep it).
@@ -3624,6 +3662,83 @@ func (c *Client) sendArchiveSite(ctx context.Context, request OptSiteLifecycleRe
 	return result, nil
 }
 
+// AssignSitesToClient invokes assignSitesToClient operation.
+//
+// Pass client_id to assign; omit or pass null to unassign. Maximum 500 site_ids per request.
+//
+// PUT /api/v1/clients/assignments
+func (c *Client) AssignSitesToClient(ctx context.Context, request *AssignSitesRequest) (AssignSitesToClientRes, error) {
+	res, err := c.sendAssignSitesToClient(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendAssignSitesToClient(ctx context.Context, request *AssignSitesRequest) (res AssignSitesToClientRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("assignSitesToClient"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/clients/assignments"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, AssignSitesToClientOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/clients/assignments"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeAssignSitesToClientRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeAssignSitesToClientResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // BeginReEnrollment invokes beginReEnrollment operation.
 //
 // M21 / ADR-041 — moves an existing revoked/disconnected/archived site back
@@ -4957,6 +5072,83 @@ func (c *Client) sendCreateBackup(ctx context.Context, request *BackupCreate, pa
 	return result, nil
 }
 
+// CreateClient invokes createClient operation.
+//
+// Create an agency client.
+//
+// POST /api/v1/clients
+func (c *Client) CreateClient(ctx context.Context, request *CreateAgencyClientRequest) (CreateClientRes, error) {
+	res, err := c.sendCreateClient(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendCreateClient(ctx context.Context, request *CreateAgencyClientRequest) (res CreateClientRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("createClient"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/clients"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, CreateClientOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/clients"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeCreateClientRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeCreateClientResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // CreateDbSnapshot invokes createDbSnapshot operation.
 //
 // Dumps the site's database to a local `.sql.gz` file on the WP server
@@ -5848,6 +6040,99 @@ func (c *Client) sendDeleteBackup(ctx context.Context, params DeleteBackupParams
 
 	stage = "DecodeResponse"
 	result, err := decodeDeleteBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// DeleteClient invokes deleteClient operation.
+//
+// Permanently deletes the client. Sites assigned to the client are unassigned (ON DELETE SET NULL)
+// but not deleted.
+//
+// DELETE /api/v1/clients/{clientId}
+func (c *Client) DeleteClient(ctx context.Context, params DeleteClientParams) (DeleteClientRes, error) {
+	res, err := c.sendDeleteClient(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteClient(ctx context.Context, params DeleteClientParams) (res DeleteClientRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteClient"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteClientOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteClientResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -8166,6 +8451,98 @@ func (c *Client) sendGetCacheStats(ctx context.Context, params GetCacheStatsPara
 
 	stage = "DecodeResponse"
 	result, err := decodeGetCacheStatsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetClient invokes getClient operation.
+//
+// Get a single agency client.
+//
+// GET /api/v1/clients/{clientId}
+func (c *Client) GetClient(ctx context.Context, params GetClientParams) (GetClientRes, error) {
+	res, err := c.sendGetClient(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetClient(ctx context.Context, params GetClientParams) (res GetClientRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getClient"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetClientOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetClientResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11214,6 +11591,102 @@ func (c *Client) sendListBackups(ctx context.Context, params ListBackupsParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeListBackupsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListClients invokes listClients operation.
+//
+// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
+// excluded unless include_archived=true is passed.
+//
+// GET /api/v1/clients
+func (c *Client) ListClients(ctx context.Context, params ListClientsParams) (ListClientsRes, error) {
+	res, err := c.sendListClients(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListClients(ctx context.Context, params ListClientsParams) (res ListClientsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listClients"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/clients"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListClientsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/clients"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "include_archived" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "include_archived",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.IncludeArchived.Get(); ok {
+				return e.EncodeValue(conv.BoolToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListClientsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -19277,6 +19750,101 @@ func (c *Client) sendUnlockBackup(ctx context.Context, params UnlockBackupParams
 
 	stage = "DecodeResponse"
 	result, err := decodeUnlockBackupResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// UpdateClient invokes updateClient operation.
+//
+// Update an agency client.
+//
+// PATCH /api/v1/clients/{clientId}
+func (c *Client) UpdateClient(ctx context.Context, request *UpdateAgencyClientRequest, params UpdateClientParams) (UpdateClientRes, error) {
+	res, err := c.sendUpdateClient(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendUpdateClient(ctx context.Context, request *UpdateAgencyClientRequest, params UpdateClientParams) (res UpdateClientRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("updateClient"),
+		semconv.HTTPRequestMethodKey.String("PATCH"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, UpdateClientOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PATCH", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeUpdateClientRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeUpdateClientResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
