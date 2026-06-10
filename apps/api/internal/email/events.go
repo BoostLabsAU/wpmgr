@@ -130,6 +130,26 @@ func publishBounce(ctx context.Context, pub EventPublisher, tenantID, siteID uui
 	})
 }
 
+// publishConfigPropagated emits email.config_propagated after an org-config
+// propagation fan-out completes. SiteID=uuid.Nil → NULL site_id in the
+// events table, which the SSE hub fans to all active tenant streams.
+// Noop when pub is nil.
+func publishConfigPropagated(ctx context.Context, pub EventPublisher, tenantID uuid.UUID, synced, failed, total int) {
+	if pub == nil {
+		return
+	}
+	_ = pub.Publish(ctx, site.ConnectionEvent{
+		Type:     site.EventEmailConfigPropagated,
+		TenantID: tenantID,
+		SiteID:   uuid.Nil, // tenant-wide fan-out
+		Data: map[string]any{
+			"synced": synced,
+			"failed": failed,
+			"total":  total,
+		},
+	})
+}
+
 // maskEmail returns a privacy-safe representation of an email address for SSE
 // payloads. The local part is replaced with the first character and asterisks;
 // the domain is kept so the operator can identify the provider without exposing

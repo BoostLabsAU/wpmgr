@@ -125,6 +125,9 @@ import type {
   DeleteBackupResponses,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponses,
+  DeleteEmailConnectionData,
+  DeleteEmailConnectionErrors,
+  DeleteEmailConnectionResponses,
   DeleteFleetEmailSuppressionData,
   DeleteFleetEmailSuppressionErrors,
   DeleteFleetEmailSuppressionResponses,
@@ -183,6 +186,9 @@ import type {
   GetCacheStatsResponses,
   GetDbScanResultData,
   GetDbScanResultResponses,
+  GetEmailNotifySettingsData,
+  GetEmailNotifySettingsErrors,
+  GetEmailNotifySettingsResponses,
   GetFleetEmailStatsData,
   GetFleetEmailStatsErrors,
   GetFleetEmailStatsResponses,
@@ -263,6 +269,9 @@ import type {
   ListBackupsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
+  ListEmailConnectionsData,
+  ListEmailConnectionsErrors,
+  ListEmailConnectionsResponses,
   ListEmailProvidersData,
   ListEmailProvidersErrors,
   ListEmailProvidersResponses,
@@ -362,6 +371,12 @@ import type {
   PutBackupSettingsNotificationsData,
   PutBackupSettingsNotificationsErrors,
   PutBackupSettingsNotificationsResponses,
+  PutEmailConnectionData,
+  PutEmailConnectionErrors,
+  PutEmailConnectionResponses,
+  PutEmailNotifySettingsData,
+  PutEmailNotifySettingsErrors,
+  PutEmailNotifySettingsResponses,
   PutOrgEmailConfigData,
   PutOrgEmailConfigErrors,
   PutOrgEmailConfigResponses,
@@ -3840,6 +3855,121 @@ export const bulkDeleteEmailLog = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/api/v1/sites/{siteId}/email/log/bulk-delete",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List named email connections for a site
+ *
+ * Returns all named provider connections that belong to the site's email
+ * config. Empty array when no named connections exist.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const listEmailConnections = <ThrowOnError extends boolean = false>(
+  options: Options<ListEmailConnectionsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListEmailConnectionsResponses,
+    ListEmailConnectionsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/connections", ...options });
+
+/**
+ * Delete a named email connection
+ *
+ * Permanently deletes the named connection. Returns 404 when the key does
+ * not exist. Returns 409 when the key is referenced as `default_connection`
+ * or `fallback_connection` on the site's config row (remove the reference
+ * first).
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const deleteEmailConnection = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteEmailConnectionData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteEmailConnectionResponses,
+    DeleteEmailConnectionErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/connections/{connKey}", ...options });
+
+/**
+ * Create or update a named email connection
+ *
+ * Creates or updates the named connection identified by `connKey` for the
+ * site's email config. The key must match `^[a-z0-9][a-z0-9_-]{0,31}$`;
+ * the value `default` is reserved and returns 400.
+ *
+ * Omit `secret` to preserve the existing stored credential. Provide an
+ * empty string to clear it.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const putEmailConnection = <ThrowOnError extends boolean = false>(
+  options: Options<PutEmailConnectionData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutEmailConnectionResponses,
+    PutEmailConnectionErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/connections/{connKey}",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get email alert and digest settings
+ *
+ * Returns the tenant-level email alert and digest notification settings.
+ * Always returns 200 with sensible defaults when no settings row exists
+ * yet (alerts_enabled=false, digest_enabled=false).
+ *
+ * Also returns `instance_mailer_configured` — when false, alerts and
+ * digests cannot be delivered even if enabled.
+ *
+ * Org-level route. Requires `site.email.manage` permission.
+ *
+ */
+export const getEmailNotifySettings = <ThrowOnError extends boolean = false>(
+  options?: Options<GetEmailNotifySettingsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetEmailNotifySettingsResponses,
+    GetEmailNotifySettingsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/notify-settings", ...options });
+
+/**
+ * Create or update email alert and digest settings
+ *
+ * Creates or updates the tenant-level email notification settings.
+ * All fields are optional — omitted fields are unchanged (PATCH semantics
+ * within a PUT envelope).
+ *
+ * Org-level route. Requires `site.email.manage` permission.
+ *
+ */
+export const putEmailNotifySettings = <ThrowOnError extends boolean = false>(
+  options: Options<PutEmailNotifySettingsData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutEmailNotifySettingsResponses,
+    PutEmailNotifySettingsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/email/notify-settings",
     ...options,
     headers: {
       "Content-Type": "application/json",

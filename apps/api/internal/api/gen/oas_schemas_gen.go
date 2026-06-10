@@ -5033,6 +5033,27 @@ func (s *DeleteDbSnapshotOK) SetDetail(val OptString) {
 	s.Detail = val
 }
 
+type DeleteEmailConnectionConflict Error
+
+func (*DeleteEmailConnectionConflict) deleteEmailConnectionRes() {}
+
+type DeleteEmailConnectionForbidden Error
+
+func (*DeleteEmailConnectionForbidden) deleteEmailConnectionRes() {}
+
+// DeleteEmailConnectionNoContent is response for DeleteEmailConnection operation.
+type DeleteEmailConnectionNoContent struct{}
+
+func (*DeleteEmailConnectionNoContent) deleteEmailConnectionRes() {}
+
+type DeleteEmailConnectionNotFound Error
+
+func (*DeleteEmailConnectionNotFound) deleteEmailConnectionRes() {}
+
+type DeleteEmailConnectionUnauthorized Error
+
+func (*DeleteEmailConnectionUnauthorized) deleteEmailConnectionRes() {}
+
 type DeleteFleetEmailSuppressionForbidden Error
 
 func (*DeleteFleetEmailSuppressionForbidden) deleteFleetEmailSuppressionRes() {}
@@ -5156,6 +5177,185 @@ type DeleteSiteShareUnauthorized Error
 
 func (*DeleteSiteShareUnauthorized) deleteSiteShareRes() {}
 
+// Metadata for one email attachment (m62+).
+// Ref: #/components/schemas/EmailAttachmentMeta
+type EmailAttachmentMeta struct {
+	// Attachment filename (directory path stripped, max 255 runes).
+	Name string `json:"name"`
+	// Attachment size in bytes (0 when unknown).
+	SizeBytes int64 `json:"size_bytes"`
+}
+
+// GetName returns the value of Name.
+func (s *EmailAttachmentMeta) GetName() string {
+	return s.Name
+}
+
+// GetSizeBytes returns the value of SizeBytes.
+func (s *EmailAttachmentMeta) GetSizeBytes() int64 {
+	return s.SizeBytes
+}
+
+// SetName sets the value of Name.
+func (s *EmailAttachmentMeta) SetName(val string) {
+	s.Name = val
+}
+
+// SetSizeBytes sets the value of SizeBytes.
+func (s *EmailAttachmentMeta) SetSizeBytes(val int64) {
+	s.SizeBytes = val
+}
+
+// A named provider connection belonging to a site's email config (m62+). The provider secret is
+// never returned — only `secret_set` indicates whether a credential is stored.
+// Ref: #/components/schemas/EmailConnection
+type EmailConnection struct {
+	// Surrogate primary key.
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	// ID of the parent SiteEmailConfig row.
+	ConfigID uuid.UUID `json:"config_id"`
+	// Operator-chosen slug (^[a-z0-9][a-z0-9_-]{0,31}$). The value 'default' is reserved for the primary
+	// config row and cannot be used for named connections.
+	ConnectionKey string `json:"connection_key"`
+	// Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+	Provider string `json:"provider"`
+	// Sender envelope address for this connection.
+	FromAddress string `json:"from_address"`
+	// Sender display name for this connection.
+	FromName string `json:"from_name"`
+	// Provider-specific non-secret fields.
+	Config OptEmailConnectionConfig `json:"config"`
+	// True when an encrypted provider secret is stored for this connection.
+	SecretSet bool      `json:"secret_set"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GetID returns the value of ID.
+func (s *EmailConnection) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *EmailConnection) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetConfigID returns the value of ConfigID.
+func (s *EmailConnection) GetConfigID() uuid.UUID {
+	return s.ConfigID
+}
+
+// GetConnectionKey returns the value of ConnectionKey.
+func (s *EmailConnection) GetConnectionKey() string {
+	return s.ConnectionKey
+}
+
+// GetProvider returns the value of Provider.
+func (s *EmailConnection) GetProvider() string {
+	return s.Provider
+}
+
+// GetFromAddress returns the value of FromAddress.
+func (s *EmailConnection) GetFromAddress() string {
+	return s.FromAddress
+}
+
+// GetFromName returns the value of FromName.
+func (s *EmailConnection) GetFromName() string {
+	return s.FromName
+}
+
+// GetConfig returns the value of Config.
+func (s *EmailConnection) GetConfig() OptEmailConnectionConfig {
+	return s.Config
+}
+
+// GetSecretSet returns the value of SecretSet.
+func (s *EmailConnection) GetSecretSet() bool {
+	return s.SecretSet
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *EmailConnection) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *EmailConnection) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetID sets the value of ID.
+func (s *EmailConnection) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *EmailConnection) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetConfigID sets the value of ConfigID.
+func (s *EmailConnection) SetConfigID(val uuid.UUID) {
+	s.ConfigID = val
+}
+
+// SetConnectionKey sets the value of ConnectionKey.
+func (s *EmailConnection) SetConnectionKey(val string) {
+	s.ConnectionKey = val
+}
+
+// SetProvider sets the value of Provider.
+func (s *EmailConnection) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetFromAddress sets the value of FromAddress.
+func (s *EmailConnection) SetFromAddress(val string) {
+	s.FromAddress = val
+}
+
+// SetFromName sets the value of FromName.
+func (s *EmailConnection) SetFromName(val string) {
+	s.FromName = val
+}
+
+// SetConfig sets the value of Config.
+func (s *EmailConnection) SetConfig(val OptEmailConnectionConfig) {
+	s.Config = val
+}
+
+// SetSecretSet sets the value of SecretSet.
+func (s *EmailConnection) SetSecretSet(val bool) {
+	s.SecretSet = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *EmailConnection) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *EmailConnection) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*EmailConnection) putEmailConnectionRes() {}
+
+// Provider-specific non-secret fields.
+type EmailConnectionConfig map[string]jx.Raw
+
+func (s *EmailConnectionConfig) init() EmailConnectionConfig {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
 // Single email log entry with prev/next navigation IDs.
 // Ref: #/components/schemas/EmailLogDetail
 type EmailLogDetail struct {
@@ -5229,6 +5429,148 @@ func (s *EmailLogList) SetNextCursor(val string) {
 func (*EmailLogList) exportSiteEmailLogRes() {}
 func (*EmailLogList) listFleetEmailLogRes()  {}
 func (*EmailLogList) listSiteEmailLogRes()   {}
+
+// Per-tenant email alert and digest settings (m62+). Returns sensible defaults (alerts_enabled=false,
+//
+//	digest_enabled=false) when no settings row has been created yet — this endpoint never 404s.
+//
+// Ref: #/components/schemas/EmailNotifySettings
+type EmailNotifySettings struct {
+	// Whether per-failure email alerts are active.
+	AlertsEnabled bool `json:"alerts_enabled"`
+	// Minimum consecutive failure count that triggers an alert. Default 3.
+	AlertFailureThreshold int `json:"alert_failure_threshold"`
+	// Minimum minutes between two alerts for the same site. Default 60.
+	AlertThrottleMinutes int `json:"alert_throttle_minutes"`
+	// List of email addresses that receive failure alerts.
+	AlertRecipients []string `json:"alert_recipients"`
+	// Whether the hourly digest email is active.
+	DigestEnabled bool `json:"digest_enabled"`
+	// UTC hour (0-23) at which the daily digest fires. Default 8.
+	DigestHourUtc int `json:"digest_hour_utc"`
+	// List of email addresses that receive the hourly digest.
+	DigestRecipients []string `json:"digest_recipients"`
+	// True when the instance-level SMTP/mailer is configured. Alerts and digests require this to be true
+	// to deliver.
+	InstanceMailerConfigured bool `json:"instance_mailer_configured"`
+	// Present when a settings row exists; absent for default response.
+	TenantID  OptNilUUID     `json:"tenant_id"`
+	CreatedAt OptNilDateTime `json:"created_at"`
+	UpdatedAt OptNilDateTime `json:"updated_at"`
+}
+
+// GetAlertsEnabled returns the value of AlertsEnabled.
+func (s *EmailNotifySettings) GetAlertsEnabled() bool {
+	return s.AlertsEnabled
+}
+
+// GetAlertFailureThreshold returns the value of AlertFailureThreshold.
+func (s *EmailNotifySettings) GetAlertFailureThreshold() int {
+	return s.AlertFailureThreshold
+}
+
+// GetAlertThrottleMinutes returns the value of AlertThrottleMinutes.
+func (s *EmailNotifySettings) GetAlertThrottleMinutes() int {
+	return s.AlertThrottleMinutes
+}
+
+// GetAlertRecipients returns the value of AlertRecipients.
+func (s *EmailNotifySettings) GetAlertRecipients() []string {
+	return s.AlertRecipients
+}
+
+// GetDigestEnabled returns the value of DigestEnabled.
+func (s *EmailNotifySettings) GetDigestEnabled() bool {
+	return s.DigestEnabled
+}
+
+// GetDigestHourUtc returns the value of DigestHourUtc.
+func (s *EmailNotifySettings) GetDigestHourUtc() int {
+	return s.DigestHourUtc
+}
+
+// GetDigestRecipients returns the value of DigestRecipients.
+func (s *EmailNotifySettings) GetDigestRecipients() []string {
+	return s.DigestRecipients
+}
+
+// GetInstanceMailerConfigured returns the value of InstanceMailerConfigured.
+func (s *EmailNotifySettings) GetInstanceMailerConfigured() bool {
+	return s.InstanceMailerConfigured
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *EmailNotifySettings) GetTenantID() OptNilUUID {
+	return s.TenantID
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *EmailNotifySettings) GetCreatedAt() OptNilDateTime {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *EmailNotifySettings) GetUpdatedAt() OptNilDateTime {
+	return s.UpdatedAt
+}
+
+// SetAlertsEnabled sets the value of AlertsEnabled.
+func (s *EmailNotifySettings) SetAlertsEnabled(val bool) {
+	s.AlertsEnabled = val
+}
+
+// SetAlertFailureThreshold sets the value of AlertFailureThreshold.
+func (s *EmailNotifySettings) SetAlertFailureThreshold(val int) {
+	s.AlertFailureThreshold = val
+}
+
+// SetAlertThrottleMinutes sets the value of AlertThrottleMinutes.
+func (s *EmailNotifySettings) SetAlertThrottleMinutes(val int) {
+	s.AlertThrottleMinutes = val
+}
+
+// SetAlertRecipients sets the value of AlertRecipients.
+func (s *EmailNotifySettings) SetAlertRecipients(val []string) {
+	s.AlertRecipients = val
+}
+
+// SetDigestEnabled sets the value of DigestEnabled.
+func (s *EmailNotifySettings) SetDigestEnabled(val bool) {
+	s.DigestEnabled = val
+}
+
+// SetDigestHourUtc sets the value of DigestHourUtc.
+func (s *EmailNotifySettings) SetDigestHourUtc(val int) {
+	s.DigestHourUtc = val
+}
+
+// SetDigestRecipients sets the value of DigestRecipients.
+func (s *EmailNotifySettings) SetDigestRecipients(val []string) {
+	s.DigestRecipients = val
+}
+
+// SetInstanceMailerConfigured sets the value of InstanceMailerConfigured.
+func (s *EmailNotifySettings) SetInstanceMailerConfigured(val bool) {
+	s.InstanceMailerConfigured = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *EmailNotifySettings) SetTenantID(val OptNilUUID) {
+	s.TenantID = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *EmailNotifySettings) SetCreatedAt(val OptNilDateTime) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *EmailNotifySettings) SetUpdatedAt(val OptNilDateTime) {
+	s.UpdatedAt = val
+}
+
+func (*EmailNotifySettings) getEmailNotifySettingsRes() {}
+func (*EmailNotifySettings) putEmailNotifySettingsRes() {}
 
 // Static catalog of supported email providers and their field schemas.
 // Ref: #/components/schemas/EmailProviderCatalog
@@ -6919,6 +7261,14 @@ func (s *GetDbScanResultOK) SetResult(val OptDbScanResult) {
 	s.Result = val
 }
 
+type GetEmailNotifySettingsForbidden Error
+
+func (*GetEmailNotifySettingsForbidden) getEmailNotifySettingsRes() {}
+
+type GetEmailNotifySettingsUnauthorized Error
+
+func (*GetEmailNotifySettingsUnauthorized) getEmailNotifySettingsRes() {}
+
 type GetFleetEmailStatsForbidden Error
 
 func (*GetFleetEmailStatsForbidden) getFleetEmailStatsRes() {}
@@ -7190,6 +7540,34 @@ func (*ListAuditForbidden) listAuditRes() {}
 type ListAuditUnauthorized Error
 
 func (*ListAuditUnauthorized) listAuditRes() {}
+
+type ListEmailConnectionsForbidden Error
+
+func (*ListEmailConnectionsForbidden) listEmailConnectionsRes() {}
+
+type ListEmailConnectionsNotFound Error
+
+func (*ListEmailConnectionsNotFound) listEmailConnectionsRes() {}
+
+type ListEmailConnectionsOK struct {
+	Connections []EmailConnection `json:"connections"`
+}
+
+// GetConnections returns the value of Connections.
+func (s *ListEmailConnectionsOK) GetConnections() []EmailConnection {
+	return s.Connections
+}
+
+// SetConnections sets the value of Connections.
+func (s *ListEmailConnectionsOK) SetConnections(val []EmailConnection) {
+	s.Connections = val
+}
+
+func (*ListEmailConnectionsOK) listEmailConnectionsRes() {}
+
+type ListEmailConnectionsUnauthorized Error
+
+func (*ListEmailConnectionsUnauthorized) listEmailConnectionsRes() {}
 
 type ListEmailProvidersForbidden Error
 
@@ -10591,6 +10969,52 @@ func (o OptDbSnapshotEntry) Or(d DbSnapshotEntry) DbSnapshotEntry {
 	return d
 }
 
+// NewOptEmailConnectionConfig returns new OptEmailConnectionConfig with value set to v.
+func NewOptEmailConnectionConfig(v EmailConnectionConfig) OptEmailConnectionConfig {
+	return OptEmailConnectionConfig{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptEmailConnectionConfig is optional EmailConnectionConfig.
+type OptEmailConnectionConfig struct {
+	Value EmailConnectionConfig
+	Set   bool
+}
+
+// IsSet returns true if OptEmailConnectionConfig was set.
+func (o OptEmailConnectionConfig) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptEmailConnectionConfig) Reset() {
+	var v EmailConnectionConfig
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptEmailConnectionConfig) SetTo(v EmailConnectionConfig) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptEmailConnectionConfig) Get() (v EmailConnectionConfig, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptEmailConnectionConfig) Or(d EmailConnectionConfig) EmailConnectionConfig {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptErrorDetails returns new OptErrorDetails with value set to v.
 func NewOptErrorDetails(v ErrorDetails) OptErrorDetails {
 	return OptErrorDetails{
@@ -12876,6 +13300,52 @@ func (o OptPutEmailConfigRequestMappings) Get() (v PutEmailConfigRequestMappings
 
 // Or returns value if set, or given parameter if does not.
 func (o OptPutEmailConfigRequestMappings) Or(d PutEmailConfigRequestMappings) PutEmailConfigRequestMappings {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPutEmailConnectionRequestConfig returns new OptPutEmailConnectionRequestConfig with value set to v.
+func NewOptPutEmailConnectionRequestConfig(v PutEmailConnectionRequestConfig) OptPutEmailConnectionRequestConfig {
+	return OptPutEmailConnectionRequestConfig{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPutEmailConnectionRequestConfig is optional PutEmailConnectionRequestConfig.
+type OptPutEmailConnectionRequestConfig struct {
+	Value PutEmailConnectionRequestConfig
+	Set   bool
+}
+
+// IsSet returns true if OptPutEmailConnectionRequestConfig was set.
+func (o OptPutEmailConnectionRequestConfig) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPutEmailConnectionRequestConfig) Reset() {
+	var v PutEmailConnectionRequestConfig
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPutEmailConnectionRequestConfig) SetTo(v PutEmailConnectionRequestConfig) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPutEmailConnectionRequestConfig) Get() (v PutEmailConnectionRequestConfig, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPutEmailConnectionRequestConfig) Or(d PutEmailConnectionRequestConfig) PutEmailConnectionRequestConfig {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -15187,6 +15657,210 @@ func (s *PutEmailConfigRequestMappings) init() PutEmailConfigRequestMappings {
 	}
 	return m
 }
+
+type PutEmailConnectionBadRequest Error
+
+func (*PutEmailConnectionBadRequest) putEmailConnectionRes() {}
+
+type PutEmailConnectionForbidden Error
+
+func (*PutEmailConnectionForbidden) putEmailConnectionRes() {}
+
+type PutEmailConnectionNotFound Error
+
+func (*PutEmailConnectionNotFound) putEmailConnectionRes() {}
+
+// Request body for PUT /sites/{siteId}/email/connections/{connKey}. All fields are optional —
+// omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting `secret` preserves
+// the existing stored credential (nil-sentinel pattern).
+// Ref: #/components/schemas/PutEmailConnectionRequest
+type PutEmailConnectionRequest struct {
+	// Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+	Provider OptString `json:"provider"`
+	// Sender envelope address for this connection.
+	FromAddress OptString `json:"from_address"`
+	// Sender display name for this connection.
+	FromName OptString `json:"from_name"`
+	// Provider-specific non-secret fields.
+	Config OptPutEmailConnectionRequestConfig `json:"config"`
+	// Provider credential. Omit to preserve the existing stored secret. Provide an empty string to clear
+	// it.
+	Secret OptNilString `json:"secret"`
+}
+
+// GetProvider returns the value of Provider.
+func (s *PutEmailConnectionRequest) GetProvider() OptString {
+	return s.Provider
+}
+
+// GetFromAddress returns the value of FromAddress.
+func (s *PutEmailConnectionRequest) GetFromAddress() OptString {
+	return s.FromAddress
+}
+
+// GetFromName returns the value of FromName.
+func (s *PutEmailConnectionRequest) GetFromName() OptString {
+	return s.FromName
+}
+
+// GetConfig returns the value of Config.
+func (s *PutEmailConnectionRequest) GetConfig() OptPutEmailConnectionRequestConfig {
+	return s.Config
+}
+
+// GetSecret returns the value of Secret.
+func (s *PutEmailConnectionRequest) GetSecret() OptNilString {
+	return s.Secret
+}
+
+// SetProvider sets the value of Provider.
+func (s *PutEmailConnectionRequest) SetProvider(val OptString) {
+	s.Provider = val
+}
+
+// SetFromAddress sets the value of FromAddress.
+func (s *PutEmailConnectionRequest) SetFromAddress(val OptString) {
+	s.FromAddress = val
+}
+
+// SetFromName sets the value of FromName.
+func (s *PutEmailConnectionRequest) SetFromName(val OptString) {
+	s.FromName = val
+}
+
+// SetConfig sets the value of Config.
+func (s *PutEmailConnectionRequest) SetConfig(val OptPutEmailConnectionRequestConfig) {
+	s.Config = val
+}
+
+// SetSecret sets the value of Secret.
+func (s *PutEmailConnectionRequest) SetSecret(val OptNilString) {
+	s.Secret = val
+}
+
+// Provider-specific non-secret fields.
+type PutEmailConnectionRequestConfig map[string]jx.Raw
+
+func (s *PutEmailConnectionRequestConfig) init() PutEmailConnectionRequestConfig {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+type PutEmailConnectionUnauthorized Error
+
+func (*PutEmailConnectionUnauthorized) putEmailConnectionRes() {}
+
+type PutEmailConnectionUnprocessableEntity Error
+
+func (*PutEmailConnectionUnprocessableEntity) putEmailConnectionRes() {}
+
+type PutEmailNotifySettingsBadRequest Error
+
+func (*PutEmailNotifySettingsBadRequest) putEmailNotifySettingsRes() {}
+
+type PutEmailNotifySettingsForbidden Error
+
+func (*PutEmailNotifySettingsForbidden) putEmailNotifySettingsRes() {}
+
+// Request body for PUT /email/notify-settings. All fields are optional — omitted fields are
+// unchanged (PATCH semantics within a PUT envelope).
+// Ref: #/components/schemas/PutEmailNotifySettingsRequest
+type PutEmailNotifySettingsRequest struct {
+	AlertsEnabled OptBool `json:"alerts_enabled"`
+	// Minimum failure count to trigger an alert (1-100).
+	AlertFailureThreshold OptInt `json:"alert_failure_threshold"`
+	// Minimum minutes between alerts per site (1-1440).
+	AlertThrottleMinutes OptInt `json:"alert_throttle_minutes"`
+	// Replace the alert recipients list.
+	AlertRecipients []string `json:"alert_recipients"`
+	DigestEnabled   OptBool  `json:"digest_enabled"`
+	// UTC hour for the daily digest (0-23).
+	DigestHourUtc OptInt `json:"digest_hour_utc"`
+	// Replace the digest recipients list.
+	DigestRecipients []string `json:"digest_recipients"`
+}
+
+// GetAlertsEnabled returns the value of AlertsEnabled.
+func (s *PutEmailNotifySettingsRequest) GetAlertsEnabled() OptBool {
+	return s.AlertsEnabled
+}
+
+// GetAlertFailureThreshold returns the value of AlertFailureThreshold.
+func (s *PutEmailNotifySettingsRequest) GetAlertFailureThreshold() OptInt {
+	return s.AlertFailureThreshold
+}
+
+// GetAlertThrottleMinutes returns the value of AlertThrottleMinutes.
+func (s *PutEmailNotifySettingsRequest) GetAlertThrottleMinutes() OptInt {
+	return s.AlertThrottleMinutes
+}
+
+// GetAlertRecipients returns the value of AlertRecipients.
+func (s *PutEmailNotifySettingsRequest) GetAlertRecipients() []string {
+	return s.AlertRecipients
+}
+
+// GetDigestEnabled returns the value of DigestEnabled.
+func (s *PutEmailNotifySettingsRequest) GetDigestEnabled() OptBool {
+	return s.DigestEnabled
+}
+
+// GetDigestHourUtc returns the value of DigestHourUtc.
+func (s *PutEmailNotifySettingsRequest) GetDigestHourUtc() OptInt {
+	return s.DigestHourUtc
+}
+
+// GetDigestRecipients returns the value of DigestRecipients.
+func (s *PutEmailNotifySettingsRequest) GetDigestRecipients() []string {
+	return s.DigestRecipients
+}
+
+// SetAlertsEnabled sets the value of AlertsEnabled.
+func (s *PutEmailNotifySettingsRequest) SetAlertsEnabled(val OptBool) {
+	s.AlertsEnabled = val
+}
+
+// SetAlertFailureThreshold sets the value of AlertFailureThreshold.
+func (s *PutEmailNotifySettingsRequest) SetAlertFailureThreshold(val OptInt) {
+	s.AlertFailureThreshold = val
+}
+
+// SetAlertThrottleMinutes sets the value of AlertThrottleMinutes.
+func (s *PutEmailNotifySettingsRequest) SetAlertThrottleMinutes(val OptInt) {
+	s.AlertThrottleMinutes = val
+}
+
+// SetAlertRecipients sets the value of AlertRecipients.
+func (s *PutEmailNotifySettingsRequest) SetAlertRecipients(val []string) {
+	s.AlertRecipients = val
+}
+
+// SetDigestEnabled sets the value of DigestEnabled.
+func (s *PutEmailNotifySettingsRequest) SetDigestEnabled(val OptBool) {
+	s.DigestEnabled = val
+}
+
+// SetDigestHourUtc sets the value of DigestHourUtc.
+func (s *PutEmailNotifySettingsRequest) SetDigestHourUtc(val OptInt) {
+	s.DigestHourUtc = val
+}
+
+// SetDigestRecipients sets the value of DigestRecipients.
+func (s *PutEmailNotifySettingsRequest) SetDigestRecipients(val []string) {
+	s.DigestRecipients = val
+}
+
+type PutEmailNotifySettingsUnauthorized Error
+
+func (*PutEmailNotifySettingsUnauthorized) putEmailNotifySettingsRes() {}
+
+type PutEmailNotifySettingsUnprocessableEntity Error
+
+func (*PutEmailNotifySettingsUnprocessableEntity) putEmailNotifySettingsRes() {}
 
 // Request body for PUT /email/org-config/webhook-config and PUT /sites/{siteId}/email/webhook-config.
 //
@@ -20117,6 +20791,9 @@ type SiteEmailConfig struct {
 	Config SiteEmailConfigConfig `json:"config"`
 	// Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).
 	Mappings SiteEmailConfigMappings `json:"mappings"`
+	// Named provider connections for this config (multi-connection, m62+). Empty array when no named
+	// connections have been created.
+	Connections []EmailConnection `json:"connections"`
 	// The full inbound webhook URL for this config row, e.g. https://manage.wpmgr.
 	// app/webhooks/email/{provider}/{token}. Shows a placeholder token segment when a token is stored
 	// but not freshly rotated. Absent when no token has been generated yet.
@@ -20213,6 +20890,11 @@ func (s *SiteEmailConfig) GetConfig() SiteEmailConfigConfig {
 // GetMappings returns the value of Mappings.
 func (s *SiteEmailConfig) GetMappings() SiteEmailConfigMappings {
 	return s.Mappings
+}
+
+// GetConnections returns the value of Connections.
+func (s *SiteEmailConfig) GetConnections() []EmailConnection {
+	return s.Connections
 }
 
 // GetWebhookURL returns the value of WebhookURL.
@@ -20325,6 +21007,11 @@ func (s *SiteEmailConfig) SetMappings(val SiteEmailConfigMappings) {
 	s.Mappings = val
 }
 
+// SetConnections sets the value of Connections.
+func (s *SiteEmailConfig) SetConnections(val []EmailConnection) {
+	s.Connections = val
+}
+
 // SetWebhookURL sets the value of WebhookURL.
 func (s *SiteEmailConfig) SetWebhookURL(val OptNilString) {
 	s.WebhookURL = val
@@ -20412,6 +21099,14 @@ type SiteEmailLogEntry struct {
 	// Full email body. Present only in the detail response and only when body_stored is true. Never
 	// returned in list or export responses.
 	Body OptNilString `json:"body"`
+	// Named connection slug that sent this email (m62+). Empty string when the primary config was used
+	// (no named connection).
+	ConnectionKey OptString `json:"connection_key"`
+	// Number of attachments on this email (m62+). Zero when none.
+	AttachmentCount OptInt `json:"attachment_count"`
+	// Attachment metadata list. Populated in the detail response when attachment_count > 0 and the agent
+	// sent attachment metadata (m62+).
+	Attachments []EmailAttachmentMeta `json:"attachments"`
 	// Timestamp the email was sent (from the agent local clock).
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -20495,6 +21190,21 @@ func (s *SiteEmailLogEntry) GetBodyStored() bool {
 // GetBody returns the value of Body.
 func (s *SiteEmailLogEntry) GetBody() OptNilString {
 	return s.Body
+}
+
+// GetConnectionKey returns the value of ConnectionKey.
+func (s *SiteEmailLogEntry) GetConnectionKey() OptString {
+	return s.ConnectionKey
+}
+
+// GetAttachmentCount returns the value of AttachmentCount.
+func (s *SiteEmailLogEntry) GetAttachmentCount() OptInt {
+	return s.AttachmentCount
+}
+
+// GetAttachments returns the value of Attachments.
+func (s *SiteEmailLogEntry) GetAttachments() []EmailAttachmentMeta {
+	return s.Attachments
 }
 
 // GetCreatedAt returns the value of CreatedAt.
@@ -20585,6 +21295,21 @@ func (s *SiteEmailLogEntry) SetBodyStored(val bool) {
 // SetBody sets the value of Body.
 func (s *SiteEmailLogEntry) SetBody(val OptNilString) {
 	s.Body = val
+}
+
+// SetConnectionKey sets the value of ConnectionKey.
+func (s *SiteEmailLogEntry) SetConnectionKey(val OptString) {
+	s.ConnectionKey = val
+}
+
+// SetAttachmentCount sets the value of AttachmentCount.
+func (s *SiteEmailLogEntry) SetAttachmentCount(val OptInt) {
+	s.AttachmentCount = val
+}
+
+// SetAttachments sets the value of Attachments.
+func (s *SiteEmailLogEntry) SetAttachments(val []EmailAttachmentMeta) {
+	s.Attachments = val
 }
 
 // SetCreatedAt sets the value of CreatedAt.

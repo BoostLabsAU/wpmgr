@@ -154,6 +154,149 @@ type TestSendResult struct {
 // single ingest request. Requests exceeding this are rejected 400.
 const maxIngestBatch = 500
 
+// maxIngestAttachments is the maximum number of attachment metadata entries
+// accepted per log entry on ingest. Entries beyond this cap are silently dropped.
+const maxIngestAttachments = 100
+
+// ---------------------------------------------------------------------------
+// m62 — Multi-connection domain types (Area 2)
+// ---------------------------------------------------------------------------
+
+// Connection represents one named email connection in site_email_connection.
+// The provider_secret_encrypted column is NEVER surfaced past the repo boundary;
+// only SecretSet (bool) is included here.
+type Connection struct {
+	ID            uuid.UUID
+	TenantID      uuid.UUID
+	ConfigID      uuid.UUID
+	ConnectionKey string
+	Provider      string
+	FromAddress   string
+	FromName      string
+	Config        map[string]any
+	SecretSet     bool
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+// ConnectionUpsertInput carries fields for a connection create-or-update.
+// SecretRaw is the plaintext secret; nil preserves the existing ciphertext.
+type ConnectionUpsertInput struct {
+	TenantID      uuid.UUID
+	ConfigID      uuid.UUID
+	ConnectionKey string
+	Provider      string
+	FromAddress   string
+	FromName      string
+	Config        map[string]any
+	SecretRaw     *string // nil = preserve existing
+}
+
+// AttachmentMeta is one attachment entry in the log.
+// Canonical wire shape: [{"name":"<basename>","size_bytes":<int64>}]
+type AttachmentMeta struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Notify settings domain types (Area 4)
+// ---------------------------------------------------------------------------
+
+// NotifySettings is the org-level alert + digest configuration.
+type NotifySettings struct {
+	TenantID             uuid.UUID
+	Enabled              bool
+	Recipients           []string
+	AlertOnFailure       bool
+	AlertThrottleMinutes int
+	DigestEnabled        bool
+	DigestCadence        string // weekly | monthly
+	DigestDay            int
+	DigestHour           int
+	Timezone             string
+	NextDigestAt         *time.Time
+	CreatedAt            time.Time
+	UpdatedAt            time.Time
+	// InstanceMailerConfigured is populated by the service from mailer.Service.Enabled.
+	// It is NOT stored in DB — injected on GET.
+	InstanceMailerConfigured bool
+}
+
+// NotifySettingsUpsertInput is the PUT body for notify settings.
+type NotifySettingsUpsertInput struct {
+	TenantID             uuid.UUID
+	Enabled              bool
+	Recipients           []string
+	AlertOnFailure       bool
+	AlertThrottleMinutes int
+	DigestEnabled        bool
+	DigestCadence        string
+	DigestDay            int
+	DigestHour           int
+	Timezone             string
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Propagation types (Area 1)
+// ---------------------------------------------------------------------------
+
+// InheritingSite is one site returned by ListEmailInheritingSites.
+type InheritingSite struct {
+	ID  uuid.UUID
+	URL string
+}
+
+// SiteRef holds a site's display info for use in notification emails.
+type SiteRef struct {
+	ID   uuid.UUID
+	URL  string
+	Name string
+}
+
+// ConnectionSecretRow is a lightweight pair returned by GetConnectionSecretCiphertexts.
+// It avoids surfacing the sqlc type through the repository interface.
+type ConnectionSecretRow struct {
+	ConnectionKey           string
+	ProviderSecretEncrypted []byte
+}
+
+// PropagateResult is returned after a PropagateOrgConfig fan-out.
+type PropagateResult struct {
+	Synced int
+	Failed int
+	Total  int
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Alert / digest data types
+// ---------------------------------------------------------------------------
+
+// AlertState is the runtime snapshot returned by ClaimAlertSlot.
+// It is NOT stored separately — it maps the email_alert_state row.
+type AlertState struct {
+	TenantID           uuid.UUID
+	SiteID             uuid.UUID
+	LastAlertAt        *time.Time
+	FailuresSinceAlert int64
+}
+
+// SiteStatsRow is one row from GetFleetStatsBySite (for the digest).
+type SiteStatsRow struct {
+	SiteID       uuid.UUID
+	Total        int64
+	SentCount    int64
+	FailedCount  int64
+	BouncedCount int64
+}
+
+// FailureSample is one entry from TopFailureSamples (for the digest).
+type FailureSample struct {
+	SiteID  uuid.UUID
+	Subject string
+	Error   string
+}
+
 // LogEntry is one email log row — the domain representation of site_email_log.
 // Body is only populated on the detail view (GetLogEntry); list views omit it
 // to avoid leaking potentially sensitive body content in bulk responses.
@@ -174,9 +317,13 @@ type LogEntry struct {
 	ResentCount int
 	BodyStored  bool
 	// Body is non-nil only in the detail view and only when BodyStored=true.
-	Body      *string
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	Body *string
+	// m62 additions.
+	ConnectionKey   string
+	AttachmentCount int
+	Attachments     []AttachmentMeta // only populated in detail view
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // LogListFilter holds the operator-supplied filters for a log list request.
@@ -223,7 +370,10 @@ type IngestEntry struct {
 	ResentCount int
 	BodyStored  bool
 	Body        *string
-	CreatedAt   time.Time
+	// m62 additions — coerced to '' / [] on ingest if absent.
+	ConnectionKey string
+	Attachments   []AttachmentMeta
+	CreatedAt     time.Time
 }
 
 // IngestResult is the response returned to the agent after ingest.
@@ -239,7 +389,7 @@ type EmailStats struct {
 	FailedCount   int64
 	ProviderCount int64
 	// SiteCount is only populated for fleet stats.
-	SiteCount int64
+	SiteCount  int64
 	ByDay      []StatsByDay
 	ByProvider []StatsByProvider
 }
@@ -266,11 +416,11 @@ type StatsByProvider struct {
 
 // Suppression represents one email_suppression row.
 type Suppression struct {
-	ID              uuid.UUID
-	TenantID        uuid.UUID
+	ID       uuid.UUID
+	TenantID uuid.UUID
 	// SiteID is nil for fleet-wide suppression.
-	SiteID          *uuid.UUID
-	EmailHash       []byte
+	SiteID    *uuid.UUID
+	EmailHash []byte
 	// Email may be nil when PII storage is off (only hash stored).
 	Email           *string
 	Reason          string // hard_bounce | complaint | unsubscribe | manual
@@ -316,9 +466,9 @@ type WebhookEventInput struct {
 	// TenantID is the resolved tenant.  In the new (m61) trust model this is set
 	// from the routeToken resolution, NOT from event metadata.  It may still be nil
 	// for legacy/un-migrated paths (in which case the event is orphaned).
-	TenantID *uuid.UUID
-	SiteID   *uuid.UUID
-	Email    string
+	TenantID  *uuid.UUID
+	SiteID    *uuid.UUID
+	Email     string
 	EmailHash []byte // sha-256 of lower-cased email; set by the webhook handler
 	EventType string // hard_bounce | complaint
 	// MetaTenantID is the wpmgr_tenant from event metadata (used for the intra-tenant

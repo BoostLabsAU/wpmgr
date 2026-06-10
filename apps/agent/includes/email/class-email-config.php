@@ -55,12 +55,35 @@ final class EmailConfig {
 	public array $config;
 
 	/**
-	 * Per-FROM routing map: from_address => connection_key.
-	 * Reserved for multi-connection Phase 3; unused in v1 (single connection).
+	 * Per-FROM routing map: from_address => connection_key (string).
+	 * Old agents sent inline arrays here; ProviderRouter keeps the is_array()
+	 * branch for backward compatibility.
 	 *
 	 * @var array<string,mixed>
 	 */
 	public array $mappings;
+
+	/**
+	 * Named connection registry (keyed by connection slug).
+	 * Sent by CP as a replace-all payload; absent/empty = no named connections.
+	 * Each value is a wire shape: {provider, config, from_address, from_name}.
+	 * Secrets are NOT stored here — they live in the keystore connection map.
+	 *
+	 * @var array<string,array<string,mixed>>
+	 */
+	public array $connections;
+
+	/**
+	 * The default connection key to use when no FROM mapping resolves.
+	 * '' or 'default' both mean "use the primary (top-level config row)".
+	 */
+	public string $default_connection;
+
+	/**
+	 * Fallback connection key used for exactly one retry when the primary send fails.
+	 * '' means no fallback is configured.
+	 */
+	public string $fallback_connection;
 
 	/** Whether the agent logs each send to the local wpmgr_email_log table. */
 	public bool $log_emails;
@@ -97,6 +120,28 @@ final class EmailConfig {
 		$this->mappings = ( isset( $raw['mappings'] ) && is_array( $raw['mappings'] ) )
 			? $raw['mappings'] : array();
 
+		// Connections registry: keyed by slug, values are wire shape arrays.
+		// Per-connection secrets are intentionally NOT stored here.
+		if ( isset( $raw['connections'] ) && is_array( $raw['connections'] ) ) {
+			$connections = array();
+			foreach ( $raw['connections'] as $key => $wire ) {
+				if ( is_string( $key ) && is_array( $wire ) ) {
+					$connections[ $key ] = $wire;
+				}
+			}
+			$this->connections = $connections;
+		} else {
+			$this->connections = array();
+		}
+
+		$dc = isset( $raw['default_connection'] ) && is_string( $raw['default_connection'] )
+			? $raw['default_connection'] : '';
+		$this->default_connection = $dc;
+
+		$fc = isset( $raw['fallback_connection'] ) && is_string( $raw['fallback_connection'] )
+			? $raw['fallback_connection'] : '';
+		$this->fallback_connection = $fc;
+
 		$this->log_emails = ! empty( $raw['log_emails'] );
 		$this->store_body = ! empty( $raw['store_body'] );
 
@@ -112,17 +157,20 @@ final class EmailConfig {
 	 */
 	public function to_array(): array {
 		return array(
-			'provider'        => $this->provider,
-			'from_address'    => $this->from_address,
-			'from_name'       => $this->from_name,
-			'force_from_email' => $this->force_from_email,
-			'force_from_name' => $this->force_from_name,
-			'return_path'     => $this->return_path,
-			'config'          => $this->config,
-			'mappings'        => $this->mappings,
-			'log_emails'      => $this->log_emails,
-			'store_body'      => $this->store_body,
-			'retention_days'  => $this->retention_days,
+			'provider'           => $this->provider,
+			'from_address'       => $this->from_address,
+			'from_name'          => $this->from_name,
+			'force_from_email'   => $this->force_from_email,
+			'force_from_name'    => $this->force_from_name,
+			'return_path'        => $this->return_path,
+			'config'             => $this->config,
+			'mappings'           => $this->mappings,
+			'connections'        => $this->connections,
+			'default_connection' => $this->default_connection,
+			'fallback_connection' => $this->fallback_connection,
+			'log_emails'         => $this->log_emails,
+			'store_body'         => $this->store_body,
+			'retention_days'     => $this->retention_days,
 		);
 	}
 

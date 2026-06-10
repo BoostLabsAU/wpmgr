@@ -33,14 +33,15 @@ class EmailLogger {
 	/**
 	 * Write a send event to the local log table.
 	 *
-	 * @param array<string,mixed> $mail       Normalised mail payload (from ProviderRouter).
-	 * @param string              $provider   Provider slug.
-	 * @param string              $status     'sent' or 'failed'.
-	 * @param string              $message_id Provider message-id (empty on failure).
-	 * @param string              $error      Human-readable error (empty on success).
-	 * @param string              $response   Raw provider response body / summary.
-	 * @param int                 $retries    Number of retry attempts consumed.
-	 * @param EmailConfig         $cfg        Runtime config (store_body flag etc.).
+	 * @param array<string,mixed> $mail           Normalised mail payload (from ProviderRouter).
+	 * @param string              $provider       Provider slug.
+	 * @param string              $status         'sent' or 'failed'.
+	 * @param string              $message_id     Provider message-id (empty on failure).
+	 * @param string              $error          Human-readable error (empty on success).
+	 * @param string              $response       Raw provider response body / summary.
+	 * @param int                 $retries        Number of retry attempts consumed.
+	 * @param EmailConfig         $cfg            Runtime config (store_body flag etc.).
+	 * @param string              $connection_key Named connection key used ('default' = primary).
 	 * @return int|false Inserted row ID or false on failure.
 	 */
 	public function write(
@@ -51,7 +52,8 @@ class EmailLogger {
 		string $error,
 		string $response,
 		int $retries,
-		EmailConfig $cfg
+		EmailConfig $cfg,
+		string $connection_key = ''
 	) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) ) {
@@ -77,6 +79,36 @@ class EmailLogger {
 			$body        = $body_html !== '' ? $body_html : $body_text;
 		}
 
+		// Build attachment metadata: [{name, size_bytes}], capped at 50 entries.
+		// Paths are never stored; only the basename (already set by MailRouter) and size.
+		$attachments_json = null;
+		$raw_attachments  = isset( $mail['attachments'] ) && is_array( $mail['attachments'] )
+			? $mail['attachments'] : array();
+		if ( $raw_attachments !== array() ) {
+			$attach_meta = array();
+			foreach ( $raw_attachments as $att ) {
+				if ( count( $attach_meta ) >= 50 ) {
+					break;
+				}
+				if ( ! is_array( $att ) ) {
+					continue;
+				}
+				$att_name = isset( $att['name'] ) ? substr( (string) $att['name'], 0, 255 ) : '';
+				if ( $att_name === '' ) {
+					continue;
+				}
+				$att_size = isset( $att['size_bytes'] ) && is_int( $att['size_bytes'] ) && $att['size_bytes'] >= 0
+					? $att['size_bytes'] : 0;
+				$attach_meta[] = array(
+					'name'       => $att_name,
+					'size_bytes' => $att_size,
+				);
+			}
+			if ( $attach_meta !== array() ) {
+				$attachments_json = wp_json_encode( $attach_meta );
+			}
+		}
+
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- plugin-owned table; no WP API equivalent; anti-replay/security log must not be cached
 		$result = $wpdb->insert(
 			$table,
@@ -93,9 +125,11 @@ class EmailLogger {
 				'resent_count'    => 0,
 				'body_stored'     => $body_stored ? 1 : 0,
 				'body'            => $body,
+				'connection_key'  => substr( $connection_key, 0, 32 ),
+				'attachments'     => $attachments_json,
 				'created_at'      => current_time( 'mysql', true ),
 			),
-			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s' )
+			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%s', '%s', '%s', '%s' )
 		);
 
 		if ( $result === false ) {

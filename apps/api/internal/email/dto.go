@@ -51,6 +51,9 @@ type configDTO struct {
 	// token that must be saved — it cannot be retrieved again.
 	WebhookRouteToken string `json:"webhook_route_token,omitempty"`
 
+	// m62: named connections list (may be nil/empty).
+	Connections []connectionDTO `json:"connections,omitempty"`
+
 	CreatedAt int64 `json:"created_at"`
 	UpdatedAt int64 `json:"updated_at"`
 }
@@ -58,6 +61,19 @@ type configDTO struct {
 // toConfigDTO maps the domain Config to the wire DTO (masked read).
 // baseURL is the public-facing base URL (e.g. "https://manage.wpmgr.app")
 // used to construct the webhook_url field. Pass "" to omit the URL.
+// conns may be nil; when non-nil the connections slice is embedded.
+func toConfigDTOWithConnections(c Config, baseURL string, conns []Connection) configDTO {
+	dto := toConfigDTO(c, baseURL)
+	if len(conns) > 0 {
+		dtoConns := make([]connectionDTO, 0, len(conns))
+		for _, conn := range conns {
+			dtoConns = append(dtoConns, toConnectionDTO(conn))
+		}
+		dto.Connections = dtoConns
+	}
+	return dto
+}
+
 func toConfigDTO(c Config, baseURL string) configDTO {
 	dto := configDTO{
 		ID:                   c.ID.String(),
@@ -228,9 +244,19 @@ type logEntryDTO struct {
 	ResentCount int            `json:"resent_count"`
 	BodyStored  bool           `json:"body_stored"`
 	// Body is only present in the detail response and only when body_stored=true.
-	Body      *string `json:"body,omitempty"`
-	CreatedAt string  `json:"created_at"`
-	UpdatedAt string  `json:"updated_at"`
+	Body *string `json:"body,omitempty"`
+	// m62 additions.
+	ConnectionKey   string              `json:"connection_key"`
+	AttachmentCount int                 `json:"attachment_count"`
+	Attachments     []attachmentMetaDTO `json:"attachments,omitempty"` // detail only
+	CreatedAt       string              `json:"created_at"`
+	UpdatedAt       string              `json:"updated_at"`
+}
+
+// attachmentMetaDTO is the wire shape of one attachment.
+type attachmentMetaDTO struct {
+	Name      string `json:"name"`
+	SizeBytes int64  `json:"size_bytes"`
 }
 
 // logDetailDTO is the detail response including prev/next navigation.
@@ -271,23 +297,25 @@ type emailStatsDTO struct {
 // the detail endpoint; list endpoints always pass false.
 func toLogEntryDTO(e LogEntry, includeBody bool) logEntryDTO {
 	dto := logEntryDTO{
-		ID:          e.ID.String(),
-		TenantID:    e.TenantID.String(),
-		SiteID:      e.SiteID.String(),
-		AgentSeq:    e.AgentSeq,
-		MessageID:   e.MessageID,
-		ToAddresses: e.ToAddresses,
-		FromAddress: e.FromAddress,
-		Subject:     e.Subject,
-		Provider:    e.Provider,
-		Status:      e.Status,
-		Response:    e.Response,
-		Error:       e.Error,
-		Retries:     e.Retries,
-		ResentCount: e.ResentCount,
-		BodyStored:  e.BodyStored,
-		CreatedAt:   e.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:   e.UpdatedAt.UTC().Format(time.RFC3339),
+		ID:              e.ID.String(),
+		TenantID:        e.TenantID.String(),
+		SiteID:          e.SiteID.String(),
+		AgentSeq:        e.AgentSeq,
+		MessageID:       e.MessageID,
+		ToAddresses:     e.ToAddresses,
+		FromAddress:     e.FromAddress,
+		Subject:         e.Subject,
+		Provider:        e.Provider,
+		Status:          e.Status,
+		Response:        e.Response,
+		Error:           e.Error,
+		Retries:         e.Retries,
+		ResentCount:     e.ResentCount,
+		BodyStored:      e.BodyStored,
+		ConnectionKey:   e.ConnectionKey,
+		AttachmentCount: e.AttachmentCount,
+		CreatedAt:       e.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:       e.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if dto.ToAddresses == nil {
 		dto.ToAddresses = []string{}
@@ -297,6 +325,14 @@ func toLogEntryDTO(e LogEntry, includeBody bool) logEntryDTO {
 	}
 	if includeBody && e.BodyStored && e.Body != nil {
 		dto.Body = e.Body
+	}
+	// Attachments only in detail view.
+	if includeBody && len(e.Attachments) > 0 {
+		dtoAtts := make([]attachmentMetaDTO, 0, len(e.Attachments))
+		for _, a := range e.Attachments {
+			dtoAtts = append(dtoAtts, attachmentMetaDTO{Name: a.Name, SizeBytes: a.SizeBytes})
+		}
+		dto.Attachments = dtoAtts
 	}
 	return dto
 }
@@ -409,9 +445,9 @@ func parseInt(s string) (int, error) {
 
 // suppressionDTO is the wire representation of a Suppression entry.
 type suppressionDTO struct {
-	ID              string  `json:"id"`
-	TenantID        string  `json:"tenant_id"`
-	SiteID          *string `json:"site_id,omitempty"`
+	ID       string  `json:"id"`
+	TenantID string  `json:"tenant_id"`
+	SiteID   *string `json:"site_id,omitempty"`
 	// Email is the masked plaintext email (if stored). Nil when PII opt-in is off.
 	Email           *string `json:"email,omitempty"`
 	Reason          string  `json:"reason"`
@@ -447,6 +483,118 @@ func toSuppressionDTO(s Suppression) suppressionDTO {
 type addSuppressionBody struct {
 	Email  string `json:"email"`
 	Reason string `json:"reason"` // manual | unsubscribe
+}
+
+// ---------------------------------------------------------------------------
+// m62 — connection DTOs
+// ---------------------------------------------------------------------------
+
+// connectionDTO is the wire representation of a named Connection. The secret is
+// never returned — only secret_set (bool) is surfaced.
+type connectionDTO struct {
+	ID            string         `json:"id"`
+	TenantID      string         `json:"tenant_id"`
+	ConfigID      string         `json:"config_id"`
+	ConnectionKey string         `json:"connection_key"`
+	Provider      string         `json:"provider"`
+	FromAddress   string         `json:"from_address"`
+	FromName      string         `json:"from_name"`
+	Config        map[string]any `json:"config"`
+	SecretSet     bool           `json:"secret_set"`
+	CreatedAt     int64          `json:"created_at"`
+	UpdatedAt     int64          `json:"updated_at"`
+}
+
+// toConnectionDTO maps a domain Connection to its wire DTO.
+func toConnectionDTO(c Connection) connectionDTO {
+	dto := connectionDTO{
+		ID:            c.ID.String(),
+		TenantID:      c.TenantID.String(),
+		ConfigID:      c.ConfigID.String(),
+		ConnectionKey: c.ConnectionKey,
+		Provider:      c.Provider,
+		FromAddress:   c.FromAddress,
+		FromName:      c.FromName,
+		Config:        c.Config,
+		SecretSet:     c.SecretSet,
+		CreatedAt:     c.CreatedAt.Unix(),
+		UpdatedAt:     c.UpdatedAt.Unix(),
+	}
+	if dto.Config == nil {
+		dto.Config = map[string]any{}
+	}
+	return dto
+}
+
+// putConnectionBody is the request body for PUT /sites/:siteId/email/connections/:key.
+type putConnectionBody struct {
+	Provider    string         `json:"provider"`
+	Config      map[string]any `json:"config"`
+	Secret      *string        `json:"secret,omitempty"`
+	FromAddress string         `json:"from_address"`
+	FromName    string         `json:"from_name"`
+}
+
+// ---------------------------------------------------------------------------
+// m62 — notify settings DTOs
+// ---------------------------------------------------------------------------
+
+// notifySettingsDTO is the wire representation of NotifySettings.
+type notifySettingsDTO struct {
+	TenantID                 string   `json:"tenant_id"`
+	Enabled                  bool     `json:"enabled"`
+	Recipients               []string `json:"recipients"`
+	AlertOnFailure           bool     `json:"alert_on_failure"`
+	AlertThrottleMinutes     int      `json:"alert_throttle_minutes"`
+	DigestEnabled            bool     `json:"digest_enabled"`
+	DigestCadence            string   `json:"digest_cadence"`
+	DigestDay                int      `json:"digest_day"`
+	DigestHour               int      `json:"digest_hour"`
+	Timezone                 string   `json:"timezone"`
+	NextDigestAt             *string  `json:"next_digest_at,omitempty"`
+	InstanceMailerConfigured bool     `json:"instance_mailer_configured"`
+	CreatedAt                int64    `json:"created_at"`
+	UpdatedAt                int64    `json:"updated_at"`
+}
+
+// toNotifySettingsDTO maps domain NotifySettings to the wire DTO.
+func toNotifySettingsDTO(s NotifySettings) notifySettingsDTO {
+	dto := notifySettingsDTO{
+		TenantID:                 s.TenantID.String(),
+		Enabled:                  s.Enabled,
+		Recipients:               s.Recipients,
+		AlertOnFailure:           s.AlertOnFailure,
+		AlertThrottleMinutes:     s.AlertThrottleMinutes,
+		DigestEnabled:            s.DigestEnabled,
+		DigestCadence:            s.DigestCadence,
+		DigestDay:                s.DigestDay,
+		DigestHour:               s.DigestHour,
+		Timezone:                 s.Timezone,
+		InstanceMailerConfigured: s.InstanceMailerConfigured,
+		CreatedAt:                s.CreatedAt.Unix(),
+		UpdatedAt:                s.UpdatedAt.Unix(),
+	}
+	if dto.Recipients == nil {
+		dto.Recipients = []string{}
+	}
+	if s.NextDigestAt != nil {
+		str := s.NextDigestAt.UTC().Format(time.RFC3339)
+		dto.NextDigestAt = &str
+	}
+	return dto
+}
+
+// notifySettingsUpdateBody is the request body for PUT /email/notify-settings.
+type notifySettingsUpdateBody struct {
+	Enabled              bool     `json:"enabled"`
+	Recipients           []string `json:"recipients"`
+	AlertOnFailure       bool     `json:"alert_on_failure"`
+	AlertThrottleMinutes int      `json:"alert_throttle_minutes"`
+	DigestEnabled        bool     `json:"digest_enabled"`
+	DigestCadence        string   `json:"digest_cadence"`
+	DigestDay            int      `json:"digest_day"`
+	DigestHour           int      `json:"digest_hour"`
+	Timezone             string   `json:"timezone"`
 }
 
 // parseSuppressionFilter extracts suppression list query params from Gin context.

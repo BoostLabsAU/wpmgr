@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Download, Loader2, Search } from "lucide-react";
+import { Download, Loader2, Search, Paperclip } from "lucide-react";
 import { Link } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -208,17 +208,37 @@ function FleetEmailRow({ entry }: { entry: SiteEmailLogEntry }) {
           </Badge>
         ) : null}
       </TableCell>
-      <TableCell className="max-w-[200px] truncate text-sm">
-        {entry.subject || (
-          <span className="italic text-[var(--color-muted-foreground)]">
-            (no subject)
+      <TableCell className="max-w-[200px] text-sm">
+        <div className="flex items-center gap-1.5">
+          <span className="truncate">
+            {entry.subject || (
+              <span className="italic text-[var(--color-muted-foreground)]">
+                (no subject)
+              </span>
+            )}
           </span>
-        )}
+          {(entry.attachment_count ?? 0) > 0 ? (
+            <span
+              className="inline-flex shrink-0 items-center gap-0.5 rounded bg-[var(--color-muted)] px-1 py-0.5 text-xs text-[var(--color-muted-foreground)]"
+              aria-label={`${entry.attachment_count} attachment${(entry.attachment_count ?? 0) !== 1 ? "s" : ""}`}
+            >
+              <Paperclip aria-hidden="true" className="size-2.5" />
+              {entry.attachment_count}
+            </span>
+          ) : null}
+        </div>
       </TableCell>
       <TableCell>
-        <Badge variant="outline" className="text-xs">
-          {entry.provider}
-        </Badge>
+        <div className="flex flex-col gap-0.5">
+          <Badge variant="outline" className="text-xs w-fit">
+            {entry.provider}
+          </Badge>
+          {entry.connection_key ? (
+            <code className="text-xs text-[var(--color-muted-foreground)]">
+              via {entry.connection_key}
+            </code>
+          ) : null}
+        </div>
       </TableCell>
       <TableCell>
         <EmailStatusBadge status={entry.status} />

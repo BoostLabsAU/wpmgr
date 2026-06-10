@@ -511,7 +511,7 @@ func emailHash(email string) []byte {
 type sesNotification struct {
 	NotificationType string `json:"notificationType"` // Bounce | Complaint
 	Bounce           *struct {
-		BounceType       string `json:"bounceType"` // Permanent | Transient
+		BounceType        string `json:"bounceType"` // Permanent | Transient
 		BouncedRecipients []struct {
 			EmailAddress string `json:"emailAddress"`
 		} `json:"bouncedRecipients"`

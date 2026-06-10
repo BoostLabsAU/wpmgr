@@ -7,6 +7,7 @@ import { PageError } from "@/components/feedback";
 import { FleetEmailDeliverability } from "@/features/email/email-deliverability";
 import { FleetEmailLogTable } from "@/features/email/fleet-email-log-table";
 import { FleetEmailSuppressionList } from "@/features/email/email-suppression-list";
+import { EmailNotifySettingsCard } from "@/features/email/email-notify-settings-card";
 import { useFleetEmailStats } from "@/features/email/use-email";
 import { useFleetEmailEvents } from "@/features/email/use-email-events";
 
@@ -67,6 +68,17 @@ function FleetEmailPage() {
         ) : stats.data ? (
           <FleetEmailDeliverability stats={stats.data} />
         ) : null}
+      </section>
+
+      {/* Email notifications (alerts + digest) */}
+      <section aria-labelledby="notifications-heading">
+        <h2
+          id="notifications-heading"
+          className="mb-4 text-sm font-semibold text-[var(--color-foreground)]"
+        >
+          Notifications
+        </h2>
+        <EmailNotifySettingsCard />
       </section>
 
       {/* Fleet email log */}

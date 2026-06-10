@@ -1,0 +1,20 @@
+Email delivery failures detected — {{.ProductName}}
+
+{{.FailureCount}} email{{if gt .FailureCount 1}}s{{end}} failed to deliver from {{.SiteName}} in the last {{.WindowMinutes}} minutes.
+
+Site: {{.SiteName}}
+URL:  {{.SiteURL}}
+Failures: {{.FailureCount}}
+{{if .Samples}}
+Recent failures:
+{{range .Samples}}- {{.Subject}} → {{.To}}
+  Error: {{.Error}}
+{{end}}
+{{end}}
+Note: bounce webhook events are not included in this alert (v1 limitation).
+
+View the email log: {{.SiteEmailURL}}
+
+---
+This alert was sent by {{.ProductName}} because email failure alerts are enabled for your account.
+To adjust alert settings, visit {{.BaseURL}}/email.

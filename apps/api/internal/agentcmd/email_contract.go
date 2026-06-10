@@ -22,6 +22,26 @@ package agentcmd
 //
 // Phase 2 (wp-agent-engineer) MUST implement both command handlers.
 
+// EmailConnectionWire is one named connection in the connections registry sent
+// to the agent on each sync_email_config push. The agent replaces its full
+// connections registry with the contents of this map (replace-all semantics).
+// An absent or empty map means "no named connections; clear the registry".
+type EmailConnectionWire struct {
+	// Provider is the provider slug: smtp | ses | sendgrid | mailgun | postmark.
+	Provider string `json:"provider"`
+	// Config holds non-secret provider settings (same shape as EmailConfigRequest.Config).
+	Config map[string]any `json:"config"`
+	// Secret is the DECRYPTED plaintext per-connection secret. Same trust boundary
+	// as EmailConfigRequest.Secret — HTTPS + Ed25519 signed body.
+	// Empty string means "no secret configured".
+	Secret string `json:"secret"`
+	// FromAddress is an optional per-connection sender address override.
+	// When non-empty, outgoing mail routes through this connection using this address.
+	FromAddress string `json:"from_address,omitempty"`
+	// FromName is an optional per-connection sender name override.
+	FromName string `json:"from_name,omitempty"`
+}
+
 // EmailConfigRequest is the POST body for `sync_email_config`.
 // It carries the full per-site email config including the DECRYPTED provider
 // secret — the signing + HTTPS transport is the security boundary.
@@ -57,8 +77,24 @@ type EmailConfigRequest struct {
 	Secret string `json:"secret"`
 
 	// Mappings is a JSON object mapping From-email addresses to connection keys
-	// for per-sender routing (Phase 2 multi-connection feature).
+	// for per-sender routing. Values are connection key strings (not arrays).
+	// Old agents' is_array() check fails safely → falls to primary row.
 	Mappings map[string]any `json:"mappings,omitempty"`
+
+	// m62 — multi-connection fields (additive; omitempty — old agents drop them).
+
+	// Connections is the full named-connection registry for this site.
+	// Replace-all semantics: absent/empty clears the agent registry.
+	// Key is the operator-chosen slug (^[a-z0-9][a-z0-9_-]{0,31}$, 'default' reserved).
+	Connections map[string]EmailConnectionWire `json:"connections,omitempty"`
+
+	// DefaultConnection is the connection key to use when mappings has no match.
+	// "" or "default" means use the primary config row (the existing behaviour).
+	DefaultConnection string `json:"default_connection,omitempty"`
+
+	// FallbackConnection is the connection key to try when DefaultConnection fails.
+	// "" means no fallback (disable_fallback semantics apply for test sends).
+	FallbackConnection string `json:"fallback_connection,omitempty"`
 
 	// LogEmails when true the agent buffers each send to its local WP table.
 	LogEmails bool `json:"log_emails"`
@@ -83,6 +119,9 @@ type SendTestEmailRequest struct {
 	Subject string `json:"subject,omitempty"`
 	// Body is the plain-text email body (defaults to a stock message if empty).
 	Body string `json:"body,omitempty"`
+	// Connection is the connection key to route the test send through.
+	// "" means use the primary config row (disable_fallback=true for all test sends).
+	Connection string `json:"connection,omitempty"`
 }
 
 // SendTestEmailResult is the response body for `send_test_email`.

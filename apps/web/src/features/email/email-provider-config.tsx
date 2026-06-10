@@ -28,14 +28,14 @@ import { EmailWebhookConfigCard } from "./email-webhook-config";
 // Provider picker
 // ---------------------------------------------------------------------------
 
-interface ProviderPickerProps {
+export interface ProviderPickerProps {
   value: string;
   providers: EmailProviderSpec[];
   onChange: (slug: string) => void;
   disabled?: boolean;
 }
 
-function ProviderPicker({
+export function ProviderPicker({
   value,
   providers,
   onChange,
@@ -66,7 +66,7 @@ function ProviderPicker({
 // Dynamic field renderer — per-provider field schema from the catalog
 // ---------------------------------------------------------------------------
 
-interface DynamicFieldProps {
+export interface DynamicFieldProps {
   field: EmailProviderField;
   /** Current non-secret config values keyed by field.key */
   config: Record<string, unknown>;
@@ -82,7 +82,7 @@ interface DynamicFieldProps {
   disabled?: boolean;
 }
 
-function DynamicField({
+export function DynamicField({
   field,
   config,
   secretValue,

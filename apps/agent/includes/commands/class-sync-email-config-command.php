@@ -41,6 +41,9 @@ final class SyncEmailConfigCommand implements CommandInterface {
 		'return_path',
 		'config',
 		'mappings',
+		'connections',
+		'default_connection',
+		'fallback_connection',
 		'log_emails',
 		'store_body',
 		'retention_days',
@@ -89,14 +92,47 @@ final class SyncEmailConfigCommand implements CommandInterface {
 			return array( 'ok' => false, 'detail' => 'mappings must be an object' );
 		}
 
-		// Extract the secret BEFORE building the config array; it is never stored
-		// in the wp-option, only in the keystore.
+		// Validate connections is an object/array if present.
+		if ( array_key_exists( 'connections', $params ) && ! is_array( $params['connections'] ) ) {
+			return array( 'ok' => false, 'detail' => 'connections must be an object' );
+		}
+
+		// Validate default_connection if present.
+		if ( array_key_exists( 'default_connection', $params ) && ! is_string( $params['default_connection'] ) ) {
+			return array( 'ok' => false, 'detail' => 'default_connection must be a string' );
+		}
+
+		// Validate fallback_connection if present.
+		if ( array_key_exists( 'fallback_connection', $params ) && ! is_string( $params['fallback_connection'] ) ) {
+			return array( 'ok' => false, 'detail' => 'fallback_connection must be a string' );
+		}
+
+		// Extract the primary secret BEFORE building the config array; it is never
+		// stored in the wp-option, only in the keystore.
 		$secret = '';
 		if ( array_key_exists( 'secret', $params ) ) {
 			if ( ! is_string( $params['secret'] ) ) {
 				return array( 'ok' => false, 'detail' => 'secret must be a string' );
 			}
 			$secret = $params['secret'];
+		}
+
+		// Extract and validate per-connection secrets from the connections map.
+		// Secrets are stripped from the config before writing to wp-options;
+		// they are persisted separately via store_connection_secrets().
+		// The secrets travel only in the signed JWT body over HTTPS; never logged.
+		$conn_secrets = array();
+		if ( array_key_exists( 'connections', $params ) && is_array( $params['connections'] ) ) {
+			foreach ( $params['connections'] as $conn_key => $wire ) {
+				if ( ! is_array( $wire ) ) {
+					continue;
+				}
+				if ( isset( $wire['secret'] ) && is_string( $wire['secret'] ) && $wire['secret'] !== '' ) {
+					$conn_secrets[ (string) $conn_key ] = $wire['secret'];
+				}
+				// Strip the secret from the wire payload before it reaches the wp-option.
+				unset( $params['connections'][ $conn_key ]['secret'] );
+			}
 		}
 
 		// Build a clean config map from the known keys only.
@@ -118,7 +154,7 @@ final class SyncEmailConfigCommand implements CommandInterface {
 			return array( 'ok' => false, 'detail' => 'failed to persist email config' );
 		}
 
-		// Persist the secret into the keystore (empty string removes it).
+		// Persist the primary secret into the keystore (empty string removes it).
 		// The secret was transmitted only in the signed JWT body over HTTPS;
 		// we never log it.
 		try {
@@ -127,6 +163,18 @@ final class SyncEmailConfigCommand implements CommandInterface {
 			// Secret storage failure is non-fatal for the config itself; the
 			// operator will see send failures and can retry.
 			return array( 'ok' => true, 'detail' => 'email config saved; secret storage failed: keystore unavailable' );
+		}
+
+		// Persist per-connection secrets atomically (replace-all semantics).
+		// If the payload has no connections key at all, leave the existing
+		// connection secrets untouched (old-CP compat: payload has no 'connections').
+		if ( array_key_exists( 'connections', $params ) ) {
+			try {
+				$this->keystore->store_connection_secrets( $conn_secrets );
+			} catch ( \Throwable $e ) {
+				// Non-fatal: connections will still work; secrets missing means
+				// sends will attempt with empty credential (provider will error).
+			}
 		}
 
 		$detail = $secret === '' ? 'email config saved; secret cleared' : 'email config saved';

@@ -183,11 +183,13 @@ RETURNING *;
 -- (tenant_id, site_id, agent_seq). Status/response/error/resent_count may
 -- change on re-push (e.g. an asynchronous provider callback updates the
 -- status after initial delivery). Body is only stored when body_stored=true.
+-- m62: connection_key + attachments added (additive; old agents send '' / '[]').
 INSERT INTO site_email_log (
     tenant_id, site_id, agent_seq,
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored, body,
+    connection_key, attachments,
     created_at, updated_at
 ) VALUES (
     @tenant_id, @site_id, @agent_seq,
@@ -196,18 +198,21 @@ INSERT INTO site_email_log (
     @body_stored,
     -- Store body only when body_stored flag is set; otherwise NULL.
     CASE WHEN @body_stored::boolean THEN @body::text ELSE NULL END,
+    @connection_key, @attachments,
     @created_at, now()
 )
 ON CONFLICT (tenant_id, site_id, agent_seq)
     WHERE agent_seq IS NOT NULL
 DO UPDATE SET
-    status        = EXCLUDED.status,
-    response      = EXCLUDED.response,
-    error         = EXCLUDED.error,
-    resent_count  = EXCLUDED.resent_count,
-    body_stored   = EXCLUDED.body_stored,
-    body          = CASE WHEN EXCLUDED.body_stored THEN EXCLUDED.body ELSE site_email_log.body END,
-    updated_at    = now()
+    status         = EXCLUDED.status,
+    response       = EXCLUDED.response,
+    error          = EXCLUDED.error,
+    resent_count   = EXCLUDED.resent_count,
+    body_stored    = EXCLUDED.body_stored,
+    body           = CASE WHEN EXCLUDED.body_stored THEN EXCLUDED.body ELSE site_email_log.body END,
+    connection_key = EXCLUDED.connection_key,
+    attachments    = EXCLUDED.attachments,
+    updated_at     = now()
 RETURNING *;
 
 -- name: ListSiteEmailLog :many
@@ -225,6 +230,8 @@ SELECT
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored,
+    connection_key,
+    jsonb_array_length(attachments) AS attachment_count,
     created_at, updated_at
 FROM site_email_log
 WHERE tenant_id   = @tenant_id
@@ -279,6 +286,8 @@ SELECT
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored,
+    connection_key,
+    jsonb_array_length(attachments) AS attachment_count,
     created_at, updated_at
 FROM site_email_log
 WHERE tenant_id   = @tenant_id
@@ -577,3 +586,253 @@ DELETE FROM site_email_log
 WHERE tenant_id = @tenant_id
   AND site_id   = @site_id
   AND id = ANY(@ids::uuid[]);
+
+-- ---------------------------------------------------------------------------
+-- site_email_connection  (m62 — multi-connection + failover)
+-- ---------------------------------------------------------------------------
+
+-- name: ListEmailConnections :many
+-- List all named connections for a config row. Ordered created_at ASC, id ASC
+-- (stable insertion order for the UI). Runs under InTenantTx.
+SELECT *
+FROM site_email_connection
+WHERE config_id = @config_id
+  AND tenant_id = @tenant_id
+ORDER BY created_at ASC, id ASC;
+
+-- name: GetEmailConnection :one
+-- Fetch one connection by (config_id, connection_key). Runs under InTenantTx.
+SELECT *
+FROM site_email_connection
+WHERE config_id      = @config_id
+  AND connection_key = @connection_key
+  AND tenant_id      = @tenant_id;
+
+-- name: UpsertEmailConnection :one
+-- Insert-or-update a named connection. secret uses the nil-sentinel pattern:
+-- when @set_secret is false the existing ciphertext is preserved.
+-- updated_at is set via now() (no trigger). Runs under InTenantTx.
+INSERT INTO site_email_connection (
+    tenant_id, config_id, connection_key,
+    provider, from_address, from_name,
+    config,
+    provider_secret_encrypted,
+    updated_at
+) VALUES (
+    @tenant_id, @config_id, @connection_key,
+    @provider, @from_address, @from_name,
+    @config,
+    CASE WHEN @set_secret::boolean THEN @provider_secret_encrypted::bytea ELSE NULL END,
+    now()
+)
+ON CONFLICT (config_id, connection_key)
+DO UPDATE SET
+    provider                  = EXCLUDED.provider,
+    from_address              = EXCLUDED.from_address,
+    from_name                 = EXCLUDED.from_name,
+    config                    = EXCLUDED.config,
+    provider_secret_encrypted = CASE WHEN @set_secret::boolean
+                                    THEN EXCLUDED.provider_secret_encrypted
+                                    ELSE site_email_connection.provider_secret_encrypted END,
+    updated_at                = now()
+RETURNING *;
+
+-- name: DeleteEmailConnection :exec
+-- Delete a named connection by (config_id, connection_key). The caller checks
+-- for routing references (default/fallback/mappings) and returns 409 before
+-- calling this. Runs under InTenantTx.
+DELETE FROM site_email_connection
+WHERE config_id      = @config_id
+  AND connection_key = @connection_key
+  AND tenant_id      = @tenant_id;
+
+-- name: GetConnectionSecretCiphertexts :many
+-- Fetch (connection_key, provider_secret_encrypted) for all connections under a
+-- config row. Used by buildAgentConfigReq to decrypt and build the connections
+-- registry. Runs under InTenantTx.
+SELECT connection_key, provider_secret_encrypted
+FROM site_email_connection
+WHERE config_id = @config_id
+  AND tenant_id = @tenant_id;
+
+-- ---------------------------------------------------------------------------
+-- Org-propagation (m62 — Area 1)
+-- ---------------------------------------------------------------------------
+
+-- name: ListEmailInheritingSites :many
+-- Returns sites that should receive the org config propagation:
+--   - enrolled (status IN ('connected','degraded'))
+--   - no per-site email config row (NOT EXISTS site_email_config WHERE site_id=sites.id)
+-- Runs under InAgentTx (cross-tenant fan-out by the propagation River worker).
+SELECT s.id, s.url
+FROM sites s
+WHERE s.tenant_id = @tenant_id
+  AND s.status IN ('connected', 'degraded')
+  AND NOT EXISTS (
+      SELECT 1 FROM site_email_config sec
+      WHERE sec.tenant_id = s.tenant_id
+        AND sec.site_id   = s.id
+  );
+
+-- name: GetSiteRef :one
+-- Fetch a site's URL by id. Used by the propagation worker and alert digest to
+-- build per-site dashboard links. Runs under InAgentTx.
+SELECT id, url, name
+FROM sites
+WHERE id        = @id
+  AND tenant_id = @tenant_id;
+
+-- ---------------------------------------------------------------------------
+-- email_notify_settings  (m62 — alerts + digest)
+-- ---------------------------------------------------------------------------
+
+-- name: GetNotifySettings :one
+-- Fetch the notify settings row for a tenant. Returns pgx.ErrNoRows when not
+-- configured (service returns defaults; GET NEVER 404s — 0.35.1 lesson).
+-- Runs under InTenantTx.
+SELECT *
+FROM email_notify_settings
+WHERE tenant_id = @tenant_id;
+
+-- name: UpsertNotifySettings :one
+-- Full-replace upsert of notify settings. next_digest_at is computed by the
+-- service (time.LoadLocation + nextDigestAt helper) and passed here.
+-- Runs under InTenantTx.
+INSERT INTO email_notify_settings (
+    tenant_id,
+    enabled, recipients,
+    alert_on_failure, alert_throttle_minutes,
+    digest_enabled, digest_cadence, digest_day, digest_hour, timezone,
+    next_digest_at,
+    updated_at
+) VALUES (
+    @tenant_id,
+    @enabled, @recipients,
+    @alert_on_failure, @alert_throttle_minutes,
+    @digest_enabled, @digest_cadence, @digest_day, @digest_hour, @timezone,
+    @next_digest_at,
+    now()
+)
+ON CONFLICT (tenant_id)
+DO UPDATE SET
+    enabled                = EXCLUDED.enabled,
+    recipients             = EXCLUDED.recipients,
+    alert_on_failure       = EXCLUDED.alert_on_failure,
+    alert_throttle_minutes = EXCLUDED.alert_throttle_minutes,
+    digest_enabled         = EXCLUDED.digest_enabled,
+    digest_cadence         = EXCLUDED.digest_cadence,
+    digest_day             = EXCLUDED.digest_day,
+    digest_hour            = EXCLUDED.digest_hour,
+    timezone               = EXCLUDED.timezone,
+    next_digest_at         = EXCLUDED.next_digest_at,
+    updated_at             = now()
+RETURNING *;
+
+-- ---------------------------------------------------------------------------
+-- email_alert_state  (m62 — per-site durable alert throttle)
+-- ---------------------------------------------------------------------------
+
+-- name: AccumulateAlertFailures :exec
+-- Upsert: increment failures_since_alert by @delta. Creates the row if absent.
+-- Runs under InAgentTx (called after IngestLogBatch for failed entries).
+INSERT INTO email_alert_state (tenant_id, site_id, failures_since_alert, updated_at)
+VALUES (@tenant_id, @site_id, @delta, now())
+ON CONFLICT (tenant_id, site_id)
+DO UPDATE SET
+    failures_since_alert = email_alert_state.failures_since_alert + @delta,
+    updated_at           = now();
+
+-- name: ClaimAlertSlot :one
+-- Single-statement conditional claim: sets last_alert_at = now() and resets
+-- failures_since_alert = 0 ONLY when:
+--   - failures_since_alert >= @min_failures (at least one new failure)
+--   - last_alert_at IS NULL OR last_alert_at < now() - @throttle_interval
+-- Returns the updated row (claim won) or no rows (pgx.ErrNoRows = throttled/skipped).
+-- Multi-instance safe: no external SELECT, no RETURNING on nothing.
+-- Runs under InAgentTx.
+UPDATE email_alert_state
+SET last_alert_at        = now(),
+    failures_since_alert = 0,
+    updated_at           = now()
+WHERE tenant_id = @tenant_id
+  AND site_id   = @site_id
+  AND failures_since_alert >= @min_failures
+  AND (last_alert_at IS NULL OR last_alert_at < now() - (CAST(@throttle_minutes AS int) * INTERVAL '1 minute'))
+RETURNING *;
+
+-- ---------------------------------------------------------------------------
+-- Digest queries (m62)
+-- ---------------------------------------------------------------------------
+
+-- name: ListDueDigests :many
+-- List notify-settings rows whose next_digest_at is in the past.
+-- RunOnStart: false for the periodic job; this is called by DigestWorker on each run.
+-- Runs under InAgentTx (cross-tenant worker).
+SELECT *
+FROM email_notify_settings
+WHERE digest_enabled  = true
+  AND enabled         = true
+  AND next_digest_at IS NOT NULL
+  AND next_digest_at <= now()
+ORDER BY next_digest_at ASC
+LIMIT @row_limit;
+
+-- name: ClaimAdvanceDigest :one
+-- Advance next_digest_at to the next period as a conditional claim.
+-- Returns the updated row if the claim succeeds (next_digest_at still <= now(),
+-- guard against double-claim by concurrent workers). Runs under InAgentTx.
+UPDATE email_notify_settings
+SET next_digest_at = @new_next_digest_at,
+    updated_at     = now()
+WHERE tenant_id     = @tenant_id
+  AND next_digest_at <= now()
+RETURNING *;
+
+-- name: GetFleetStatsBySite :many
+-- Per-site stats for the digest [from, to] window. Returns top sites by failure
+-- count. Runs under InAgentTx.
+SELECT
+    site_id,
+    COUNT(*)                                        AS total,
+    COUNT(*) FILTER (WHERE status = 'sent')         AS sent_count,
+    COUNT(*) FILTER (WHERE status = 'failed')       AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced'
+                        OR status = 'complained')   AS bounced_count
+FROM site_email_log
+WHERE tenant_id   = @tenant_id
+  AND created_at >= @range_from
+  AND created_at <= @range_to
+GROUP BY site_id
+ORDER BY failed_count DESC, total DESC
+LIMIT @row_limit;
+
+-- name: TopFailureSamples :many
+-- Top failure samples for the digest (subject + truncated error, no bodies).
+-- Runs under InAgentTx.
+SELECT
+    site_id,
+    subject,
+    error
+FROM site_email_log
+WHERE tenant_id   = @tenant_id
+  AND status      = 'failed'
+  AND created_at >= @range_from
+  AND created_at <= @range_to
+ORDER BY created_at DESC
+LIMIT @row_limit;
+
+-- name: TopFailureSamplesBySite :many
+-- Top failure samples for a per-site failure alert email (subject + error, no bodies).
+-- Runs under InAgentTx.
+SELECT
+    site_id,
+    subject,
+    error
+FROM site_email_log
+WHERE tenant_id   = @tenant_id
+  AND site_id     = @site_id
+  AND status      = 'failed'
+  AND created_at >= @range_from
+  AND created_at <= @range_to
+ORDER BY created_at DESC
+LIMIT @row_limit;

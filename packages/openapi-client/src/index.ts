@@ -151,6 +151,12 @@ export {
   putOrgEmailWebhookConfig,
   // email sync (Phase 5)
   syncSiteEmailConfig,
+  // email m62 — connections + notify settings
+  listEmailConnections,
+  putEmailConnection,
+  deleteEmailConnection,
+  getEmailNotifySettings,
+  putEmailNotifySettings,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -508,4 +514,20 @@ export type {
   // email sync (Phase 5)
   SyncSiteEmailConfigData,
   SyncSiteEmailConfigResponse,
+  // email m62 — connections + notify settings + attachment metadata
+  EmailConnection,
+  EmailAttachmentMeta,
+  EmailNotifySettings,
+  PutEmailConnectionRequest,
+  PutEmailNotifySettingsRequest,
+  ListEmailConnectionsData,
+  ListEmailConnectionsResponse,
+  PutEmailConnectionData,
+  PutEmailConnectionResponse,
+  DeleteEmailConnectionData,
+  DeleteEmailConnectionResponse,
+  GetEmailNotifySettingsData,
+  GetEmailNotifySettingsResponse,
+  PutEmailNotifySettingsData,
+  PutEmailNotifySettingsResponse,
 } from "./generated/types.gen";

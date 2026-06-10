@@ -458,6 +458,16 @@ type Handler interface {
 	//
 	// DELETE /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}
 	DeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (*DeleteDbSnapshotOK, error)
+	// DeleteEmailConnection implements deleteEmailConnection operation.
+	//
+	// Permanently deletes the named connection. Returns 404 when the key does
+	// not exist. Returns 409 when the key is referenced as `default_connection`
+	// or `fallback_connection` on the site's config row (remove the reference
+	// first).
+	// Requires `site.email.manage` permission.
+	//
+	// DELETE /api/v1/sites/{siteId}/email/connections/{connKey}
+	DeleteEmailConnection(ctx context.Context, params DeleteEmailConnectionParams) (DeleteEmailConnectionRes, error)
 	// DeleteFleetEmailSuppression implements deleteFleetEmailSuppression operation.
 	//
 	// Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
@@ -637,6 +647,17 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/db/scan
 	GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (*GetDbScanResultOK, error)
+	// GetEmailNotifySettings implements getEmailNotifySettings operation.
+	//
+	// Returns the tenant-level email alert and digest notification settings.
+	// Always returns 200 with sensible defaults when no settings row exists
+	// yet (alerts_enabled=false, digest_enabled=false).
+	// Also returns `instance_mailer_configured` — when false, alerts and
+	// digests cannot be delivered even if enabled.
+	// Org-level route. Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/email/notify-settings
+	GetEmailNotifySettings(ctx context.Context) (GetEmailNotifySettingsRes, error)
 	// GetFleetEmailStats implements getFleetEmailStats operation.
 	//
 	// Returns tenant-wide summary counts and a per-day time-series for the
@@ -879,6 +900,14 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/db/snapshots
 	ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (*DbSnapshotList, error)
+	// ListEmailConnections implements listEmailConnections operation.
+	//
+	// Returns all named provider connections that belong to the site's email
+	// config. Empty array when no named connections exist.
+	// Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/sites/{siteId}/email/connections
+	ListEmailConnections(ctx context.Context, params ListEmailConnectionsParams) (ListEmailConnectionsRes, error)
 	// ListEmailProviders implements listEmailProviders operation.
 	//
 	// Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
@@ -1202,6 +1231,26 @@ type Handler interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-settings/notifications
 	PutBackupSettingsNotifications(ctx context.Context, req *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error)
+	// PutEmailConnection implements putEmailConnection operation.
+	//
+	// Creates or updates the named connection identified by `connKey` for the
+	// site's email config. The key must match `^[a-z0-9][a-z0-9_-]{0,31}$`;
+	// the value `default` is reserved and returns 400.
+	// Omit `secret` to preserve the existing stored credential. Provide an
+	// empty string to clear it.
+	// Requires `site.email.manage` permission.
+	//
+	// PUT /api/v1/sites/{siteId}/email/connections/{connKey}
+	PutEmailConnection(ctx context.Context, req *PutEmailConnectionRequest, params PutEmailConnectionParams) (PutEmailConnectionRes, error)
+	// PutEmailNotifySettings implements putEmailNotifySettings operation.
+	//
+	// Creates or updates the tenant-level email notification settings.
+	// All fields are optional — omitted fields are unchanged (PATCH semantics
+	// within a PUT envelope).
+	// Org-level route. Requires `site.email.manage` permission.
+	//
+	// PUT /api/v1/email/notify-settings
+	PutEmailNotifySettings(ctx context.Context, req *PutEmailNotifySettingsRequest) (PutEmailNotifySettingsRes, error)
 	// PutOrgEmailConfig implements putOrgEmailConfig operation.
 	//
 	// Creates or updates the org-wide default email configuration. This row is

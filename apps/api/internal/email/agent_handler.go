@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"path/filepath"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -146,6 +148,9 @@ type ingestLogRequest struct {
 // CreatedAt is json.RawMessage rather than time.Time so a MySQL-format or
 // otherwise non-RFC3339 timestamp does not fail json.Unmarshal on the whole
 // batch. parseCreatedAt normalises it afterwards.
+//
+// m62: ConnectionKey and Attachments are new fields. Old agents that do not
+// send them get "" and '[]' respectively (coerced in the handler).
 type ingestLogEntry struct {
 	AgentSeq    int64           `json:"agent_seq"`
 	MessageID   string          `json:"message_id"`
@@ -161,6 +166,53 @@ type ingestLogEntry struct {
 	BodyStored  bool            `json:"body_stored"`
 	Body        *string         `json:"body"`
 	CreatedAt   json.RawMessage `json:"created_at"` // any parseable timestamp string
+	// m62 additions — old agents send "" / absent; coerced below.
+	ConnectionKey string          `json:"connection_key"`
+	Attachments   json.RawMessage `json:"attachments"`
+}
+
+// maxAttachmentNameRunes is the maximum UTF-8 rune length for an attachment
+// name stored in the log. Names longer than this are truncated (never 422).
+const maxAttachmentNameRunes = 255
+
+// coerceAttachments normalises the agent-sent attachments JSON into a slice
+// of AttachmentMeta. It is deliberately tolerant: filepath.Base is applied to
+// strip directory paths, names are clamped to maxAttachmentNameRunes, negative
+// sizes are set to 0, empty names are dropped, and the slice is capped at
+// maxIngestAttachments. Any JSON parse failure returns an empty slice — never
+// causes a 422 on the batch.
+func coerceAttachments(raw json.RawMessage) []AttachmentMeta {
+	if len(raw) == 0 || string(raw) == "null" {
+		return []AttachmentMeta{}
+	}
+	var items []struct {
+		Name      string `json:"name"`
+		SizeBytes int64  `json:"size_bytes"`
+	}
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return []AttachmentMeta{}
+	}
+	out := make([]AttachmentMeta, 0, len(items))
+	for _, item := range items {
+		if len(out) >= maxIngestAttachments {
+			break
+		}
+		name := filepath.Base(item.Name)
+		if name == "." || name == "" {
+			continue
+		}
+		// Clamp name to maxAttachmentNameRunes.
+		if utf8.RuneCountInString(name) > maxAttachmentNameRunes {
+			runes := []rune(name)
+			name = string(runes[:maxAttachmentNameRunes])
+		}
+		size := item.SizeBytes
+		if size < 0 {
+			size = 0
+		}
+		out = append(out, AttachmentMeta{Name: name, SizeBytes: size})
+	}
+	return out
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +261,9 @@ func (h *AgentHandler) ingestLog(c *gin.Context) {
 			BodyStored:  e.BodyStored,
 			Body:        e.Body,
 			CreatedAt:   parseCreatedAt(e.CreatedAt),
+			// m62: coerce new fields; tolerant of absent/empty from old agents.
+			ConnectionKey: e.ConnectionKey,
+			Attachments:   coerceAttachments(e.Attachments),
 		})
 	}
 

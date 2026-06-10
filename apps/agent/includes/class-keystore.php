@@ -58,6 +58,13 @@ final class Keystore implements EmailKeystoreInterface
     public const OPTION_EMAIL_SECRET = 'wpmgr_agent_email_secret';
 
     /**
+     * Option name holding the per-connection secrets map, AES-256-GCM-encrypted.
+     * Stores a JSON object {connection_key: plaintext_secret} for all named
+     * connections; replaced atomically on every sync_email_config push.
+     */
+    public const OPTION_EMAIL_CONN_SECRETS = 'wpmgr_agent_email_conn_secrets';
+
+    /**
      * Option pinning which master-key source this install uses, so decrypt
      * always re-derives/reads the exact same key. Value is one of:
      *   ['source' => 'constant']
@@ -321,6 +328,57 @@ final class Keystore implements EmailKeystoreInterface
         } catch (\Throwable $e) {
             return '';
         }
+    }
+
+    /**
+     * Persist the per-connection secrets map, AES-256-GCM-encrypted.
+     *
+     * The map is keyed by connection_key (slug) with plaintext-secret values.
+     * Stored as an AES-encrypted JSON blob under OPTION_EMAIL_CONN_SECRETS;
+     * replaced atomically on every sync. Passing an empty array removes the option.
+     *
+     * @param array<string,string> $secrets Map of connection_key => plaintext secret.
+     * @return void
+     */
+    public function store_connection_secrets( array $secrets ): void
+    {
+        if ( $secrets === [] ) {
+            delete_option( self::OPTION_EMAIL_CONN_SECRETS );
+            return;
+        }
+        $json      = (string) wp_json_encode( $secrets );
+        $encrypted = $this->encrypt( $json );
+        update_option( self::OPTION_EMAIL_CONN_SECRETS, $encrypted, false );
+    }
+
+    /**
+     * Retrieve the decrypted plaintext secret for a named connection.
+     * Returns an empty string when no secret is stored for that key.
+     *
+     * @param string $connection_key Operator-chosen connection slug.
+     * @return string Decrypted secret, or '' when absent.
+     */
+    public function get_connection_secret( string $connection_key ): string
+    {
+        if ( $connection_key === '' ) {
+            return '';
+        }
+        $stored = get_option( self::OPTION_EMAIL_CONN_SECRETS );
+        if ( ! is_string( $stored ) || $stored === '' ) {
+            return '';
+        }
+        try {
+            $json = $this->decrypt( $stored );
+        } catch ( \Throwable $e ) {
+            return '';
+        }
+        $map = json_decode( $json, true );
+        if ( ! is_array( $map ) ) {
+            return '';
+        }
+        return isset( $map[ $connection_key ] ) && is_string( $map[ $connection_key ] )
+            ? $map[ $connection_key ]
+            : '';
     }
 
     /**

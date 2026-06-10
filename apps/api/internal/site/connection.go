@@ -230,6 +230,10 @@ const (
 	EventEmailLogIngested        = "email.log_ingested"
 	EventEmailSuppressionUpdated = "email.suppression_updated"
 	EventEmailBounce             = "email.bounce"
+	// email.config_propagated — emitted after an org-config propagation fan-out.
+	// SiteID=uuid.Nil (NULL) → tenant-wide fan-out to all active streams.
+	// Payload: {"synced": int, "failed": int, "total": int}
+	EventEmailConfigPropagated = "email.config_propagated"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

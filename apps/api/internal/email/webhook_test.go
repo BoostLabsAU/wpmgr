@@ -264,13 +264,13 @@ func TestSNSAllowedCertHost_Valid(t *testing.T) {
 
 func TestSNSAllowedCertHost_Rejected(t *testing.T) {
 	cases := []string{
-		"http://sns.us-east-1.amazonaws.com/cert.pem",     // HTTP, not HTTPS
-		"https://attacker.com/cert.pem",                    // non-AWS host
-		"https://evil-amazonaws.com/cert.pem",              // suffix match must be exact
-		"https://amazonaws.com.attacker.com/cert.pem",      // suffix bypass attempt
+		"http://sns.us-east-1.amazonaws.com/cert.pem", // HTTP, not HTTPS
+		"https://attacker.com/cert.pem",               // non-AWS host
+		"https://evil-amazonaws.com/cert.pem",         // suffix match must be exact
+		"https://amazonaws.com.attacker.com/cert.pem", // suffix bypass attempt
 		"",
 		"file:///etc/passwd",
-		"https://169.254.169.254/latest/meta-data",         // SSRF to IMDS
+		"https://169.254.169.254/latest/meta-data", // SSRF to IMDS
 	}
 	for _, u := range cases {
 		if snsAllowedCertHost(u) {
@@ -293,10 +293,10 @@ func TestSNSAllowedSubscribeURL_Valid(t *testing.T) {
 
 func TestSNSAllowedSubscribeURL_Rejected(t *testing.T) {
 	cases := []string{
-		"http://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription",      // HTTP
-		"https://attacker.com/ssrf-target",                                     // non-AWS
-		"https://internal.corp.example.com/?Action=ConfirmSubscription",        // internal host
-		"https://169.254.169.254/latest/user-data",                             // IMDS SSRF
+		"http://sns.us-east-1.amazonaws.com/?Action=ConfirmSubscription", // HTTP
+		"https://attacker.com/ssrf-target",                               // non-AWS
+		"https://internal.corp.example.com/?Action=ConfirmSubscription",  // internal host
+		"https://169.254.169.254/latest/user-data",                       // IMDS SSRF
 		"",
 	}
 	for _, u := range cases {
@@ -317,7 +317,7 @@ func TestParseSESEvents_HardBounce_WithTags(t *testing.T) {
 	note := sesNotification{
 		NotificationType: "Bounce",
 		Bounce: &struct {
-			BounceType       string `json:"bounceType"`
+			BounceType        string `json:"bounceType"`
 			BouncedRecipients []struct {
 				EmailAddress string `json:"emailAddress"`
 			} `json:"bouncedRecipients"`
@@ -374,7 +374,7 @@ func TestParseSESEvents_SoftBounce_Skipped(t *testing.T) {
 	note := sesNotification{
 		NotificationType: "Bounce",
 		Bounce: &struct {
-			BounceType       string `json:"bounceType"`
+			BounceType        string `json:"bounceType"`
 			BouncedRecipients []struct {
 				EmailAddress string `json:"emailAddress"`
 			} `json:"bouncedRecipients"`
@@ -447,13 +447,15 @@ func TestParseSESEvents_NoTags_NilTenantSite(t *testing.T) {
 	note := sesNotification{
 		NotificationType: "Bounce",
 		Bounce: &struct {
-			BounceType       string `json:"bounceType"`
+			BounceType        string `json:"bounceType"`
 			BouncedRecipients []struct {
 				EmailAddress string `json:"emailAddress"`
 			} `json:"bouncedRecipients"`
 		}{
-			BounceType:       "Permanent",
-			BouncedRecipients: []struct{ EmailAddress string `json:"emailAddress"` }{{EmailAddress: "u@x.com"}},
+			BounceType: "Permanent",
+			BouncedRecipients: []struct {
+				EmailAddress string `json:"emailAddress"`
+			}{{EmailAddress: "u@x.com"}},
 		},
 		Mail: struct {
 			MessageID string `json:"messageId"`

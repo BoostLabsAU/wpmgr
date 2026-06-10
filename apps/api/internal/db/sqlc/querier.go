@@ -13,6 +13,12 @@ import (
 )
 
 type Querier interface {
+	// ---------------------------------------------------------------------------
+	// email_alert_state  (m62 — per-site durable alert throttle)
+	// ---------------------------------------------------------------------------
+	// Upsert: increment failures_since_alert by @delta. Creates the row if absent.
+	// Runs under InAgentTx (called after IngestLogBatch for failed entries).
+	AccumulateAlertFailures(ctx context.Context, arg AccumulateAlertFailuresParams) error
 	// Deletes a tenant ONLY if it has no memberships and no sites, returning whether
 	// a row was removed. Delegates to the SECURITY DEFINER admin_delete_empty_tenant
 	// function: the tenant's ON DELETE CASCADE reaches audit_log, which wpmgr_app may
@@ -62,6 +68,18 @@ type Querier interface {
 	// generation counter and clears archived_at so the row leaves the archived list.
 	// The next consume increments nothing further — generation already advanced.
 	BeginSiteReEnrollment(ctx context.Context, arg BeginSiteReEnrollmentParams) (Site, error)
+	// Advance next_digest_at to the next period as a conditional claim.
+	// Returns the updated row if the claim succeeds (next_digest_at still <= now(),
+	// guard against double-claim by concurrent workers). Runs under InAgentTx.
+	ClaimAdvanceDigest(ctx context.Context, arg ClaimAdvanceDigestParams) (EmailNotifySetting, error)
+	// Single-statement conditional claim: sets last_alert_at = now() and resets
+	// failures_since_alert = 0 ONLY when:
+	//   - failures_since_alert >= @min_failures (at least one new failure)
+	//   - last_alert_at IS NULL OR last_alert_at < now() - @throttle_interval
+	// Returns the updated row (claim won) or no rows (pgx.ErrNoRows = throttled/skipped).
+	// Multi-instance safe: no external SELECT, no RETURNING on nothing.
+	// Runs under InAgentTx.
+	ClaimAlertSlot(ctx context.Context, arg ClaimAlertSlotParams) (EmailAlertState, error)
 	// Clear the in-flight db_clean watchdog columns on completion or failure.
 	ClearActiveDBCleanJob(ctx context.Context, siteID uuid.UUID) error
 	// Clear the in-flight db_scan watchdog columns on completion or failure.
@@ -149,6 +167,10 @@ type Querier interface {
 	// row (predicates still hold) or returns 0 rows (the agent already enrolled).
 	// rowsAffected==0 must be treated as not_cancellable by the service layer.
 	DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error)
+	// Delete a named connection by (config_id, connection_key). The caller checks
+	// for routing references (default/fallback/mappings) and returns 409 before
+	// calling this. Runs under InTenantTx.
+	DeleteEmailConnection(ctx context.Context, arg DeleteEmailConnectionParams) error
 	// Bulk delete of log entries by id list. Must be tenant+site scoped (InTenantTx).
 	// The ids array is the caller-supplied list; RLS provides the second line of defence.
 	DeleteEmailLogsBulk(ctx context.Context, arg DeleteEmailLogsBulkParams) (int64, error)
@@ -265,6 +287,10 @@ type Querier interface {
 	// site_cache_stats
 	// ---------------------------------------------------------------------------
 	GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCacheStat, error)
+	// Fetch (connection_key, provider_secret_encrypted) for all connections under a
+	// config row. Used by buildAgentConfigReq to decrypt and build the connections
+	// registry. Runs under InTenantTx.
+	GetConnectionSecretCiphertexts(ctx context.Context, arg GetConnectionSecretCiphertextsParams) ([]GetConnectionSecretCiphertextsRow, error)
 	// Returns the latest scan result for a site (tenant-scoped via RLS).
 	GetDBScanResult(ctx context.Context, arg GetDBScanResultParams) (SiteDbScanResult, error)
 	// Returns up to 366 data points for the trend chart, ordered oldest-first.
@@ -283,6 +309,8 @@ type Querier interface {
 	// Returns the full row so the handler can load and decrypt the per-row signing
 	// key and verify the provider signature with the right key.
 	GetEmailConfigByRouteTokenHash(ctx context.Context, tokenHash []byte) (SiteEmailConfig, error)
+	// Fetch one connection by (config_id, connection_key). Runs under InTenantTx.
+	GetEmailConnection(ctx context.Context, arg GetEmailConnectionParams) (SiteEmailConnection, error)
 	// Fetch a single email log entry by id (operator detail view, includes body).
 	GetEmailLog(ctx context.Context, arg GetEmailLogParams) (SiteEmailLog, error)
 	// Fetch only the body_stored flag + id for a resend gate check.
@@ -315,6 +343,9 @@ type Querier interface {
 	GetFleetEmailStats(ctx context.Context, arg GetFleetEmailStatsParams) (GetFleetEmailStatsRow, error)
 	// Fleet daily time-series (tenant-wide).
 	GetFleetEmailStatsByDay(ctx context.Context, arg GetFleetEmailStatsByDayParams) ([]GetFleetEmailStatsByDayRow, error)
+	// Per-site stats for the digest [from, to] window. Returns top sites by failure
+	// count. Runs under InAgentTx.
+	GetFleetStatsBySite(ctx context.Context, arg GetFleetStatsBySiteParams) ([]GetFleetStatsBySiteRow, error)
 	// By-id load for the per-site invitation management routes (revoke/regenerate).
 	// Tenant isolation is enforced by RLS; the handler additionally verifies
 	// site_id + scope against the path before mutating.
@@ -323,6 +354,13 @@ type Querier interface {
 	GetInvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, error)
 	GetLastAuditHash(ctx context.Context, tenantID uuid.UUID) (string, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	// ---------------------------------------------------------------------------
+	// email_notify_settings  (m62 — alerts + digest)
+	// ---------------------------------------------------------------------------
+	// Fetch the notify settings row for a tenant. Returns pgx.ErrNoRows when not
+	// configured (service returns defaults; GET NEVER 404s — 0.35.1 lesson).
+	// Runs under InTenantTx.
+	GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (EmailNotifySetting, error)
 	// Returns the org-wide default config row (site_id IS NULL) for a tenant.
 	GetOrgEmailConfig(ctx context.Context, tenantID uuid.UUID) (SiteEmailConfig, error)
 	// Enroll path (app.enroll GUC): resolve a presented code by its hash before the
@@ -402,6 +440,9 @@ type Querier interface {
 	// Loads a site under the tenant scope with a row lock so the load → validate →
 	// write sequence is serialized against concurrent transitions on the same row.
 	GetSiteForTransition(ctx context.Context, arg GetSiteForTransitionParams) (Site, error)
+	// Fetch a site's URL by id. Used by the propagation worker and alert digest to
+	// build per-site dashboard links. Runs under InAgentTx.
+	GetSiteRef(ctx context.Context, arg GetSiteRefParams) (GetSiteRefRow, error)
 	// ---------------------------------------------------------------------------
 	// Timeout-sweeper selects (cross-tenant, app.agent GUC). Both scan the partial
 	// idx_sites_last_seen index (connected/degraded only).
@@ -447,6 +488,7 @@ type Querier interface {
 	// (tenant_id, site_id, agent_seq). Status/response/error/resent_count may
 	// change on re-push (e.g. an asynchronous provider callback updates the
 	// status after initial delivery). Body is only stored when body_stored=true.
+	// m62: connection_key + attachments added (additive; old agents send '' / '[]').
 	IngestEmailLogEntry(ctx context.Context, arg IngestEmailLogEntryParams) (SiteEmailLog, error)
 	// Agent-auth path (app.agent GUC). The unique (site_id, nonce) index makes a
 	// replayed nonce a no-op via ON CONFLICT, returning 0 rows affected.
@@ -551,6 +593,27 @@ type Querier interface {
 	// Cross-tenant enumeration of enabled schedules whose next_run_at has passed,
 	// for the periodic scheduler. Runs under the app.agent GUC (scheduler policy).
 	ListDueBackupSchedules(ctx context.Context, arg ListDueBackupSchedulesParams) ([]BackupSchedule, error)
+	// ---------------------------------------------------------------------------
+	// Digest queries (m62)
+	// ---------------------------------------------------------------------------
+	// List notify-settings rows whose next_digest_at is in the past.
+	// RunOnStart: false for the periodic job; this is called by DigestWorker on each run.
+	// Runs under InAgentTx (cross-tenant worker).
+	ListDueDigests(ctx context.Context, rowLimit int32) ([]EmailNotifySetting, error)
+	// ---------------------------------------------------------------------------
+	// site_email_connection  (m62 — multi-connection + failover)
+	// ---------------------------------------------------------------------------
+	// List all named connections for a config row. Ordered created_at ASC, id ASC
+	// (stable insertion order for the UI). Runs under InTenantTx.
+	ListEmailConnections(ctx context.Context, arg ListEmailConnectionsParams) ([]SiteEmailConnection, error)
+	// ---------------------------------------------------------------------------
+	// Org-propagation (m62 — Area 1)
+	// ---------------------------------------------------------------------------
+	// Returns sites that should receive the org config propagation:
+	//   - enrolled (status IN ('connected','degraded'))
+	//   - no per-site email config row (NOT EXISTS site_email_config WHERE site_id=sites.id)
+	// Runs under InAgentTx (cross-tenant fan-out by the propagation River worker).
+	ListEmailInheritingSites(ctx context.Context, tenantID uuid.UUID) ([]ListEmailInheritingSitesRow, error)
 	// Keyset-paginated list of suppression entries for a site.
 	// Pass site_id = uuid.Nil to list fleet-wide entries only (site_id IS NULL).
 	// Pass a real site_id to list that site's entries (plus fleet-wide entries).
@@ -819,6 +882,12 @@ type Querier interface {
 	// sessions (ADR-045 Phase 2).
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	SetUserPending(ctx context.Context, id uuid.UUID) error
+	// Top failure samples for the digest (subject + truncated error, no bodies).
+	// Runs under InAgentTx.
+	TopFailureSamples(ctx context.Context, arg TopFailureSamplesParams) ([]TopFailureSamplesRow, error)
+	// Top failure samples for a per-site failure alert email (subject + error, no bodies).
+	// Runs under InAgentTx.
+	TopFailureSamplesBySite(ctx context.Context, arg TopFailureSamplesBySiteParams) ([]TopFailureSamplesBySiteRow, error)
 	TouchAPIKey(ctx context.Context, arg TouchAPIKeyParams) error
 	TouchRucssResultLastUsed(ctx context.Context, arg TouchRucssResultLastUsedParams) error
 	// ---------------------------------------------------------------------------
@@ -889,6 +958,10 @@ type Querier interface {
 	//   carry the orphan-enumeration output from agents >= 0.16.0. Agents < 0.16.0
 	//   omit these fields; the caller passes '[]' for backward compat.
 	UpsertDBScanResult(ctx context.Context, arg UpsertDBScanResultParams) (SiteDbScanResult, error)
+	// Insert-or-update a named connection. secret uses the nil-sentinel pattern:
+	// when @set_secret is false the existing ciphertext is preserved.
+	// updated_at is set via now() (no trigger). Runs under InTenantTx.
+	UpsertEmailConnection(ctx context.Context, arg UpsertEmailConnectionParams) (SiteEmailConnection, error)
 	// ---------------------------------------------------------------------------
 	// email_suppression  (Phase 4a — webhooks + suppression list)
 	// ---------------------------------------------------------------------------
@@ -911,6 +984,10 @@ type Querier interface {
 	// Runs under app.agent (InAgentTx). tenant_id + site_id ALWAYS come from the
 	// VERIFIED agent identity, never from the body.
 	UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error)
+	// Full-replace upsert of notify settings. next_digest_at is computed by the
+	// service (time.LoadLocation + nextDigestAt helper) and passed here.
+	// Runs under InTenantTx.
+	UpsertNotifySettings(ctx context.Context, arg UpsertNotifySettingsParams) (EmailNotifySetting, error)
 	// Upsert the org-wide default row (site_id IS NULL).
 	UpsertOrgEmailConfig(ctx context.Context, arg UpsertOrgEmailConfigParams) (SiteEmailConfig, error)
 	// Tenant-create helper: insert an owner membership for the creator; on conflict

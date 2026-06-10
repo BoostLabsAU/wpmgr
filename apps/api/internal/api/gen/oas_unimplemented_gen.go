@@ -592,6 +592,19 @@ func (UnimplementedHandler) DeleteDbSnapshot(ctx context.Context, params DeleteD
 	return r, ht.ErrNotImplemented
 }
 
+// DeleteEmailConnection implements deleteEmailConnection operation.
+//
+// Permanently deletes the named connection. Returns 404 when the key does
+// not exist. Returns 409 when the key is referenced as `default_connection`
+// or `fallback_connection` on the site's config row (remove the reference
+// first).
+// Requires `site.email.manage` permission.
+//
+// DELETE /api/v1/sites/{siteId}/email/connections/{connKey}
+func (UnimplementedHandler) DeleteEmailConnection(ctx context.Context, params DeleteEmailConnectionParams) (r DeleteEmailConnectionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DeleteFleetEmailSuppression implements deleteFleetEmailSuppression operation.
 //
 // Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
@@ -834,6 +847,20 @@ func (UnimplementedHandler) GetCacheStats(ctx context.Context, params GetCacheSt
 //
 // GET /api/v1/sites/{siteId}/perf/db/scan
 func (UnimplementedHandler) GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (r *GetDbScanResultOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetEmailNotifySettings implements getEmailNotifySettings operation.
+//
+// Returns the tenant-level email alert and digest notification settings.
+// Always returns 200 with sensible defaults when no settings row exists
+// yet (alerts_enabled=false, digest_enabled=false).
+// Also returns `instance_mailer_configured` — when false, alerts and
+// digests cannot be delivered even if enabled.
+// Org-level route. Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/notify-settings
+func (UnimplementedHandler) GetEmailNotifySettings(ctx context.Context) (r GetEmailNotifySettingsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1166,6 +1193,17 @@ func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsP
 //
 // GET /api/v1/sites/{siteId}/perf/db/snapshots
 func (UnimplementedHandler) ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (r *DbSnapshotList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListEmailConnections implements listEmailConnections operation.
+//
+// Returns all named provider connections that belong to the site's email
+// config. Empty array when no named connections exist.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/sites/{siteId}/email/connections
+func (UnimplementedHandler) ListEmailConnections(ctx context.Context, params ListEmailConnectionsParams) (r ListEmailConnectionsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1603,6 +1641,32 @@ func (UnimplementedHandler) PutBackupSettingsContents(ctx context.Context, req *
 //
 // PUT /api/v1/sites/{siteId}/backup-settings/notifications
 func (UnimplementedHandler) PutBackupSettingsNotifications(ctx context.Context, req *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (r PutBackupSettingsNotificationsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutEmailConnection implements putEmailConnection operation.
+//
+// Creates or updates the named connection identified by `connKey` for the
+// site's email config. The key must match `^[a-z0-9][a-z0-9_-]{0,31}$`;
+// the value `default` is reserved and returns 400.
+// Omit `secret` to preserve the existing stored credential. Provide an
+// empty string to clear it.
+// Requires `site.email.manage` permission.
+//
+// PUT /api/v1/sites/{siteId}/email/connections/{connKey}
+func (UnimplementedHandler) PutEmailConnection(ctx context.Context, req *PutEmailConnectionRequest, params PutEmailConnectionParams) (r PutEmailConnectionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutEmailNotifySettings implements putEmailNotifySettings operation.
+//
+// Creates or updates the tenant-level email notification settings.
+// All fields are optional — omitted fields are unchanged (PATCH semantics
+// within a PUT envelope).
+// Org-level route. Requires `site.email.manage` permission.
+//
+// PUT /api/v1/email/notify-settings
+func (UnimplementedHandler) PutEmailNotifySettings(ctx context.Context, req *PutEmailNotifySettingsRequest) (r PutEmailNotifySettingsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

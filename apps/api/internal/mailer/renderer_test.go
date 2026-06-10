@@ -54,6 +54,37 @@ func sampleData(name string) map[string]any {
 		common["SiteName"] = "example.com"
 		common["Role"] = "viewer"
 		common["DashboardURL"] = "https://manage.wpmgr.app/shared-with-me"
+	case "email_failure_alert":
+		// Mirrors the production shape built in email/notify.go sendAlert:
+		// counts are ints, samples carry Subject/To/Error.
+		common["SiteName"] = "example.com"
+		common["SiteURL"] = "https://example.com"
+		common["SiteEmailURL"] = "https://manage.wpmgr.app/sites/abc/email/log"
+		common["FailureCount"] = 3
+		common["WindowMinutes"] = 60
+		common["Samples"] = []map[string]any{
+			{"Subject": "Order receipt", "To": "buyer@example.com", "Error": "550 mailbox unavailable"},
+			{"Subject": "Password reset", "To": "user@example.com", "Error": "timeout connecting to provider"},
+		}
+	case "email_digest":
+		// Mirrors the production shape built in email/notify.go buildDigestData:
+		// aggregate counts are int64, per-site rows carry int64 counts.
+		common["PeriodLabel"] = "June 2026"
+		common["From"] = "2026-06-01"
+		common["To"] = "2026-06-30"
+		common["Total"] = int64(120)
+		common["SentCount"] = int64(110)
+		common["FailedCount"] = int64(7)
+		common["BouncedCount"] = int64(3)
+		common["SiteCount"] = int64(2)
+		common["Sites"] = []map[string]any{
+			{"SiteName": "example.com", "SiteURL": "https://example.com", "Sent": int64(80), "Failed": int64(5), "Bounced": int64(2)},
+			{"SiteName": "shop.example.com", "SiteURL": "https://shop.example.com", "Sent": int64(30), "Failed": int64(0), "Bounced": int64(1)},
+		}
+		common["TopFailures"] = []map[string]any{
+			{"SiteName": "example.com", "Subject": "Order receipt", "Error": "550 mailbox unavailable"},
+		}
+		common["DashboardURL"] = "https://manage.wpmgr.app/email"
 	}
 	return common
 }

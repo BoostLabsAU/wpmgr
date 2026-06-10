@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronLeft, ChevronRight, X, RotateCcw, Loader2, Image, ImageOff } from "lucide-react";
+import { ChevronLeft, ChevronRight, X, RotateCcw, Loader2, Image, ImageOff, Paperclip } from "lucide-react";
 
 import {
   Dialog,
@@ -106,6 +106,16 @@ export function EmailLogDetailDialog({
       </Dialog>
     </TooltipProvider>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Formatting helpers
+// ---------------------------------------------------------------------------
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // ---------------------------------------------------------------------------
@@ -228,8 +238,13 @@ function LogDetailBody({ siteId, entry: detail, prevId, nextId, onNavigate }: Lo
         <dt className="font-medium text-[var(--color-muted-foreground)]">
           Provider
         </dt>
-        <dd>
+        <dd className="flex flex-wrap items-center gap-1.5">
           <Badge variant="outline">{e.provider}</Badge>
+          {e.connection_key ? (
+            <code className="text-xs text-[var(--color-muted-foreground)]">
+              via {e.connection_key}
+            </code>
+          ) : null}
         </dd>
 
         {e.retries > 0 ? (
@@ -251,6 +266,30 @@ function LogDetailBody({ siteId, entry: detail, prevId, nextId, onNavigate }: Lo
             <Badge variant="muted">No</Badge>
           )}
         </dd>
+
+        {(e.attachments ?? []).length > 0 ? (
+          <>
+            <dt className="font-medium text-[var(--color-muted-foreground)]">
+              Attachments
+            </dt>
+            <dd className="flex flex-wrap gap-1.5">
+              {(e.attachments ?? []).map((att, idx) => (
+                <span
+                  key={idx}
+                  className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border)] bg-[var(--color-muted)] px-2 py-0.5 text-xs break-all"
+                >
+                  <Paperclip aria-hidden="true" className="size-3 shrink-0" />
+                  <span className="break-all">{att.name}</span>
+                  {att.size_bytes > 0 ? (
+                    <span className="shrink-0 text-[var(--color-muted-foreground)]">
+                      {formatBytes(att.size_bytes)}
+                    </span>
+                  ) : null}
+                </span>
+              ))}
+            </dd>
+          </>
+        ) : null}
       </dl>
 
       {/* Error */}

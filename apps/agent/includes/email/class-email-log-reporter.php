@@ -214,7 +214,7 @@ final class EmailLogReporter {
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
 				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $table is $wpdb->prefix + a hard-coded constant, not user input
-				"SELECT id, message_id, mail_to, mail_from, subject, provider, status, response, error, retries, resent_count, body_stored, body, created_at FROM {$table} WHERE id > %d ORDER BY id ASC LIMIT %d",
+				"SELECT id, message_id, mail_to, mail_from, subject, provider, status, response, error, retries, resent_count, body_stored, body, connection_key, attachments, created_at FROM {$table} WHERE id > %d ORDER BY id ASC LIMIT %d",
 				$cursor,
 				self::BATCH_SIZE
 			),
@@ -261,24 +261,34 @@ final class EmailLogReporter {
 			}
 
 			$entry = [
-				'agent_seq'     => (int) ( $row['id'] ?? 0 ),
-				'message_id'    => (string) ( $row['message_id'] ?? '' ),
-				'to_addresses'  => $to_addresses,
-				'from_address'  => (string) ( $row['mail_from'] ?? '' ),
-				'subject'       => (string) ( $row['subject'] ?? '' ),
-				'provider'      => (string) ( $row['provider'] ?? '' ),
-				'status'        => (string) ( $row['status'] ?? '' ),
-				'response'      => $response_decoded,
-				'error'         => (string) ( $row['error'] ?? '' ),
-				'retries'       => (int) ( $row['retries'] ?? 0 ),
-				'resent_count'  => (int) ( $row['resent_count'] ?? 0 ),
-				'body_stored'   => (bool) $body_stored,
-				'created_at'    => $this->toRfc3339( (string) ( $row['created_at'] ?? '' ) ),
+				'agent_seq'      => (int) ( $row['id'] ?? 0 ),
+				'message_id'     => (string) ( $row['message_id'] ?? '' ),
+				'to_addresses'   => $to_addresses,
+				'from_address'   => (string) ( $row['mail_from'] ?? '' ),
+				'subject'        => (string) ( $row['subject'] ?? '' ),
+				'provider'       => (string) ( $row['provider'] ?? '' ),
+				'status'         => (string) ( $row['status'] ?? '' ),
+				'response'       => $response_decoded,
+				'error'          => (string) ( $row['error'] ?? '' ),
+				'retries'        => (int) ( $row['retries'] ?? 0 ),
+				'resent_count'   => (int) ( $row['resent_count'] ?? 0 ),
+				'body_stored'    => (bool) $body_stored,
+				'connection_key' => (string) ( $row['connection_key'] ?? '' ),
+				'created_at'     => $this->toRfc3339( (string) ( $row['created_at'] ?? '' ) ),
 			];
 
 			// Include body ONLY when body_stored=1 (privacy: default is OFF).
 			if ( $body_stored === 1 ) {
 				$entry['body'] = isset( $row['body'] ) ? (string) $row['body'] : null;
+			}
+
+			// Include attachments only when the column is non-null and non-empty.
+			$attachments_raw = isset( $row['attachments'] ) ? (string) $row['attachments'] : '';
+			if ( $attachments_raw !== '' ) {
+				$decoded_attach = json_decode( $attachments_raw, true );
+				if ( is_array( $decoded_attach ) && $decoded_attach !== [] ) {
+					$entry['attachments'] = $decoded_attach;
+				}
 			}
 
 			$entries[] = $entry;

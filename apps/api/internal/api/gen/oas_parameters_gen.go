@@ -1369,6 +1369,125 @@ func decodeDeleteDbSnapshotParams(args [2]string, argsEscaped bool, r *http.Requ
 	return params, nil
 }
 
+// DeleteEmailConnectionParams is parameters of deleteEmailConnection operation.
+type DeleteEmailConnectionParams struct {
+	SiteId uuid.UUID
+	// Connection slug to delete.
+	ConnKey string
+}
+
+func unpackDeleteEmailConnectionParams(packed middleware.Parameters) (params DeleteEmailConnectionParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "connKey",
+			In:   "path",
+		}
+		params.ConnKey = packed[key].(string)
+	}
+	return params
+}
+
+func decodeDeleteEmailConnectionParams(args [2]string, argsEscaped bool, r *http.Request) (params DeleteEmailConnectionParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	// Decode path: connKey.
+	if err := func() error {
+		param := args[1]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[1])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "connKey",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.ConnKey = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "connKey",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // DeleteFleetEmailSuppressionParams is parameters of deleteFleetEmailSuppression operation.
 type DeleteFleetEmailSuppressionParams struct {
 	SuppressionId uuid.UUID
@@ -5405,6 +5524,71 @@ func unpackListDbSnapshotsParams(packed middleware.Parameters) (params ListDbSna
 }
 
 func decodeListDbSnapshotsParams(args [1]string, argsEscaped bool, r *http.Request) (params ListDbSnapshotsParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// ListEmailConnectionsParams is parameters of listEmailConnections operation.
+type ListEmailConnectionsParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackListEmailConnectionsParams(packed middleware.Parameters) (params ListEmailConnectionsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeListEmailConnectionsParams(args [1]string, argsEscaped bool, r *http.Request) (params ListEmailConnectionsParams, _ error) {
 	// Decode path: siteId.
 	if err := func() error {
 		param := args[0]
@@ -11411,6 +11595,125 @@ func decodePutBackupSettingsNotificationsParams(args [1]string, argsEscaped bool
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// PutEmailConnectionParams is parameters of putEmailConnection operation.
+type PutEmailConnectionParams struct {
+	SiteId uuid.UUID
+	// Connection slug (^[a-z0-9][a-z0-9_-]{0,31}$).
+	ConnKey string
+}
+
+func unpackPutEmailConnectionParams(packed middleware.Parameters) (params PutEmailConnectionParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "connKey",
+			In:   "path",
+		}
+		params.ConnKey = packed[key].(string)
+	}
+	return params
+}
+
+func decodePutEmailConnectionParams(args [2]string, argsEscaped bool, r *http.Request) (params PutEmailConnectionParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	// Decode path: connKey.
+	if err := func() error {
+		param := args[1]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[1])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "connKey",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.ConnKey = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "connKey",
 			In:   "path",
 			Err:  err,
 		}

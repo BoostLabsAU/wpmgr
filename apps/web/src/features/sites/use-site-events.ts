@@ -127,6 +127,8 @@ const SITE_EVENT_TYPES = [
   "email.log_ingested",
   "email.suppression_updated",
   "email.bounce",
+  // m62 — org-config propagation result (tenant-wide fan-out, site_id=null)
+  "email.config_propagated",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

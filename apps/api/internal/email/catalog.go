@@ -5,24 +5,24 @@ package email
 // in reads (only a *_set bool is surfaced). IsRequired marks fields that must be
 // present for the provider to function.
 type ProviderField struct {
-	Key        string   `json:"key"`
-	Label      string   `json:"label"`
-	Type       string   `json:"type"` // text | number | select | bool | password
-	IsSecret   bool     `json:"is_secret,omitempty"`
-	IsRequired bool     `json:"is_required,omitempty"`
+	Key        string `json:"key"`
+	Label      string `json:"label"`
+	Type       string `json:"type"` // text | number | select | bool | password
+	IsSecret   bool   `json:"is_secret,omitempty"`
+	IsRequired bool   `json:"is_required,omitempty"`
 	// Options is non-nil only for type=select fields.
-	Options    []string `json:"options,omitempty"`
-	Default    any      `json:"default,omitempty"`
-	Help       string   `json:"help,omitempty"`
+	Options []string `json:"options,omitempty"`
+	Default any      `json:"default,omitempty"`
+	Help    string   `json:"help,omitempty"`
 }
 
 // ProviderSpec is the static schema for one email provider.
 type ProviderSpec struct {
-	Slug        string          `json:"slug"`
-	Label       string          `json:"label"`
-	Fields      []ProviderField `json:"fields"`
+	Slug   string          `json:"slug"`
+	Label  string          `json:"label"`
+	Fields []ProviderField `json:"fields"`
 	// DocsURL is a link to the provider's official API / SMTP documentation.
-	DocsURL     string          `json:"docs_url,omitempty"`
+	DocsURL string `json:"docs_url,omitempty"`
 }
 
 // Catalog is the static v1 provider catalog (SMTP + 4 API providers).

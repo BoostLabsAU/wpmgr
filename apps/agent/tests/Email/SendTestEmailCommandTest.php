@@ -37,7 +37,7 @@ class SendTestEmailCommandTest extends TestCase
     private function make_router(bool $ok, string $message_id = '', string $detail = ''): ProviderRouter
     {
         $router = $this->createMock(ProviderRouter::class);
-        $router->method('send')->willReturn([
+        $router->method('send_via')->willReturn([
             'ok'         => $ok,
             'message_id' => $message_id,
             'detail'     => $detail,
@@ -100,10 +100,11 @@ class SendTestEmailCommandTest extends TestCase
 
         $router = $this->createMock(ProviderRouter::class);
         $router->expects($this->once())
-            ->method('send')
+            ->method('send_via')
             ->with(
                 $this->callback(fn($mail) => $mail['to'] === ['admin@example.com']),
                 $this->isInstanceOf(EmailConfig::class),
+                '', // connection_key defaults to ''
                 true // disable_fallback must be true
             )
             ->willReturn(['ok' => true, 'message_id' => 'sg-test-001', 'detail' => '']);
@@ -125,7 +126,7 @@ class SendTestEmailCommandTest extends TestCase
         );
 
         $router = $this->createMock(ProviderRouter::class);
-        $router->method('send')->willReturn([
+        $router->method('send_via')->willReturn([
             'ok'         => false,
             'message_id' => '',
             'detail'     => 'Mailgun error 401: Forbidden',
@@ -148,11 +149,12 @@ class SendTestEmailCommandTest extends TestCase
 
         $router = $this->createMock(ProviderRouter::class);
         $router->expects($this->once())
-            ->method('send')
+            ->method('send_via')
             ->with(
                 $this->callback(fn($mail) => $mail['subject'] === 'Test Email from WPMgr'),
                 $this->anything(),
-                true
+                '',   // connection_key
+                true  // disable_fallback
             )
             ->willReturn(['ok' => true, 'message_id' => '', 'detail' => '']);
 
@@ -170,11 +172,12 @@ class SendTestEmailCommandTest extends TestCase
 
         $router = $this->createMock(ProviderRouter::class);
         $router->expects($this->once())
-            ->method('send')
+            ->method('send_via')
             ->with(
                 $this->callback(fn($mail) => $mail['subject'] === 'My Custom Subject'),
                 $this->anything(),
-                true
+                '',   // connection_key
+                true  // disable_fallback
             )
             ->willReturn(['ok' => true, 'message_id' => '', 'detail' => '']);
 

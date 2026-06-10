@@ -381,11 +381,11 @@ func TestMaskEmail(t *testing.T) {
 		want string
 	}{
 		{"alice@example.com", "a****@example.com"},
-		{"a@b.com", "a@b.com"},          // single-char local — no masking needed
+		{"a@b.com", "a@b.com"}, // single-char local — no masking needed
 		{"ab@x.org", "a*@x.org"},
-		{"", ""},                         // empty passthrough
-		{"notanemail", "notanemail"},      // no @ — passthrough
-		{"@domain.com", "@domain.com"},   // empty local — passthrough
+		{"", ""},                       // empty passthrough
+		{"notanemail", "notanemail"},   // no @ — passthrough
+		{"@domain.com", "@domain.com"}, // empty local — passthrough
 	}
 	for _, tc := range cases {
 		got := maskEmail(tc.in)
