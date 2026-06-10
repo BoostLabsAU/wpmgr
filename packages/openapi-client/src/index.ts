@@ -149,6 +149,8 @@ export {
   // email webhook config (Phase 4b)
   putSiteEmailWebhookConfig,
   putOrgEmailWebhookConfig,
+  // email sync (Phase 5)
+  syncSiteEmailConfig,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -503,4 +505,7 @@ export type {
   PutSiteEmailWebhookConfigResponse,
   PutOrgEmailWebhookConfigData,
   PutOrgEmailWebhookConfigResponse,
+  // email sync (Phase 5)
+  SyncSiteEmailConfigData,
+  SyncSiteEmailConfigResponse,
 } from "./generated/types.gen";

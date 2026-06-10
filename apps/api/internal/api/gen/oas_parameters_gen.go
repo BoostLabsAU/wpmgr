@@ -13108,6 +13108,71 @@ func decodeSyncMediaParams(args [1]string, argsEscaped bool, r *http.Request) (p
 	return params, nil
 }
 
+// SyncSiteEmailConfigParams is parameters of syncSiteEmailConfig operation.
+type SyncSiteEmailConfigParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackSyncSiteEmailConfigParams(packed middleware.Parameters) (params SyncSiteEmailConfigParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeSyncSiteEmailConfigParams(args [1]string, argsEscaped bool, r *http.Request) (params SyncSiteEmailConfigParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // TestSiteDestinationParams is parameters of testSiteDestination operation.
 type TestSiteDestinationParams struct {
 	SiteId uuid.UUID

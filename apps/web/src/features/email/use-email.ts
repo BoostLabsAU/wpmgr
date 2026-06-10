@@ -12,6 +12,7 @@ import {
   getSiteEmailConfig,
   putSiteEmailConfig,
   sendTestEmail,
+  syncSiteEmailConfig,
   listEmailProviders,
   getOrgEmailConfig,
   putOrgEmailConfig,
@@ -244,6 +245,37 @@ export function useTestEmail(
       });
       if (error) throw toError(error);
       return data;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Sync email config to agent
+// ---------------------------------------------------------------------------
+
+/** POST /api/v1/sites/:siteId/email/sync */
+export function useSyncEmailConfig(
+  siteId: string,
+): UseMutationResult<EmailTestResult, Error, void> {
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await syncSiteEmailConfig({
+        path: { siteId },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (result) => {
+      if (result?.ok) {
+        toast.success("Email config synced to site");
+      } else {
+        toast.error("Could not sync to site", {
+          description: result?.detail ?? "The agent reported a failure",
+        });
+      }
+    },
+    onError: (err) => {
+      toast.error("Could not sync to site", { description: err.message });
     },
   });
 }

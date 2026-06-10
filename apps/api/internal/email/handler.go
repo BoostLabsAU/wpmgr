@@ -54,29 +54,32 @@ func (h *Handler) SetPublicBase(publicBase string) {
 // Register mounts all email routes onto the authenticated /api/v1 group.
 //
 // Per-site routes (under /sites/:siteId, gated by RequireSiteAccess):
-//   GET    /sites/:siteId/email/config                — masked config
-//   PUT    /sites/:siteId/email/config                — upsert per-site config
-//   POST   /sites/:siteId/email/test                  — dispatch send_test_email command
-//   GET    /sites/:siteId/email/log                   — keyset-paginated log list
-//   GET    /sites/:siteId/email/log/export            — CSV export
-//   GET    /sites/:siteId/email/log/:logId            — single log entry detail
-//   GET    /sites/:siteId/email/stats                 — per-site email stats
-//   POST   /sites/:siteId/email/log/:logId/resend     — single resend (body_stored gate)
-//   POST   /sites/:siteId/email/log/resend            — bulk resend (body ids[])
-//   DELETE /sites/:siteId/email/log                   — bulk delete (ids[])
-//   GET    /sites/:siteId/email/suppression           — per-site suppression list
-//   POST   /sites/:siteId/email/suppression           — manual add
-//   DELETE /sites/:siteId/email/suppression/:id       — un-suppress
+//
+//	GET    /sites/:siteId/email/config                — masked config
+//	PUT    /sites/:siteId/email/config                — upsert per-site config
+//	POST   /sites/:siteId/email/test                  — dispatch send_test_email command
+//	POST   /sites/:siteId/email/sync                  — push stored config to agent (explicit sync)
+//	GET    /sites/:siteId/email/log                   — keyset-paginated log list
+//	GET    /sites/:siteId/email/log/export            — CSV export
+//	GET    /sites/:siteId/email/log/:logId            — single log entry detail
+//	GET    /sites/:siteId/email/stats                 — per-site email stats
+//	POST   /sites/:siteId/email/log/:logId/resend     — single resend (body_stored gate)
+//	POST   /sites/:siteId/email/log/resend            — bulk resend (body ids[])
+//	DELETE /sites/:siteId/email/log                   — bulk delete (ids[])
+//	GET    /sites/:siteId/email/suppression           — per-site suppression list
+//	POST   /sites/:siteId/email/suppression           — manual add
+//	DELETE /sites/:siteId/email/suppression/:id       — un-suppress
 //
 // Org-level routes (no :siteId — RequireAuth+RequireTenant+RequireOrgScope):
-//   GET  /email/providers              — static provider catalog
-//   GET  /email/org-config             — org-wide default config
-//   PUT  /email/org-config             — upsert org-wide default config
-//   GET  /email/log                    — fleet cross-site log list
-//   GET  /email/stats                  — fleet cross-site stats
-//   GET  /email/suppression            — fleet suppression list
-//   POST /email/suppression            — fleet manual add
-//   DELETE /email/suppression/:id      — fleet un-suppress
+//
+//	GET  /email/providers              — static provider catalog
+//	GET  /email/org-config             — org-wide default config
+//	PUT  /email/org-config             — upsert org-wide default config
+//	GET  /email/log                    — fleet cross-site log list
+//	GET  /email/stats                  — fleet cross-site stats
+//	GET  /email/suppression            — fleet suppression list
+//	POST /email/suppression            — fleet manual add
+//	DELETE /email/suppression/:id      — fleet un-suppress
 func (h *Handler) Register(r *gin.RouterGroup) {
 	// Per-site group: inherits RequireAuth + RequireTenant from v1, adds site gate.
 	g := r.Group("/sites/:siteId", authz.RequireSiteAccess("siteId"))
@@ -85,6 +88,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// m61: per-site webhook security config (route token rotation, signing key, SES ARNs).
 	g.PUT("/email/webhook-config", authz.RequirePermission(authz.PermEmailManage), h.putWebhookConfig)
 	g.POST("/email/test", authz.RequirePermission(authz.PermEmailManage), h.testSend)
+	g.POST("/email/sync", authz.RequirePermission(authz.PermEmailManage), h.syncToAgent)
 	// Phase 3 — log viewer + stats.
 	// NOTE: /email/log/export and /email/log/resend must be registered BEFORE
 	// /email/log/:logId so Gin does not parse "export"/"resend" as a :logId UUID.
@@ -163,8 +167,8 @@ func (h *Handler) putConfig(c *gin.Context) {
 		return
 	}
 	h.record(c, p, audit.ActionEmailConfigUpdated, siteID, map[string]any{
-		"provider":    saved.Provider,
-		"secret_set":  saved.SecretSet,
+		"provider":   saved.Provider,
+		"secret_set": saved.SecretSet,
 	})
 	c.JSON(http.StatusOK, toConfigDTO(saved, h.publicBase))
 }
@@ -198,6 +202,28 @@ func (h *Handler) testSend(c *gin.Context) {
 		Subject: body.Subject,
 		Body:    body.Body,
 	})
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": result.OK, "detail": result.Detail})
+}
+
+// syncToAgent handles POST /sites/:siteId/email/sync.
+// Pushes the stored email config to the site agent without sending a test
+// email. Useful after saving a config when the agent was offline at save
+// time, or after rotating a secret, so the agent picks up the latest config
+// immediately rather than waiting for the next implicit sync.
+//
+// The response is always 200; ok=false carries the failure detail so the
+// frontend can display it without treating it as an error.
+func (h *Handler) syncToAgent(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	result, err := h.svc.SyncConfigToAgent(c.Request.Context(), p.TenantID, siteID)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -284,8 +310,8 @@ func (h *Handler) putWebhookConfig(c *gin.Context) {
 		return
 	}
 	h.record(c, p, audit.ActionEmailConfigUpdated, siteID, map[string]any{
-		"webhook_config": true,
-		"rotated_token":  body.RotateToken,
+		"webhook_config":  true,
+		"rotated_token":   body.RotateToken,
 		"signing_key_set": body.WebhookSigningKey != nil,
 	})
 	c.JSON(http.StatusOK, toConfigDTO(result.Config, h.publicBase))

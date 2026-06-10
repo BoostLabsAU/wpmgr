@@ -449,6 +449,10 @@ type SilenceSitePHPErrorRes interface {
 	silenceSitePHPErrorRes()
 }
 
+type SyncSiteEmailConfigRes interface {
+	syncSiteEmailConfigRes()
+}
+
 type TestSiteDestinationRes interface {
 	testSiteDestinationRes()
 }

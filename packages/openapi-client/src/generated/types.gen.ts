@@ -8060,6 +8060,43 @@ export type SendTestEmailResponses = {
 export type SendTestEmailResponse =
   SendTestEmailResponses[keyof SendTestEmailResponses];
 
+export type SyncSiteEmailConfigData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/sync";
+};
+
+export type SyncSiteEmailConfigErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type SyncSiteEmailConfigError =
+  SyncSiteEmailConfigErrors[keyof SyncSiteEmailConfigErrors];
+
+export type SyncSiteEmailConfigResponses = {
+  /**
+   * Sync result (ok may be false when the agent returns an error or is offline)
+   */
+  200: EmailTestResult;
+};
+
+export type SyncSiteEmailConfigResponse =
+  SyncSiteEmailConfigResponses[keyof SyncSiteEmailConfigResponses];
+
 export type ListSiteEmailLogData = {
   body?: never;
   path: {

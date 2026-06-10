@@ -17,7 +17,6 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
-
 // Encryptor age-encrypts and decrypts provider secrets. *cryptbox.AgeIdentity
 // satisfies it. Declared as an interface so the service is unit-testable with a
 // fake, and so the age-guard can be checked without importing cryptbox.
@@ -86,11 +85,11 @@ type repository interface {
 //   - provider validation
 //   - dispatching sync_email_config and send_test_email commands to the agent
 type Service struct {
-	repo      repository
-	enc       Encryptor // nil when WPMGR_SITE_DEST_AGE_SECRET not configured
-	agent     AgentEmailClient
-	siteLook  SiteLookup
-	log       *slog.Logger
+	repo     repository
+	enc      Encryptor // nil when WPMGR_SITE_DEST_AGE_SECRET not configured
+	agent    AgentEmailClient
+	siteLook SiteLookup
+	log      *slog.Logger
 	// pub is the site-event bus used to emit email.suppression_updated and
 	// email.bounce SSE events. May be nil (guarded before use).
 	pub EventPublisher
@@ -100,6 +99,9 @@ type Service struct {
 // return ServiceUnavailable("email_crypto_unwired")); agent may be nil (command
 // dispatch paths return graceful errors until Phase 2).
 func NewService(repo *Repo, enc Encryptor, log *slog.Logger) *Service {
+	if log == nil {
+		log = slog.Default()
+	}
 	return &Service{repo: repo, enc: enc, log: log}
 }
 
@@ -178,8 +180,38 @@ func (s *Service) UpsertSiteConfig(ctx context.Context, in UpsertInput) (Config,
 	}
 
 	// Best-effort: push the decrypted config to the agent. A push failure is
-	// non-fatal (config is stored); the caller surfaces it as a header warning.
-	// TODO(phase2): wire push here once the agent implements sync_email_config.
+	// non-fatal — the config is already saved. Log the warning and return the
+	// saved config cleanly so the save always succeeds even when the agent is
+	// offline.
+	if s.agent != nil && s.siteLook != nil && in.SiteID != nil {
+		siteURL, urlErr := s.siteLook.GetSiteURL(ctx, in.TenantID, *in.SiteID)
+		if urlErr != nil {
+			s.log.Warn("email: saved config but could not resolve site URL for agent sync",
+				slog.String("site_id", in.SiteID.String()),
+				slog.Any("error", urlErr),
+			)
+			return saved, nil
+		}
+		secret, secretErr := s.resolveEffectiveSecret(ctx, in, saved)
+		if secretErr != nil {
+			s.log.Warn("email: saved config but could not resolve secret for agent sync",
+				slog.String("site_id", in.SiteID.String()),
+				slog.Any("error", secretErr),
+			)
+			// Push without the secret — the agent will be configured for the
+			// provider/from fields; the secret push will retry on next save.
+			secret = ""
+		}
+		req := s.buildAgentConfigReq(saved, secret)
+		if _, syncErr := s.agent.SyncEmailConfig(ctx, *in.SiteID, siteURL, req); syncErr != nil {
+			s.log.Warn("email: config stored but agent sync failed",
+				slog.String("site_id", in.SiteID.String()),
+				slog.Any("error", syncErr),
+			)
+			// Non-fatal: the save succeeded; return the saved config cleanly.
+			return saved, nil
+		}
+	}
 
 	return saved, nil
 }
@@ -202,6 +234,12 @@ func (s *Service) UpsertOrgConfig(ctx context.Context, in UpsertInput) (Config, 
 	if err != nil {
 		return Config{}, domain.Internal("email_upsert_org_config", "failed to save org email config").WithCause(err)
 	}
+	// TODO(org-propagation): saving the org-wide default does NOT yet push to
+	// sites that inherit it (sites with no per-site row). Propagating to all
+	// enrolled sites on every org-config save risks surprise-routing mail for
+	// operators who have not explicitly opted each site in. Implement as a
+	// deliberate follow-up: enumerate inheriting sites and push SyncEmailConfig
+	// to each, with rate-limiting and a per-site opt-in gate.
 	return saved, nil
 }
 
@@ -239,6 +277,43 @@ func (s *Service) SendTest(ctx context.Context, tenantID, siteID uuid.UUID, in T
 		return TestSendResult{}, domain.NotFound("email_site_not_found", "site not found or not enrolled")
 	}
 
+	// Belt-and-suspenders: push the current email config to the agent before
+	// sending so that a freshly saved config is always reflected, and so the
+	// agent never hits "no email config — run sync_email_config first" on the
+	// test path. Failures here surface as a clear TestSendResult rather than
+	// the opaque downstream error from the agent.
+	cfg, cfgErr := s.GetConfig(ctx, tenantID, siteID)
+	if cfgErr != nil {
+		return TestSendResult{OK: false, Detail: "could not load email config for agent sync: " + cfgErr.Error()}, nil
+	}
+	// Resolve the effective secret: try per-site first, then fall back to org
+	// secret when the config was inherited (SiteID from GetConfig points to the
+	// queried site in both cases, so we check SecretSet to know if there is
+	// anything stored).
+	var syncSecret string
+	if s.enc != nil && cfg.SecretSet {
+		// Per-site secret first.
+		ct, ctErr := s.repo.GetSecretCiphertext(ctx, tenantID, siteID)
+		if ctErr == nil && len(ct) > 0 {
+			if plain, dErr := s.enc.Decrypt(ct); dErr == nil {
+				syncSecret = string(plain)
+			}
+		}
+		// If no per-site ciphertext (inherited org config), try the org secret.
+		if syncSecret == "" {
+			orgCt, orgCtErr := s.repo.GetOrgSecretCiphertext(ctx, tenantID)
+			if orgCtErr == nil && len(orgCt) > 0 {
+				if plain, dErr := s.enc.Decrypt(orgCt); dErr == nil {
+					syncSecret = string(plain)
+				}
+			}
+		}
+	}
+	syncReq := s.buildAgentConfigReq(cfg, syncSecret)
+	if _, syncErr := s.agent.SyncEmailConfig(ctx, siteID, siteURL, syncReq); syncErr != nil {
+		return TestSendResult{OK: false, Detail: "could not sync config to agent: " + syncErr.Error()}, nil
+	}
+
 	res, err := s.agent.SendTestEmail(ctx, siteID, siteURL, agentcmd.SendTestEmailRequest{
 		To:      in.To,
 		Subject: in.Subject,
@@ -251,6 +326,66 @@ func (s *Service) SendTest(ctx context.Context, tenantID, siteID uuid.UUID, in T
 		return TestSendResult{OK: false, Detail: err.Error()}, nil
 	}
 	return TestSendResult{OK: res.OK, Detail: res.Detail}, nil
+}
+
+// ---------------------------------------------------------------------------
+// SyncConfigToAgent
+// ---------------------------------------------------------------------------
+
+// SyncConfigToAgent pushes the stored email config to the site's agent.
+// This is the explicit "Sync to site" action — distinct from the implicit
+// sync that runs on Save and the pre-sync that runs before SendTest.
+//
+// Errors from the agent command are returned as TestSendResult{OK:false}
+// (non-fatal, graceful) so the handler always responds 200 and lets the
+// frontend display the outcome. Domain errors (site not found, no config)
+// are returned as TestSendResult{OK:false} for the same reason.
+func (s *Service) SyncConfigToAgent(ctx context.Context, tenantID, siteID uuid.UUID) (TestSendResult, error) {
+	if s.agent == nil || s.siteLook == nil {
+		return TestSendResult{
+			OK:     false,
+			Detail: "agent command client not configured; cannot sync",
+		}, nil
+	}
+
+	// Resolve effective config (per-site → org fallback).
+	cfg, err := s.GetConfig(ctx, tenantID, siteID)
+	if err != nil {
+		// domain.NotFound is not a 5xx — surface as ok=false.
+		return TestSendResult{OK: false, Detail: "no email config to sync"}, nil
+	}
+
+	// Resolve the effective decrypted secret: per-site first, then org fallback
+	// for inherited configs. ErrNotFound → empty secret (non-fatal).
+	var secret string
+	if s.enc != nil && cfg.SecretSet {
+		ct, ctErr := s.repo.GetSecretCiphertext(ctx, tenantID, siteID)
+		if ctErr == nil && len(ct) > 0 {
+			if plain, dErr := s.enc.Decrypt(ct); dErr == nil {
+				secret = string(plain)
+			}
+		}
+		// No per-site ciphertext (inherited org config) — try the org secret.
+		if secret == "" {
+			orgCt, orgCtErr := s.repo.GetOrgSecretCiphertext(ctx, tenantID)
+			if orgCtErr == nil && len(orgCt) > 0 {
+				if plain, dErr := s.enc.Decrypt(orgCt); dErr == nil {
+					secret = string(plain)
+				}
+			}
+		}
+	}
+
+	siteURL, urlErr := s.siteLook.GetSiteURL(ctx, tenantID, siteID)
+	if urlErr != nil {
+		return TestSendResult{}, domain.NotFound("email_site_not_found", "site not found or not enrolled")
+	}
+
+	req := s.buildAgentConfigReq(cfg, secret)
+	if _, syncErr := s.agent.SyncEmailConfig(ctx, siteID, siteURL, req); syncErr != nil {
+		return TestSendResult{OK: false, Detail: syncErr.Error()}, nil
+	}
+	return TestSendResult{OK: true, Detail: "email config synced to site agent"}, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -749,7 +884,7 @@ func (s *Service) ResolveWebhookConfig(ctx context.Context, plainToken string) (
 	}
 
 	return WebhookResolvedConfig{
-		Config:         cfg,
+		Config:          cfg,
 		SigningKeyPlain: signingKeyPlain,
 	}, nil
 }
@@ -789,6 +924,58 @@ func webhookEventToLogStatus(eventType string) string {
 func ptrNow() *time.Time {
 	t := time.Now().UTC()
 	return &t
+}
+
+// buildAgentConfigReq maps a Config domain value and an already-decrypted
+// plaintext secret into the wire shape sent to the agent. Both UpsertSiteConfig
+// and SendTest use this so the mapping stays in one place.
+// secret is the plaintext provider secret; empty string means "no secret
+// configured" — the agent will clear any previously stored secret.
+func (s *Service) buildAgentConfigReq(cfg Config, secret string) agentcmd.EmailConfigRequest {
+	return agentcmd.EmailConfigRequest{
+		Provider:       cfg.Provider,
+		FromAddress:    cfg.FromAddress,
+		FromName:       cfg.FromName,
+		ForceFromEmail: cfg.ForceFromEmail,
+		ForceFromName:  cfg.ForceFromName,
+		ReturnPath:     cfg.ReturnPath,
+		Config:         cfg.Config,
+		Secret:         secret,
+		Mappings:       cfg.Mappings,
+		LogEmails:      cfg.LogEmails,
+		StoreBody:      cfg.StoreBody,
+		RetentionDays:  cfg.RetentionDays,
+	}
+}
+
+// resolveEffectiveSecret decrypts the stored per-site ciphertext for use in an
+// agent push. When in.SecretRaw is non-nil (the operator just supplied a fresh
+// secret), it is used directly — no DB round-trip needed. Otherwise the stored
+// ciphertext is loaded and decrypted. Returns an empty string when no secret is
+// configured (not an error).
+func (s *Service) resolveEffectiveSecret(ctx context.Context, in UpsertInput, saved Config) (string, error) {
+	// Operator just supplied a fresh plaintext secret — use it directly.
+	if in.SecretRaw != nil {
+		return *in.SecretRaw, nil
+	}
+	// No encryptor: cannot decrypt.
+	if s.enc == nil {
+		return "", nil
+	}
+	// No secret stored: nothing to decrypt.
+	if !saved.SecretSet || in.SiteID == nil {
+		return "", nil
+	}
+	ct, err := s.repo.GetSecretCiphertext(ctx, in.TenantID, *in.SiteID)
+	if err != nil || len(ct) == 0 {
+		// Tolerate ErrNotFound: some provider configs legitimately have no secret.
+		return "", nil
+	}
+	plain, err := s.enc.Decrypt(ct)
+	if err != nil {
+		return "", fmt.Errorf("decrypt stored secret: %w", err)
+	}
+	return string(plain), nil
 }
 
 // decryptSecret decrypts the stored ciphertext for a site config. Called only

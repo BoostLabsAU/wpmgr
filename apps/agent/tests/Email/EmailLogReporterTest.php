@@ -335,6 +335,199 @@ class EmailLogReporterTest extends TestCase {
 	public function test_hook_push_name_is_correct(): void {
 		$this->assertSame( 'wpmgr_email_log_push', EmailLogReporter::HOOK_PUSH );
 	}
+
+	// -------------------------------------------------------------------------
+	// Response-field contract: always an object (or null), never a bare string
+	// -------------------------------------------------------------------------
+
+	/**
+	 * A plain-string response column value (e.g. "SMTP send OK") must be wrapped
+	 * into { "summary": "<value>" } — never forwarded as a bare string.
+	 */
+	public function test_string_response_is_wrapped_as_summary_object(): void {
+		$this->makeWpdb( [
+			[
+				'id'           => '10',
+				'message_id'   => 'smtp-001',
+				'mail_to'      => 'user@example.com',
+				'mail_from'    => 'sender@example.com',
+				'subject'      => 'Test',
+				'provider'     => 'smtp',
+				'status'       => 'sent',
+				'response'     => 'SMTP send OK',
+				'error'        => '',
+				'retries'      => '0',
+				'resent_count' => '0',
+				'body_stored'  => '0',
+				'body'         => null,
+				'created_at'   => '2026-06-10 10:00:00',
+			],
+		] );
+
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( '{"acked_through":10}' );
+
+		/** @var array<string,mixed>|null $capturedArgs */
+		$capturedArgs = null;
+		Functions\when( 'wp_remote_post' )->alias( function ( string $url, array $args ) use ( &$capturedArgs ) {
+			$capturedArgs = $args;
+			return [ 'response' => [ 'code' => 200 ] ];
+		} );
+
+		$reporter = new EmailLogReporter( $this->settings, $this->signer );
+		$reporter->push();
+
+		$this->assertNotNull( $capturedArgs, 'wp_remote_post was not called' );
+		$payload = json_decode( (string) $capturedArgs['body'], true );
+		$entry   = $payload['entries'][0];
+
+		// Must be an array (JSON object), not a bare string.
+		$this->assertIsArray( $entry['response'], 'response must be an array/object, not a scalar' );
+		$this->assertArrayHasKey( 'summary', $entry['response'] );
+		$this->assertSame( 'SMTP send OK', $entry['response']['summary'] );
+	}
+
+	/**
+	 * A JSON-object response column value must be preserved as-is (decoded array).
+	 */
+	public function test_json_object_response_is_preserved(): void {
+		$this->makeWpdb( [
+			[
+				'id'           => '11',
+				'message_id'   => 'sg-002',
+				'mail_to'      => 'user@example.com',
+				'mail_from'    => 'sender@example.com',
+				'subject'      => 'Test',
+				'provider'     => 'sendgrid',
+				'status'       => 'sent',
+				'response'     => '{"id":"sg-002","status":"delivered"}',
+				'error'        => '',
+				'retries'      => '0',
+				'resent_count' => '0',
+				'body_stored'  => '0',
+				'body'         => null,
+				'created_at'   => '2026-06-10 11:00:00',
+			],
+		] );
+
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( '{"acked_through":11}' );
+
+		/** @var array<string,mixed>|null $capturedArgs */
+		$capturedArgs = null;
+		Functions\when( 'wp_remote_post' )->alias( function ( string $url, array $args ) use ( &$capturedArgs ) {
+			$capturedArgs = $args;
+			return [ 'response' => [ 'code' => 200 ] ];
+		} );
+
+		$reporter = new EmailLogReporter( $this->settings, $this->signer );
+		$reporter->push();
+
+		$this->assertNotNull( $capturedArgs, 'wp_remote_post was not called' );
+		$payload = json_decode( (string) $capturedArgs['body'], true );
+		$entry   = $payload['entries'][0];
+
+		$this->assertIsArray( $entry['response'] );
+		$this->assertSame( 'sg-002', $entry['response']['id'] );
+		$this->assertSame( 'delivered', $entry['response']['status'] );
+		// Must NOT have been double-wrapped.
+		$this->assertArrayNotHasKey( 'summary', $entry['response'] );
+	}
+
+	// -------------------------------------------------------------------------
+	// created_at contract: always valid RFC3339, never empty or raw MySQL string
+	// -------------------------------------------------------------------------
+
+	/**
+	 * An empty created_at column must produce a valid RFC3339 UTC timestamp,
+	 * not an empty string.
+	 */
+	public function test_empty_created_at_produces_rfc3339_fallback(): void {
+		$this->makeWpdb( [
+			[
+				'id'           => '20',
+				'message_id'   => 'smtp-empty-ts',
+				'mail_to'      => 'user@example.com',
+				'mail_from'    => 'sender@example.com',
+				'subject'      => 'Test',
+				'provider'     => 'smtp',
+				'status'       => 'sent',
+				'response'     => '',
+				'error'        => '',
+				'retries'      => '0',
+				'resent_count' => '0',
+				'body_stored'  => '0',
+				'body'         => null,
+				'created_at'   => '',
+			],
+		] );
+
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( '{"acked_through":20}' );
+
+		/** @var array<string,mixed>|null $capturedArgs */
+		$capturedArgs = null;
+		Functions\when( 'wp_remote_post' )->alias( function ( string $url, array $args ) use ( &$capturedArgs ) {
+			$capturedArgs = $args;
+			return [ 'response' => [ 'code' => 200 ] ];
+		} );
+
+		$reporter = new EmailLogReporter( $this->settings, $this->signer );
+		$reporter->push();
+
+		$this->assertNotNull( $capturedArgs, 'wp_remote_post was not called' );
+		$payload = json_decode( (string) $capturedArgs['body'], true );
+		$entry   = $payload['entries'][0];
+
+		// Must be a non-empty RFC3339 string (YYYY-MM-DDTHH:...).
+		$this->assertNotSame( '', $entry['created_at'], 'created_at must not be empty' );
+		$this->assertMatchesRegularExpression(
+			'/^\d{4}-\d{2}-\d{2}T/',
+			$entry['created_at'],
+			'created_at must match RFC3339 pattern'
+		);
+	}
+
+	/**
+	 * A normal MySQL DATETIME string (Y-m-d H:i:s, UTC) must convert to the
+	 * correct RFC3339 UTC representation.
+	 */
+	public function test_mysql_datetime_converts_to_rfc3339(): void {
+		$this->makeWpdb( [
+			[
+				'id'           => '21',
+				'message_id'   => 'smtp-normal-ts',
+				'mail_to'      => 'user@example.com',
+				'mail_from'    => 'sender@example.com',
+				'subject'      => 'Test',
+				'provider'     => 'smtp',
+				'status'       => 'sent',
+				'response'     => '',
+				'error'        => '',
+				'retries'      => '0',
+				'resent_count' => '0',
+				'body_stored'  => '0',
+				'body'         => null,
+				'created_at'   => '2026-06-10 15:30:00',
+			],
+		] );
+
+		Functions\when( 'wp_remote_retrieve_body' )->justReturn( '{"acked_through":21}' );
+
+		/** @var array<string,mixed>|null $capturedArgs */
+		$capturedArgs = null;
+		Functions\when( 'wp_remote_post' )->alias( function ( string $url, array $args ) use ( &$capturedArgs ) {
+			$capturedArgs = $args;
+			return [ 'response' => [ 'code' => 200 ] ];
+		} );
+
+		$reporter = new EmailLogReporter( $this->settings, $this->signer );
+		$reporter->push();
+
+		$this->assertNotNull( $capturedArgs, 'wp_remote_post was not called' );
+		$payload = json_decode( (string) $capturedArgs['body'], true );
+		$entry   = $payload['entries'][0];
+
+		// DateTimeImmutable with DateTime::RFC3339 produces "+00:00" suffix for UTC.
+		$this->assertSame( '2026-06-10T15:30:00+00:00', $entry['created_at'] );
+	}
 }
 
 // ---------------------------------------------------------------------------

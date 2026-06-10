@@ -1473,6 +1473,20 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/media/sync
 	SyncMedia(ctx context.Context, params SyncMediaParams) (*SyncMediaAccepted, error)
+	// SyncSiteEmailConfig implements syncSiteEmailConfig operation.
+	//
+	// Dispatches the signed `sync_email_config` command so the agent has the
+	// current provider config and decrypted secret before the next send.
+	// Use this when the agent was offline at save time (the implicit sync on
+	// PUT /email/config was skipped), after rotating a secret, or when the
+	// operator explicitly wants to confirm the agent has the latest config.
+	// Unlike `sendTestEmail` there is no request body — the stored config is
+	// read from the CP and pushed as-is. The response is always 200; `ok`
+	// indicates whether the agent acknowledged the push.
+	// Requires `site.email.manage` permission (operator+) and site access.
+	//
+	// POST /api/v1/sites/{siteId}/email/sync
+	SyncSiteEmailConfig(ctx context.Context, params SyncSiteEmailConfigParams) (SyncSiteEmailConfigRes, error)
 	// TestSiteDestination implements testSiteDestination operation.
 	//
 	// Returns 200 with `{ok, message}` regardless of success/failure so the

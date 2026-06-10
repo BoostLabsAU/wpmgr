@@ -441,6 +441,9 @@ import type {
   StreamUpdateRunEventsResponses,
   SyncMediaData,
   SyncMediaResponses,
+  SyncSiteEmailConfigData,
+  SyncSiteEmailConfigErrors,
+  SyncSiteEmailConfigResponses,
   TestSiteDestinationData,
   TestSiteDestinationErrors,
   TestSiteDestinationResponses,
@@ -3482,6 +3485,32 @@ export const sendTestEmail = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   });
+
+/**
+ * Push the stored email config to the site agent
+ *
+ * Dispatches the signed `sync_email_config` command so the agent has the
+ * current provider config and decrypted secret before the next send.
+ *
+ * Use this when the agent was offline at save time (the implicit sync on
+ * PUT /email/config was skipped), after rotating a secret, or when the
+ * operator explicitly wants to confirm the agent has the latest config.
+ *
+ * Unlike `sendTestEmail` there is no request body — the stored config is
+ * read from the CP and pushed as-is. The response is always 200; `ok`
+ * indicates whether the agent acknowledged the push.
+ *
+ * Requires `site.email.manage` permission (operator+) and site access.
+ *
+ */
+export const syncSiteEmailConfig = <ThrowOnError extends boolean = false>(
+  options: Options<SyncSiteEmailConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    SyncSiteEmailConfigResponses,
+    SyncSiteEmailConfigErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/sync", ...options });
 
 /**
  * List the email log for a site (keyset-paginated)

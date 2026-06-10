@@ -1,5 +1,5 @@
 import { useState, useId } from "react";
-import { Eye, EyeOff, CheckCircle2, ExternalLink } from "lucide-react";
+import { Eye, EyeOff, CheckCircle2, ExternalLink, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -21,7 +21,7 @@ import type {
   EmailProviderSpec,
   EmailProviderField,
 } from "@wpmgr/api";
-import { useProviders, usePutEmailConfig, useEmailConfig, useOrgEmailConfig } from "./use-email";
+import { useProviders, usePutEmailConfig, useEmailConfig, useOrgEmailConfig, useSyncEmailConfig } from "./use-email";
 import { EmailWebhookConfigCard } from "./email-webhook-config";
 
 // ---------------------------------------------------------------------------
@@ -305,6 +305,7 @@ export function EmailProviderConfig({ siteId }: EmailProviderConfigProps) {
   const configQuery = useEmailConfig(siteId);
   const providersQuery = useProviders();
   const save = usePutEmailConfig(siteId);
+  const sync = useSyncEmailConfig(siteId);
 
   // Local state mirrors the server config. We derive it from the query data
   // once it loads. Per-field "saving" state is tracked per field so row-level
@@ -605,6 +606,15 @@ export function EmailProviderConfig({ siteId }: EmailProviderConfigProps) {
             {save.error.message}
           </p>
         ) : null}
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => sync.mutate()}
+          disabled={!serverConfig || sync.isPending}
+        >
+          <RefreshCw aria-hidden="true" className="mr-1.5 size-4" />
+          {sync.isPending ? "Syncing…" : "Sync to site"}
+        </Button>
         <Button
           type="button"
           onClick={() => save.mutate(buildPayload())}
