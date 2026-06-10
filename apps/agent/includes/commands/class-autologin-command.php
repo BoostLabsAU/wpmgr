@@ -59,7 +59,7 @@ final class AutologinCommand implements CommandInterface
     public const PATH_CONSUME = '/agent/v1/autologin/consume';
 
     /** Outbound HTTP timeout for the consume callback, in seconds. */
-    private const CONSUME_TIMEOUT = 10;
+    private const CONSUME_TIMEOUT = 5;
 
     /** Replay TTL for an autologin jti, in seconds. 24h matches the CP exp ceiling. */
     private const REPLAY_TTL = 86400;
@@ -142,71 +142,90 @@ final class AutologinCommand implements CommandInterface
             return $this->fail('replay_detected', 410, $jti);
         }
 
-        // ---- Step 4: control-plane consume callback (authoritative target). ----
-        $consume = $this->consume($jti, $request);
-        if (!$consume['ok']) {
-            // CP rejected the consume (already used / expired / not found / down).
-            return $this->fail('consume_rejected', 410, $jti);
-        }
-
-        $targetLogin  = $consume['target_wp_user_login'];
-        $allowedRoles = $consume['allowed_wp_roles'];
-
-        // ---- Step 5: resolve a local WP user. ----
-        $user = $this->resolveUser($targetLogin);
-        if ($user === null) {
-            return $this->fail('wp_user_not_found', 404, $jti);
-        }
-
-        // ---- Step 6: role allow-list (CP-supplied policy is authoritative). ----
-        if (!$this->rolesAllowed($user, $allowedRoles)) {
-            return $this->fail('role_not_allowed', 403, $jti);
-        }
-
-        // ---- Step 7: mark replay BEFORE cookie issue. ----
-        if (!$this->replay->mark($jti, self::REPLAY_TTL)) {
-            // Defensive self-heal: the M5.5 autologin replay table is created
-            // only by the schema migration runner, and an install where that
-            // table is missing (e.g. same-version re-upload that bypassed
-            // register_activation_hook AND a stale db-version option) will
-            // fail every mark() until the operator intervenes. Run the
-            // migration once and retry the insert exactly once before giving
-            // up — this turns a permanent 500 into a transient one and
-            // unblocks the user on the very next click.
-            Schema::ensureCurrent(true);
-            // PHPStan infers mark() is always false here from the outer guard,
-            // but mark() is impure (consults $wpdb/the live table) and the
-            // intervening Schema::ensureCurrent(true) may have CREATEd the
-            // missing table, flipping the second call's outcome.
-            // @phpstan-ignore-next-line booleanNot.alwaysTrue
-            if (!$this->replay->mark($jti, self::REPLAY_TTL)) {
-                // If we still can't durably mark this jti, do NOT issue a
-                // cookie: a race-window with a parallel presentation would
-                // defeat single-use.
-                return $this->fail('replay_mark_failed', 500, $jti);
+        // ---- Steps 4–10: post-verify body — catch any hooked-plugin Throwable
+        //      so an unexpected fatal from a third-party hook returns a clean 500
+        //      instead of an FPM 502. Hard exit()/die() in a hook still cannot be
+        //      caught; that is acceptable. ----
+        try {
+            // ---- Step 4: control-plane consume callback (authoritative target). ----
+            $consume = $this->consume($jti, $request);
+            if (!$consume['ok']) {
+                // CP rejected the consume (already used / expired / not found / down).
+                return $this->fail('consume_rejected', 410, $jti);
             }
+
+            $targetLogin  = $consume['target_wp_user_login'];
+            $allowedRoles = $consume['allowed_wp_roles'];
+
+            // ---- Step 5: resolve a local WP user. ----
+            $user = $this->resolveUser($targetLogin);
+            if ($user === null) {
+                return $this->fail('wp_user_not_found', 404, $jti);
+            }
+
+            // ---- Step 6: role allow-list (CP-supplied policy is authoritative). ----
+            if (!$this->rolesAllowed($user, $allowedRoles)) {
+                return $this->fail('role_not_allowed', 403, $jti);
+            }
+
+            // ---- Step 7: mark replay BEFORE cookie issue. ----
+            if (!$this->replay->mark($jti, self::REPLAY_TTL)) {
+                // Defensive self-heal: the M5.5 autologin replay table is created
+                // only by the schema migration runner, and an install where that
+                // table is missing (e.g. same-version re-upload that bypassed
+                // register_activation_hook AND a stale db-version option) will
+                // fail every mark() until the operator intervenes. Run the
+                // migration once and retry the insert exactly once before giving
+                // up — this turns a permanent 500 into a transient one and
+                // unblocks the user on the very next click.
+                Schema::ensureCurrent(true);
+                // PHPStan infers mark() is always false here from the outer guard,
+                // but mark() is impure (consults $wpdb/the live table) and the
+                // intervening Schema::ensureCurrent(true) may have CREATEd the
+                // missing table, flipping the second call's outcome.
+                // @phpstan-ignore-next-line booleanNot.alwaysTrue
+                if (!$this->replay->mark($jti, self::REPLAY_TTL)) {
+                    // If we still can't durably mark this jti, do NOT issue a
+                    // cookie: a race-window with a parallel presentation would
+                    // defeat single-use.
+                    return $this->fail('replay_mark_failed', 500, $jti);
+                }
+            }
+
+            // ---- Step 8: issue the WP auth cookie — unless the same user is
+            //      already authenticated (re-click fast-path). Account-switch
+            //      (different user) still issues a fresh cookie as usual.
+            //      This avoids re-firing wp_login over a live session, which can
+            //      trip hooked 2FA/security plugins and cause a 502. ----
+            $sameUserAlreadyLoggedIn = function_exists('is_user_logged_in')
+                && function_exists('get_current_user_id')
+                && is_user_logged_in()
+                && get_current_user_id() === (int) $user->ID;
+
+            if (!$sameUserAlreadyLoggedIn) {
+                $this->issueAuthCookie($user);
+            }
+
+            // ---- Step 10 (success branch): integration hook BEFORE the redirect. ----
+            if (function_exists('do_action')) {
+                do_action('wpmgr_autologin_success', (int) $user->ID, $jti);
+            }
+
+            // ---- Step 9: sanitize redirect_to and wp_safe_redirect. ----
+            $rawRedirect = $request->get_param('redirect_to');
+            $rawRedirect = is_string($rawRedirect) ? $rawRedirect : '';
+            $target      = $this->sanitizeRedirect($rawRedirect);
+
+            if (function_exists('wp_safe_redirect')) {
+                wp_safe_redirect($target, 302);
+            }
+
+            // In a real WP runtime wp_safe_redirect calls exit; in tests it does
+            // not, so we return a 302 response so callers can assert the target.
+            return new \WP_REST_Response(null, 302, ['Location' => $target]);
+        } catch (\Throwable $e) {
+            return $this->fail('autologin_error', 500, $jti);
         }
-
-        // ---- Step 8: issue the WP auth cookie. ----
-        $this->issueAuthCookie($user);
-
-        // ---- Step 10 (success branch): integration hook BEFORE the redirect. ----
-        if (function_exists('do_action')) {
-            do_action('wpmgr_autologin_success', (int) $user->ID, $jti);
-        }
-
-        // ---- Step 9: sanitize redirect_to and wp_safe_redirect. ----
-        $rawRedirect = $request->get_param('redirect_to');
-        $rawRedirect = is_string($rawRedirect) ? $rawRedirect : '';
-        $target      = $this->sanitizeRedirect($rawRedirect);
-
-        if (function_exists('wp_safe_redirect')) {
-            wp_safe_redirect($target, 302);
-        }
-
-        // In a real WP runtime wp_safe_redirect calls exit; in tests it does
-        // not, so we return a 302 response so callers can assert the target.
-        return new \WP_REST_Response(null, 302, ['Location' => $target]);
     }
 
     /**
@@ -367,6 +386,35 @@ final class AutologinCommand implements CommandInterface
     /**
      * Clear any existing auth, set the new auth cookie, and fire wp_login.
      *
+     * 2FA bypass rationale: the authorization gate for this path is the
+     * Ed25519-signed single-use JWT + CP role allow-list — that is already a
+     * stronger proof of operator intent than an interactive TOTP/push challenge.
+     * We suppress per-plugin 2FA re-challenges using strictly request-scoped
+     * filters and WP session markers that are removed before this method returns.
+     * Nothing is persisted to options, user meta, or global state.
+     *
+     * Bypass coverage:
+     *   - Official Two Factor plugin: injecting the session-verification markers
+     *     (two-factor-login, two-factor-provider) into the auth cookie's session
+     *     data via the attach_session_information filter causes
+     *     Two_Factor_Core::is_current_user_session_two_factor() to return true,
+     *     so the plugin treats the session as already verified.
+     *   - WP 2FA (Melapress): the wp_2fa_should_redirect_unconfigured filter
+     *     suppresses its admin_init enforcement redirect for this request only.
+     *   - Wordfence Login Security / miniOrange (common mode): these enforce via
+     *     the authenticate filter chain, which wp_set_auth_cookie() never
+     *     triggers. No action required; noted here so a future reader does not
+     *     add redundant handling.
+     *   - Solid Security (itsec_login_interstitial) and Shield (login-intent):
+     *     these use post-login interstitials with no public verified-session
+     *     marker. They may still challenge on the subsequent page load. This is
+     *     documented in ADR-055 as an accepted residual.
+     *
+     * wp_login ordering: we fire wp_login AFTER setting the session markers so
+     * that hooked session/audit plugins observe the login with the markers
+     * already present. The Two Factor plugin hooks wp_login at PHP_INT_MAX and
+     * tears down sessions that lack its markers — the ordering avoids that.
+     *
      * @param \WP_User $user Resolved user.
      * @return void
      */
@@ -381,12 +429,60 @@ final class AutologinCommand implements CommandInterface
         if (function_exists('wp_set_current_user')) {
             wp_set_current_user($userId, $userLogin);
         }
+
         if (function_exists('wp_set_auth_cookie')) {
+            // --- Two Factor plugin: inject session-verification markers
+            //     into the auth cookie session data so that
+            //     Two_Factor_Core::is_current_user_session_two_factor()
+            //     treats this session as already verified. Only inject when
+            //     the user has an actual provider configured; an empty provider
+            //     meta means the plugin is not active for this user.
+            $twoFactorProvider = function_exists('get_user_meta')
+                ? (string) get_user_meta($userId, '_two_factor_provider', true)
+                : '';
+
+            /** @var callable|null $twoFactorSessionFilter Closure held so remove_filter can match it by reference. */
+            $twoFactorSessionFilter = null;
+            if ($twoFactorProvider !== '') {
+                $verifiedAt             = time();
+                $twoFactorSessionFilter = static function (array $session) use ($twoFactorProvider, $verifiedAt): array {
+                    $session['two-factor-login']    = $verifiedAt;
+                    $session['two-factor-provider'] = $twoFactorProvider;
+                    return $session;
+                };
+                if (function_exists('add_filter')) {
+                    add_filter('attach_session_information', $twoFactorSessionFilter, 10, 1); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- attaching to a WP core filter for cross-plugin session-marker injection; filter name is owned by WP core
+                }
+            }
+
+            // --- WP 2FA (Melapress): disable the admin_init enforcement
+            //     redirect for this request only. Uses the plugin's documented
+            //     public filter lever; removed immediately after cookie issuance.
+            $wp2FaFilterAdded = false;
+            if (function_exists('add_filter')) {
+                add_filter('wp_2fa_should_redirect_unconfigured', '__return_false'); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- attaching to WP 2FA plugin's documented public filter; name is owned by that plugin
+                $wp2FaFilterAdded = true;
+            }
+
             // Session cookie (remember=false). Secure flag follows is_ssl().
             wp_set_auth_cookie($userId, false, function_exists('is_ssl') ? is_ssl() : false);
+
+            // Tear down request-scoped filters immediately — never leave them
+            // active beyond this cookie issuance. Pass the same closure variable
+            // so remove_filter can match it by identity.
+            if ($twoFactorSessionFilter !== null && function_exists('remove_filter')) {
+                remove_filter('attach_session_information', $twoFactorSessionFilter, 10); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- removing our own transient attachment to a WP core filter; see add_filter above
+            }
+            if ($wp2FaFilterAdded && function_exists('remove_filter')) {
+                remove_filter('wp_2fa_should_redirect_unconfigured', '__return_false'); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- removing our own transient attachment; see add_filter above
+            }
         }
+
+        // Fire wp_login AFTER session markers are written so hooked plugins
+        // (including the Two Factor plugin at PHP_INT_MAX priority) see an
+        // already-verified session and do not tear it down or re-challenge.
         if (function_exists('do_action')) {
-            do_action('wp_login', $userLogin, $user); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- 'wp_login' is a WordPress core action; must fire unprefixed so 2FA/audit/session plugins observe the login
+            do_action('wp_login', $userLogin, $user); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- 'wp_login' is a WordPress core action; must fire unprefixed so audit/session plugins observe the login
         }
     }
 

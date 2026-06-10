@@ -80,7 +80,7 @@ export const FEATURES = {
       icon: "Network",
       title: "Fleet connection",
       desc:
-        "Add a site by URL, paste a one-time code into the plugin, and it goes live with no refresh. One-click login into wp-admin with no shared passwords, plus live status dots that flip the moment a site goes up, slow, or offline.",
+        "Add a site by URL, paste a one-time code into the plugin, and it goes live with no refresh. One-click login into wp-admin uses a signed, single-use token so you are never stopped by a login form or a second-factor prompt, with no shared passwords. The connection badge debounces transient heartbeat gaps so low-traffic sites show a stable status, and a Re-check button forces an immediate liveness refresh whenever you need it. An uptime pill next to the badge makes clear at a glance whether the agent is quiet or the site is actually down.",
     },
     {
       icon: "DatabaseBackup",

@@ -130,6 +130,11 @@ final class AutologinCommandTest extends TestCase
             return true;
         });
 
+        Functions\when('is_user_logged_in')->justReturn(false);
+        Functions\when('get_current_user_id')->justReturn(0);
+        Functions\when('get_user_meta')->justReturn('');
+        Functions\when('add_filter')->justReturn(true);
+        Functions\when('remove_filter')->justReturn(true);
         Functions\when('is_ssl')->justReturn(true);
         Functions\when('home_url')->alias(static function ($path = '') {
             return 'https://example.test' . (is_string($path) ? $path : '');
@@ -601,6 +606,231 @@ final class AutologinCommandTest extends TestCase
         $cache = new ReplayCache();
         $this->assertFalse($cache->mark('', 60));
         $this->assertFalse($cache->mark('x', 0));
+    }
+
+    // -----------------------------------------------------------------------
+    // Same-user fast-path (re-click 502 fix)
+    // -----------------------------------------------------------------------
+
+    /**
+     * When the logged-in user IS the token target, handle() must redirect (302)
+     * WITHOUT re-issuing the auth cookie and WITHOUT firing wp_login.
+     */
+    public function test_same_user_already_logged_in_skips_cookie_and_wp_login(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // Simulate: current session belongs to user ID 7 (the token target).
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+
+        $token = $this->jwt($this->uniqueJti('same-user'), time(), ['tgt' => 'alice']);
+        $req   = new \WP_REST_Request([
+            'token'       => $token,
+            'redirect_to' => '/wp-admin/plugins.php',
+        ]);
+
+        $res = $this->command()->handle($req);
+
+        // Should still return a 302.
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        // Cookie must NOT have been issued.
+        $this->assertCount(0, $this->authCookieCalls, 'No cookie re-issue for same-user re-click.');
+        $this->assertSame(0, $this->clearAuthCount, 'wp_clear_auth_cookie must not be called.');
+        $this->assertCount(0, $this->currentUserCalls, 'wp_set_current_user must not be called.');
+
+        // wp_login must NOT fire (cookie/session churn avoided).
+        $hooks = array_column($this->hookCalls, 0);
+        $this->assertNotContains('wp_login', $hooks, 'wp_login must not re-fire for same-user re-click.');
+
+        // wpmgr_autologin_success and the redirect must still happen.
+        $this->assertContains('wpmgr_autologin_success', $hooks);
+        $this->assertCount(1, $this->redirectCalls);
+        $this->assertSame('https://example.test/wp-admin/plugins.php', $this->redirectCalls[0][0]);
+    }
+
+    /**
+     * When the logged-in user is a DIFFERENT user from the token target,
+     * handle() must issue a fresh cookie (account-switch path).
+     */
+    public function test_different_user_logged_in_still_issues_cookie(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // A different user (ID 99) is currently logged in.
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(99);
+
+        $token = $this->jwt($this->uniqueJti('acct-switch'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+        $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued for account-switch.');
+    }
+
+    // -----------------------------------------------------------------------
+    // Post-verify Throwable catch
+    // -----------------------------------------------------------------------
+
+    /**
+     * A Throwable thrown by a hooked action inside the post-verify body must
+     * result in fail('autologin_error', 500, ...) rather than an unhandled
+     * exception propagating to the caller.
+     */
+    public function test_post_verify_throwable_returns_500_envelope(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // Replace the do_action stub to throw on wpmgr_autologin_success
+        // (simulates a hooked plugin fatally throwing in the post-verify body).
+        Functions\when('do_action')->alias(function (string $hook, $a = null, $b = null): void {
+            if ($hook === 'wpmgr_autologin_success') {
+                throw new \RuntimeException('simulated hooked-plugin fatal');
+            }
+            $this->hookCalls[] = [$hook, $a, $b];
+        });
+
+        $token = $this->jwt($this->uniqueJti('throwable'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_Error::class, $res);
+        $this->assertSame('wpmgr_autologin_error', $res->get_error_code());
+        $this->assertSame(500, $res->get_error_data()['status']);
+    }
+
+    // -----------------------------------------------------------------------
+    // Two Factor session-marker injection
+    // -----------------------------------------------------------------------
+
+    /**
+     * When _two_factor_provider meta is non-empty, the attach_session_information
+     * filter must be registered before wp_set_auth_cookie() and removed after,
+     * and it must inject two-factor-login / two-factor-provider into the session.
+     */
+    public function test_two_factor_markers_injected_and_filter_removed_when_provider_set(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // User has Two Factor plugin configured with TOTP.
+        Functions\when('get_user_meta')->alias(static function ($userId, $key, $single = false): mixed {
+            if ($key === '_two_factor_provider' && $single) {
+                return 'Two_Factor_Totp';
+            }
+            return $single ? '' : [];
+        });
+
+        /** @var array<int,array{hook:string,callable:callable,priority:int}> $addFilterCalls */
+        $addFilterCalls = [];
+        /** @var array<int,array{hook:string,callback:mixed,priority:int}> $removeFilterCalls */
+        $removeFilterCalls = [];
+        /** @var callable|null $capturedSessionFilter */
+        $capturedSessionFilter = null;
+
+        Functions\when('add_filter')->alias(
+            function (string $hook, callable $cb, int $priority = 10, int $accepted = 1) use (
+                &$addFilterCalls,
+                &$capturedSessionFilter
+            ): bool {
+                $addFilterCalls[] = ['hook' => $hook, 'callable' => $cb, 'priority' => $priority];
+                if ($hook === 'attach_session_information') {
+                    $capturedSessionFilter = $cb;
+                }
+                return true;
+            }
+        );
+        Functions\when('remove_filter')->alias(
+            function (string $hook, $cb, int $priority = 10) use (&$removeFilterCalls): bool {
+                $removeFilterCalls[] = ['hook' => $hook, 'callback' => $cb, 'priority' => $priority];
+                return true;
+            }
+        );
+
+        $token = $this->jwt($this->uniqueJti('2fa-marker'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        // attach_session_information filter must have been registered exactly once.
+        $sessionFilterAdds = array_filter(
+            $addFilterCalls,
+            static fn ($c) => $c['hook'] === 'attach_session_information'
+        );
+        $this->assertCount(1, $sessionFilterAdds, 'attach_session_information filter must be added exactly once.');
+
+        // The captured filter callback must inject the correct markers.
+        $this->assertNotNull($capturedSessionFilter, 'Session filter callback must have been captured.');
+        $result = ($capturedSessionFilter)([]);
+        $this->assertArrayHasKey('two-factor-login', $result);
+        $this->assertIsInt($result['two-factor-login']);
+        $this->assertSame('Two_Factor_Totp', $result['two-factor-provider']);
+
+        // The filter must have been removed after cookie issuance.
+        $sessionFilterRemoves = array_filter(
+            $removeFilterCalls,
+            static fn ($c) => $c['hook'] === 'attach_session_information'
+        );
+        $this->assertCount(1, $sessionFilterRemoves, 'attach_session_information filter must be removed exactly once.');
+
+        // wp_2fa_should_redirect_unconfigured must also have been added and removed.
+        $wp2FaAdds = array_filter(
+            $addFilterCalls,
+            static fn ($c) => $c['hook'] === 'wp_2fa_should_redirect_unconfigured'
+        );
+        $this->assertCount(1, $wp2FaAdds, 'wp_2fa_should_redirect_unconfigured filter must be added.');
+        $wp2FaRemoves = array_filter(
+            $removeFilterCalls,
+            static fn ($c) => $c['hook'] === 'wp_2fa_should_redirect_unconfigured'
+        );
+        $this->assertCount(1, $wp2FaRemoves, 'wp_2fa_should_redirect_unconfigured filter must be removed.');
+    }
+
+    /**
+     * When _two_factor_provider meta is empty (no provider configured), the
+     * attach_session_information filter must NOT be registered, and the flow
+     * must complete normally without errors.
+     */
+    public function test_two_factor_markers_not_injected_when_provider_empty(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        // User has NO Two Factor provider configured.
+        Functions\when('get_user_meta')->alias(static function ($userId, $key, $single = false): mixed {
+            return $single ? '' : [];
+        });
+
+        /** @var array<int,array{hook:string,callable:callable,priority:int}> $addFilterCalls */
+        $addFilterCalls = [];
+        Functions\when('add_filter')->alias(
+            function (string $hook, callable $cb, int $priority = 10, int $accepted = 1) use (&$addFilterCalls): bool {
+                $addFilterCalls[] = ['hook' => $hook, 'callable' => $cb, 'priority' => $priority];
+                return true;
+            }
+        );
+
+        $token = $this->jwt($this->uniqueJti('no-2fa'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        // attach_session_information must NOT have been registered (no provider).
+        $sessionFilterAdds = array_filter(
+            $addFilterCalls,
+            static fn ($c) => $c['hook'] === 'attach_session_information'
+        );
+        $this->assertCount(0, $sessionFilterAdds, 'attach_session_information must NOT be added when provider is empty.');
+
+        // Cookie must still have been issued normally.
+        $this->assertCount(1, $this->authCookieCalls);
     }
 
     // -----------------------------------------------------------------------

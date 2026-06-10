@@ -467,7 +467,19 @@ func (s *connService) transition(ctx context.Context, tenantID, siteID uuid.UUID
 // inside the repo's locked transition tx (under the tx context).
 
 func applyConnected(ctx context.Context, q *sqlc.Queries, l sqlc.Site) (sqlc.Site, error) {
-	return q.MarkSiteConnected(ctx, sqlc.MarkSiteConnectedParams{ID: l.ID, TenantID: l.TenantID})
+	updated, err := q.MarkSiteConnected(ctx, sqlc.MarkSiteConnectedParams{ID: l.ID, TenantID: l.TenantID})
+	if err != nil {
+		return sqlc.Site{}, err
+	}
+	// M58 hysteresis: reset the consecutive-miss counter when recovering to
+	// connected so a recovered site starts fresh at 0.
+	if rerr := q.ResetSiteMissedHeartbeats(ctx, sqlc.ResetSiteMissedHeartbeatsParams{
+		ID:       l.ID,
+		TenantID: l.TenantID,
+	}); rerr != nil {
+		return sqlc.Site{}, rerr
+	}
+	return updated, nil
 }
 
 func applyDegraded(ctx context.Context, q *sqlc.Queries, l sqlc.Site) (sqlc.Site, error) {

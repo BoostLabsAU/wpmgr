@@ -140,3 +140,133 @@ func (r *stateBackedSweepRepo) ListToDisconnect(_ context.Context, _ time.Time) 
 	}
 	return nil, nil
 }
+
+// ---- M58 hysteresis tests ----
+
+// fakeMissIncrementer is an in-memory MissIncrementer. Counts per site-id.
+type fakeMissIncrementer struct {
+	counts map[uuid.UUID]int32
+}
+
+func newFakeMissIncrementer() *fakeMissIncrementer {
+	return &fakeMissIncrementer{counts: make(map[uuid.UUID]int32)}
+}
+
+func (f *fakeMissIncrementer) IncrementMissedHeartbeats(_ context.Context, _, siteID uuid.UUID) (int32, error) {
+	f.counts[siteID]++
+	return f.counts[siteID], nil
+}
+
+func (f *fakeMissIncrementer) reset(id uuid.UUID) { f.counts[id] = 0 }
+
+// TestHysteresisRequiresNConsecutiveMisses verifies that MarkDegraded is NOT
+// called until the miss counter reaches the configured threshold (default 3).
+func TestHysteresisRequiresNConsecutiveMisses(t *testing.T) {
+	id := uuid.New()
+	tenant := uuid.New()
+	repo := &sweepRepo{
+		toDegrade: []SiteRef{{ID: id, TenantID: tenant}},
+	}
+	tr := &recordTransitioner{states: map[uuid.UUID]ConnectionState{}}
+	inc := newFakeMissIncrementer()
+
+	sw := NewSweeper(repo, tr, nil)
+	sw.SetMissIncrementer(inc)
+	sw.SetDegradeMissThreshold(3)
+
+	now := time.Now()
+
+	// Passes 1 and 2: counter increments but MarkDegraded must NOT fire.
+	for i := 1; i <= 2; i++ {
+		deg, _, err := sw.Sweep(context.Background(), now)
+		if err != nil {
+			t.Fatalf("pass %d sweep error: %v", i, err)
+		}
+		if deg != 0 {
+			t.Fatalf("pass %d: expected no degrade yet (counter=%d), got deg=%d",
+				i, inc.counts[id], deg)
+		}
+		if len(tr.degraded) != 0 {
+			t.Fatalf("pass %d: MarkDegradedTenant called too early (counter=%d)",
+				i, inc.counts[id])
+		}
+	}
+
+	// Pass 3: counter reaches threshold — MarkDegraded must fire.
+	deg, _, err := sw.Sweep(context.Background(), now)
+	if err != nil {
+		t.Fatalf("pass 3 sweep error: %v", err)
+	}
+	if deg != 1 {
+		t.Fatalf("pass 3: expected 1 degrade, got %d", deg)
+	}
+	if len(tr.degraded) != 1 || tr.degraded[0] != id {
+		t.Fatalf("pass 3: MarkDegradedTenant not called for site %s", id)
+	}
+}
+
+// TestHysteresisHeartbeatResetsCounter verifies that one interleaved heartbeat
+// (resetting the counter to 0) prevents the site from degrading even after N-1
+// misses have accumulated.
+func TestHysteresisHeartbeatResetsCounter(t *testing.T) {
+	id := uuid.New()
+	tenant := uuid.New()
+	repo := &sweepRepo{
+		toDegrade: []SiteRef{{ID: id, TenantID: tenant}},
+	}
+	tr := &recordTransitioner{states: map[uuid.UUID]ConnectionState{}}
+	inc := newFakeMissIncrementer()
+
+	sw := NewSweeper(repo, tr, nil)
+	sw.SetMissIncrementer(inc)
+	sw.SetDegradeMissThreshold(3)
+
+	now := time.Now()
+
+	// Passes 1 and 2: two misses, counter = 2.
+	for i := 1; i <= 2; i++ {
+		if _, _, err := sw.Sweep(context.Background(), now); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+	if inc.counts[id] != 2 {
+		t.Fatalf("expected counter=2 after 2 misses, got %d", inc.counts[id])
+	}
+	if len(tr.degraded) != 0 {
+		t.Fatal("MarkDegraded fired before threshold")
+	}
+
+	// Simulate a heartbeat: reset the counter. In production this happens when
+	// the agent's next heartbeat arrives and calls TouchSiteHeartbeat. In the
+	// test we reset the fake counter directly.
+	inc.reset(id)
+
+	// Pass 3 with reset counter: counter goes to 1, still below threshold.
+	if _, _, err := sw.Sweep(context.Background(), now); err != nil {
+		t.Fatalf("pass 3 (after heartbeat reset): %v", err)
+	}
+	if len(tr.degraded) != 0 {
+		t.Fatal("MarkDegraded fired after heartbeat reset — counter should have restarted")
+	}
+	if inc.counts[id] != 1 {
+		t.Fatalf("counter after reset+pass = %d, want 1", inc.counts[id])
+	}
+
+	// Passes 4 and 5: counter reaches 3 only on pass 5 (total: reset, 1, 2, 3).
+	for i := 4; i <= 4; i++ {
+		if _, _, err := sw.Sweep(context.Background(), now); err != nil {
+			t.Fatalf("pass %d: %v", i, err)
+		}
+	}
+	if len(tr.degraded) != 0 {
+		t.Fatal("MarkDegraded fired too early (counter should be 2)")
+	}
+
+	// Pass 5: threshold reached.
+	if deg, _, err := sw.Sweep(context.Background(), now); err != nil || deg != 1 {
+		t.Fatalf("pass 5: expected 1 degrade, got deg=%d err=%v", deg, err)
+	}
+	if len(tr.degraded) != 1 {
+		t.Fatal("MarkDegraded not called at threshold")
+	}
+}

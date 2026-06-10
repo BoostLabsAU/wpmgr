@@ -86,6 +86,9 @@ CREATE TABLE sites (
     disconnected_at       timestamptz,
     disconnected_reason   text,
     archived_at           timestamptz,
+    -- M58 hysteresis: counts consecutive sweeper overdue evaluations.
+    -- Reset to 0 on every heartbeat; the sweeper degrades only after N misses.
+    missed_heartbeats     integer NOT NULL DEFAULT 0,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );

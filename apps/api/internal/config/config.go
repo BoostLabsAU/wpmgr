@@ -33,6 +33,27 @@ type Config struct {
 	SMTP       SMTPConfig       `koanf:"smtp"`
 	Uptime     UptimeConfig     `koanf:"uptime"`
 	Autologin  AutologinConfig  `koanf:"autologin"`
+	Conn       ConnConfig       `koanf:"conn"`
+}
+
+// ConnConfig holds the M21 connection-lifecycle sweeper tunables (M58).
+//
+// DegradeAfter is how long a site's last_seen_at may be stale before the
+// sweeper considers it overdue. DegradeMissThreshold is the number of
+// consecutive overdue evaluations required before the site is transitioned to
+// degraded (the hysteresis counter — prevents one-late-beat flaps on
+// traffic-gated wp-cron sites). DisconnectAfter is the hard cutoff for the
+// degraded→disconnected transition; it remains a single-evaluation threshold.
+type ConnConfig struct {
+	// DegradeAfter is the staleness window before a connected site is considered
+	// overdue. Default 300s (5×60s beats). Env: WPMGR_CONN_DEGRADE_AFTER.
+	DegradeAfter time.Duration `koanf:"degrade_after"`
+	// DegradeMissThreshold is the consecutive-miss count before degrading.
+	// Default 3. Env: WPMGR_CONN_DEGRADE_MISS_THRESHOLD.
+	DegradeMissThreshold int `koanf:"degrade_miss_threshold"`
+	// DisconnectAfter is the staleness window before a degraded site is
+	// disconnected. Default 900s. Env: WPMGR_CONN_DISCONNECT_AFTER.
+	DisconnectAfter time.Duration `koanf:"disconnect_after"`
 }
 
 // AutologinConfig holds the Phase 5.5 one-click login tunables (ADR-031).
@@ -376,7 +397,10 @@ func defaults() map[string]any {
 		"uptime.probe_concurrency":      10,
 		"uptime.alert_interval":         "60s",
 		"uptime.down_threshold":         2,
-		"autologin.require_2fa_step_up": false,
+		"autologin.require_2fa_step_up":    false,
+		"conn.degrade_after":                "300s",
+		"conn.degrade_miss_threshold":       3,
+		"conn.disconnect_after":             "900s",
 	}
 }
 
@@ -457,6 +481,8 @@ func mapEnvKey(k string) string {
 		return "uptime." + strings.TrimPrefix(k, "uptime_")
 	case strings.HasPrefix(k, "autologin_"):
 		return "autologin." + strings.TrimPrefix(k, "autologin_")
+	case strings.HasPrefix(k, "conn_"):
+		return "conn." + strings.TrimPrefix(k, "conn_")
 	default:
 		return k
 	}

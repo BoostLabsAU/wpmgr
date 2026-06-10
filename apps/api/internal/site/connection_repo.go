@@ -246,7 +246,8 @@ func (r *pgRepo) PairingCodeSiteID(ctx context.Context, codeHash string) (uuid.U
 	return siteID, bound, err
 }
 
-// Heartbeat bumps last_seen_at and returns the post-update site.
+// Heartbeat bumps last_seen_at, resets the consecutive-miss counter (M58),
+// and returns the post-update site.
 func (r *pgRepo) Heartbeat(ctx context.Context, tenantID, siteID uuid.UUID) (Site, error) {
 	var out Site
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -261,6 +262,25 @@ func (r *pgRepo) Heartbeat(ctx context.Context, tenantID, siteID uuid.UUID) (Sit
 		return nil
 	})
 	return out, err
+}
+
+// IncrementMissedHeartbeats atomically increments the consecutive-miss counter
+// for a connected site (cross-tenant, app.agent GUC) and returns the new count.
+// Satisfies the MissIncrementer interface consumed by the Sweeper.
+func (r *pgRepo) IncrementMissedHeartbeats(ctx context.Context, tenantID, siteID uuid.UUID) (int32, error) {
+	var count int32
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		n, err := sqlc.New(tx).IncrementSiteMissedHeartbeats(ctx, sqlc.IncrementSiteMissedHeartbeatsParams{
+			ID:       siteID,
+			TenantID: tenantID,
+		})
+		if err != nil {
+			return domain.Internal("site_miss_increment_failed", "failed to increment missed heartbeats").WithCause(err)
+		}
+		count = n
+		return nil
+	})
+	return count, err
 }
 
 func (r *pgRepo) ListToDegrade(ctx context.Context, cutoff time.Time) ([]SiteRef, error) {

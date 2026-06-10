@@ -5,6 +5,7 @@ import {
   Check,
   Copy,
   MoreHorizontal,
+  RefreshCw,
   RotateCw,
   Share2,
   Unplug,
@@ -38,7 +39,10 @@ import {
   useArchiveSite,
   useRestoreSite,
   useCreateEnrollmentCode,
+  useRecheckConnection,
+  AgentUnreachableError,
 } from "@/features/sites/use-site-connection";
+import { UptimePill } from "@/features/monitoring/uptime-pill";
 import { useRecordRecentSite } from "@/features/command/use-recent-sites";
 import { useMe, canManage } from "@/features/auth/use-auth";
 import { toast } from "@/components/toast";
@@ -180,6 +184,7 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
   const archive = useArchiveSite();
   const restore = useRestoreSite();
   const enrollmentCode = useCreateEnrollmentCode();
+  const recheck = useRecheckConnection();
 
   const hostname = hostnameOf(site.url);
   const adminUrl = `${stripTrailingSlash(site.url)}/wp-admin/`;
@@ -300,10 +305,55 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
           </span>
         </div>
 
-        <ConnectionStateBadge
-          state={connectionState}
-          lastSeenAt={site.last_seen_at ?? null}
-        />
+        {/* Connection badge + uptime pill + re-check button — grouped so they
+            read as a single "connection health" cluster in the header strip. */}
+        <div className="flex items-center gap-1.5">
+          <ConnectionStateBadge
+            state={connectionState}
+            lastSeenAt={site.last_seen_at ?? null}
+          />
+          {/* UptimePill renders nothing when no monitor is configured for this
+              site, so no conditional guard needed here. */}
+          <UptimePill siteId={site.id} />
+          {/* Only connected and degraded sites can be re-checked — others are
+              not actively heartbeating so the probe would 502 immediately. */}
+          {(connectionState === "connected" || connectionState === "degraded") ? (
+            <button
+              type="button"
+              aria-label="Re-check connection"
+              title="Re-check connection"
+              disabled={recheck.isPending}
+              onClick={() => {
+                recheck.mutate(
+                  { siteId: site.id },
+                  {
+                    onSuccess: () =>
+                      toast.success("Connection refreshed", {
+                        description: "Agent responded — badge updated.",
+                      }),
+                    onError: (err) => {
+                      if (err instanceof AgentUnreachableError) {
+                        // Non-destructive: agent quiet is normal on low-traffic
+                        // sites; don't alarm the operator.
+                        toast.info(err.message);
+                      } else {
+                        toast.error("Re-check failed", {
+                          description: err.message,
+                        });
+                      }
+                    },
+                  },
+                );
+              }}
+              className="inline-flex size-6 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-2 disabled:opacity-50"
+            >
+              <RefreshCw
+                aria-hidden="true"
+                className={cn("size-3.5", recheck.isPending && "animate-spin")}
+              />
+            </button>
+          ) : null}
+        </div>
 
         <div className="ml-auto flex items-center gap-2">
           {manage ? (

@@ -26,6 +26,7 @@ import {
   ChevronUp,
   ChevronsUpDown,
   MoreHorizontal,
+  RefreshCw,
   RotateCw,
   Trash2,
   Unplug,
@@ -65,6 +66,11 @@ import {
   useSitesSelection,
   type SitesSelection,
 } from "@/features/sites/use-sites-selection";
+import {
+  useRecheckConnection,
+  AgentUnreachableError,
+} from "@/features/sites/use-site-connection";
+import { toast } from "@/components/toast";
 
 // Surface 4.5 — the Sites table.
 //
@@ -446,8 +452,46 @@ function RowActions({
   // Remove is only surfaced for archived/disconnected sites — states where
   // neither connecting nor active management is possible.
   const canRemove = isReconnectable(connectionState);
+  // Re-check is only meaningful for sites that are actively heartbeating.
+  const canRecheck =
+    connectionState === "connected" || connectionState === "degraded";
+  const recheck = useRecheckConnection();
+
   return (
     <div className="flex items-center justify-end gap-1">
+      {canRecheck ? (
+        <button
+          type="button"
+          aria-label="Re-check connection"
+          title="Re-check connection"
+          disabled={recheck.isPending}
+          onClick={(e) => {
+            e.stopPropagation();
+            recheck.mutate(
+              { siteId: site.id },
+              {
+                onSuccess: () =>
+                  toast.success("Connection refreshed", {
+                    description: "Agent responded.",
+                  }),
+                onError: (err) => {
+                  if (err instanceof AgentUnreachableError) {
+                    toast.info(err.message);
+                  } else {
+                    toast.error("Re-check failed", { description: err.message });
+                  }
+                },
+              },
+            );
+          }}
+          className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
+        >
+          <RefreshCw
+            aria-hidden="true"
+            className={cn("size-3.5", recheck.isPending && "animate-spin")}
+          />
+        </button>
+      ) : null}
       <button
         type="button"
         aria-label={`Log in to ${site.name}`}

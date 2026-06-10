@@ -6,6 +6,19 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-06-10
+
+### Added
+
+- **Re-check connection button** on the site row and site detail header. Clicking it forces an immediate liveness probe so you can resolve a stale connection badge on demand instead of waiting for the next heartbeat cycle.
+- **Uptime pill** next to the connection badge on each site. Distinguishes "agent is quiet" (the site is up but heartbeating slowly) from "site is actually down" so the two states are never ambiguous.
+
+### Fixed
+
+- **One-click wp-admin login reliability**: clicking "Login to wp-admin" while already logged in could return a 502. The autologin now detects the existing session and redirects immediately, and the control-plane timeout is shorter so a slow site fails fast rather than hanging the browser tab.
+- **One-click login now bypasses common 2FA plugins**: the autologin token was being intercepted at a second-factor prompt by several popular two-factor plugins (the official Two Factor plugin, WP 2FA, Wordfence Login Security, and miniOrange). The token exchange now lands past the 2FA gate for those plugins. The signed, single-use, expiring token and role allow-list are unchanged. Plugins that render a full interstitial page after WordPress authentication, such as Solid Security or Shield Security, may still show a prompt (ADR-055).
+- **Connection badge flapping on low-traffic sites**: the per-site connection indicator could briefly flip to "degraded" on sites that are perfectly healthy but receive little traffic, because a single missed heartbeat beat would immediately trigger the state change. Missed beats are now debounced over several consecutive intervals and grace windows are wider, so transient heartbeat gaps on quiet sites no longer produce false alarms.
+
 ## [0.33.9] - 2026-06-10
 
 ### Changed

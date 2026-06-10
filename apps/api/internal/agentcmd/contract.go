@@ -159,3 +159,9 @@ type RefreshInventoryResponse struct {
 // (which splits the blob into one row per category) stays byte-for-byte the
 // same as the daily cron-push path.
 type DiagnosticsRequest struct{}
+
+// MetadataRequest is the POST body for the `metadata` command (M58 Re-check
+// connection). The agent's metadata command takes no params — it always returns
+// the full current inventory — so the struct is intentionally empty.
+type MetadataRequest struct{}
+

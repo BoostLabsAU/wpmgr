@@ -26,6 +26,26 @@ type RefreshEnqueuer interface {
 	EnqueueRefresh(ctx context.Context, tenantID, siteID uuid.UUID, siteURL, source string) error
 }
 
+// AgentRechecker dispatches a synchronous metadata pull to the site's agent
+// (M58 Re-check connection). Implemented by *agentcmd.Client; a local
+// interface keeps the site package free of an agentcmd import cycle.
+type AgentRechecker interface {
+	// MetadataRaw sends the signed `metadata` command and returns the raw JSON
+	// response body. siteID is bound into the JWT's aud claim.
+	MetadataRaw(ctx context.Context, siteID uuid.UUID, siteURL string) ([]byte, error)
+}
+
+// RecheckLimiter gates the per-(tenant,site) call rate on the Re-check
+// connection endpoint.  The interface mirrors autologin.Limiter so the same
+// MemoryLimiter implementation can be wired in without importing the autologin
+// package from here.
+//
+// Allow returns (true, 0) when the request is within budget, or (false,
+// retryAfter) when the bucket is exhausted.
+type RecheckLimiter interface {
+	Allow(ctx context.Context, key string, limitPerMinute int) (allowed bool, retryAfter time.Duration)
+}
+
 // Handler serves the site HTTP endpoints under /api/v1/sites plus the public
 // /enroll endpoint. The active tenant for authed routes is taken from the
 // authenticated principal; /enroll derives the tenant from the pairing code.
@@ -41,6 +61,12 @@ type Handler struct {
 	// refresher enqueues inventory-refresh jobs. nil when CP->agent commands are
 	// disabled (the /updates/refresh route then returns 501).
 	refresher RefreshEnqueuer
+	// rechecker dispatches synchronous metadata pulls for the Re-check connection
+	// endpoint (M58). nil when CP->agent commands are disabled.
+	rechecker AgentRechecker
+	// recheckLimiter gates the per-(tenant,site) recheck call rate. nil ⇒
+	// no rate-limiting (dev builds / tests that don't wire it).
+	recheckLimiter RecheckLimiter
 	// staleAfter is the freshness window used to decide whether the agent is
 	// reachable for an immediate refresh. Zero ⇒ no freshness gate.
 	staleAfter time.Duration
@@ -60,6 +86,15 @@ func (h *Handler) SetRefreshEnqueuer(r RefreshEnqueuer, staleAfter time.Duration
 	h.refresher = r
 	h.staleAfter = staleAfter
 }
+
+// SetRechecker wires the synchronous metadata-pull client used by the Re-check
+// connection endpoint (M58). Call once at boot when the CP has a signing key.
+func (h *Handler) SetRechecker(r AgentRechecker) { h.rechecker = r }
+
+// SetRecheckLimiter wires the per-(tenant,site) rate limiter for the Re-check
+// connection endpoint. Call once at boot; omitting it leaves the endpoint
+// unlimited (acceptable for dev/test, wrong for production).
+func (h *Handler) SetRecheckLimiter(l RecheckLimiter) { h.recheckLimiter = l }
 
 // SetClock overrides the time source used for staleness checks (tests).
 func (h *Handler) SetClock(now func() time.Time) { h.now = now }
@@ -114,6 +149,10 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// mutate persisted state (it asks the agent to push fresh metadata back).
 	r.POST("/sites/:siteId/updates/refresh", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.refreshUpdates)
 	r.GET("/sites/:siteId/updates/available", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.getAvailableUpdates)
+	// M58 Re-check connection: operator-triggered synchronous metadata pull.
+	// PermSiteWrite (non-destructive but intentional action) + site access gate.
+	// No org scope required (collaborators with write access may re-check).
+	r.POST("/sites/:siteId/recheck", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.recheck)
 }
 
 // RegisterPublic mounts the public, unauthenticated /enroll endpoint on the
