@@ -252,6 +252,12 @@ func (h *Handler) list(c *gin.Context) {
 	if p, ok := domain.PrincipalFromContext(c.Request.Context()); ok {
 		in.Principal = p
 	}
+	// m63 — optional client filter: ?clientId=<uuid> returns only sites in that client.
+	if rawClientID := c.Query("clientId"); rawClientID != "" {
+		if cid, err := uuid.Parse(rawClientID); err == nil {
+			in.ClientID = &cid
+		}
+	}
 	ss, err := h.svc.List(c.Request.Context(), in)
 	if err != nil {
 		httpx.Error(c, err)
@@ -627,6 +633,14 @@ func toAPI(s Site) gen.Site {
 	case "running", "pending":
 		out.LastBackupStatus = gen.NewOptSiteLastBackupStatus(gen.SiteLastBackupStatusRunning)
 	}
+	// m63 — agency client assignment.
+	if s.ClientID != nil {
+		out.ClientID = gen.NewOptUUID(*s.ClientID)
+	}
+	if s.ClientName != "" {
+		out.ClientName = gen.NewOptString(s.ClientName)
+	}
+
 	if len(s.Components) > 0 {
 		var comp struct {
 			Plugins    []Component `json:"plugins"`

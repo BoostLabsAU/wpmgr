@@ -167,6 +167,13 @@ const (
 	ActionEmailSuppressionAdded = "site.email.suppression.added"
 	// ActionEmailSuppressionDeleted: metadata: suppression_id, scope (site|fleet).
 	ActionEmailSuppressionDeleted = "site.email.suppression.deleted"
+
+	// Agency Clients (m63). Recorded when a client is created, updated, deleted,
+	// or when sites are bulk-assigned.
+	ActionClientCreated      = "client.created"
+	ActionClientUpdated      = "client.updated"
+	ActionClientDeleted      = "client.deleted"
+	ActionClientSitesAssigned = "client.sites.assigned"
 )
 
 // Entry is one audit record.

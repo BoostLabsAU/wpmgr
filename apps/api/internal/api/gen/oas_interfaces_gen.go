@@ -73,6 +73,10 @@ type ArchiveSiteRes interface {
 	archiveSiteRes()
 }
 
+type AssignSitesToClientRes interface {
+	assignSitesToClientRes()
+}
+
 type BeginReEnrollmentRes interface {
 	beginReEnrollmentRes()
 }
@@ -109,6 +113,10 @@ type CreateBackupRes interface {
 	createBackupRes()
 }
 
+type CreateClientRes interface {
+	createClientRes()
+}
+
 type CreateOrgRes interface {
 	createOrgRes()
 }
@@ -143,6 +151,10 @@ type CreateUpdateRunRes interface {
 
 type DeleteBackupRes interface {
 	deleteBackupRes()
+}
+
+type DeleteClientRes interface {
+	deleteClientRes()
 }
 
 type DeleteEmailConnectionRes interface {
@@ -203,6 +215,10 @@ type GetBackupSettingsNotificationsRes interface {
 
 type GetBackupSqlInspectionRes interface {
 	getBackupSqlInspectionRes()
+}
+
+type GetClientRes interface {
+	getClientRes()
 }
 
 type GetEmailNotifySettingsRes interface {
@@ -287,6 +303,10 @@ type ListApiKeysRes interface {
 
 type ListAuditRes interface {
 	listAuditRes()
+}
+
+type ListClientsRes interface {
+	listClientsRes()
 }
 
 type ListEmailConnectionsRes interface {
@@ -483,6 +503,10 @@ type UnblockSiteIPRes interface {
 
 type UnlockBackupRes interface {
 	unlockBackupRes()
+}
+
+type UpdateClientRes interface {
+	updateClientRes()
 }
 
 type UpdateSiteDestinationRes interface {

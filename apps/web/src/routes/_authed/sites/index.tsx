@@ -2,6 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { Archive } from "lucide-react";
 
+import { useClients } from "@/features/clients/use-clients";
+import { SetClientDialog } from "@/features/clients/set-client-dialog";
+
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 import { FilterEmpty, SitesPageEmpty } from "@/components/empty";
@@ -51,8 +54,22 @@ function SitesPage() {
   // (the default list hides archived sites).
   const [showArchived, setShowArchived] = useState(false);
 
+  // m63 — applied client filter (null = all clients).
+  const [appliedClientId, setAppliedClientId] = useState<string | null>(null);
+  const { data: clientsData } = useClients();
+  const clientOptions = useMemo(
+    () => (clientsData ?? []).map((c) => ({ id: c.id, name: c.name })),
+    [clientsData],
+  );
+
+  // m63 — Set-client bulk action dialog.
+  const [setClientOpen, setSetClientOpen] = useState(false);
+
   const { data: sites, isPending, isError, error, refetch, isFetching } =
-    useSites(appliedTag, { view: showArchived ? "archived" : "active" });
+    useSites(appliedTag, {
+      view: showArchived ? "archived" : "active",
+      clientId: appliedClientId ?? undefined,
+    });
 
   // When the active bucket is empty, also fetch the archived bucket so we can
   // surface a "Disconnected sites" panel above the onboarding empty state.
@@ -61,6 +78,7 @@ function SitesPage() {
   const activeIsEmpty = !isPending && !isError && (sites?.length ?? 0) === 0;
   const { data: archivedSites } = useSites(appliedTag, {
     view: "archived",
+    clientId: appliedClientId ?? undefined,
   });
   // Only show the panel when: active bucket is genuinely empty AND archived has
   // sites. When showArchived is on we already show the archived list via the
@@ -365,9 +383,8 @@ function SitesPage() {
   }, [selection.count]);
 
   const handleBulkSetClient = useCallback(() => {
-    // TODO(sprint-4): open a client-picker modal.
-    toast.info(`Setting client on ${selection.count} sites lands in Sprint 4`);
-  }, [selection.count]);
+    setSetClientOpen(true);
+  }, []);
 
   const handleBulkPauseMonitoring = useCallback(() => {
     // TODO(sprint-4): wire to the monitoring service pause endpoint.
@@ -457,7 +474,9 @@ function SitesPage() {
             search={search}
             onSearchChange={setSearch}
             tagOptions={tagOptions}
-            clientOptions={tagOptions}
+            clientOptions={clientOptions}
+            appliedClientId={appliedClientId}
+            onClientFilterChange={setAppliedClientId}
             canOperate={operate}
             onBulkUpdate={openUpdateWizardForSelection}
             onBulkBackup={handleBulkBackup}
@@ -635,6 +654,16 @@ function SitesPage() {
           open={reconnectTarget !== null}
           onClose={() => setReconnectTarget(null)}
           initialSite={reconnectTarget ?? undefined}
+        />
+      ) : null}
+
+      {/* m63 — Set-client bulk action: assign the selected sites to a client. */}
+      {operate ? (
+        <SetClientDialog
+          open={setClientOpen}
+          onClose={() => setSetClientOpen(false)}
+          siteIds={Array.from(selection.selected)}
+          onSuccess={() => selection.replace([])}
         />
       ) : null}
     </section>

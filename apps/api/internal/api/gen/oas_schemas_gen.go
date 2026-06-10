@@ -286,6 +286,184 @@ func (s *AddSuppressionRequest) SetReason(val OptString) {
 	s.Reason = val
 }
 
+// An agency client record that groups sites under a customer entity.
+// Ref: #/components/schemas/AgencyClient
+type AgencyClient struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	// Display name for the client.
+	Name string `json:"name"`
+	// Optional company / business name.
+	Company OptString `json:"company"`
+	// Optional primary contact email address.
+	ContactEmail OptString `json:"contact_email"`
+	// Optional contact phone number.
+	Phone OptString `json:"phone"`
+	// Internal operator notes (not shown to the client).
+	Notes OptString `json:"notes"`
+	// Hex color for the color badge (e.g. "#3b82f6"). Empty when unset.
+	Color OptString `json:"color"`
+	// URL of the client's logo. Empty when unset.
+	LogoURL OptURI `json:"logo_url"`
+	// Number of non-archived sites currently assigned to this client.
+	SiteCount int64 `json:"site_count"`
+	// Set when the client is soft-deleted (archived). Absent for active clients.
+	ArchivedAt OptDateTime `json:"archived_at"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
+}
+
+// GetID returns the value of ID.
+func (s *AgencyClient) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *AgencyClient) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetName returns the value of Name.
+func (s *AgencyClient) GetName() string {
+	return s.Name
+}
+
+// GetCompany returns the value of Company.
+func (s *AgencyClient) GetCompany() OptString {
+	return s.Company
+}
+
+// GetContactEmail returns the value of ContactEmail.
+func (s *AgencyClient) GetContactEmail() OptString {
+	return s.ContactEmail
+}
+
+// GetPhone returns the value of Phone.
+func (s *AgencyClient) GetPhone() OptString {
+	return s.Phone
+}
+
+// GetNotes returns the value of Notes.
+func (s *AgencyClient) GetNotes() OptString {
+	return s.Notes
+}
+
+// GetColor returns the value of Color.
+func (s *AgencyClient) GetColor() OptString {
+	return s.Color
+}
+
+// GetLogoURL returns the value of LogoURL.
+func (s *AgencyClient) GetLogoURL() OptURI {
+	return s.LogoURL
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *AgencyClient) GetSiteCount() int64 {
+	return s.SiteCount
+}
+
+// GetArchivedAt returns the value of ArchivedAt.
+func (s *AgencyClient) GetArchivedAt() OptDateTime {
+	return s.ArchivedAt
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *AgencyClient) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *AgencyClient) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetID sets the value of ID.
+func (s *AgencyClient) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *AgencyClient) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetName sets the value of Name.
+func (s *AgencyClient) SetName(val string) {
+	s.Name = val
+}
+
+// SetCompany sets the value of Company.
+func (s *AgencyClient) SetCompany(val OptString) {
+	s.Company = val
+}
+
+// SetContactEmail sets the value of ContactEmail.
+func (s *AgencyClient) SetContactEmail(val OptString) {
+	s.ContactEmail = val
+}
+
+// SetPhone sets the value of Phone.
+func (s *AgencyClient) SetPhone(val OptString) {
+	s.Phone = val
+}
+
+// SetNotes sets the value of Notes.
+func (s *AgencyClient) SetNotes(val OptString) {
+	s.Notes = val
+}
+
+// SetColor sets the value of Color.
+func (s *AgencyClient) SetColor(val OptString) {
+	s.Color = val
+}
+
+// SetLogoURL sets the value of LogoURL.
+func (s *AgencyClient) SetLogoURL(val OptURI) {
+	s.LogoURL = val
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *AgencyClient) SetSiteCount(val int64) {
+	s.SiteCount = val
+}
+
+// SetArchivedAt sets the value of ArchivedAt.
+func (s *AgencyClient) SetArchivedAt(val OptDateTime) {
+	s.ArchivedAt = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *AgencyClient) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *AgencyClient) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*AgencyClient) createClientRes() {}
+func (*AgencyClient) getClientRes()    {}
+func (*AgencyClient) updateClientRes() {}
+
+// Ref: #/components/schemas/AgencyClientList
+type AgencyClientList struct {
+	Items []AgencyClient `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *AgencyClientList) GetItems() []AgencyClient {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *AgencyClientList) SetItems(val []AgencyClient) {
+	s.Items = val
+}
+
+func (*AgencyClientList) listClientsRes() {}
+
 type AgentAutologinConsumeForbidden Error
 
 func (*AgentAutologinConsumeForbidden) agentAutologinConsumeRes() {}
@@ -1514,6 +1692,64 @@ func (*ApiKeyList) listApiKeysRes() {}
 type ArchiveSiteNoContent struct{}
 
 func (*ArchiveSiteNoContent) archiveSiteRes() {}
+
+// Ref: #/components/schemas/AssignSitesRequest
+type AssignSitesRequest struct {
+	// UUID of the client to assign. Omit or pass null to unassign the sites.
+	ClientID OptNilUUID `json:"client_id"`
+	// List of site UUIDs to assign (or unassign).
+	SiteIds []uuid.UUID `json:"site_ids"`
+}
+
+// GetClientID returns the value of ClientID.
+func (s *AssignSitesRequest) GetClientID() OptNilUUID {
+	return s.ClientID
+}
+
+// GetSiteIds returns the value of SiteIds.
+func (s *AssignSitesRequest) GetSiteIds() []uuid.UUID {
+	return s.SiteIds
+}
+
+// SetClientID sets the value of ClientID.
+func (s *AssignSitesRequest) SetClientID(val OptNilUUID) {
+	s.ClientID = val
+}
+
+// SetSiteIds sets the value of SiteIds.
+func (s *AssignSitesRequest) SetSiteIds(val []uuid.UUID) {
+	s.SiteIds = val
+}
+
+// Ref: #/components/schemas/AssignSitesResponse
+type AssignSitesResponse struct {
+	// Number of sites whose client assignment was changed.
+	Updated int64 `json:"updated"`
+}
+
+// GetUpdated returns the value of Updated.
+func (s *AssignSitesResponse) GetUpdated() int64 {
+	return s.Updated
+}
+
+// SetUpdated sets the value of Updated.
+func (s *AssignSitesResponse) SetUpdated(val int64) {
+	s.Updated = val
+}
+
+func (*AssignSitesResponse) assignSitesToClientRes() {}
+
+type AssignSitesToClientBadRequest Error
+
+func (*AssignSitesToClientBadRequest) assignSitesToClientRes() {}
+
+type AssignSitesToClientForbidden Error
+
+func (*AssignSitesToClientForbidden) assignSitesToClientRes() {}
+
+type AssignSitesToClientUnauthorized Error
+
+func (*AssignSitesToClientUnauthorized) assignSitesToClientRes() {}
 
 // Ref: #/components/schemas/AuditEntry
 type AuditEntry struct {
@@ -3727,6 +3963,88 @@ func (s *ComputeRucssReq) SetUrls(val []string) {
 	s.Urls = val
 }
 
+// Ref: #/components/schemas/CreateAgencyClientRequest
+type CreateAgencyClientRequest struct {
+	Name         string    `json:"name"`
+	Company      OptString `json:"company"`
+	ContactEmail OptString `json:"contact_email"`
+	Phone        OptString `json:"phone"`
+	Notes        OptString `json:"notes"`
+	// Hex color code (e.g. "#3b82f6").
+	Color   OptString `json:"color"`
+	LogoURL OptURI    `json:"logo_url"`
+}
+
+// GetName returns the value of Name.
+func (s *CreateAgencyClientRequest) GetName() string {
+	return s.Name
+}
+
+// GetCompany returns the value of Company.
+func (s *CreateAgencyClientRequest) GetCompany() OptString {
+	return s.Company
+}
+
+// GetContactEmail returns the value of ContactEmail.
+func (s *CreateAgencyClientRequest) GetContactEmail() OptString {
+	return s.ContactEmail
+}
+
+// GetPhone returns the value of Phone.
+func (s *CreateAgencyClientRequest) GetPhone() OptString {
+	return s.Phone
+}
+
+// GetNotes returns the value of Notes.
+func (s *CreateAgencyClientRequest) GetNotes() OptString {
+	return s.Notes
+}
+
+// GetColor returns the value of Color.
+func (s *CreateAgencyClientRequest) GetColor() OptString {
+	return s.Color
+}
+
+// GetLogoURL returns the value of LogoURL.
+func (s *CreateAgencyClientRequest) GetLogoURL() OptURI {
+	return s.LogoURL
+}
+
+// SetName sets the value of Name.
+func (s *CreateAgencyClientRequest) SetName(val string) {
+	s.Name = val
+}
+
+// SetCompany sets the value of Company.
+func (s *CreateAgencyClientRequest) SetCompany(val OptString) {
+	s.Company = val
+}
+
+// SetContactEmail sets the value of ContactEmail.
+func (s *CreateAgencyClientRequest) SetContactEmail(val OptString) {
+	s.ContactEmail = val
+}
+
+// SetPhone sets the value of Phone.
+func (s *CreateAgencyClientRequest) SetPhone(val OptString) {
+	s.Phone = val
+}
+
+// SetNotes sets the value of Notes.
+func (s *CreateAgencyClientRequest) SetNotes(val OptString) {
+	s.Notes = val
+}
+
+// SetColor sets the value of Color.
+func (s *CreateAgencyClientRequest) SetColor(val OptString) {
+	s.Color = val
+}
+
+// SetLogoURL sets the value of LogoURL.
+func (s *CreateAgencyClientRequest) SetLogoURL(val OptURI) {
+	s.LogoURL = val
+}
+
 type CreateApiKeyForbidden Error
 
 func (*CreateApiKeyForbidden) createApiKeyRes() {}
@@ -3754,6 +4072,18 @@ func (*CreateAutologinNotFound) createAutologinRes() {}
 type CreateAutologinUnprocessableEntity Error
 
 func (*CreateAutologinUnprocessableEntity) createAutologinRes() {}
+
+type CreateClientBadRequest Error
+
+func (*CreateClientBadRequest) createClientRes() {}
+
+type CreateClientForbidden Error
+
+func (*CreateClientForbidden) createClientRes() {}
+
+type CreateClientUnauthorized Error
+
+func (*CreateClientUnauthorized) createClientRes() {}
 
 type CreateOrgConflict Error
 
@@ -5007,6 +5337,23 @@ func (*DeleteBackupNotFound) deleteBackupRes() {}
 type DeleteBackupUnprocessableEntity Error
 
 func (*DeleteBackupUnprocessableEntity) deleteBackupRes() {}
+
+type DeleteClientForbidden Error
+
+func (*DeleteClientForbidden) deleteClientRes() {}
+
+// DeleteClientNoContent is response for DeleteClient operation.
+type DeleteClientNoContent struct{}
+
+func (*DeleteClientNoContent) deleteClientRes() {}
+
+type DeleteClientNotFound Error
+
+func (*DeleteClientNotFound) deleteClientRes() {}
+
+type DeleteClientUnauthorized Error
+
+func (*DeleteClientUnauthorized) deleteClientRes() {}
 
 type DeleteDbSnapshotOK struct {
 	Ok     OptBool   `json:"ok"`
@@ -7247,6 +7594,18 @@ func (s *GetBackupSqlInspectionAccepted) SetLocation(val OptString) {
 
 func (*GetBackupSqlInspectionAccepted) getBackupSqlInspectionRes() {}
 
+type GetClientForbidden Error
+
+func (*GetClientForbidden) getClientRes() {}
+
+type GetClientNotFound Error
+
+func (*GetClientNotFound) getClientRes() {}
+
+type GetClientUnauthorized Error
+
+func (*GetClientUnauthorized) getClientRes() {}
+
 type GetDbScanResultOK struct {
 	Result OptDbScanResult `json:"result"`
 }
@@ -7540,6 +7899,14 @@ func (*ListAuditForbidden) listAuditRes() {}
 type ListAuditUnauthorized Error
 
 func (*ListAuditUnauthorized) listAuditRes() {}
+
+type ListClientsForbidden Error
+
+func (*ListClientsForbidden) listClientsRes() {}
+
+type ListClientsUnauthorized Error
+
+func (*ListClientsUnauthorized) listClientsRes() {}
 
 type ListEmailConnectionsForbidden Error
 
@@ -14088,6 +14455,52 @@ func (o OptTriggerDbScanReq) Or(d TriggerDbScanReq) TriggerDbScanReq {
 	return d
 }
 
+// NewOptURI returns new OptURI with value set to v.
+func NewOptURI(v url.URL) OptURI {
+	return OptURI{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptURI is optional url.URL.
+type OptURI struct {
+	Value url.URL
+	Set   bool
+}
+
+// IsSet returns true if OptURI was set.
+func (o OptURI) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptURI) Reset() {
+	var v url.URL
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptURI) SetTo(v url.URL) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptURI) Get() (v url.URL, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptURI) Or(d url.URL) url.URL {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptUUID returns new OptUUID with value set to v.
 func NewOptUUID(v uuid.UUID) OptUUID {
 	return OptUUID{
@@ -18402,8 +18815,13 @@ type Site struct {
 	// Normalized status of the most recent backup snapshot (DB 'completed'→'success',
 	// 'pending'→'running').
 	LastBackupStatus OptSiteLastBackupStatus `json:"last_backup_status"`
-	CreatedAt        time.Time               `json:"created_at"`
-	UpdatedAt        time.Time               `json:"updated_at"`
+	// UUID of the agency client this site is grouped under (m63). Absent when the site has no client.
+	ClientID OptUUID `json:"client_id"`
+	// Display name of the agency client this site is grouped under (m63). Absent when the site has no
+	// client.
+	ClientName OptString `json:"client_name"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // GetID returns the value of ID.
@@ -18534,6 +18952,16 @@ func (s *Site) GetLastBackupAt() OptDateTime {
 // GetLastBackupStatus returns the value of LastBackupStatus.
 func (s *Site) GetLastBackupStatus() OptSiteLastBackupStatus {
 	return s.LastBackupStatus
+}
+
+// GetClientID returns the value of ClientID.
+func (s *Site) GetClientID() OptUUID {
+	return s.ClientID
+}
+
+// GetClientName returns the value of ClientName.
+func (s *Site) GetClientName() OptString {
+	return s.ClientName
 }
 
 // GetCreatedAt returns the value of CreatedAt.
@@ -18674,6 +19102,16 @@ func (s *Site) SetLastBackupAt(val OptDateTime) {
 // SetLastBackupStatus sets the value of LastBackupStatus.
 func (s *Site) SetLastBackupStatus(val OptSiteLastBackupStatus) {
 	s.LastBackupStatus = val
+}
+
+// SetClientID sets the value of ClientID.
+func (s *Site) SetClientID(val OptUUID) {
+	s.ClientID = val
+}
+
+// SetClientName sets the value of ClientName.
+func (s *Site) SetClientName(val OptString) {
+	s.ClientName = val
 }
 
 // SetCreatedAt sets the value of CreatedAt.
@@ -22883,6 +23321,105 @@ func (*UnblockSiteIPServiceUnavailable) unblockSiteIPRes() {}
 type UnblockSiteIPUnprocessableEntity Error
 
 func (*UnblockSiteIPUnprocessableEntity) unblockSiteIPRes() {}
+
+// All fields are optional (PATCH semantics).
+// Ref: #/components/schemas/UpdateAgencyClientRequest
+type UpdateAgencyClientRequest struct {
+	Name         OptString `json:"name"`
+	Company      OptString `json:"company"`
+	ContactEmail OptString `json:"contact_email"`
+	Phone        OptString `json:"phone"`
+	Notes        OptString `json:"notes"`
+	// Hex color code (e.g. "#3b82f6"). Pass empty string to clear.
+	Color   OptString `json:"color"`
+	LogoURL OptURI    `json:"logo_url"`
+}
+
+// GetName returns the value of Name.
+func (s *UpdateAgencyClientRequest) GetName() OptString {
+	return s.Name
+}
+
+// GetCompany returns the value of Company.
+func (s *UpdateAgencyClientRequest) GetCompany() OptString {
+	return s.Company
+}
+
+// GetContactEmail returns the value of ContactEmail.
+func (s *UpdateAgencyClientRequest) GetContactEmail() OptString {
+	return s.ContactEmail
+}
+
+// GetPhone returns the value of Phone.
+func (s *UpdateAgencyClientRequest) GetPhone() OptString {
+	return s.Phone
+}
+
+// GetNotes returns the value of Notes.
+func (s *UpdateAgencyClientRequest) GetNotes() OptString {
+	return s.Notes
+}
+
+// GetColor returns the value of Color.
+func (s *UpdateAgencyClientRequest) GetColor() OptString {
+	return s.Color
+}
+
+// GetLogoURL returns the value of LogoURL.
+func (s *UpdateAgencyClientRequest) GetLogoURL() OptURI {
+	return s.LogoURL
+}
+
+// SetName sets the value of Name.
+func (s *UpdateAgencyClientRequest) SetName(val OptString) {
+	s.Name = val
+}
+
+// SetCompany sets the value of Company.
+func (s *UpdateAgencyClientRequest) SetCompany(val OptString) {
+	s.Company = val
+}
+
+// SetContactEmail sets the value of ContactEmail.
+func (s *UpdateAgencyClientRequest) SetContactEmail(val OptString) {
+	s.ContactEmail = val
+}
+
+// SetPhone sets the value of Phone.
+func (s *UpdateAgencyClientRequest) SetPhone(val OptString) {
+	s.Phone = val
+}
+
+// SetNotes sets the value of Notes.
+func (s *UpdateAgencyClientRequest) SetNotes(val OptString) {
+	s.Notes = val
+}
+
+// SetColor sets the value of Color.
+func (s *UpdateAgencyClientRequest) SetColor(val OptString) {
+	s.Color = val
+}
+
+// SetLogoURL sets the value of LogoURL.
+func (s *UpdateAgencyClientRequest) SetLogoURL(val OptURI) {
+	s.LogoURL = val
+}
+
+type UpdateClientBadRequest Error
+
+func (*UpdateClientBadRequest) updateClientRes() {}
+
+type UpdateClientForbidden Error
+
+func (*UpdateClientForbidden) updateClientRes() {}
+
+type UpdateClientNotFound Error
+
+func (*UpdateClientNotFound) updateClientRes() {}
+
+type UpdateClientUnauthorized Error
+
+func (*UpdateClientUnauthorized) updateClientRes() {}
 
 // One thing to update on a site.
 // Ref: #/components/schemas/UpdateItem

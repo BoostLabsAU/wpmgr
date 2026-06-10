@@ -8,6 +8,7 @@ import {
   Settings,
   Share2,
   Shield,
+  Users,
   type LucideIcon,
 } from "lucide-react";
 
@@ -83,6 +84,11 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
       { label: "Uptime", to: "/uptime" },
       { label: "Performance", to: "/performance" },
     ],
+  },
+  {
+    label: "Clients",
+    icon: Users,
+    to: "/clients",
   },
   {
     label: "Email",

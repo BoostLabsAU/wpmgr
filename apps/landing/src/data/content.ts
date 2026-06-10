@@ -149,6 +149,12 @@ export const FEATURES = {
         "Four roles from owner to viewer, so each person gets exactly the access they need. Share one site with a collaborator who can never see the rest of your fleet, sign in with email, or with your company's single sign-on (OIDC), and keep a tamper-evident audit log of every action.",
     },
     {
+      icon: "Briefcase",
+      title: "Clients",
+      desc:
+        "Organize your fleet by customer. Group any number of sites under a named client record (name, company, contact email, phone, brand color, logo URL, and notes), then bulk-assign sites from the fleet view in one action. Filter the sites list to a single client and jump straight to their dedicated page showing every assigned site. Clients are the foundation for white-label maintenance reports and a read-only client portal, both coming in the next phases. Clients are tenant-isolated; site-scoped collaborators cannot see the client roster.",
+    },
+    {
       icon: "Mail",
       title: "Email in minutes",
       desc:

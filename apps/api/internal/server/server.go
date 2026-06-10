@@ -22,6 +22,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/authz"
 	"github.com/mosamlife/wpmgr/apps/api/internal/autologin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
+	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
@@ -164,6 +165,9 @@ type Deps struct {
 	// EmailAgentSuppressionH serves the Phase-4a agent suppression-fetch
 	// endpoint at GET /agent/v1/email/suppression. nil ⇒ route not mounted.
 	EmailAgentSuppressionH *email.AgentSuppressionHandler
+	// ClientH serves the m63 agency-client management routes under
+	// /api/v1/clients. nil ⇒ routes not mounted.
+	ClientH *clientpkg.Handler
 	ServiceName string
 	Version     string
 }
@@ -410,6 +414,12 @@ func New(deps Deps) *Server {
 	// routes under /email/...
 	if deps.EmailH != nil {
 		deps.EmailH.Register(v1)
+	}
+
+	// m63 — agency client management: list/create/update/delete clients +
+	// bulk site assignment. All routes are org-scoped (no site collaborators).
+	if deps.ClientH != nil {
+		deps.ClientH.Register(v1)
 	}
 
 	// m33 — superadmin instance-management area (auth-only, not tenant-gated).

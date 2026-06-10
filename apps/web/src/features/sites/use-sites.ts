@@ -30,8 +30,8 @@ export type SitesView = "active" | "archived";
 export const sitesKeys = {
   all: ["sites"] as const,
   lists: () => [...sitesKeys.all, "list"] as const,
-  list: (tag?: string, view: SitesView = "active") =>
-    [...sitesKeys.lists(), { tag: tag ?? null, view }] as const,
+  list: (tag?: string, view: SitesView = "active", clientId?: string) =>
+    [...sitesKeys.lists(), { tag: tag ?? null, view, clientId: clientId ?? null }] as const,
   detail: (id: string) => [...sitesKeys.all, "detail", id] as const,
 };
 
@@ -44,8 +44,8 @@ export class NotFoundError extends Error {
 }
 
 /**
- * List sites, optionally filtered by a single tag (?tag=). Passing an empty or
- * undefined tag lists all sites.
+ * List sites, optionally filtered by a single tag (?tag=) and/or a client
+ * UUID (?clientId=). Passing an empty or undefined tag lists all sites.
  *
  * The default ("active") view hides archived sites (the CP omits them unless
  * asked). Pass `view: "archived"` to fetch the archived bucket via
@@ -53,24 +53,21 @@ export class NotFoundError extends Error {
  */
 export function useSites(
   tag?: string,
-  options?: { view?: SitesView },
+  options?: { view?: SitesView; clientId?: string },
 ): UseQueryResult<Site[], Error> {
   const trimmed = tag?.trim() ? tag.trim() : undefined;
   const view: SitesView = options?.view ?? "active";
+  const clientId = options?.clientId || undefined;
   return useQuery({
-    queryKey: sitesKeys.list(trimmed, view),
+    queryKey: sitesKeys.list(trimmed, view, clientId),
     queryFn: async () => {
-      // The archived view passes `?state=archived`, a query param the generated
-      // ListSitesData type does not declare yet (Phase 5 backend addition). For
-      // that view we call the shared `client` directly so we can attach the
-      // param without churning the generated client; the active view stays on
-      // the typed `listSites` wrapper.
+      // The archived view passes `?state=archived`. For views that need extra
+      // params we call the typed `listSites` with the full query object.
       if (view === "archived") {
         const query: Record<string, string> = { state: "archived" };
         if (trimmed) query.tag = trimmed;
-        // The client's response-style generics unwrap a responses-map (the
-        // generated SDK passes `{ <status>: Body }`). We mirror that so `data`
-        // types as SiteList rather than being collapsed to its value union.
+        if (clientId) query.clientId = clientId;
+        // The client's response-style generics unwrap a responses-map.
         const { data, error } = await client.get<{ 200: SiteList }>({
           url: "/api/v1/sites",
           query,
@@ -78,9 +75,12 @@ export function useSites(
         if (error) throw toError(error);
         return data?.items ?? [];
       }
-      const { data, error } = await listSites(
-        trimmed ? { query: { tag: trimmed } } : {},
-      );
+      const { data, error } = await listSites({
+        query: {
+          ...(trimmed ? { tag: trimmed } : {}),
+          ...(clientId ? { clientId } : {}),
+        },
+      });
       if (error) throw toError(error);
       return data?.items ?? [];
     },

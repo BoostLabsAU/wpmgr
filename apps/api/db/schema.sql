@@ -89,6 +89,10 @@ CREATE TABLE sites (
     -- M58 hysteresis: counts consecutive sweeper overdue evaluations.
     -- Reset to 0 on every heartbeat; the sweeper degrades only after N misses.
     missed_heartbeats     integer NOT NULL DEFAULT 0,
+    -- M63 clients: optional client grouping (1 site has AT MOST 1 client).
+    -- The composite FK to clients (id, tenant_id) is added after the clients
+    -- table definition below (ON DELETE SET NULL — unassign, never cascade).
+    client_id   uuid,
     created_at  timestamptz NOT NULL DEFAULT now(),
     updated_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -2250,5 +2254,58 @@ CREATE POLICY email_alert_state_tenant_isolation ON email_alert_state
     WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
 CREATE POLICY email_alert_state_agent ON email_alert_state
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m63 — clients (Clients Foundation: per-tenant client records for grouping
+-- sites under agency customers; soft-delete via archived_at)
+-- ---------------------------------------------------------------------------
+CREATE TABLE clients (
+    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id     uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    name          text        NOT NULL,
+    contact_email citext,
+    company       text,
+    phone         text,
+    notes         text,
+    color         text,
+    logo_url      text,
+    archived_at   timestamptz,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+
+    -- Backs the composite FK on sites (prevents tenant drift, mirrors
+    -- sites_id_tenant_key used by site_shares in m19).
+    CONSTRAINT clients_id_tenant_key UNIQUE (id, tenant_id)
+);
+
+-- Fast tenant-scoped list + assignment lookups.
+CREATE INDEX clients_tenant_idx ON clients (tenant_id);
+
+-- Composite FK from sites.client_id (declared in the sites table above):
+-- cross-tenant-proof because (client_id, tenant_id) must exist in clients.
+-- ON DELETE SET NULL — deleting a client unassigns its sites.
+ALTER TABLE sites
+    ADD CONSTRAINT sites_client_tenant_fkey
+    FOREIGN KEY (client_id, tenant_id)
+    REFERENCES clients (id, tenant_id)
+    ON DELETE SET NULL;
+
+-- Partial index: only rows that have a client assigned benefit.
+CREATE INDEX sites_client_idx ON sites (client_id)
+    WHERE client_id IS NOT NULL;
+
+-- RLS mirrors m36: tenant isolation + agent path. No site_scope RESTRICTIVE
+-- policy — a site-scoped collaborator must never enumerate the client roster;
+-- org access is gated in-app via RequireOrgScope + PermClientRead/Manage.
+ALTER TABLE clients ENABLE ROW LEVEL SECURITY;
+ALTER TABLE clients FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY clients_tenant_isolation ON clients
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY clients_agent ON clients
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');

@@ -242,6 +242,17 @@ export const SiteSchema = {
       description:
         "Normalized status of the most recent backup snapshot (DB 'completed'→'success', 'pending'→'running').",
     },
+    client_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "UUID of the agency client this site is grouped under (m63). Absent when the site has no client.",
+    },
+    client_name: {
+      type: "string",
+      description:
+        "Display name of the agency client this site is grouped under (m63). Absent when the site has no client.",
+    },
     created_at: {
       type: "string",
       format: "date-time",
@@ -6739,6 +6750,205 @@ export const PutEmailNotifySettingsRequestSchema = {
         format: "email",
       },
       description: "Replace the digest recipients list.",
+    },
+  },
+} as const;
+
+export const AgencyClientSchema = {
+  type: "object",
+  required: [
+    "id",
+    "tenant_id",
+    "name",
+    "site_count",
+    "created_at",
+    "updated_at",
+  ],
+  description:
+    "An agency client record that groups sites under a customer entity.",
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+    },
+    name: {
+      type: "string",
+      description: "Display name for the client.",
+    },
+    company: {
+      type: "string",
+      description: "Optional company / business name.",
+    },
+    contact_email: {
+      type: "string",
+      format: "email",
+      description: "Optional primary contact email address.",
+    },
+    phone: {
+      type: "string",
+      description: "Optional contact phone number.",
+    },
+    notes: {
+      type: "string",
+      description: "Internal operator notes (not shown to the client).",
+    },
+    color: {
+      type: "string",
+      description:
+        'Hex color for the color badge (e.g. "#3b82f6"). Empty when unset.',
+    },
+    logo_url: {
+      type: "string",
+      format: "uri",
+      description: "URL of the client's logo. Empty when unset.",
+    },
+    site_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of non-archived sites currently assigned to this client.",
+    },
+    archived_at: {
+      type: "string",
+      format: "date-time",
+      description:
+        "Set when the client is soft-deleted (archived). Absent for active clients.",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const AgencyClientListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/AgencyClient",
+      },
+    },
+  },
+} as const;
+
+export const CreateAgencyClientRequestSchema = {
+  type: "object",
+  required: ["name"],
+  properties: {
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+    },
+    company: {
+      type: "string",
+      maxLength: 200,
+    },
+    contact_email: {
+      type: "string",
+      format: "email",
+      maxLength: 320,
+    },
+    phone: {
+      type: "string",
+      maxLength: 80,
+    },
+    notes: {
+      type: "string",
+      maxLength: 2000,
+    },
+    color: {
+      type: "string",
+      description: 'Hex color code (e.g. "#3b82f6").',
+    },
+    logo_url: {
+      type: "string",
+      format: "uri",
+    },
+  },
+} as const;
+
+export const UpdateAgencyClientRequestSchema = {
+  type: "object",
+  description: "All fields are optional (PATCH semantics).",
+  properties: {
+    name: {
+      type: "string",
+      minLength: 1,
+      maxLength: 200,
+    },
+    company: {
+      type: "string",
+      maxLength: 200,
+    },
+    contact_email: {
+      type: "string",
+      format: "email",
+      maxLength: 320,
+    },
+    phone: {
+      type: "string",
+      maxLength: 80,
+    },
+    notes: {
+      type: "string",
+      maxLength: 2000,
+    },
+    color: {
+      type: "string",
+      description:
+        'Hex color code (e.g. "#3b82f6"). Pass empty string to clear.',
+    },
+    logo_url: {
+      type: "string",
+      format: "uri",
+    },
+  },
+} as const;
+
+export const AssignSitesRequestSchema = {
+  type: "object",
+  required: ["site_ids"],
+  properties: {
+    client_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "UUID of the client to assign. Omit or pass null to unassign the sites.",
+    },
+    site_ids: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "uuid",
+      },
+      minItems: 1,
+      maxItems: 500,
+      description: "List of site UUIDs to assign (or unassign).",
+    },
+  },
+} as const;
+
+export const AssignSitesResponseSchema = {
+  type: "object",
+  required: ["updated"],
+  properties: {
+    updated: {
+      type: "integer",
+      format: "int64",
+      description: "Number of sites whose client assignment was changed.",
     },
   },
 } as const;

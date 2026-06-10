@@ -157,6 +157,13 @@ export {
   deleteEmailConnection,
   getEmailNotifySettings,
   putEmailNotifySettings,
+  // clients (m63 Foundation)
+  listClients,
+  createClient,
+  updateClient,
+  deleteClient,
+  getClient,
+  assignSitesToClient,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -530,4 +537,23 @@ export type {
   GetEmailNotifySettingsResponse,
   PutEmailNotifySettingsData,
   PutEmailNotifySettingsResponse,
+  // clients (m63 Foundation)
+  AgencyClient,
+  AgencyClientList,
+  CreateAgencyClientRequest,
+  UpdateAgencyClientRequest,
+  AssignSitesRequest,
+  AssignSitesResponse,
+  ListClientsData,
+  ListClientsResponse,
+  CreateClientData,
+  CreateClientResponse,
+  AssignSitesToClientData,
+  AssignSitesToClientResponse,
+  DeleteClientData,
+  DeleteClientResponse,
+  GetClientData,
+  GetClientResponse,
+  UpdateClientData,
+  UpdateClientResponse,
 } from "./generated/types.gen";

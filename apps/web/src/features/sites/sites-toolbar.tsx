@@ -69,18 +69,31 @@ const TOOLBAR_MOTION = {
 // Public surface
 // ---------------------------------------------------------------------------
 
+export interface ClientOption {
+  id: string;
+  name: string;
+}
+
 export interface SitesToolbarProps {
   /** Selection state, lifted from the route so both toolbar & table read the same set. */
   selection: SitesSelection;
   /** Density tuple, lifted so the toolbar (idle mode) can drive it. */
   densityState: [SitesDensity, (next: SitesDensity) => void];
 
-  // ---- Idle-mode filter wiring (basic — real wiring is Sprint 4) -----------
+  // ---- Idle-mode filter wiring -----------------------------------------------
   /** Controlled search input value. */
   search: string;
   onSearchChange: (next: string) => void;
-  /** Available client/tag values, used to populate the Client + Tag dropdowns. */
-  clientOptions?: readonly string[];
+  /**
+   * Client options for the Client filter dropdown (id+name pairs from useClients).
+   * When provided with onClientFilterChange, the dropdown shows real client options.
+   */
+  clientOptions?: readonly ClientOption[];
+  /** Currently-applied client filter id (null = all). */
+  appliedClientId?: string | null;
+  /** Called when the client filter selection changes. */
+  onClientFilterChange?: (clientId: string | null) => void;
+  /** Available tag values, used to populate the Tag dropdown. */
   tagOptions?: readonly string[];
 
   // ---- Permission gates ---------------------------------------------------
@@ -149,11 +162,19 @@ function IdleMode({
   search,
   onSearchChange,
   clientOptions = [],
+  appliedClientId,
+  onClientFilterChange,
   tagOptions = [],
   densityState,
   addSiteSlot,
 }: SitesToolbarProps) {
   const [density, onDensityChange] = densityState;
+
+  const activeClientLabel =
+    appliedClientId && clientOptions.length > 0
+      ? (clientOptions.find((c) => c.id === appliedClientId)?.name ?? "All clients")
+      : "All clients";
+
   return (
     <motion.div
       layout="position"
@@ -165,13 +186,23 @@ function IdleMode({
     >
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput value={search} onChange={onSearchChange} />
-        <FilterDropdown
-          label="All clients"
-          options={clientOptions}
-          icon={Users}
-          ariaLabel="Filter by client"
-          filterKind="client"
-        />
+        {/* Client filter — real wiring when onClientFilterChange is provided */}
+        {onClientFilterChange ? (
+          <ClientFilterDropdown
+            label={activeClientLabel}
+            options={clientOptions}
+            appliedId={appliedClientId ?? null}
+            onSelect={onClientFilterChange}
+          />
+        ) : (
+          <FilterDropdown
+            label="All clients"
+            options={clientOptions.map((c) => c.name)}
+            icon={Users}
+            ariaLabel="Filter by client"
+            filterKind="client"
+          />
+        )}
         <FilterDropdown
           label="Status: any"
           options={["Up", "Down", "Pending", "Disabled"]}
@@ -239,11 +270,7 @@ function FilterDropdown({
   icon?: typeof Tag;
   filterKind: FilterKind;
 }) {
-  // Sprint 3 keeps the dropdown UI live but defers real filter wiring to
-  // Sprint 4 (touching useSites() is out of this scope). We surface the
-  // intent via console.debug so changes are observable in dev.
   const handleSelect = (value: string | null) => {
-     
     console.debug("[sites-toolbar] filter change", {
       kind: filterKind,
       value,
@@ -279,6 +306,64 @@ function FilterDropdown({
               className="font-mono text-xs"
             >
               {opt}
+            </DropdownMenuItem>
+          ))
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+/**
+ * Real client filter dropdown — shows id+name pairs; fires onSelect with the
+ * client id (or null for "all"). Renders the applied client name in the label.
+ */
+function ClientFilterDropdown({
+  label,
+  options,
+  appliedId,
+  onSelect,
+}: {
+  label: string;
+  options: readonly ClientOption[];
+  appliedId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Filter by client"
+          className={cn(
+            "h-9 gap-1.5",
+            appliedId && "border-primary/50 bg-primary/5",
+          )}
+        >
+          <Users aria-hidden="true" className="size-3.5" />
+          {label}
+          <ChevronDown aria-hidden="true" className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="min-w-[14rem]">
+        <DropdownMenuItem
+          onSelect={() => onSelect(null)}
+          className={!appliedId ? "font-medium" : ""}
+        >
+          All clients
+        </DropdownMenuItem>
+        {options.length > 0 ? <DropdownMenuSeparator /> : null}
+        {options.length === 0 ? (
+          <DropdownMenuItem disabled>No clients yet</DropdownMenuItem>
+        ) : (
+          options.slice(0, 50).map((opt) => (
+            <DropdownMenuItem
+              key={opt.id}
+              onSelect={() => onSelect(opt.id)}
+              className={appliedId === opt.id ? "font-medium" : ""}
+            >
+              {opt.name}
             </DropdownMenuItem>
           ))
         )}

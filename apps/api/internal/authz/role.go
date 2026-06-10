@@ -107,6 +107,13 @@ const (
 	// orgLevelPerms. A site collaborator with access to a site can manage
 	// that site's email config.
 	PermEmailManage Permission = "site.email.manage"
+
+	// PermClientRead lists and reads agency clients (m63). Viewer+ — org-scoped
+	// only; site-scoped collaborators never see the client roster.
+	PermClientRead Permission = "client:read"
+	// PermClientManage creates, updates, deletes, and assigns agency clients (m63).
+	// Operator+ — same tier as PermSiteWrite; includes the assignment flow.
+	PermClientManage Permission = "client:manage"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -140,6 +147,9 @@ var minRoleFor = map[Permission]Role{
 	PermMediaCleanDelete: RoleAdmin,
 	// Per-site Email Management (m59). Operator+ — site-write-class.
 	PermEmailManage: RoleOperator,
+	// Agency Clients (m63). Read: viewer+; manage: operator+; org-scoped only.
+	PermClientRead:   RoleViewer,
+	PermClientManage: RoleOperator,
 }
 
 // Allows reports whether role r is permitted to perform p.
