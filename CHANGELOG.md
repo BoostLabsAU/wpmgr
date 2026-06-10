@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.35.4] - 2026-06-10
+
+### Added
+
+- **Rendered HTML email preview in the email log.** A logged email's body now shows a real rendered preview (Preview / HTML source tabs) instead of raw markup. The preview renders inside a locked-down sandboxed iframe (no scripts, no same-origin) with a strict content-security policy, and the body is sanitized first. Remote images and tracking pixels are blocked by default with a per-message "Load remote images" opt-in. Plain-text bodies render as text. Security reviewed.
+
 ## [0.35.3] - 2026-06-10
 
 ### Fixed

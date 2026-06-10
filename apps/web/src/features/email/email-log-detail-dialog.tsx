@@ -1,5 +1,5 @@
-import { useId } from "react";
-import { ChevronLeft, ChevronRight, X, RotateCcw, Loader2 } from "lucide-react";
+import * as React from "react";
+import { ChevronLeft, ChevronRight, X, RotateCcw, Loader2, Image, ImageOff } from "lucide-react";
 
 import {
   Dialog,
@@ -11,12 +11,14 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { PageError } from "@/components/feedback";
 import { TooltipProvider, Tooltip } from "@/components/ui/tooltip";
 import { relativeTime } from "@/lib/utils";
 import type { SiteEmailLogEntry } from "@wpmgr/api";
 import { useEmailLogDetail, useResendEmail, BodyNotStoredError } from "./use-email";
 import { EmailStatusBadge } from "./email-status-badge";
+import { SafeEmailPreview } from "./safe-email-preview";
 
 // ---------------------------------------------------------------------------
 // Email log detail dialog
@@ -29,6 +31,12 @@ import { EmailStatusBadge } from "./email-status-badge";
 // Phase 4a additions:
 //   - Resend button: enabled when body_stored=true, disabled with tooltip
 //     when body_stored=false. Handles the 409 body_not_stored response.
+//
+// Phase 4b additions:
+//   - HTML email body rendered in a sandboxed iframe (SafeEmailPreview).
+//   - Tabbed Preview / HTML source for HTML bodies.
+//   - Remote-image toggle (operator opt-in, default blocked).
+//   - State reset (loadRemote + active tab) whenever logId changes.
 // ---------------------------------------------------------------------------
 
 export interface EmailLogDetailDialogProps {
@@ -45,7 +53,7 @@ export function EmailLogDetailDialog({
   onNavigate,
 }: EmailLogDetailDialogProps) {
   const detail = useEmailLogDetail(siteId, logId);
-  const titleId = useId();
+  const titleId = React.useId();
 
   return (
     <TooltipProvider>
@@ -82,7 +90,10 @@ export function EmailLogDetailDialog({
                 onRetry={() => void detail.refetch()}
               />
             ) : detail.data ? (
+              // Key by logId so all local state (loadRemote, activeTab) resets
+              // automatically whenever the operator navigates to a different entry.
               <LogDetailBody
+                key={logId}
                 siteId={siteId}
                 entry={detail.data}
                 prevId={detail.data.prev_id ?? null}
@@ -95,6 +106,24 @@ export function EmailLogDetailDialog({
       </Dialog>
     </TooltipProvider>
   );
+}
+
+// ---------------------------------------------------------------------------
+// HTML detection
+// ---------------------------------------------------------------------------
+
+const HTML_PATTERN =
+  /<(html|body|head|table|div|p|a|img|span|br|h[1-6]|ul|ol|td|tr)\b|<!doctype html|<\/[a-z]+>/i;
+
+function looksLikeHtml(body: string): boolean {
+  return HTML_PATTERN.test(body);
+}
+
+/** Returns true if the body contains any remote <img or url( reference. */
+const REMOTE_IMAGE_PATTERN = /<img\b[^>]+https?:\/\/|url\(\s*['"]?https?:\/\//i;
+
+function hasRemoteImages(body: string): boolean {
+  return REMOTE_IMAGE_PATTERN.test(body);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +146,21 @@ function LogDetailBody({ siteId, entry: detail, prevId, nextId, onNavigate }: Lo
 
   const resend = useResendEmail(siteId);
   const canResend = e.body_stored;
+
+  // Body display state — both reset when logId changes (via `key` on this
+  // component in the parent, so initial values here are always the defaults).
+  const [loadRemote, setLoadRemote] = React.useState(false);
+  const [activeTab, setActiveTab] = React.useState<"preview" | "source">("preview");
+
+  const isHtml = React.useMemo(
+    () => (e.body ? looksLikeHtml(e.body) : false),
+    [e.body],
+  );
+
+  const bodyHasRemote = React.useMemo(
+    () => (e.body ? hasRemoteImages(e.body) : false),
+    [e.body],
+  );
 
   return (
     <div className="space-y-4">
@@ -236,12 +280,76 @@ function LogDetailBody({ siteId, entry: detail, prevId, nextId, onNavigate }: Lo
       {/* Body (only present when body_stored and the server returned it) */}
       {e.body_stored && e.body ? (
         <div className="space-y-1">
-          <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
-            Email body
-          </p>
-          <pre className="max-h-64 overflow-auto rounded-md bg-[var(--color-muted)] px-3 py-2 text-xs text-[var(--color-foreground)]">
-            {e.body}
-          </pre>
+          {/* Section heading + type badge */}
+          <div className="flex items-center gap-2">
+            <p className="text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]">
+              Email body
+            </p>
+            {isHtml ? (
+              <Badge variant="outline">HTML</Badge>
+            ) : (
+              <Badge variant="muted">Plain text</Badge>
+            )}
+          </div>
+
+          {isHtml ? (
+            // HTML body: tabbed Preview / HTML source
+            <Tabs
+              value={activeTab}
+              onValueChange={(v) => setActiveTab(v as "preview" | "source")}
+            >
+              <TabsList aria-label="Email body view">
+                <TabsTrigger value="preview">Preview</TabsTrigger>
+                <TabsTrigger value="source">HTML source</TabsTrigger>
+              </TabsList>
+
+              <TabsContent value="preview" className="pt-2 space-y-2">
+                {/* Remote-image toolbar — only shown when the body actually has
+                    remote images so the toggle is never misleading. */}
+                {bodyHasRemote ? (
+                  <div className="flex items-center justify-end gap-2">
+                    {!loadRemote ? (
+                      <span className="text-xs text-[var(--color-muted-foreground)]">
+                        Remote images blocked to protect privacy.
+                      </span>
+                    ) : null}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setLoadRemote((prev) => !prev)}
+                      aria-pressed={loadRemote}
+                      aria-label={
+                        loadRemote
+                          ? "Block remote images"
+                          : "Allow remote images"
+                      }
+                      className="gap-1.5"
+                    >
+                      {loadRemote ? (
+                        <ImageOff aria-hidden="true" className="size-3.5" />
+                      ) : (
+                        <Image aria-hidden="true" className="size-3.5" />
+                      )}
+                      {loadRemote ? "Block images" : "Load images"}
+                    </Button>
+                  </div>
+                ) : null}
+                <SafeEmailPreview html={e.body} loadRemote={loadRemote} />
+              </TabsContent>
+
+              <TabsContent value="source" className="pt-2">
+                <pre className="max-h-64 overflow-auto rounded-md bg-[var(--color-muted)] px-3 py-2 text-xs text-[var(--color-foreground)]">
+                  {e.body}
+                </pre>
+              </TabsContent>
+            </Tabs>
+          ) : (
+            // Plain-text body: no tabs, just the pre block
+            <pre className="max-h-64 overflow-auto rounded-md bg-[var(--color-muted)] px-3 py-2 text-xs text-[var(--color-foreground)]">
+              {e.body}
+            </pre>
+          )}
         </div>
       ) : null}
 
