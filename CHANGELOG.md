@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.34.1] - 2026-06-10
+
+### Fixed
+
+- The "Re-check connection" button now also appears for **disconnected** sites, not just connected and degraded ones. Disconnected is the case where a manual re-check is most useful, since it is the quickest way to recover a site that simply fell behind on its heartbeat.
+
 ## [0.34.0] - 2026-06-10
 
 ### Added

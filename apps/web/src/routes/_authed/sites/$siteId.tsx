@@ -315,9 +315,13 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
           {/* UptimePill renders nothing when no monitor is configured for this
               site, so no conditional guard needed here. */}
           <UptimePill siteId={site.id} />
-          {/* Only connected and degraded sites can be re-checked — others are
-              not actively heartbeating so the probe would 502 immediately. */}
-          {(connectionState === "connected" || connectionState === "degraded") ? (
+          {/* Re-check is available for connected, degraded, and disconnected
+              sites — disconnected is the key recovery case (a quiet site that
+              fell behind on heartbeats heals on a successful probe). An
+              unreachable agent returns a calm error, not a hard failure. */}
+          {(connectionState === "connected" ||
+            connectionState === "degraded" ||
+            connectionState === "disconnected") ? (
             <button
               type="button"
               aria-label="Re-check connection"
