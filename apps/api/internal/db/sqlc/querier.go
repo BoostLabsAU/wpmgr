@@ -78,6 +78,10 @@ type Querier interface {
 	// Returns the updated row if the claim succeeds (next_digest_at still <= now(),
 	// guard against double-claim by concurrent workers). Runs under InAgentTx.
 	ClaimAdvanceDigest(ctx context.Context, arg ClaimAdvanceDigestParams) (EmailNotifySetting, error)
+	// Atomically advances next_run_at to @new_next_run_at for a schedule row,
+	// recording last_run_at = now(). Returns no row when the claim races
+	// (already claimed by another worker). Runs under InAgentTx.
+	ClaimAdvanceReportSchedule(ctx context.Context, arg ClaimAdvanceReportScheduleParams) (ReportSchedule, error)
 	// Single-statement conditional claim: sets last_alert_at = now() and resets
 	// failures_since_alert = 0 ONLY when:
 	//   - failures_since_alert >= @min_failures (at least one new failure)
@@ -93,6 +97,7 @@ type Querier interface {
 	// Clears the grace-window previous hash once the rotation grace period expires.
 	ClearBeaconKeyHashPrev(ctx context.Context, siteID uuid.UUID) error
 	CompleteBackupSnapshot(ctx context.Context, arg CompleteBackupSnapshotParams) (BackupSnapshot, error)
+	CompleteReport(ctx context.Context, arg CompleteReportParams) (GeneratedReport, error)
 	// Consume path (app.agent). Atomic single-shot UPDATE that wins exactly once
 	// across concurrent agent callbacks: the (consumed_at IS NULL) predicate makes
 	// the second consume a 0-row update; RETURNING tells the caller it lost. The
@@ -142,6 +147,10 @@ type Querier interface {
 	// pending_enrollment BEFORE the agent enrolls, so the enrollment code can be
 	// bound to a real site_id and the dashboard can subscribe to it immediately.
 	CreatePendingSite(ctx context.Context, arg CreatePendingSiteParams) (Site, error)
+	// ---------------------------------------------------------------------------
+	// generated_reports — one row per rendered report
+	// ---------------------------------------------------------------------------
+	CreateReport(ctx context.Context, arg CreateReportParams) (GeneratedReport, error)
 	// Upsert on (site_id, user_id): if a share already exists for this (site, user)
 	// pair, update the role, granted_by and expires_at in place.
 	CreateShare(ctx context.Context, arg CreateShareParams) (SiteShare, error)
@@ -209,9 +218,11 @@ type Querier interface {
 	// DeleteSweptChunk below, implemented as raw SQL in repo.go). Retained only so
 	// the generated querier keeps compiling.
 	DeleteOrphanChunk(ctx context.Context, arg DeleteOrphanChunkParams) (int64, error)
+	DeleteReport(ctx context.Context, arg DeleteReportParams) (int64, error)
 	DeleteShare(ctx context.Context, arg DeleteShareParams) (int64, error)
 	DeleteSite(ctx context.Context, arg DeleteSiteParams) (int64, error)
 	FailBackupSnapshot(ctx context.Context, arg FailBackupSnapshotParams) (BackupSnapshot, error)
+	FailReport(ctx context.Context, arg FailReportParams) (GeneratedReport, error)
 	// Records a terminal task state (succeeded|failed|rolled_back|skipped) with the
 	// resolved versions and any detail/error. Tenant-scoped by id+tenant_id.
 	FinishUpdateTask(ctx context.Context, arg FinishUpdateTaskParams) (UpdateTask, error)
@@ -240,6 +251,11 @@ type Querier interface {
 	// backup_chunks  (content-addressed dedup + refcount GC)
 	// ---------------------------------------------------------------------------
 	GetBackupChunk(ctx context.Context, arg GetBackupChunkParams) (BackupChunk, error)
+	// ---------------------------------------------------------------------------
+	// Per-section data queries for the aggregator
+	// ---------------------------------------------------------------------------
+	// Backup section: completed snapshots in [from, to) for a site.
+	GetBackupReportStats(ctx context.Context, arg GetBackupReportStatsParams) (GetBackupReportStatsRow, error)
 	// ADR-050 MARK-AND-SWEEP retention GC. These are implemented as raw tx.Query /
 	// tx.Exec in repo.go (matching the m44/m46 raw-SQL precedent) rather than
 	// regenerating sqlc; the canonical statements are documented here.
@@ -298,6 +314,7 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCacheStat, error)
 	GetClient(ctx context.Context, arg GetClientParams) (GetClientRow, error)
+	GetClientWithTimezone(ctx context.Context, arg GetClientWithTimezoneParams) (Client, error)
 	// Fetch (connection_key, provider_secret_encrypted) for all connections under a
 	// config row. Used by buildAgentConfigReq to decrypt and build the connections
 	// registry. Runs under InTenantTx.
@@ -390,6 +407,11 @@ type Querier interface {
 	// permissive SELECT policy; wpmgr_app has SELECT only. These queries run under the
 	// normal pool (no tenant GUC needed — any authenticated session may read).
 	GetPluginSignatureBySlug(ctx context.Context, slug string) (PluginSignature, error)
+	GetReport(ctx context.Context, arg GetReportParams) (GeneratedReport, error)
+	// ---------------------------------------------------------------------------
+	// report_schedules — singleton schedule per client
+	// ---------------------------------------------------------------------------
+	GetReportSchedule(ctx context.Context, arg GetReportScheduleParams) (ReportSchedule, error)
 	GetRucssJob(ctx context.Context, arg GetRucssJobParams) (RucssJob, error)
 	// ---------------------------------------------------------------------------
 	// rucss_results
@@ -473,6 +495,17 @@ type Querier interface {
 	// Like ListTenantsForUser it relies on the memberships_self_read policy and must
 	// be run via InUserTx; a non-member (or unknown tenant) yields no rows.
 	GetTenantForUser(ctx context.Context, arg GetTenantForUserParams) (Tenant, error)
+	// Client Reports queries (M64 — White-label client reports Phase 2).
+	// All queries are tenant-scoped both explicitly (tenant_id in WHERE/VALUES)
+	// and by RLS. The repo wraps each call in the appropriate tx helper
+	// (InTenantTx for operator path, InAgentTx for the due-scanner / worker).
+	// updated_at is set by now() in mutations (project convention, no trigger).
+	// ---------------------------------------------------------------------------
+	// Shared tenant name lookup (used by the aggregator for agency branding).
+	// ---------------------------------------------------------------------------
+	GetTenantName(ctx context.Context, id uuid.UUID) (string, error)
+	// Update section: succeeded/failed tasks grouped by target_type in [from, to).
+	GetUpdateReportStats(ctx context.Context, arg GetUpdateReportStatsParams) ([]GetUpdateReportStatsRow, error)
 	GetUpdateRun(ctx context.Context, arg GetUpdateRunParams) (UpdateRun, error)
 	GetUpdateTask(ctx context.Context, arg GetUpdateTaskParams) (UpdateTask, error)
 	GetUserByEmail(ctx context.Context, email string) (User, error)
@@ -624,6 +657,9 @@ type Querier interface {
 	// RunOnStart: false for the periodic job; this is called by DigestWorker on each run.
 	// Runs under InAgentTx (cross-tenant worker).
 	ListDueDigests(ctx context.Context, rowLimit int32) ([]EmailNotifySetting, error)
+	// Returns up to @limit enabled schedules where next_run_at <= now(), JOINed
+	// with the client for timezone/name/contact_email. Runs under InAgentTx.
+	ListDueReportSchedules(ctx context.Context, rowLimit int32) ([]ListDueReportSchedulesRow, error)
 	// ---------------------------------------------------------------------------
 	// site_email_connection  (m62 — multi-connection + failover)
 	// ---------------------------------------------------------------------------
@@ -707,6 +743,10 @@ type Querier interface {
 	// List pending (not yet accepted, not expired, not revoked) invitations for the
 	// current tenant.
 	ListPendingInvitations(ctx context.Context, tenantID uuid.UUID) ([]Invitation, error)
+	// Keyset cursor pagination: composite predicate (created_at, id) < (cursor_at, cursor_id)
+	// because batch inserts can share created_at and a bare compare skips co-timestamped rows
+	// (standing keyset-cursor-composite rule).
+	ListReports(ctx context.Context, arg ListReportsParams) ([]GeneratedReport, error)
 	ListRucssResultsForSite(ctx context.Context, arg ListRucssResultsForSiteParams) ([]RucssResult, error)
 	// All runs for a site (upcoming + past), newest scheduled_for first.
 	ListScheduleRunsBySite(ctx context.Context, arg ListScheduleRunsBySiteParams) ([]BackupScheduleRun, error)
@@ -802,6 +842,7 @@ type Querier interface {
 	MarkEmailLogBounced(ctx context.Context, arg MarkEmailLogBouncedParams) error
 	MarkEmailSent(ctx context.Context, id uuid.UUID) error
 	MarkInvitationAccepted(ctx context.Context, arg MarkInvitationAcceptedParams) (Invitation, error)
+	MarkReportGenerating(ctx context.Context, arg MarkReportGeneratingParams) (GeneratedReport, error)
 	// ---------------------------------------------------------------------------
 	// Connection-state transitions. Each writes connection_state plus the derived
 	// legacy status/health_status (ADR-041 keeps the legacy columns in sync), and
@@ -937,6 +978,10 @@ type Querier interface {
 	// Partial update: each field uses COALESCE so an absent narg leaves the
 	// stored value unchanged. updated_at is always refreshed.
 	UpdateClient(ctx context.Context, arg UpdateClientParams) (Client, error)
+	// ---------------------------------------------------------------------------
+	// clients.timezone (D-0: client-level timezone field, decision 6)
+	// ---------------------------------------------------------------------------
+	UpdateClientTimezone(ctx context.Context, arg UpdateClientTimezoneParams) (Client, error)
 	UpdateMembershipRole(ctx context.Context, arg UpdateMembershipRoleParams) (Membership, error)
 	// Advance the next_db_clean_at timestamp after a clean job is dispatched.
 	// Runs under app.agent (the scheduled-dispatch path is cross-tenant).
@@ -1026,6 +1071,7 @@ type Querier interface {
 	// htaccess_managed) are NOT touched here — those are reported by the agent via
 	// UpdatePerfInstallState — so an operator config save never clobbers them.
 	UpsertPerfConfig(ctx context.Context, arg UpsertPerfConfigParams) (SitePerfConfig, error)
+	UpsertReportSchedule(ctx context.Context, arg UpsertReportScheduleParams) (ReportSchedule, error)
 	UpsertRucssResult(ctx context.Context, arg UpsertRucssResultParams) (RucssResult, error)
 	// ---------------------------------------------------------------------------
 	// rum_rollup_daily writes (InRumIngestTx — idempotent additive upsert)

@@ -1,0 +1,27 @@
+Your website report is ready — {{.agency_name}}
+{{if .client_name}}Client: {{.client_name}}
+{{end}}
+Period: {{.period_label}}
+
+Summary
+-------
+Sites:             {{.site_count}}
+Avg Uptime:        {{.avg_uptime_pct}}%
+Backups completed: {{.backups_count}}
+Updates applied:   {{.updates_applied}}
+Emails sent:       {{.emails_sent}}
+{{if .emails_failed}}Emails failed:     {{.emails_failed}}
+{{end}}
+{{if .intro_text}}{{.intro_text}}
+
+{{end}}
+{{if .html_url}}View report:     {{.html_url}}
+{{end}}{{if .pdf_url}}Download PDF:    {{.pdf_url}}
+{{end}}
+(Report links expire in 7 days.)
+
+{{if .closing_text}}{{.closing_text}}
+
+{{end}}
+--
+{{if .show_powered_by}}Prepared with WPMgr · {{end}}Contact {{.SupportEmail}} for support.

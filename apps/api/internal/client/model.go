@@ -21,9 +21,12 @@ type Client struct {
 	Notes        *string
 	Color        *string
 	LogoURL      *string
-	ArchivedAt   *time.Time
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Timezone is the client's IANA timezone governing report send time
+	// (decision 6; m64). Defaults to "UTC".
+	Timezone   string
+	ArchivedAt *time.Time
+	CreatedAt  time.Time
+	UpdatedAt  time.Time
 	// SiteCount is the number of non-archived sites currently assigned to this
 	// client. Populated by the repo (subquery / JOIN), not stored on the row.
 	SiteCount int64
@@ -39,6 +42,8 @@ type CreateInput struct {
 	Notes        *string
 	Color        *string
 	LogoURL      *string
+	// Timezone is the client's IANA timezone (default "UTC").
+	Timezone *string
 }
 
 // UpdateInput is the validated partial-update input for a client. A nil field
@@ -53,6 +58,8 @@ type UpdateInput struct {
 	Notes        *string
 	Color        *string
 	LogoURL      *string
+	// Timezone, when non-nil, updates the client's IANA timezone.
+	Timezone *string
 }
 
 // AssignInput bulk-assigns sites to a client (or unassigns when ClientID is nil).

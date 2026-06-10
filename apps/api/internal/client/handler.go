@@ -59,6 +59,9 @@ type createClientBody struct {
 	Notes        *string `json:"notes"`
 	Color        *string `json:"color"`
 	LogoURL      *string `json:"logo_url"`
+	// Timezone is an IANA timezone name (e.g. "America/New_York"). Defaults to
+	// "UTC" when absent.
+	Timezone *string `json:"timezone"`
 }
 
 type updateClientBody struct {
@@ -69,6 +72,8 @@ type updateClientBody struct {
 	Notes        *string `json:"notes"`
 	Color        *string `json:"color"`
 	LogoURL      *string `json:"logo_url"`
+	// Timezone, when present, updates the client's IANA timezone.
+	Timezone *string `json:"timezone"`
 }
 
 type assignSitesBody struct {
@@ -119,6 +124,7 @@ func (h *Handler) create(c *gin.Context) {
 		Notes:        body.Notes,
 		Color:        body.Color,
 		LogoURL:      body.LogoURL,
+		Timezone:     body.Timezone,
 	})
 	if err != nil {
 		httpx.Error(c, err)
@@ -174,6 +180,7 @@ func (h *Handler) update(c *gin.Context) {
 		Notes:        body.Notes,
 		Color:        body.Color,
 		LogoURL:      body.LogoURL,
+		Timezone:     body.Timezone,
 	})
 	if err != nil {
 		httpx.Error(c, err)
@@ -263,6 +270,7 @@ func toAPI(c Client) gen.AgencyClient {
 		TenantID:  c.TenantID,
 		Name:      c.Name,
 		SiteCount: c.SiteCount,
+		Timezone:  c.Timezone,
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}

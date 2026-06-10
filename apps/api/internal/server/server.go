@@ -23,6 +23,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/autologin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
+	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
@@ -168,6 +169,10 @@ type Deps struct {
 	// ClientH serves the m63 agency-client management routes under
 	// /api/v1/clients. nil ⇒ routes not mounted.
 	ClientH *clientpkg.Handler
+	// ReportH serves the m64 white-label report routes under
+	// /api/v1/clients/:clientId/report-schedule and /api/v1/clients/:clientId/reports.
+	// nil ⇒ routes not mounted.
+	ReportH *reportpkg.Handler
 	ServiceName string
 	Version     string
 }
@@ -420,6 +425,12 @@ func New(deps Deps) *Server {
 	// bulk site assignment. All routes are org-scoped (no site collaborators).
 	if deps.ClientH != nil {
 		deps.ClientH.Register(v1)
+	}
+
+	// m64 — white-label client reports: schedule management + on-demand generation.
+	// Routes are nested under /clients/:clientId/ and share RequireOrgScope().
+	if deps.ReportH != nil {
+		deps.ReportH.Register(v1)
 	}
 
 	// m33 — superadmin instance-management area (auth-only, not tenant-gated).

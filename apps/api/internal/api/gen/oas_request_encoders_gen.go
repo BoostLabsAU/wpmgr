@@ -618,6 +618,26 @@ func encodeForgotPasswordRequest(
 	return nil
 }
 
+func encodeGenerateClientReportRequest(
+	req OptGenerateClientReportRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	if !req.Set {
+		// Keep request with empty body if value is not set.
+		return nil
+	}
+	e := new(jx.Encoder)
+	{
+		if req.Set {
+			req.Encode(e)
+		}
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeInviteMemberRequest(
 	req *InviteRequest,
 	r *http.Request,
@@ -766,6 +786,20 @@ func encodePutBackupSettingsContentsRequest(
 
 func encodePutBackupSettingsNotificationsRequest(
 	req *SiteBackupSettingsNotificationsUpdate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePutClientReportScheduleRequest(
+	req *ClientReportScheduleUpdate,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

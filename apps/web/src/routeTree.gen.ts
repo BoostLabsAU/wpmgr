@@ -59,6 +59,7 @@ import { Route as AuthedSitesSiteIdCacheRouteImport } from './routes/_authed/sit
 import { Route as AuthedSitesSiteIdBackupsRouteImport } from './routes/_authed/sites/$siteId.backups'
 import { Route as AuthedSitesSiteIdActivityRouteImport } from './routes/_authed/sites/$siteId.activity'
 import { Route as AuthedClientsClientIdSitesRouteImport } from './routes/_authed/clients/$clientId.sites'
+import { Route as AuthedClientsClientIdReportsRouteImport } from './routes/_authed/clients/$clientId.reports'
 
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: '/verify-email',
@@ -319,6 +320,12 @@ const AuthedClientsClientIdSitesRoute =
     path: '/sites',
     getParentRoute: () => AuthedClientsClientIdRoute,
   } as any)
+const AuthedClientsClientIdReportsRoute =
+  AuthedClientsClientIdReportsRouteImport.update({
+    id: '/reports',
+    path: '/reports',
+    getParentRoute: () => AuthedClientsClientIdRoute,
+  } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -355,6 +362,7 @@ export interface FileRoutesByFullPath {
   '/email/': typeof AuthedEmailIndexRoute
   '/sites/': typeof AuthedSitesIndexRoute
   '/updates/': typeof AuthedUpdatesIndexRoute
+  '/clients/$clientId/reports': typeof AuthedClientsClientIdReportsRoute
   '/clients/$clientId/sites': typeof AuthedClientsClientIdSitesRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
@@ -404,6 +412,7 @@ export interface FileRoutesByTo {
   '/email': typeof AuthedEmailIndexRoute
   '/sites': typeof AuthedSitesIndexRoute
   '/updates': typeof AuthedUpdatesIndexRoute
+  '/clients/$clientId/reports': typeof AuthedClientsClientIdReportsRoute
   '/clients/$clientId/sites': typeof AuthedClientsClientIdSitesRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
@@ -457,6 +466,7 @@ export interface FileRoutesById {
   '/_authed/email/': typeof AuthedEmailIndexRoute
   '/_authed/sites/': typeof AuthedSitesIndexRoute
   '/_authed/updates/': typeof AuthedUpdatesIndexRoute
+  '/_authed/clients/$clientId/reports': typeof AuthedClientsClientIdReportsRoute
   '/_authed/clients/$clientId/sites': typeof AuthedClientsClientIdSitesRoute
   '/_authed/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/_authed/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
@@ -510,6 +520,7 @@ export interface FileRouteTypes {
     | '/email/'
     | '/sites/'
     | '/updates/'
+    | '/clients/$clientId/reports'
     | '/clients/$clientId/sites'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
@@ -559,6 +570,7 @@ export interface FileRouteTypes {
     | '/email'
     | '/sites'
     | '/updates'
+    | '/clients/$clientId/reports'
     | '/clients/$clientId/sites'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
@@ -611,6 +623,7 @@ export interface FileRouteTypes {
     | '/_authed/email/'
     | '/_authed/sites/'
     | '/_authed/updates/'
+    | '/_authed/clients/$clientId/reports'
     | '/_authed/clients/$clientId/sites'
     | '/_authed/sites/$siteId/activity'
     | '/_authed/sites/$siteId/backups'
@@ -993,15 +1006,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedClientsClientIdSitesRouteImport
       parentRoute: typeof AuthedClientsClientIdRoute
     }
+    '/_authed/clients/$clientId/reports': {
+      id: '/_authed/clients/$clientId/reports'
+      path: '/reports'
+      fullPath: '/clients/$clientId/reports'
+      preLoaderRoute: typeof AuthedClientsClientIdReportsRouteImport
+      parentRoute: typeof AuthedClientsClientIdRoute
+    }
   }
 }
 
 interface AuthedClientsClientIdRouteChildren {
+  AuthedClientsClientIdReportsRoute: typeof AuthedClientsClientIdReportsRoute
   AuthedClientsClientIdSitesRoute: typeof AuthedClientsClientIdSitesRoute
   AuthedClientsClientIdIndexRoute: typeof AuthedClientsClientIdIndexRoute
 }
 
 const AuthedClientsClientIdRouteChildren: AuthedClientsClientIdRouteChildren = {
+  AuthedClientsClientIdReportsRoute: AuthedClientsClientIdReportsRoute,
   AuthedClientsClientIdSitesRoute: AuthedClientsClientIdSitesRoute,
   AuthedClientsClientIdIndexRoute: AuthedClientsClientIdIndexRoute,
 }

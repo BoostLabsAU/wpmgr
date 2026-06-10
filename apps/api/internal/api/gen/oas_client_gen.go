@@ -490,6 +490,12 @@ type Invoker interface {
 	//
 	// DELETE /api/v1/clients/{clientId}
 	DeleteClient(ctx context.Context, params DeleteClientParams) (DeleteClientRes, error)
+	// DeleteClientReport invokes deleteClientReport operation.
+	//
+	// Deletes the report record and its stored blobs (HTML + PDF) from object storage.
+	//
+	// DELETE /api/v1/clients/{clientId}/reports/{reportId}
+	DeleteClientReport(ctx context.Context, params DeleteClientReportParams) (DeleteClientReportRes, error)
 	// DeleteDbSnapshot invokes deleteDbSnapshot operation.
 	//
 	// Removes a snapshot from the WP server's local store. This is
@@ -609,6 +615,13 @@ type Invoker interface {
 	//
 	// POST /auth/password/forgot
 	ForgotPassword(ctx context.Context, request *ForgotPasswordReq) (*ForgotPasswordOK, error)
+	// GenerateClientReport invokes generateClientReport operation.
+	//
+	// Enqueues a report generation job. Returns 202 Accepted immediately; poll GET /reports/{reportId}
+	// for status. When notify=true and the schedule has recipients, an email is sent on completion.
+	//
+	// POST /api/v1/clients/{clientId}/reports
+	GenerateClientReport(ctx context.Context, request OptGenerateClientReportRequest, params GenerateClientReportParams) (GenerateClientReportRes, error)
 	// GetAlertConfig invokes getAlertConfig operation.
 	//
 	// Returns the tenant's downtime/recovery alert channel: email recipients,
@@ -683,6 +696,20 @@ type Invoker interface {
 	//
 	// GET /api/v1/clients/{clientId}
 	GetClient(ctx context.Context, params GetClientParams) (GetClientRes, error)
+	// GetClientReport invokes getClientReport operation.
+	//
+	// Returns the report record. When status is `completed`, `html_url` and `pdf_url` are pre-signed
+	// download links (valid 7 days).
+	//
+	// GET /api/v1/clients/{clientId}/reports/{reportId}
+	GetClientReport(ctx context.Context, params GetClientReportParams) (GetClientReportRes, error)
+	// GetClientReportSchedule invokes getClientReportSchedule operation.
+	//
+	// Returns the current report schedule configuration. If no schedule has been saved yet, returns
+	// sensible defaults (disabled, monthly).
+	//
+	// GET /api/v1/clients/{clientId}/report-schedule
+	GetClientReportSchedule(ctx context.Context, params GetClientReportScheduleParams) (GetClientReportScheduleRes, error)
 	// GetDbScanResult invokes getDbScanResult operation.
 	//
 	// Returns the most recently persisted db_scan result including the
@@ -937,6 +964,13 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListClientReports invokes listClientReports operation.
+	//
+	// Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
+	// pagination.
+	//
+	// GET /api/v1/clients/{clientId}/reports
+	ListClientReports(ctx context.Context, params ListClientReportsParams) (ListClientReportsRes, error)
 	// ListClients invokes listClients operation.
 	//
 	// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
@@ -1283,6 +1317,12 @@ type Invoker interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-settings/notifications
 	PutBackupSettingsNotifications(ctx context.Context, request *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error)
+	// PutClientReportSchedule invokes putClientReportSchedule operation.
+	//
+	// Create or update the report schedule for a client.
+	//
+	// PUT /api/v1/clients/{clientId}/report-schedule
+	PutClientReportSchedule(ctx context.Context, request *ClientReportScheduleUpdate, params PutClientReportScheduleParams) (PutClientReportScheduleRes, error)
 	// PutEmailConnection invokes putEmailConnection operation.
 	//
 	// Creates or updates the named connection identified by `connKey` for the
@@ -6140,6 +6180,117 @@ func (c *Client) sendDeleteClient(ctx context.Context, params DeleteClientParams
 	return result, nil
 }
 
+// DeleteClientReport invokes deleteClientReport operation.
+//
+// Deletes the report record and its stored blobs (HTML + PDF) from object storage.
+//
+// DELETE /api/v1/clients/{clientId}/reports/{reportId}
+func (c *Client) DeleteClientReport(ctx context.Context, params DeleteClientReportParams) (DeleteClientReportRes, error) {
+	res, err := c.sendDeleteClientReport(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteClientReport(ctx context.Context, params DeleteClientReportParams) (res DeleteClientReportRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteClientReport"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/reports/{reportId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteClientReportOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [4]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/reports/"
+	{
+		// Encode "reportId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "reportId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ReportId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteClientReportResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // DeleteDbSnapshot invokes deleteDbSnapshot operation.
 //
 // Removes a snapshot from the WP server's local store. This is
@@ -7714,6 +7865,103 @@ func (c *Client) sendForgotPassword(ctx context.Context, request *ForgotPassword
 	return result, nil
 }
 
+// GenerateClientReport invokes generateClientReport operation.
+//
+// Enqueues a report generation job. Returns 202 Accepted immediately; poll GET /reports/{reportId}
+// for status. When notify=true and the schedule has recipients, an email is sent on completion.
+//
+// POST /api/v1/clients/{clientId}/reports
+func (c *Client) GenerateClientReport(ctx context.Context, request OptGenerateClientReportRequest, params GenerateClientReportParams) (GenerateClientReportRes, error) {
+	res, err := c.sendGenerateClientReport(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendGenerateClientReport(ctx context.Context, request OptGenerateClientReportRequest, params GenerateClientReportParams) (res GenerateClientReportRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("generateClientReport"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/reports"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GenerateClientReportOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/reports"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeGenerateClientReportRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGenerateClientReportResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetAlertConfig invokes getAlertConfig operation.
 //
 // Returns the tenant's downtime/recovery alert channel: email recipients,
@@ -8543,6 +8791,212 @@ func (c *Client) sendGetClient(ctx context.Context, params GetClientParams) (res
 
 	stage = "DecodeResponse"
 	result, err := decodeGetClientResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetClientReport invokes getClientReport operation.
+//
+// Returns the report record. When status is `completed`, `html_url` and `pdf_url` are pre-signed
+// download links (valid 7 days).
+//
+// GET /api/v1/clients/{clientId}/reports/{reportId}
+func (c *Client) GetClientReport(ctx context.Context, params GetClientReportParams) (GetClientReportRes, error) {
+	res, err := c.sendGetClientReport(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetClientReport(ctx context.Context, params GetClientReportParams) (res GetClientReportRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getClientReport"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/reports/{reportId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetClientReportOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [4]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/reports/"
+	{
+		// Encode "reportId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "reportId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ReportId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetClientReportResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetClientReportSchedule invokes getClientReportSchedule operation.
+//
+// Returns the current report schedule configuration. If no schedule has been saved yet, returns
+// sensible defaults (disabled, monthly).
+//
+// GET /api/v1/clients/{clientId}/report-schedule
+func (c *Client) GetClientReportSchedule(ctx context.Context, params GetClientReportScheduleParams) (GetClientReportScheduleRes, error) {
+	res, err := c.sendGetClientReportSchedule(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetClientReportSchedule(ctx context.Context, params GetClientReportScheduleParams) (res GetClientReportScheduleRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getClientReportSchedule"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/report-schedule"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetClientReportScheduleOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/report-schedule"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetClientReportScheduleResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11591,6 +12045,138 @@ func (c *Client) sendListBackups(ctx context.Context, params ListBackupsParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeListBackupsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListClientReports invokes listClientReports operation.
+//
+// Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
+// pagination.
+//
+// GET /api/v1/clients/{clientId}/reports
+func (c *Client) ListClientReports(ctx context.Context, params ListClientReportsParams) (ListClientReportsRes, error) {
+	res, err := c.sendListClientReports(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListClientReports(ctx context.Context, params ListClientReportsParams) (res ListClientReportsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listClientReports"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/reports"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListClientReportsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/reports"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListClientReportsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -16470,6 +17056,102 @@ func (c *Client) sendPutBackupSettingsNotifications(ctx context.Context, request
 
 	stage = "DecodeResponse"
 	result, err := decodePutBackupSettingsNotificationsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PutClientReportSchedule invokes putClientReportSchedule operation.
+//
+// Create or update the report schedule for a client.
+//
+// PUT /api/v1/clients/{clientId}/report-schedule
+func (c *Client) PutClientReportSchedule(ctx context.Context, request *ClientReportScheduleUpdate, params PutClientReportScheduleParams) (PutClientReportScheduleRes, error) {
+	res, err := c.sendPutClientReportSchedule(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutClientReportSchedule(ctx context.Context, request *ClientReportScheduleUpdate, params PutClientReportScheduleParams) (res PutClientReportScheduleRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putClientReportSchedule"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/clients/{clientId}/report-schedule"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutClientReportScheduleOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/clients/"
+	{
+		// Encode "clientId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "clientId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.ClientId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/report-schedule"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutClientReportScheduleRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutClientReportScheduleResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

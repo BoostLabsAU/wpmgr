@@ -35,10 +35,10 @@ WHERE c.id = @id AND c.tenant_id = @tenant_id;
 -- name: CreateClient :one
 INSERT INTO clients (
     tenant_id, name, contact_email, company, phone, notes, color, logo_url,
-    updated_at
+    timezone, updated_at
 ) VALUES (
     @tenant_id, @name, @contact_email, @company, @phone, @notes, @color, @logo_url,
-    now()
+    COALESCE(sqlc.narg('timezone')::text, 'UTC'), now()
 )
 RETURNING *;
 
@@ -53,6 +53,7 @@ SET name          = COALESCE(sqlc.narg('name')::text, name),
     notes         = COALESCE(sqlc.narg('notes')::text, notes),
     color         = COALESCE(sqlc.narg('color')::text, color),
     logo_url      = COALESCE(sqlc.narg('logo_url')::text, logo_url),
+    timezone      = COALESCE(sqlc.narg('timezone')::text, timezone),
     updated_at    = now()
 WHERE id = @id AND tenant_id = @tenant_id
 RETURNING *;

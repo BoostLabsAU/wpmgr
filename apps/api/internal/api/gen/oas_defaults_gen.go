@@ -47,6 +47,38 @@ func (s *BackupScheduleUpdate) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *ClientReportSectionFlags) setDefaults() {
+	{
+		val := bool(true)
+		s.Uptime.SetTo(val)
+	}
+	{
+		val := bool(true)
+		s.Backups.SetTo(val)
+	}
+	{
+		val := bool(true)
+		s.Updates.SetTo(val)
+	}
+	{
+		val := bool(true)
+		s.Performance.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.Email.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *GenerateClientReportRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.Notify.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *PHPErrorSilence) setDefaults() {
 	{
 		val := bool(true)

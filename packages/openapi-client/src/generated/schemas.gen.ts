@@ -6761,6 +6761,7 @@ export const AgencyClientSchema = {
     "tenant_id",
     "name",
     "site_count",
+    "timezone",
     "created_at",
     "updated_at",
   ],
@@ -6811,6 +6812,12 @@ export const AgencyClientSchema = {
       format: "int64",
       description:
         "Number of non-archived sites currently assigned to this client.",
+    },
+    timezone: {
+      type: "string",
+      description:
+        'IANA timezone name governing report send time (e.g. "America/New_York"). Defaults to "UTC".',
+      example: "UTC",
     },
     archived_at: {
       type: "string",
@@ -6876,6 +6883,11 @@ export const CreateAgencyClientRequestSchema = {
       type: "string",
       format: "uri",
     },
+    timezone: {
+      type: "string",
+      description:
+        'IANA timezone name (e.g. "America/New_York"). Defaults to "UTC" when absent.',
+    },
   },
 } as const;
 
@@ -6914,6 +6926,11 @@ export const UpdateAgencyClientRequestSchema = {
       type: "string",
       format: "uri",
     },
+    timezone: {
+      type: "string",
+      description:
+        'IANA timezone name (e.g. "America/New_York"). Omit to leave unchanged.',
+    },
   },
 } as const;
 
@@ -6949,6 +6966,283 @@ export const AssignSitesResponseSchema = {
       type: "integer",
       format: "int64",
       description: "Number of sites whose client assignment was changed.",
+    },
+  },
+} as const;
+
+export const ClientReportSectionFlagsSchema = {
+  type: "object",
+  description: "Controls which data sections are included in a report.",
+  properties: {
+    uptime: {
+      type: "boolean",
+      default: true,
+    },
+    backups: {
+      type: "boolean",
+      default: true,
+    },
+    updates: {
+      type: "boolean",
+      default: true,
+    },
+    performance: {
+      type: "boolean",
+      default: true,
+    },
+    email: {
+      type: "boolean",
+      default: false,
+    },
+  },
+} as const;
+
+export const ClientReportScheduleSchema = {
+  type: "object",
+  required: [
+    "client_id",
+    "enabled",
+    "cadence",
+    "send_day",
+    "send_hour",
+    "recipients",
+    "sections",
+    "intro_text",
+    "closing_text",
+    "powered_by_removed",
+    "instance_mailer_configured",
+  ],
+  description: "Report schedule configuration for an agency client.",
+  properties: {
+    client_id: {
+      type: "string",
+      format: "uuid",
+    },
+    enabled: {
+      type: "boolean",
+      description: "Whether scheduled sending is active.",
+    },
+    cadence: {
+      type: "string",
+      enum: ["weekly", "monthly"],
+      description:
+        'How often to send. "monthly" sends on the Nth day of the month; "weekly" sends on the Nth day of the week (0=Sunday).',
+    },
+    send_day: {
+      type: "integer",
+      description:
+        "For monthly: day-of-month (1–28). For weekly: day-of-week (0=Sunday … 6=Saturday).",
+    },
+    send_hour: {
+      type: "integer",
+      minimum: 0,
+      maximum: 23,
+      description:
+        "Hour-of-day in the client's timezone at which the report is sent.",
+    },
+    timezone: {
+      type: "string",
+      description:
+        "IANA timezone name inherited from the client record. Informational only; update via PUT /clients/{clientId}.",
+    },
+    recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description: "Email addresses to deliver the report to.",
+    },
+    sections: {
+      $ref: "#/components/schemas/ClientReportSectionFlags",
+    },
+    intro_text: {
+      type: "string",
+      description:
+        "Optional opening paragraph for the report body (supports plain text).",
+    },
+    closing_text: {
+      type: "string",
+      description: "Optional closing paragraph for the report body.",
+    },
+    powered_by_removed: {
+      type: "boolean",
+      description:
+        'When true, the "Powered by WPMgr" footer is omitted (white-label plan).',
+    },
+    next_run_at: {
+      type: "string",
+      format: "date-time",
+      description: "Next scheduled execution time. Absent when disabled.",
+    },
+    last_run_at: {
+      type: "string",
+      format: "date-time",
+      description: "Most recent execution time. Absent when never run.",
+    },
+    instance_mailer_configured: {
+      type: "boolean",
+      description:
+        "Whether the instance-level SMTP mailer is configured. When false, recipients will not receive emails even if the schedule is enabled.",
+    },
+  },
+} as const;
+
+export const ClientReportScheduleUpdateSchema = {
+  type: "object",
+  description: "All fields are required (full replace).",
+  required: ["enabled", "cadence", "send_day", "send_hour", "recipients"],
+  properties: {
+    enabled: {
+      type: "boolean",
+    },
+    cadence: {
+      type: "string",
+      enum: ["weekly", "monthly"],
+    },
+    send_day: {
+      type: "integer",
+    },
+    send_hour: {
+      type: "integer",
+      minimum: 0,
+      maximum: 23,
+    },
+    recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      maxItems: 20,
+    },
+    sections: {
+      $ref: "#/components/schemas/ClientReportSectionFlags",
+    },
+    intro_text: {
+      type: "string",
+      maxLength: 2000,
+    },
+    closing_text: {
+      type: "string",
+      maxLength: 2000,
+    },
+    powered_by_removed: {
+      type: "boolean",
+    },
+  },
+} as const;
+
+export const GenerateClientReportRequestSchema = {
+  type: "object",
+  description:
+    "Optional overrides for an on-demand report. Omit entirely to use schedule defaults.",
+  properties: {
+    period_start: {
+      type: "string",
+      format: "date-time",
+      description:
+        "Start of the data window (inclusive). Defaults to 30 days ago when absent.",
+    },
+    period_end: {
+      type: "string",
+      format: "date-time",
+      description:
+        "End of the data window (exclusive). Defaults to now when absent.",
+    },
+    sections: {
+      $ref: "#/components/schemas/ClientReportSectionFlags",
+    },
+    notify: {
+      type: "boolean",
+      default: false,
+      description:
+        "When true, the report is emailed to the schedule's recipients on completion.",
+    },
+  },
+} as const;
+
+export const ClientReportSchema = {
+  type: "object",
+  required: [
+    "id",
+    "client_id",
+    "period_start",
+    "period_end",
+    "status",
+    "created_at",
+  ],
+  description: "A generated client report record.",
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    client_id: {
+      type: "string",
+      format: "uuid",
+    },
+    schedule_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "Set when the report was triggered by a schedule; absent for on-demand.",
+    },
+    period_start: {
+      type: "string",
+      format: "date-time",
+    },
+    period_end: {
+      type: "string",
+      format: "date-time",
+    },
+    status: {
+      type: "string",
+      enum: ["queued", "generating", "completed", "failed"],
+    },
+    error: {
+      type: "string",
+      description:
+        'Human-readable error message. Present only when status is "failed".',
+    },
+    html_url: {
+      type: "string",
+      format: "uri",
+      description:
+        'Pre-signed URL for the HTML report (valid 7 days). Present only when status is "completed" and object storage is configured.',
+    },
+    pdf_url: {
+      type: "string",
+      format: "uri",
+      description:
+        'Pre-signed URL for the PDF report (valid 7 days). Present only when status is "completed" and object storage is configured.',
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    completed_at: {
+      type: "string",
+      format: "date-time",
+      description: "When the generation job finished (success or failure).",
+    },
+  },
+} as const;
+
+export const ClientReportListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/ClientReport",
+      },
+    },
+    next_cursor: {
+      type: "string",
+      description:
+        "Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when there are no more pages.",
     },
   },
 } as const;

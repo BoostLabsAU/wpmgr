@@ -470,6 +470,12 @@ type Handler interface {
 	//
 	// DELETE /api/v1/clients/{clientId}
 	DeleteClient(ctx context.Context, params DeleteClientParams) (DeleteClientRes, error)
+	// DeleteClientReport implements deleteClientReport operation.
+	//
+	// Deletes the report record and its stored blobs (HTML + PDF) from object storage.
+	//
+	// DELETE /api/v1/clients/{clientId}/reports/{reportId}
+	DeleteClientReport(ctx context.Context, params DeleteClientReportParams) (DeleteClientReportRes, error)
 	// DeleteDbSnapshot implements deleteDbSnapshot operation.
 	//
 	// Removes a snapshot from the WP server's local store. This is
@@ -589,6 +595,13 @@ type Handler interface {
 	//
 	// POST /auth/password/forgot
 	ForgotPassword(ctx context.Context, req *ForgotPasswordReq) (*ForgotPasswordOK, error)
+	// GenerateClientReport implements generateClientReport operation.
+	//
+	// Enqueues a report generation job. Returns 202 Accepted immediately; poll GET /reports/{reportId}
+	// for status. When notify=true and the schedule has recipients, an email is sent on completion.
+	//
+	// POST /api/v1/clients/{clientId}/reports
+	GenerateClientReport(ctx context.Context, req OptGenerateClientReportRequest, params GenerateClientReportParams) (GenerateClientReportRes, error)
 	// GetAlertConfig implements getAlertConfig operation.
 	//
 	// Returns the tenant's downtime/recovery alert channel: email recipients,
@@ -663,6 +676,20 @@ type Handler interface {
 	//
 	// GET /api/v1/clients/{clientId}
 	GetClient(ctx context.Context, params GetClientParams) (GetClientRes, error)
+	// GetClientReport implements getClientReport operation.
+	//
+	// Returns the report record. When status is `completed`, `html_url` and `pdf_url` are pre-signed
+	// download links (valid 7 days).
+	//
+	// GET /api/v1/clients/{clientId}/reports/{reportId}
+	GetClientReport(ctx context.Context, params GetClientReportParams) (GetClientReportRes, error)
+	// GetClientReportSchedule implements getClientReportSchedule operation.
+	//
+	// Returns the current report schedule configuration. If no schedule has been saved yet, returns
+	// sensible defaults (disabled, monthly).
+	//
+	// GET /api/v1/clients/{clientId}/report-schedule
+	GetClientReportSchedule(ctx context.Context, params GetClientReportScheduleParams) (GetClientReportScheduleRes, error)
 	// GetDbScanResult implements getDbScanResult operation.
 	//
 	// Returns the most recently persisted db_scan result including the
@@ -917,6 +944,13 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListClientReports implements listClientReports operation.
+	//
+	// Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
+	// pagination.
+	//
+	// GET /api/v1/clients/{clientId}/reports
+	ListClientReports(ctx context.Context, params ListClientReportsParams) (ListClientReportsRes, error)
 	// ListClients implements listClients operation.
 	//
 	// Returns the list of agency clients for the current tenant, ordered by name. Archived clients are
@@ -1263,6 +1297,12 @@ type Handler interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-settings/notifications
 	PutBackupSettingsNotifications(ctx context.Context, req *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error)
+	// PutClientReportSchedule implements putClientReportSchedule operation.
+	//
+	// Create or update the report schedule for a client.
+	//
+	// PUT /api/v1/clients/{clientId}/report-schedule
+	PutClientReportSchedule(ctx context.Context, req *ClientReportScheduleUpdate, params PutClientReportScheduleParams) (PutClientReportScheduleRes, error)
 	// PutEmailConnection implements putEmailConnection operation.
 	//
 	// Creates or updates the named connection identified by `connKey` for the

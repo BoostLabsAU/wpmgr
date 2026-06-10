@@ -2309,3 +2309,100 @@ CREATE POLICY clients_tenant_isolation ON clients
 CREATE POLICY clients_agent ON clients
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- m64: client-level timezone governs report send-time (decision 6).
+-- IANA names validated app-side (time.LoadLocation → UTC fallback on failure).
+ALTER TABLE clients
+    ADD COLUMN IF NOT EXISTS timezone text NOT NULL DEFAULT 'UTC';
+
+-- ---------------------------------------------------------------------------
+-- report_schedules  (m64 — White-label client reports Phase 2)
+-- One row per client: cadence, recipients, section flags, branding, powered-by.
+-- ---------------------------------------------------------------------------
+CREATE TABLE report_schedules (
+    id                 uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id          uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    client_id          uuid        NOT NULL,
+    enabled            boolean     NOT NULL DEFAULT false,
+    cadence            text        NOT NULL DEFAULT 'monthly'
+        CONSTRAINT report_schedules_cadence CHECK (cadence IN ('weekly','monthly')),
+    send_day           integer     NOT NULL DEFAULT 1
+        CONSTRAINT report_schedules_send_day CHECK (send_day BETWEEN 0 AND 28),
+    send_hour          integer     NOT NULL DEFAULT 8
+        CONSTRAINT report_schedules_send_hour CHECK (send_hour BETWEEN 0 AND 23),
+    recipients         jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    sections           jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    intro_text         text        NOT NULL DEFAULT '',
+    closing_text       text        NOT NULL DEFAULT '',
+    powered_by_removed boolean     NOT NULL DEFAULT false,
+    next_run_at        timestamptz,
+    last_run_at        timestamptz,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    updated_at         timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT report_schedules_pkey           PRIMARY KEY (id),
+    CONSTRAINT report_schedules_client_key     UNIQUE (client_id),
+    CONSTRAINT report_schedules_client_tenant_fkey
+        FOREIGN KEY (client_id, tenant_id)
+        REFERENCES clients (id, tenant_id) ON DELETE CASCADE
+);
+
+CREATE INDEX report_schedules_tenant_idx ON report_schedules (tenant_id);
+CREATE INDEX report_schedules_due_idx ON report_schedules (next_run_at) WHERE enabled;
+
+ALTER TABLE report_schedules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE report_schedules FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY report_schedules_tenant_isolation ON report_schedules
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY report_schedules_agent ON report_schedules
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- generated_reports  (m64 — White-label client reports Phase 2)
+-- One row per rendered report: status, period, blob keys, data snapshot.
+-- ---------------------------------------------------------------------------
+CREATE TABLE generated_reports (
+    id             uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id      uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    client_id      uuid        NOT NULL,
+    -- NULL = on-demand. ON DELETE SET NULL: deleting/recreating a schedule
+    -- must never destroy report history.
+    schedule_id    uuid        REFERENCES report_schedules (id) ON DELETE SET NULL,
+    period_start   timestamptz NOT NULL,
+    period_end     timestamptz NOT NULL,
+    status         text        NOT NULL DEFAULT 'pending'
+        CONSTRAINT generated_reports_status
+        CHECK (status IN ('pending','generating','completed','failed')),
+    data_snapshot  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    html_blob_key  text        NOT NULL DEFAULT '',
+    pdf_blob_key   text        NOT NULL DEFAULT '',
+    error          text        NOT NULL DEFAULT '',
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    completed_at   timestamptz,
+
+    CONSTRAINT generated_reports_pkey PRIMARY KEY (id),
+
+    -- ON DELETE CASCADE: reports are only reachable through the client detail page.
+    CONSTRAINT generated_reports_client_tenant_fkey
+        FOREIGN KEY (client_id, tenant_id)
+        REFERENCES clients (id, tenant_id) ON DELETE CASCADE
+);
+
+-- Keyset cursor index. List queries use composite predicate (created_at,id)<.
+CREATE INDEX generated_reports_list_idx
+    ON generated_reports (tenant_id, client_id, created_at DESC, id DESC);
+
+ALTER TABLE generated_reports ENABLE ROW LEVEL SECURITY;
+ALTER TABLE generated_reports FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY generated_reports_tenant_isolation ON generated_reports
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY generated_reports_agent ON generated_reports
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

@@ -53,7 +53,7 @@ func (r *pgRepo) List(ctx context.Context, tenantID uuid.UUID, includeArchived b
 		for _, row := range rows {
 			out = append(out, rowToModel(row.ID, row.TenantID, row.Name, row.ContactEmail,
 				row.Company, row.Phone, row.Notes, row.Color, row.LogoUrl,
-				row.ArchivedAt, row.CreatedAt, row.UpdatedAt, row.SiteCount))
+				row.Timezone, row.ArchivedAt, row.CreatedAt, row.UpdatedAt, row.SiteCount))
 		}
 		return nil
 	})
@@ -72,7 +72,7 @@ func (r *pgRepo) Get(ctx context.Context, tenantID, id uuid.UUID) (Client, error
 		}
 		out = rowToModel(row.ID, row.TenantID, row.Name, row.ContactEmail,
 			row.Company, row.Phone, row.Notes, row.Color, row.LogoUrl,
-			row.ArchivedAt, row.CreatedAt, row.UpdatedAt, row.SiteCount)
+			row.Timezone, row.ArchivedAt, row.CreatedAt, row.UpdatedAt, row.SiteCount)
 		return nil
 	})
 	return out, err
@@ -90,6 +90,7 @@ func (r *pgRepo) Create(ctx context.Context, in CreateInput) (Client, error) {
 			Notes:        in.Notes,
 			Color:        in.Color,
 			LogoUrl:      in.LogoURL,
+			Timezone:     in.Timezone,
 		})
 		if err != nil {
 			return domain.Internal("client_create_failed", "failed to create client").WithCause(err)
@@ -113,6 +114,7 @@ func (r *pgRepo) Update(ctx context.Context, in UpdateInput) (Client, error) {
 			Notes:        in.Notes,
 			Color:        in.Color,
 			LogoUrl:      in.LogoURL,
+			Timezone:     in.Timezone,
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
@@ -200,6 +202,7 @@ func rowToModel(
 	id, tenantID uuid.UUID,
 	name string,
 	contactEmail, company, phone, notes, color, logoURL *string,
+	timezone string,
 	archivedAt pgtype.Timestamptz,
 	createdAt, updatedAt time.Time,
 	siteCount int64,
@@ -214,6 +217,7 @@ func rowToModel(
 		Notes:        notes,
 		Color:        color,
 		LogoURL:      logoURL,
+		Timezone:     timezone,
 		CreatedAt:    createdAt,
 		UpdatedAt:    updatedAt,
 		SiteCount:    siteCount,
@@ -236,6 +240,7 @@ func fromClient(row sqlc.Client) Client {
 		Notes:        row.Notes,
 		Color:        row.Color,
 		LogoURL:      row.LogoUrl,
+		Timezone:     row.Timezone,
 		CreatedAt:    row.CreatedAt,
 		UpdatedAt:    row.UpdatedAt,
 	}

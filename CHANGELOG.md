@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-06-11
+
+### Added
+
+- **White-label client reports (scheduled and on-demand).** Every client record now has a Reports tab. Enable a monthly (default) or weekly schedule per client, choose the send day and hour in the client's own timezone (a new per-client timezone field, defaulted from the agency), and recipients default to the client contact email. A "Generate now" button builds a report for any period from presets or a custom range of up to 92 days. The report aggregates data WPMgr already tracks: uptime and response time, backups completed, updates applied, Core Web Vitals real-user p75, and email deliverability. Each section has an on/off toggle; a custom intro and closing text block can be added to any report. Reports are delivered as a branded HTML email digest, a print-optimized page, and a downloadable PDF rendered server-side with vector charts and full Unicode support (no headless browser). The client's brand color and logo appear on every output; the "powered by" footer can be removed free of charge on any plan. Delivery uses the instance mailer; the schedule card shows a warning when instance email is not configured, but reports still generate and download regardless. Reports and download links are tenant-isolated; logo URLs are SSRF-guarded; report periods are bounded at 92 days; security-reviewed (two rounds, green verdict). Migration m64.
+
 ## [0.37.0] - 2026-06-11
 
 ### Added
