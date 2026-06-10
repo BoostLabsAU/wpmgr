@@ -128,14 +128,14 @@ func (r *fakeRepo) UpsertOrgConfig(_ context.Context, in upsertRepoInput) (Confi
 	r.storedCt = in.SecretCiphertext
 	id := uuid.New()
 	cfg := Config{
-		ID:       id,
-		TenantID: in.TenantID,
-		Provider: in.Provider,
-		SecretSet: in.SetSecret && len(in.SecretCiphertext) > 0,
+		ID:            id,
+		TenantID:      in.TenantID,
+		Provider:      in.Provider,
+		SecretSet:     in.SetSecret && len(in.SecretCiphertext) > 0,
 		LogEmails:     in.LogEmails,
 		RetentionDays: in.RetentionDays,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 	r.org[in.TenantID] = cfg
 	return cfg, nil
@@ -271,6 +271,72 @@ func (r *fakeRepo) DeleteEmailLogsBulk(_ context.Context, _, _ uuid.UUID, _ []uu
 	return 0, nil
 }
 
+// m62 stubs — required to satisfy the extended repository interface.
+
+func (r *fakeRepo) ListConnections(_ context.Context, _, _ uuid.UUID) ([]Connection, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) GetConnection(_ context.Context, _, _ uuid.UUID, _ string) (Connection, error) {
+	return Connection{}, ErrNotFound
+}
+
+func (r *fakeRepo) UpsertConnection(_ context.Context, _ ConnectionUpsertInput, _ []byte, _ bool) (Connection, error) {
+	return Connection{}, nil
+}
+
+func (r *fakeRepo) DeleteConnection(_ context.Context, _, _ uuid.UUID, _ string) error {
+	return nil
+}
+
+func (r *fakeRepo) GetConnectionSecretCiphertexts(_ context.Context, _, _ uuid.UUID) ([]ConnectionSecretRow, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) ListEmailInheritingSites(_ context.Context, _ uuid.UUID) ([]InheritingSite, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) GetSiteRef(_ context.Context, _, _ uuid.UUID) (SiteRef, error) {
+	return SiteRef{}, ErrNotFound
+}
+
+func (r *fakeRepo) GetNotifySettings(_ context.Context, _ uuid.UUID) (NotifySettings, error) {
+	return NotifySettings{}, ErrNotFound
+}
+
+func (r *fakeRepo) UpsertNotifySettings(_ context.Context, in NotifySettings) (NotifySettings, error) {
+	return in, nil
+}
+
+func (r *fakeRepo) AccumulateAlertFailures(_ context.Context, _, _ uuid.UUID, _ int64) error {
+	return nil
+}
+
+func (r *fakeRepo) ClaimAlertSlot(_ context.Context, _, _ uuid.UUID, _ int64, _ int) (*AlertState, error) {
+	return nil, nil // throttled
+}
+
+func (r *fakeRepo) ListDueDigests(_ context.Context, _ int32) ([]NotifySettings, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) ClaimAdvanceDigest(_ context.Context, _ uuid.UUID, _ time.Time) (NotifySettings, error) {
+	return NotifySettings{}, ErrNotFound
+}
+
+func (r *fakeRepo) GetFleetStatsBySite(_ context.Context, _ uuid.UUID, _, _ time.Time, _ int32) ([]SiteStatsRow, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) TopFailureSamples(_ context.Context, _ uuid.UUID, _, _ time.Time, _ int32) ([]FailureSample, error) {
+	return nil, nil
+}
+
+func (r *fakeRepo) TopFailureSamplesBySite(_ context.Context, _, _ uuid.UUID, _, _ time.Time, _ int32) ([]FailureSample, error) {
+	return nil, nil
+}
+
 // ---------------------------------------------------------------------------
 // tests
 // ---------------------------------------------------------------------------
@@ -282,13 +348,13 @@ func TestService_GetConfig_OrgFallback(t *testing.T) {
 	repo := newFakeRepo()
 	// No per-site row; set an org-wide row.
 	orgCfg := Config{
-		ID:       uuid.New(),
-		TenantID: tenantID,
-		Provider: "sendgrid",
-		LogEmails: true,
+		ID:            uuid.New(),
+		TenantID:      tenantID,
+		Provider:      "sendgrid",
+		LogEmails:     true,
 		RetentionDays: 14,
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt:     time.Now(),
+		UpdatedAt:     time.Now(),
 	}
 	repo.org[tenantID] = orgCfg
 
@@ -485,9 +551,9 @@ func TestService_RLSTenantIsolation(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type fakeAgentClient struct {
-	syncCalled   int
-	syncLastReq  agentcmd.EmailConfigRequest
-	syncErr      error
+	syncCalled  int
+	syncLastReq agentcmd.EmailConfigRequest
+	syncErr     error
 
 	sendTestCalled int
 	sendTestErr    error

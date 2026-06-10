@@ -9,7 +9,10 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/google/uuid"
 
@@ -76,6 +79,25 @@ type repository interface {
 	GetEmailLogBodyStored(ctx context.Context, tenantID, siteID, id uuid.UUID) (bool, error)
 	IncrEmailLogResentCount(ctx context.Context, tenantID, siteID, id uuid.UUID) error
 	DeleteEmailLogsBulk(ctx context.Context, tenantID, siteID uuid.UUID, ids []uuid.UUID) (int64, error)
+	// m62 Area 2 — multi-connection CRUD
+	ListConnections(ctx context.Context, tenantID, configID uuid.UUID) ([]Connection, error)
+	GetConnection(ctx context.Context, tenantID, configID uuid.UUID, key string) (Connection, error)
+	UpsertConnection(ctx context.Context, in ConnectionUpsertInput, secretCiphertext []byte, setSecret bool) (Connection, error)
+	DeleteConnection(ctx context.Context, tenantID, configID uuid.UUID, key string) error
+	GetConnectionSecretCiphertexts(ctx context.Context, tenantID, configID uuid.UUID) ([]ConnectionSecretRow, error)
+	// m62 Area 1 — org propagation
+	ListEmailInheritingSites(ctx context.Context, tenantID uuid.UUID) ([]InheritingSite, error)
+	GetSiteRef(ctx context.Context, tenantID, siteID uuid.UUID) (SiteRef, error)
+	// m62 Area 4 — notify settings + alert state + digest
+	GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (NotifySettings, error)
+	UpsertNotifySettings(ctx context.Context, in NotifySettings) (NotifySettings, error)
+	AccumulateAlertFailures(ctx context.Context, tenantID, siteID uuid.UUID, n int64) error
+	ClaimAlertSlot(ctx context.Context, tenantID, siteID uuid.UUID, minFailures int64, throttleMinutes int) (*AlertState, error)
+	ListDueDigests(ctx context.Context, limit int32) ([]NotifySettings, error)
+	ClaimAdvanceDigest(ctx context.Context, tenantID uuid.UUID, newNextAt time.Time) (NotifySettings, error)
+	GetFleetStatsBySite(ctx context.Context, tenantID uuid.UUID, from, to time.Time, limit int32) ([]SiteStatsRow, error)
+	TopFailureSamples(ctx context.Context, tenantID uuid.UUID, from, to time.Time, limit int32) ([]FailureSample, error)
+	TopFailureSamplesBySite(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time, limit int32) ([]FailureSample, error)
 }
 
 // Service is the email domain business-logic layer. It owns:
@@ -84,6 +106,7 @@ type repository interface {
 //   - org-wide default resolution (per-site row → org default → ErrNotFound)
 //   - provider validation
 //   - dispatching sync_email_config and send_test_email commands to the agent
+//   - m62: multi-connection CRUD, org propagation, alerts, digest
 type Service struct {
 	repo     repository
 	enc      Encryptor // nil when WPMGR_SITE_DEST_AGE_SECRET not configured
@@ -93,6 +116,13 @@ type Service struct {
 	// pub is the site-event bus used to emit email.suppression_updated and
 	// email.bounce SSE events. May be nil (guarded before use).
 	pub EventPublisher
+	// m62: River enqueuer for background jobs.
+	enqueuer Enqueuer
+	// m62: instance mailer for alert/digest emails.
+	mailer       MailerEnqueuer
+	mailerStatus MailerStatus
+	// m62: public base URL for constructing dashboard links in emails.
+	publicBase string
 }
 
 // NewService builds the email service. enc may be nil (all secret-write paths
@@ -115,6 +145,27 @@ func (s *Service) SetAgentClient(agent AgentEmailClient, siteLook SiteLookup) {
 // publisher is constructed. A nil publisher is always safe (emits are skipped).
 func (s *Service) SetPublisher(pub EventPublisher) {
 	s.pub = pub
+}
+
+// SetEnqueuer wires the River job enqueuer for background propagation jobs.
+func (s *Service) SetEnqueuer(eq Enqueuer) {
+	s.enqueuer = eq
+}
+
+// SetMailer wires the instance mailer enqueuer for alert/digest emails.
+func (s *Service) SetMailer(m MailerEnqueuer) {
+	s.mailer = m
+}
+
+// SetMailerStatus wires the instance mailer status checker.
+func (s *Service) SetMailerStatus(ms MailerStatus) {
+	s.mailerStatus = ms
+}
+
+// SetPublicBase sets the public base URL used to construct dashboard links in
+// notification emails (e.g. "https://manage.wpmgr.app"). Called from main.go.
+func (s *Service) SetPublicBase(base string) {
+	s.publicBase = base
 }
 
 // ---------------------------------------------------------------------------
@@ -234,12 +285,16 @@ func (s *Service) UpsertOrgConfig(ctx context.Context, in UpsertInput) (Config, 
 	if err != nil {
 		return Config{}, domain.Internal("email_upsert_org_config", "failed to save org email config").WithCause(err)
 	}
-	// TODO(org-propagation): saving the org-wide default does NOT yet push to
-	// sites that inherit it (sites with no per-site row). Propagating to all
-	// enrolled sites on every org-config save risks surprise-routing mail for
-	// operators who have not explicitly opted each site in. Implement as a
-	// deliberate follow-up: enumerate inheriting sites and push SyncEmailConfig
-	// to each, with rate-limiting and a per-site opt-in gate.
+	// m62 Area 1: enqueue propagation to inheriting sites. Best-effort —
+	// a failure here does not roll back the config save.
+	if s.enqueuer != nil {
+		if eqErr := s.enqueuer.EnqueueOrgConfigPropagate(ctx, in.TenantID); eqErr != nil {
+			s.log.Warn("email: org config saved but propagation enqueue failed",
+				slog.String("tenant_id", in.TenantID.String()),
+				slog.Any("error", eqErr),
+			)
+		}
+	}
 	return saved, nil
 }
 
@@ -458,6 +513,8 @@ func (s *Service) buildRepoInput(ctx context.Context, in UpsertInput) (upsertRep
 // accepted so the agent can advance its high-water cursor.
 //
 // Batch size is capped at maxIngestBatch; larger batches are rejected.
+// m62: after a successful ingest, maybeAlertFailures is called best-effort for
+// any entries with status=failed.
 func (s *Service) IngestLogBatch(ctx context.Context, tenantID, siteID uuid.UUID, entries []IngestEntry) (IngestResult, error) {
 	if len(entries) == 0 {
 		return IngestResult{}, nil
@@ -470,6 +527,18 @@ func (s *Service) IngestLogBatch(ctx context.Context, tenantID, siteID uuid.UUID
 	if err != nil {
 		return IngestResult{}, domain.Internal("email_ingest_log", "failed to ingest email log batch").WithCause(err)
 	}
+
+	// m62: count failures in this batch and maybe trigger an alert.
+	failureCount := 0
+	for _, e := range entries {
+		if e.Status == "failed" {
+			failureCount++
+		}
+	}
+	if failureCount > 0 {
+		go s.maybeAlertFailures(context.Background(), tenantID, siteID, failureCount)
+	}
+
 	return IngestResult{AckedThrough: maxSeq}, nil
 }
 
@@ -931,23 +1000,313 @@ func ptrNow() *time.Time {
 // and SendTest use this so the mapping stays in one place.
 // secret is the plaintext provider secret; empty string means "no secret
 // configured" — the agent will clear any previously stored secret.
+//
+// m62: when cfg.ID is non-zero, connections are loaded and their secrets
+// decrypted. Connection loading failures are logged but non-fatal — the push
+// proceeds without connections rather than blocking the save.
 func (s *Service) buildAgentConfigReq(cfg Config, secret string) agentcmd.EmailConfigRequest {
-	return agentcmd.EmailConfigRequest{
-		Provider:       cfg.Provider,
-		FromAddress:    cfg.FromAddress,
-		FromName:       cfg.FromName,
-		ForceFromEmail: cfg.ForceFromEmail,
-		ForceFromName:  cfg.ForceFromName,
-		ReturnPath:     cfg.ReturnPath,
-		Config:         cfg.Config,
-		Secret:         secret,
-		Mappings:       cfg.Mappings,
-		LogEmails:      cfg.LogEmails,
-		StoreBody:      cfg.StoreBody,
-		RetentionDays:  cfg.RetentionDays,
+	req := agentcmd.EmailConfigRequest{
+		Provider:           cfg.Provider,
+		FromAddress:        cfg.FromAddress,
+		FromName:           cfg.FromName,
+		ForceFromEmail:     cfg.ForceFromEmail,
+		ForceFromName:      cfg.ForceFromName,
+		ReturnPath:         cfg.ReturnPath,
+		Config:             cfg.Config,
+		Secret:             secret,
+		Mappings:           cfg.Mappings,
+		LogEmails:          cfg.LogEmails,
+		StoreBody:          cfg.StoreBody,
+		RetentionDays:      cfg.RetentionDays,
+		DefaultConnection:  ptrStringVal(cfg.DefaultConnection),
+		FallbackConnection: ptrStringVal(cfg.FallbackConnection),
 	}
+
+	// m62: attach the named-connections registry if the config has an ID
+	// (i.e. it was loaded from the DB, not a zero-value fallback).
+	if cfg.ID != uuid.Nil && s.enc != nil {
+		ctx := context.Background() // background — called outside a request
+		secretRows, err := s.repo.GetConnectionSecretCiphertexts(ctx, cfg.TenantID, cfg.ID)
+		if err != nil {
+			s.log.Warn("email: could not load connection secrets for agent push", slog.Any("error", err))
+		} else {
+			// Build a map from connection_key → decrypted secret for the push.
+			secretMap := make(map[string]string, len(secretRows))
+			for _, row := range secretRows {
+				if len(row.ProviderSecretEncrypted) > 0 {
+					plain, derr := s.enc.Decrypt(row.ProviderSecretEncrypted)
+					if derr == nil {
+						secretMap[row.ConnectionKey] = string(plain)
+					}
+				}
+			}
+			// Load full connection objects to build the registry.
+			conns, cerr := s.repo.ListConnections(ctx, cfg.TenantID, cfg.ID)
+			if cerr == nil && len(conns) > 0 {
+				registry := make(map[string]agentcmd.EmailConnectionWire, len(conns))
+				for _, c := range conns {
+					registry[c.ConnectionKey] = agentcmd.EmailConnectionWire{
+						Provider:    c.Provider,
+						Config:      c.Config,
+						Secret:      secretMap[c.ConnectionKey],
+						FromAddress: c.FromAddress,
+						FromName:    c.FromName,
+					}
+				}
+				req.Connections = registry
+			}
+		}
+	}
+
+	return req
 }
 
+// ptrStringVal returns the dereferenced value of a *string, or "" if nil.
+func ptrStringVal(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+// ---------------------------------------------------------------------------
+// m62 Area 2 — multi-connection CRUD
+// ---------------------------------------------------------------------------
+
+// maxConnectionsPerConfig is the maximum number of named connections allowed
+// per config row (defensive; prevents accidental registry bloat).
+const maxConnectionsPerConfig = 50
+
+// connectionKeyPattern is the valid slug regex as enforced by the DB CHECK.
+// Duplicated here for early validation before touching the DB.
+// Pattern: ^[a-z0-9][a-z0-9_-]{0,31}$ and key must not equal "default".
+func validConnectionKey(key string) bool {
+	if key == "default" || len(key) < 1 || len(key) > 32 {
+		return false
+	}
+	for i, ch := range key {
+		switch {
+		case ch >= 'a' && ch <= 'z':
+		case ch >= '0' && ch <= '9':
+		case ch == '_' || ch == '-':
+			if i == 0 {
+				return false // must start with [a-z0-9]
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// ListConnections returns all named connections for a config row.
+func (s *Service) ListConnections(ctx context.Context, tenantID, configID uuid.UUID) ([]Connection, error) {
+	conns, err := s.repo.ListConnections(ctx, tenantID, configID)
+	if err != nil {
+		return nil, domain.Internal("email_list_connections", "failed to list connections").WithCause(err)
+	}
+	return conns, nil
+}
+
+// UpsertConnection creates or updates a named connection. Validates the slug,
+// age-encrypts the secret when provided, and returns the updated Connection.
+func (s *Service) UpsertConnection(ctx context.Context, in ConnectionUpsertInput) (Connection, error) {
+	if !validConnectionKey(in.ConnectionKey) {
+		return Connection{}, domain.Validation("email_invalid_connection_key",
+			"connection_key must match ^[a-z0-9][a-z0-9_-]{0,31}$ and must not be 'default'")
+	}
+	if !ValidProviderSlug(in.Provider) {
+		return Connection{}, domain.Validation("email_invalid_provider",
+			"provider must be one of: smtp, ses, sendgrid, mailgun, postmark")
+	}
+	if in.Config == nil {
+		in.Config = map[string]any{}
+	}
+
+	var secretCiphertext []byte
+	setSecret := false
+	if in.SecretRaw != nil {
+		if s.enc == nil {
+			return Connection{}, domain.ServiceUnavailable(
+				"email_crypto_unwired",
+				"secret encryption is not configured; cannot store connection secret",
+			)
+		}
+		ct, err := s.enc.Encrypt([]byte(*in.SecretRaw))
+		if err != nil {
+			return Connection{}, domain.Internal("email_encrypt_connection_secret", "failed to encrypt connection secret").WithCause(err)
+		}
+		secretCiphertext = ct
+		setSecret = true
+	}
+
+	conn, err := s.repo.UpsertConnection(ctx, in, secretCiphertext, setSecret)
+	if err != nil {
+		return Connection{}, domain.Internal("email_upsert_connection", "failed to save connection").WithCause(err)
+	}
+	return conn, nil
+}
+
+// DeleteConnection removes a named connection. Returns 409 Conflict when the
+// key is referenced as default_connection or fallback_connection on the parent
+// config row (checked in-service by loading the config row first).
+func (s *Service) DeleteConnection(ctx context.Context, tenantID, configID uuid.UUID, key string) error {
+	// Check that the config row is not referencing this key.
+	// We do not cross-reference mappings (complex enough for v1).
+	cfgRows, err := s.repo.ListSiteConfigs(ctx, tenantID, 1000, 0)
+	if err == nil {
+		for _, c := range cfgRows {
+			if c.ID == configID {
+				if (c.DefaultConnection != nil && *c.DefaultConnection == key) ||
+					(c.FallbackConnection != nil && *c.FallbackConnection == key) {
+					return domain.Conflict("email_connection_in_use",
+						"connection is referenced as default_connection or fallback_connection; update the config before deleting")
+				}
+			}
+		}
+	}
+	if err := s.repo.DeleteConnection(ctx, tenantID, configID, key); err != nil {
+		return domain.Internal("email_delete_connection", "failed to delete connection").WithCause(err)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// m62 Area 1 — org-wide config propagation
+// ---------------------------------------------------------------------------
+
+// PropagateOrgConfig fans the org-wide config out to all enrolled inheriting
+// sites for the given tenant. At most 8 sites are pushed concurrently.
+// Returns the counts of synced/failed/total. Errors are per-site and never
+// fatal for the whole job.
+func (s *Service) PropagateOrgConfig(ctx context.Context, tenantID uuid.UUID) (PropagateResult, error) {
+	if s.agent == nil || s.siteLook == nil {
+		return PropagateResult{}, nil // agent not wired — no-op
+	}
+
+	// Load the org config + effective secret.
+	orgCfg, err := s.repo.GetOrgConfig(ctx, tenantID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return PropagateResult{}, nil // no org config to propagate
+		}
+		return PropagateResult{}, domain.Internal("propagate_get_org_cfg", "failed to load org config").WithCause(err)
+	}
+	var orgSecret string
+	if s.enc != nil && orgCfg.SecretSet {
+		orgCt, ctErr := s.repo.GetOrgSecretCiphertext(ctx, tenantID)
+		if ctErr == nil && len(orgCt) > 0 {
+			if plain, dErr := s.enc.Decrypt(orgCt); dErr == nil {
+				orgSecret = string(plain)
+			}
+		}
+	}
+	req := s.buildAgentConfigReq(orgCfg, orgSecret)
+
+	// Enumerate inheriting sites.
+	sites, err := s.repo.ListEmailInheritingSites(ctx, tenantID)
+	if err != nil {
+		return PropagateResult{}, domain.Internal("propagate_list_sites", "failed to list inheriting sites").WithCause(err)
+	}
+
+	if len(sites) == 0 {
+		publishConfigPropagated(ctx, s.pub, tenantID, 0, 0, 0)
+		return PropagateResult{}, nil
+	}
+
+	var mu sync.Mutex
+	result := PropagateResult{Total: len(sites)}
+
+	eg, egCtx := errgroup.WithContext(ctx)
+	eg.SetLimit(8) // max 8 concurrent site pushes
+	for _, site := range sites {
+		site := site // capture
+		eg.Go(func() error {
+			pushCtx, cancel := context.WithTimeout(egCtx, 15*time.Second)
+			defer cancel()
+			_, syncErr := s.agent.SyncEmailConfig(pushCtx, site.ID, site.URL, req)
+			mu.Lock()
+			if syncErr != nil {
+				result.Failed++
+				s.log.Warn("email propagate: agent sync failed",
+					slog.String("site_id", site.ID.String()),
+					slog.Any("error", syncErr),
+				)
+			} else {
+				result.Synced++
+			}
+			mu.Unlock()
+			return nil // per-site failures are non-fatal for the errgroup
+		})
+	}
+	_ = eg.Wait()
+
+	publishConfigPropagated(ctx, s.pub, tenantID, result.Synced, result.Failed, result.Total)
+	return result, nil
+}
+
+// ---------------------------------------------------------------------------
+// m62 Area 4 — notify settings
+// ---------------------------------------------------------------------------
+
+// GetNotifySettings returns the org-level notify settings. When no row exists
+// the service returns safe defaults with GET-always-200 semantics (lesson from
+// 0.35.1 hotfix: never 404 on a settings GET).
+func (s *Service) GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (NotifySettings, error) {
+	settings, err := s.repo.GetNotifySettings(ctx, tenantID)
+	if errors.Is(err, ErrNotFound) {
+		defaults := defaultNotifySettings(tenantID)
+		defaults.InstanceMailerConfigured = s.mailerIsConfigured(ctx)
+		return defaults, nil
+	}
+	if err != nil {
+		return NotifySettings{}, domain.Internal("email_get_notify_settings", "failed to load notify settings").WithCause(err)
+	}
+	settings.InstanceMailerConfigured = s.mailerIsConfigured(ctx)
+	return settings, nil
+}
+
+// PutNotifySettings validates and upserts the notify settings, computing
+// next_digest_at from the scheduling fields.
+func (s *Service) PutNotifySettings(ctx context.Context, in NotifySettingsUpsertInput) (NotifySettings, error) {
+	if err := validateNotifySettings(in); err != nil {
+		return NotifySettings{}, err
+	}
+
+	var nextAt *time.Time
+	if in.DigestEnabled {
+		nextAt = nextDigestAt(in.DigestCadence, in.DigestDay, in.DigestHour, in.Timezone)
+	}
+
+	settings := NotifySettings{
+		TenantID:             in.TenantID,
+		Enabled:              in.Enabled,
+		Recipients:           in.Recipients,
+		AlertOnFailure:       in.AlertOnFailure,
+		AlertThrottleMinutes: in.AlertThrottleMinutes,
+		DigestEnabled:        in.DigestEnabled,
+		DigestCadence:        in.DigestCadence,
+		DigestDay:            in.DigestDay,
+		DigestHour:           in.DigestHour,
+		Timezone:             in.Timezone,
+		NextDigestAt:         nextAt,
+	}
+
+	saved, err := s.repo.UpsertNotifySettings(ctx, settings)
+	if err != nil {
+		return NotifySettings{}, domain.Internal("email_put_notify_settings", "failed to save notify settings").WithCause(err)
+	}
+	saved.InstanceMailerConfigured = s.mailerIsConfigured(ctx)
+	return saved, nil
+}
+
+// errCodeValidation wraps a validation error for the email package. Used by
+// notify.go which cannot import domain directly in errCode().
+func errCodeValidation(code, msg string) error {
+	return domain.Validation(code, msg)
+}
+
+// ---------------------------------------------------------------------------
 // resolveEffectiveSecret decrypts the stored per-site ciphertext for use in an
 // agent push. When in.SecretRaw is non-nil (the operator just supplied a fresh
 // secret), it is used directly — no DB round-trip needed. Otherwise the stored

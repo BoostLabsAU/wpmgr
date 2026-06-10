@@ -1,0 +1,30 @@
+Your WPMgr email delivery digest — {{.ProductName}}
+
+Period: {{.PeriodLabel}} ({{.From}} – {{.To}})
+
+SUMMARY
+-------
+Total:              {{.Total}}
+Delivered:          {{.SentCount}}
+Failed:             {{.FailedCount}}
+Bounced/complained: {{.BouncedCount}}
+Sites:              {{.SiteCount}}
+{{if .Sites}}
+BY SITE (top {{len .Sites}} by failures)
+-------
+{{range .Sites}}{{.SiteName}} — Sent: {{.Sent}}, Failed: {{.Failed}}, Bounced: {{.Bounced}}
+  {{.SiteURL}}
+{{end}}
+{{end}}
+{{if .TopFailures}}
+TOP FAILURES
+------------
+{{range .TopFailures}}{{.SiteName}} — {{.Subject}}
+  Error: {{.Error}}
+{{end}}
+{{end}}
+Open email dashboard: {{.DashboardURL}}
+
+---
+Note: bounce/complaint counts reflect webhook-ingested events. Webhook bounces do not trigger per-failure alerts (v1 limitation).
+To adjust digest settings, visit {{.BaseURL}}/email.

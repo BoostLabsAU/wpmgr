@@ -29,6 +29,9 @@ var subjects = map[string]string{
 	// Track B (m49): backup-event notification emails.
 	"backup_completed": "Backup completed",
 	"backup_failed":    "Backup failed — action required",
+	// m62: per-site email alerts + digest.
+	"email_failure_alert": "Email delivery failures detected",
+	"email_digest":        "Your WPMgr email delivery digest",
 }
 
 // TemplateRenderer renders the embedded HTML + plaintext templates. It parses

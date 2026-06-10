@@ -18,6 +18,445 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
+// ---------------------------------------------------------------------------
+// m62 — multi-connection CRUD  (Area 2)
+// ---------------------------------------------------------------------------
+
+// ListConnections returns all named connections for a config row. Ordered by
+// created_at ASC, id ASC (stable insertion order). Runs under InTenantTx.
+func (r *Repo) ListConnections(ctx context.Context, tenantID, configID uuid.UUID) ([]Connection, error) {
+	var out []Connection
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).ListEmailConnections(ctx, sqlc.ListEmailConnectionsParams{
+			ConfigID: configID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			return domain.Internal("email_list_connections", "failed to list connections").WithCause(qerr)
+		}
+		for _, row := range rows {
+			out = append(out, connectionFromRow(row))
+		}
+		return nil
+	})
+	return out, err
+}
+
+// GetConnection returns a single named connection by key. Returns ErrNotFound
+// when absent. Runs under InTenantTx.
+func (r *Repo) GetConnection(ctx context.Context, tenantID, configID uuid.UUID, key string) (Connection, error) {
+	var c Connection
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).GetEmailConnection(ctx, sqlc.GetEmailConnectionParams{
+			ConfigID:      configID,
+			ConnectionKey: key,
+			TenantID:      tenantID,
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		c = connectionFromRow(row)
+		return nil
+	})
+	return c, err
+}
+
+// UpsertConnection creates or updates a named connection. Uses the nil-sentinel
+// pattern: when in.SecretCiphertext is nil the existing ciphertext is preserved.
+// Runs under InTenantTx.
+func (r *Repo) UpsertConnection(ctx context.Context, in ConnectionUpsertInput, secretCiphertext []byte, setSecret bool) (Connection, error) {
+	cfgJSON, err := jsonMarshal(in.Config)
+	if err != nil {
+		return Connection{}, err
+	}
+	var c Connection
+	dbErr := r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).UpsertEmailConnection(ctx, sqlc.UpsertEmailConnectionParams{
+			TenantID:                in.TenantID,
+			ConfigID:                in.ConfigID,
+			ConnectionKey:           in.ConnectionKey,
+			Provider:                in.Provider,
+			FromAddress:             in.FromAddress,
+			FromName:                in.FromName,
+			Config:                  cfgJSON,
+			SetSecret:               setSecret,
+			ProviderSecretEncrypted: secretCiphertext,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		c = connectionFromRow(row)
+		return nil
+	})
+	return c, dbErr
+}
+
+// DeleteConnection deletes a named connection by key. Runs under InTenantTx.
+func (r *Repo) DeleteConnection(ctx context.Context, tenantID, configID uuid.UUID, key string) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return sqlc.New(tx).DeleteEmailConnection(ctx, sqlc.DeleteEmailConnectionParams{
+			ConfigID:      configID,
+			ConnectionKey: key,
+			TenantID:      tenantID,
+		})
+	})
+}
+
+// GetConnectionSecretCiphertexts fetches (connection_key, provider_secret_encrypted)
+// for all connections under a config row. Used by buildAgentConfigReq to decrypt and
+// build the connections registry. Runs under InTenantTx.
+func (r *Repo) GetConnectionSecretCiphertexts(ctx context.Context, tenantID, configID uuid.UUID) ([]ConnectionSecretRow, error) {
+	var out []ConnectionSecretRow
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetConnectionSecretCiphertexts(ctx, sqlc.GetConnectionSecretCiphertextsParams{
+			ConfigID: configID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, ConnectionSecretRow{
+				ConnectionKey:           row.ConnectionKey,
+				ProviderSecretEncrypted: row.ProviderSecretEncrypted,
+			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// connectionFromRow maps a sqlc SiteEmailConnection to the domain Connection.
+// The provider_secret_encrypted column is NEVER copied — only SecretSet (bool).
+func connectionFromRow(row sqlc.SiteEmailConnection) Connection {
+	c := Connection{
+		ID:            row.ID,
+		TenantID:      row.TenantID,
+		ConfigID:      row.ConfigID,
+		ConnectionKey: row.ConnectionKey,
+		Provider:      row.Provider,
+		FromAddress:   row.FromAddress,
+		FromName:      row.FromName,
+		SecretSet:     len(row.ProviderSecretEncrypted) > 0,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
+	}
+	if len(row.Config) > 0 {
+		_ = json.Unmarshal(row.Config, &c.Config)
+	}
+	if c.Config == nil {
+		c.Config = map[string]any{}
+	}
+	return c
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Org-propagation  (Area 1)
+// ---------------------------------------------------------------------------
+
+// ListEmailInheritingSites returns enrolled sites that have no per-site email
+// config row (i.e. inherit the org default). Runs under InAgentTx.
+func (r *Repo) ListEmailInheritingSites(ctx context.Context, tenantID uuid.UUID) ([]InheritingSite, error) {
+	var out []InheritingSite
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).ListEmailInheritingSites(ctx, tenantID)
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, InheritingSite{ID: row.ID, URL: row.Url})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// GetSiteRef fetches a site's URL and name for use in notification emails.
+// Runs under InAgentTx.
+func (r *Repo) GetSiteRef(ctx context.Context, tenantID, siteID uuid.UUID) (SiteRef, error) {
+	var ref SiteRef
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).GetSiteRef(ctx, sqlc.GetSiteRefParams{
+			ID:       siteID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		ref = SiteRef{ID: row.ID, URL: row.Url, Name: row.Name}
+		return nil
+	})
+	return ref, err
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Notify settings (Area 4)
+// ---------------------------------------------------------------------------
+
+// GetNotifySettings returns the org-level notify settings row. Returns
+// ErrNotFound when no row exists (service returns defaults). Runs under InTenantTx.
+func (r *Repo) GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (NotifySettings, error) {
+	var out NotifySettings
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).GetNotifySettings(ctx, tenantID)
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		out = notifySettingsFromRow(row)
+		return nil
+	})
+	return out, err
+}
+
+// UpsertNotifySettings creates or updates the notify settings row.
+// Runs under InTenantTx.
+func (r *Repo) UpsertNotifySettings(ctx context.Context, in NotifySettings) (NotifySettings, error) {
+	recipientsJSON, err := json.Marshal(in.Recipients)
+	if err != nil {
+		return NotifySettings{}, fmt.Errorf("marshal recipients: %w", err)
+	}
+	var nextDigestAtPG pgtype.Timestamptz
+	if in.NextDigestAt != nil {
+		nextDigestAtPG = pgtype.Timestamptz{Time: *in.NextDigestAt, Valid: true}
+	}
+	var out NotifySettings
+	dbErr := r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).UpsertNotifySettings(ctx, sqlc.UpsertNotifySettingsParams{
+			TenantID:             in.TenantID,
+			Enabled:              in.Enabled,
+			Recipients:           recipientsJSON,
+			AlertOnFailure:       in.AlertOnFailure,
+			AlertThrottleMinutes: int32(in.AlertThrottleMinutes),
+			DigestEnabled:        in.DigestEnabled,
+			DigestCadence:        in.DigestCadence,
+			DigestDay:            int32(in.DigestDay),
+			DigestHour:           int32(in.DigestHour),
+			Timezone:             in.Timezone,
+			NextDigestAt:         nextDigestAtPG,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		out = notifySettingsFromRow(row)
+		return nil
+	})
+	return out, dbErr
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Alert state (Area 4)
+// ---------------------------------------------------------------------------
+
+// AccumulateAlertFailures upserts an email_alert_state row and increments
+// failures_since_alert by n. Runs under InAgentTx.
+func (r *Repo) AccumulateAlertFailures(ctx context.Context, tenantID, siteID uuid.UUID, n int64) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).AccumulateAlertFailures(ctx, sqlc.AccumulateAlertFailuresParams{
+			TenantID: tenantID,
+			SiteID:   siteID,
+			Delta:    n,
+		})
+	})
+}
+
+// ClaimAlertSlot tries to claim an alert slot for a site. Returns the updated
+// AlertState when the claim succeeds, nil when throttled (pgx.ErrNoRows).
+// Runs under InAgentTx.
+func (r *Repo) ClaimAlertSlot(ctx context.Context, tenantID, siteID uuid.UUID, minFailures int64, throttleMinutes int) (*AlertState, error) {
+	var state *AlertState
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).ClaimAlertSlot(ctx, sqlc.ClaimAlertSlotParams{
+			TenantID:        tenantID,
+			SiteID:          siteID,
+			MinFailures:     minFailures,
+			ThrottleMinutes: int32(throttleMinutes),
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return nil // throttled — not an error
+			}
+			return qerr
+		}
+		s := AlertState{
+			TenantID:           row.TenantID,
+			SiteID:             row.SiteID,
+			FailuresSinceAlert: row.FailuresSinceAlert,
+		}
+		if row.LastAlertAt.Valid {
+			t := row.LastAlertAt.Time
+			s.LastAlertAt = &t
+		}
+		state = &s
+		return nil
+	})
+	return state, err
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Digest scheduling (Area 4)
+// ---------------------------------------------------------------------------
+
+// ListDueDigests returns notify-settings rows where next_digest_at <= now()
+// and digest is enabled. Used by the DigestWorker. Runs under InAgentTx.
+func (r *Repo) ListDueDigests(ctx context.Context, limit int32) ([]NotifySettings, error) {
+	var out []NotifySettings
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).ListDueDigests(ctx, limit)
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, notifySettingsFromRow(row))
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ClaimAdvanceDigest atomically advances next_digest_at to newNextAt for a
+// tenant. Returns the updated row when the claim succeeds (row still due at
+// call time), ErrNotFound when already claimed by another worker instance.
+// Runs under InAgentTx.
+func (r *Repo) ClaimAdvanceDigest(ctx context.Context, tenantID uuid.UUID, newNextAt time.Time) (NotifySettings, error) {
+	var out NotifySettings
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).ClaimAdvanceDigest(ctx, sqlc.ClaimAdvanceDigestParams{
+			TenantID:        tenantID,
+			NewNextDigestAt: pgtype.Timestamptz{Time: newNextAt, Valid: true},
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound // already claimed
+			}
+			return qerr
+		}
+		out = notifySettingsFromRow(row)
+		return nil
+	})
+	return out, err
+}
+
+// ---------------------------------------------------------------------------
+// m62 — Digest analytics (Area 4)
+// ---------------------------------------------------------------------------
+
+// GetFleetStatsBySite returns per-site aggregate stats for the given [from, to]
+// window, ordered by failed_count DESC. Runs under InAgentTx.
+func (r *Repo) GetFleetStatsBySite(ctx context.Context, tenantID uuid.UUID, from, to time.Time, limit int32) ([]SiteStatsRow, error) {
+	rangeFrom, rangeTo := resolveRange(from, to)
+	var out []SiteStatsRow
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetFleetStatsBySite(ctx, sqlc.GetFleetStatsBySiteParams{
+			TenantID:  tenantID,
+			RangeFrom: rangeFrom,
+			RangeTo:   rangeTo,
+			RowLimit:  limit,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, SiteStatsRow{
+				SiteID:       row.SiteID,
+				Total:        row.Total,
+				SentCount:    row.SentCount,
+				FailedCount:  row.FailedCount,
+				BouncedCount: row.BouncedCount,
+			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// TopFailureSamples returns the top N failure rows (subject + error) across
+// all sites for the given [from, to] window. Runs under InAgentTx.
+func (r *Repo) TopFailureSamples(ctx context.Context, tenantID uuid.UUID, from, to time.Time, limit int32) ([]FailureSample, error) {
+	rangeFrom, rangeTo := resolveRange(from, to)
+	var out []FailureSample
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).TopFailureSamples(ctx, sqlc.TopFailureSamplesParams{
+			TenantID:  tenantID,
+			RangeFrom: rangeFrom,
+			RangeTo:   rangeTo,
+			RowLimit:  limit,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, FailureSample{SiteID: row.SiteID, Subject: row.Subject, Error: row.Error})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// TopFailureSamplesBySite returns the top N failure rows for a specific site.
+// Runs under InAgentTx.
+func (r *Repo) TopFailureSamplesBySite(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time, limit int32) ([]FailureSample, error) {
+	rangeFrom, rangeTo := resolveRange(from, to)
+	var out []FailureSample
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).TopFailureSamplesBySite(ctx, sqlc.TopFailureSamplesBySiteParams{
+			TenantID:  tenantID,
+			SiteID:    siteID,
+			RangeFrom: rangeFrom,
+			RangeTo:   rangeTo,
+			RowLimit:  limit,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		for _, row := range rows {
+			out = append(out, FailureSample{SiteID: row.SiteID, Subject: row.Subject, Error: row.Error})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ---------------------------------------------------------------------------
+// notify settings helpers
+// ---------------------------------------------------------------------------
+
+func notifySettingsFromRow(row sqlc.EmailNotifySetting) NotifySettings {
+	s := NotifySettings{
+		TenantID:             row.TenantID,
+		Enabled:              row.Enabled,
+		AlertOnFailure:       row.AlertOnFailure,
+		AlertThrottleMinutes: int(row.AlertThrottleMinutes),
+		DigestEnabled:        row.DigestEnabled,
+		DigestCadence:        row.DigestCadence,
+		DigestDay:            int(row.DigestDay),
+		DigestHour:           int(row.DigestHour),
+		Timezone:             row.Timezone,
+		CreatedAt:            row.CreatedAt,
+		UpdatedAt:            row.UpdatedAt,
+	}
+	if row.NextDigestAt.Valid {
+		t := row.NextDigestAt.Time
+		s.NextDigestAt = &t
+	}
+	// Recipients is stored as a JSON array ([]byte) in the DB.
+	if len(row.Recipients) > 0 {
+		_ = json.Unmarshal(row.Recipients, &s.Recipients)
+	}
+	if s.Recipients == nil {
+		s.Recipients = []string{}
+	}
+	return s
+}
+
 // epochStart / farFuture are sentinel bounds used when no date range is supplied.
 // Using time.Time{} (zero) as epoch-start and a year far in the future as upper
 // bound avoids NULL handling in SQL while keeping queries simple.
@@ -328,18 +767,18 @@ type upsertRepoInput struct {
 // copied — only SecretSet and WebhookSigningKeySet bools are surfaced.
 func configFromRow(row sqlc.SiteEmailConfig) Config {
 	cfg := Config{
-		ID:                       row.ID,
-		TenantID:                 row.TenantID,
-		Provider:                 row.Provider,
-		FromAddress:              row.FromAddress,
-		FromName:                 row.FromName,
-		ForceFromEmail:           row.ForceFromEmail,
-		ForceFromName:            row.ForceFromName,
-		ReturnPath:               row.ReturnPath,
-		SecretSet:                len(row.ProviderSecretEncrypted) > 0,
-		LogEmails:                row.LogEmails,
-		StoreBody:                row.StoreBody,
-		RetentionDays:            int(row.RetentionDays),
+		ID:             row.ID,
+		TenantID:       row.TenantID,
+		Provider:       row.Provider,
+		FromAddress:    row.FromAddress,
+		FromName:       row.FromName,
+		ForceFromEmail: row.ForceFromEmail,
+		ForceFromName:  row.ForceFromName,
+		ReturnPath:     row.ReturnPath,
+		SecretSet:      len(row.ProviderSecretEncrypted) > 0,
+		LogEmails:      row.LogEmails,
+		StoreBody:      row.StoreBody,
+		RetentionDays:  int(row.RetentionDays),
 		// m61: webhook security masked reads.
 		WebhookSigningKeySet:     len(row.WebhookSigningKeyEnc) > 0,
 		WebhookRouteTokenHashSet: len(row.WebhookRouteTokenHash) > 0,
@@ -418,23 +857,30 @@ func (r *Repo) IngestLogBatch(ctx context.Context, tenantID, siteID uuid.UUID, e
 			if createdAt.IsZero() {
 				createdAt = time.Now().UTC()
 			}
+			// m62: marshal attachments; nil/empty → '[]'.
+			attJSON, mErr := json.Marshal(e.Attachments)
+			if mErr != nil || len(attJSON) == 0 {
+				attJSON = []byte("[]")
+			}
 			_, qerr := q.IngestEmailLogEntry(ctx, sqlc.IngestEmailLogEntryParams{
-				TenantID:    tenantID,
-				SiteID:      siteID,
-				AgentSeq:    agentSeq,
-				MessageID:   messageID,
-				ToAddresses: e.ToAddresses,
-				FromAddress: e.FromAddress,
-				Subject:     e.Subject,
-				Provider:    e.Provider,
-				Status:      e.Status,
-				Response:    respJSON,
-				Error:       e.Error,
-				Retries:     int32(e.Retries),
-				ResentCount: int32(e.ResentCount),
-				BodyStored:  e.BodyStored,
-				Body:        body,
-				CreatedAt:   createdAt,
+				TenantID:      tenantID,
+				SiteID:        siteID,
+				AgentSeq:      agentSeq,
+				MessageID:     messageID,
+				ToAddresses:   e.ToAddresses,
+				FromAddress:   e.FromAddress,
+				Subject:       e.Subject,
+				Provider:      e.Provider,
+				Status:        e.Status,
+				Response:      respJSON,
+				Error:         e.Error,
+				Retries:       int32(e.Retries),
+				ResentCount:   int32(e.ResentCount),
+				BodyStored:    e.BodyStored,
+				Body:          body,
+				ConnectionKey: e.ConnectionKey,
+				Attachments:   attJSON,
+				CreatedAt:     createdAt,
 			})
 			if qerr != nil {
 				return domain.Internal("email_ingest_entry", "failed to upsert email log entry").WithCause(qerr)
@@ -1175,22 +1621,24 @@ func encodeCursor(t time.Time, id uuid.UUID) string {
 // logListRowToEntry maps a ListSiteEmailLogRow to a LogEntry (no body).
 func logListRowToEntry(row sqlc.ListSiteEmailLogRow) LogEntry {
 	e := LogEntry{
-		ID:          row.ID,
-		TenantID:    row.TenantID,
-		SiteID:      row.SiteID,
-		AgentSeq:    row.AgentSeq,
-		MessageID:   row.MessageID,
-		ToAddresses: row.ToAddresses,
-		FromAddress: row.FromAddress,
-		Subject:     row.Subject,
-		Provider:    row.Provider,
-		Status:      row.Status,
-		Error:       row.Error,
-		Retries:     int(row.Retries),
-		ResentCount: int(row.ResentCount),
-		BodyStored:  row.BodyStored,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:              row.ID,
+		TenantID:        row.TenantID,
+		SiteID:          row.SiteID,
+		AgentSeq:        row.AgentSeq,
+		MessageID:       row.MessageID,
+		ToAddresses:     row.ToAddresses,
+		FromAddress:     row.FromAddress,
+		Subject:         row.Subject,
+		Provider:        row.Provider,
+		Status:          row.Status,
+		Error:           row.Error,
+		Retries:         int(row.Retries),
+		ResentCount:     int(row.ResentCount),
+		BodyStored:      row.BodyStored,
+		ConnectionKey:   row.ConnectionKey,
+		AttachmentCount: int(row.AttachmentCount),
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
 	}
 	if len(row.Response) > 0 {
 		_ = json.Unmarshal(row.Response, &e.Response)
@@ -1207,22 +1655,24 @@ func logListRowToEntry(row sqlc.ListSiteEmailLogRow) LogEntry {
 // fleetLogRowToEntry maps a ListFleetEmailLogRow to a LogEntry (no body).
 func fleetLogRowToEntry(row sqlc.ListFleetEmailLogRow) LogEntry {
 	e := LogEntry{
-		ID:          row.ID,
-		TenantID:    row.TenantID,
-		SiteID:      row.SiteID,
-		AgentSeq:    row.AgentSeq,
-		MessageID:   row.MessageID,
-		ToAddresses: row.ToAddresses,
-		FromAddress: row.FromAddress,
-		Subject:     row.Subject,
-		Provider:    row.Provider,
-		Status:      row.Status,
-		Error:       row.Error,
-		Retries:     int(row.Retries),
-		ResentCount: int(row.ResentCount),
-		BodyStored:  row.BodyStored,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:              row.ID,
+		TenantID:        row.TenantID,
+		SiteID:          row.SiteID,
+		AgentSeq:        row.AgentSeq,
+		MessageID:       row.MessageID,
+		ToAddresses:     row.ToAddresses,
+		FromAddress:     row.FromAddress,
+		Subject:         row.Subject,
+		Provider:        row.Provider,
+		Status:          row.Status,
+		Error:           row.Error,
+		Retries:         int(row.Retries),
+		ResentCount:     int(row.ResentCount),
+		BodyStored:      row.BodyStored,
+		ConnectionKey:   row.ConnectionKey,
+		AttachmentCount: int(row.AttachmentCount),
+		CreatedAt:       row.CreatedAt,
+		UpdatedAt:       row.UpdatedAt,
 	}
 	if len(row.Response) > 0 {
 		_ = json.Unmarshal(row.Response, &e.Response)
@@ -1239,23 +1689,24 @@ func fleetLogRowToEntry(row sqlc.ListFleetEmailLogRow) LogEntry {
 // logRowToEntry maps a full SiteEmailLog row (including body) to a LogEntry.
 func logRowToEntry(row sqlc.SiteEmailLog) LogEntry {
 	e := LogEntry{
-		ID:          row.ID,
-		TenantID:    row.TenantID,
-		SiteID:      row.SiteID,
-		AgentSeq:    row.AgentSeq,
-		MessageID:   row.MessageID,
-		ToAddresses: row.ToAddresses,
-		FromAddress: row.FromAddress,
-		Subject:     row.Subject,
-		Provider:    row.Provider,
-		Status:      row.Status,
-		Error:       row.Error,
-		Retries:     int(row.Retries),
-		ResentCount: int(row.ResentCount),
-		BodyStored:  row.BodyStored,
-		Body:        row.Body,
-		CreatedAt:   row.CreatedAt,
-		UpdatedAt:   row.UpdatedAt,
+		ID:            row.ID,
+		TenantID:      row.TenantID,
+		SiteID:        row.SiteID,
+		AgentSeq:      row.AgentSeq,
+		MessageID:     row.MessageID,
+		ToAddresses:   row.ToAddresses,
+		FromAddress:   row.FromAddress,
+		Subject:       row.Subject,
+		Provider:      row.Provider,
+		Status:        row.Status,
+		Error:         row.Error,
+		Retries:       int(row.Retries),
+		ResentCount:   int(row.ResentCount),
+		BodyStored:    row.BodyStored,
+		Body:          row.Body,
+		ConnectionKey: row.ConnectionKey,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
 	}
 	if len(row.Response) > 0 {
 		_ = json.Unmarshal(row.Response, &e.Response)
@@ -1266,5 +1717,14 @@ func logRowToEntry(row sqlc.SiteEmailLog) LogEntry {
 	if e.ToAddresses == nil {
 		e.ToAddresses = []string{}
 	}
+	// m62: unmarshal attachments JSON (detail view only).
+	if len(row.Attachments) > 0 {
+		_ = json.Unmarshal(row.Attachments, &e.Attachments)
+	}
+	if e.Attachments == nil {
+		e.Attachments = []AttachmentMeta{}
+	}
+	// AttachmentCount populated from the slice length (detail row has full data).
+	e.AttachmentCount = len(e.Attachments)
 	return e
 }

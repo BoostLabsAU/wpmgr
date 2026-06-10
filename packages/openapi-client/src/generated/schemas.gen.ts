@@ -5732,6 +5732,14 @@ export const SiteEmailConfigSchema = {
       description:
         "Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).\n",
     },
+    connections: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailConnection",
+      },
+      description:
+        "Named provider connections for this config (multi-connection, m62+). Empty array when no named connections have been created.\n",
+    },
     webhook_url: {
       type: "string",
       nullable: true,
@@ -6118,6 +6126,24 @@ export const SiteEmailLogEntrySchema = {
       description:
         "Full email body. Present only in the detail response and only when body_stored is true. Never returned in list or export responses.\n",
     },
+    connection_key: {
+      type: "string",
+      description:
+        "Named connection slug that sent this email (m62+). Empty string when the primary config was used (no named connection).\n",
+    },
+    attachment_count: {
+      type: "integer",
+      description:
+        "Number of attachments on this email (m62+). Zero when none.",
+    },
+    attachments: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailAttachmentMeta",
+      },
+      description:
+        "Attachment metadata list. Populated in the detail response when attachment_count > 0 and the agent sent attachment metadata (m62+).\n",
+    },
     created_at: {
       type: "string",
       format: "date-time",
@@ -6472,6 +6498,247 @@ export const BulkDeleteLogsResponseSchema = {
       format: "int64",
       description:
         "Number of rows actually deleted (may be less than requested if some IDs did not exist).",
+    },
+  },
+} as const;
+
+export const EmailAttachmentMetaSchema = {
+  type: "object",
+  description: "Metadata for one email attachment (m62+).",
+  required: ["name", "size_bytes"],
+  properties: {
+    name: {
+      type: "string",
+      description:
+        "Attachment filename (directory path stripped, max 255 runes).",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Attachment size in bytes (0 when unknown).",
+    },
+  },
+} as const;
+
+export const EmailConnectionSchema = {
+  type: "object",
+  description:
+    "A named provider connection belonging to a site's email config (m62+). The provider secret is never returned — only `secret_set` indicates whether a credential is stored.\n",
+  required: [
+    "id",
+    "tenant_id",
+    "config_id",
+    "connection_key",
+    "provider",
+    "from_address",
+    "from_name",
+    "secret_set",
+    "created_at",
+    "updated_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+      description: "Surrogate primary key.",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+    },
+    config_id: {
+      type: "string",
+      format: "uuid",
+      description: "ID of the parent SiteEmailConfig row.",
+    },
+    connection_key: {
+      type: "string",
+      description:
+        "Operator-chosen slug (^[a-z0-9][a-z0-9_-]{0,31}$). The value 'default' is reserved for the primary config row and cannot be used for named connections.\n",
+    },
+    provider: {
+      type: "string",
+      description:
+        "Provider slug (smtp | ses | sendgrid | mailgun | postmark).",
+    },
+    from_address: {
+      type: "string",
+      description: "Sender envelope address for this connection.",
+    },
+    from_name: {
+      type: "string",
+      description: "Sender display name for this connection.",
+    },
+    config: {
+      type: "object",
+      additionalProperties: true,
+      description: "Provider-specific non-secret fields.",
+    },
+    secret_set: {
+      type: "boolean",
+      description:
+        "True when an encrypted provider secret is stored for this connection.",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PutEmailConnectionRequestSchema = {
+  type: "object",
+  description:
+    "Request body for PUT /sites/{siteId}/email/connections/{connKey}. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting `secret` preserves the existing stored credential (nil-sentinel pattern).\n",
+  properties: {
+    provider: {
+      type: "string",
+      description:
+        "Provider slug (smtp | ses | sendgrid | mailgun | postmark).",
+    },
+    from_address: {
+      type: "string",
+      description: "Sender envelope address for this connection.",
+    },
+    from_name: {
+      type: "string",
+      description: "Sender display name for this connection.",
+    },
+    config: {
+      type: "object",
+      additionalProperties: true,
+      description: "Provider-specific non-secret fields.",
+    },
+    secret: {
+      type: "string",
+      nullable: true,
+      description:
+        "Provider credential. Omit to preserve the existing stored secret. Provide an empty string to clear it.\n",
+    },
+  },
+} as const;
+
+export const EmailNotifySettingsSchema = {
+  type: "object",
+  description:
+    "Per-tenant email alert and digest settings (m62+). Returns sensible defaults (alerts_enabled=false, digest_enabled=false) when no settings row has been created yet — this endpoint never 404s.\n",
+  required: [
+    "alerts_enabled",
+    "alert_failure_threshold",
+    "alert_throttle_minutes",
+    "alert_recipients",
+    "digest_enabled",
+    "digest_hour_utc",
+    "digest_recipients",
+    "instance_mailer_configured",
+  ],
+  properties: {
+    alerts_enabled: {
+      type: "boolean",
+      description: "Whether per-failure email alerts are active.",
+    },
+    alert_failure_threshold: {
+      type: "integer",
+      description:
+        "Minimum consecutive failure count that triggers an alert. Default 3.\n",
+    },
+    alert_throttle_minutes: {
+      type: "integer",
+      description:
+        "Minimum minutes between two alerts for the same site. Default 60.\n",
+    },
+    alert_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description: "List of email addresses that receive failure alerts.",
+    },
+    digest_enabled: {
+      type: "boolean",
+      description: "Whether the hourly digest email is active.",
+    },
+    digest_hour_utc: {
+      type: "integer",
+      description:
+        "UTC hour (0-23) at which the daily digest fires. Default 8.\n",
+    },
+    digest_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description: "List of email addresses that receive the hourly digest.",
+    },
+    instance_mailer_configured: {
+      type: "boolean",
+      description:
+        "True when the instance-level SMTP/mailer is configured. Alerts and digests require this to be true to deliver.\n",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "Present when a settings row exists; absent for default response.",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+    },
+  },
+} as const;
+
+export const PutEmailNotifySettingsRequestSchema = {
+  type: "object",
+  description:
+    "Request body for PUT /email/notify-settings. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope).\n",
+  properties: {
+    alerts_enabled: {
+      type: "boolean",
+    },
+    alert_failure_threshold: {
+      type: "integer",
+      description: "Minimum failure count to trigger an alert (1-100).",
+    },
+    alert_throttle_minutes: {
+      type: "integer",
+      description: "Minimum minutes between alerts per site (1-1440).",
+    },
+    alert_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description: "Replace the alert recipients list.",
+    },
+    digest_enabled: {
+      type: "boolean",
+    },
+    digest_hour_utc: {
+      type: "integer",
+      description: "UTC hour for the daily digest (0-23).",
+    },
+    digest_recipients: {
+      type: "array",
+      items: {
+        type: "string",
+        format: "email",
+      },
+      description: "Replace the digest recipients list.",
     },
   },
 } as const;

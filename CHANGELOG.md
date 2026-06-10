@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-06-10
+
+### Added
+
+- **Multiple named email connections with automatic failover.** A site can now define any number of named connections alongside its primary provider (for example, a backup SES account with the slug "ses-backup"). Each connection has its own provider, settings, and encrypted credential. The Routing tab is fully rebuilt: a Connections card lists every connection with its provider badge and identity, per-connection test sends, and an add/edit dialog; a Routing card lets you map specific FROM addresses to a connection and choose a fallback connection that is retried automatically on primary failure. The email log records which connection was actually used for each send. Behavior change: saving an email config now validates `default_connection`, `fallback_connection`, and per-FROM mapping values against the connections you have defined. Documented v1 limitation: bounce and complaint webhooks remain bound to the primary provider in this release; bounces routed through a non-primary connection's provider are not ingested until per-connection webhook tokens ship in a later release.
+- **Org-wide email default now propagates automatically to every site.** Previously, saving the org-wide email default had no effect on sites that were already enrolled; each had to be synced manually. Now, saving the org default enqueues a background job that pushes the config to every connected and degraded site that inherits it (up to 8 in parallel, 15 seconds per site). A live SSE toast shows "Org email default synced to N/total sites" and warns when any site could not be reached. Sites with a per-site override are unaffected. This closes a consistency gap: the dashboard was already showing the org config as those sites' effective config before this release.
+- **Attachment metadata in the email log.** Each logged email now records the names and sizes of any attachments (file names only, never paths or contents). List views show a paperclip and count chip next to the subject when attachments are present; the detail view shows name and formatted-size chips. Works for both the per-site log and the fleet-wide log. Agent local schema bumped to v11.
+- **Failure alerts and scheduled deliverability digest.** Opt in to email alerts sent to operator-chosen recipients when a site's sends start failing (throttled to one alert per site per 60 minutes by default, configurable from 15 minutes to 24 hours). A separate weekly or monthly deliverability digest summarises sent, failed, and bounced counts per site with a top-failures list. Both are delivered via the instance mailer; the Notifications card on the Email tab shows a warning banner when instance email is not configured. Documented v1 limitation: per-failure alerts fire only on agent-reported failures (status=failed); bounces and complaints reported via provider webhooks count in the digest but do not trigger the per-failure alert in this release.
+
 ## [0.35.4] - 2026-06-10
 
 ### Added

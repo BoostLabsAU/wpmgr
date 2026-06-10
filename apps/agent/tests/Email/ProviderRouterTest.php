@@ -187,10 +187,13 @@ class ProviderRouterTest extends TestCase
         Functions\when('current_time')->justReturn('2026-01-01 00:00:00');
 
         $cfg = new EmailConfig([
-            'provider' => 'sendgrid',
-            'config'   => [
-                'fallback_provider' => 'smtp',
-                'fallback_config'   => ['host' => 'smtp.fallback.com', 'port' => 587],
+            'provider'           => 'sendgrid',
+            'fallback_connection' => 'backup-smtp',
+            'connections'        => [
+                'backup-smtp' => [
+                    'provider' => 'smtp',
+                    'config'   => ['host' => 'smtp.fallback.com', 'port' => 587],
+                ],
             ],
             'log_emails' => false,
         ]);

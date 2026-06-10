@@ -73,6 +73,13 @@ final class SendTestEmailCommand implements CommandInterface {
 			? $params['body']
 			: 'This is a test message sent by WPMgr to verify your email provider configuration is working correctly.';
 
+		// Optional connection key: route the test via a specific named connection.
+		// Defaults to '' (primary row). Fallback is always disabled for test sends.
+		$connection_key = '';
+		if ( array_key_exists( 'connection', $params ) && is_string( $params['connection'] ) ) {
+			$connection_key = $params['connection'];
+		}
+
 		$from_address = $cfg->from_address !== '' ? $cfg->from_address : 'wordpress@' . $this->site_domain();
 		$from_name    = $cfg->from_name !== '' ? $cfg->from_name : 'WordPress';
 
@@ -94,8 +101,9 @@ final class SendTestEmailCommand implements CommandInterface {
 			'x_tenant_id' => function_exists( 'get_option' ) ? (string) ( get_option( 'wpmgr_agent_tenant_id', '' ) ) : '',
 		);
 
-		// Disable fallback so the real provider error surfaces in the test result.
-		$result = $this->provider_router->send( $mail, $cfg, true );
+		// Route via the specific connection key when provided; disable_fallback is
+		// always true for test sends so the real provider error surfaces.
+		$result = $this->provider_router->send_via( $mail, $cfg, $connection_key, true );
 
 		return array(
 			'ok'         => $result['ok'],

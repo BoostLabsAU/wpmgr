@@ -2035,10 +2035,14 @@ CREATE TABLE IF NOT EXISTS site_email_log (
     error         text        NOT NULL DEFAULT '',
     retries       integer     NOT NULL DEFAULT 0,
     resent_count  integer     NOT NULL DEFAULT 0,
-    body_stored   boolean     NOT NULL DEFAULT false,
-    body          text,
-    created_at    timestamptz NOT NULL DEFAULT now(),
-    updated_at    timestamptz NOT NULL DEFAULT now(),
+    body_stored    boolean     NOT NULL DEFAULT false,
+    body           text,
+    -- m62: connection_key identifies which named connection sent this email.
+    connection_key text        NOT NULL DEFAULT '',
+    -- m62: attachments metadata — JSON array of {name, size_bytes} objects.
+    attachments    jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT site_email_log_pkey PRIMARY KEY (id)
 );
 
@@ -2149,3 +2153,102 @@ CREATE POLICY email_webhook_events_tenant_isolation ON email_webhook_events
         tenant_id IS NULL
         OR tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
     );
+
+-- ---------------------------------------------------------------------------
+-- m62 — site_email_connection (multi-connection + failover)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS site_email_connection (
+    id                        uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id                 uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    config_id                 uuid        NOT NULL REFERENCES site_email_config (id) ON DELETE CASCADE,
+    connection_key            text        NOT NULL,
+    provider                  text        NOT NULL DEFAULT 'smtp',
+    from_address              text        NOT NULL DEFAULT '',
+    from_name                 text        NOT NULL DEFAULT '',
+    config                    jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    provider_secret_encrypted bytea,
+    created_at                timestamptz NOT NULL DEFAULT now(),
+    updated_at                timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_email_connection_pkey PRIMARY KEY (id),
+    CONSTRAINT site_email_connection_key_check
+        CHECK (connection_key ~ '^[a-z0-9][a-z0-9_-]{0,31}$' AND connection_key <> 'default')
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_email_connection_cfg_key_idx
+    ON site_email_connection (config_id, connection_key);
+
+CREATE INDEX IF NOT EXISTS site_email_connection_tenant_idx
+    ON site_email_connection (tenant_id);
+
+ALTER TABLE site_email_connection ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_email_connection FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_email_connection_tenant_isolation ON site_email_connection
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_email_connection_agent ON site_email_connection
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m62 — email_notify_settings (org-level alert + digest preferences)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS email_notify_settings (
+    tenant_id              uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    enabled                boolean     NOT NULL DEFAULT false,
+    recipients             jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    alert_on_failure       boolean     NOT NULL DEFAULT true,
+    alert_throttle_minutes integer     NOT NULL DEFAULT 60
+        CONSTRAINT email_notify_settings_throttle_range CHECK (alert_throttle_minutes BETWEEN 15 AND 1440),
+    digest_enabled         boolean     NOT NULL DEFAULT false,
+    digest_cadence         text        NOT NULL DEFAULT 'weekly'
+        CONSTRAINT email_notify_settings_digest_cadence CHECK (digest_cadence IN ('weekly', 'monthly')),
+    digest_day             integer     NOT NULL DEFAULT 1
+        CONSTRAINT email_notify_settings_digest_day CHECK (digest_day BETWEEN 0 AND 28),
+    digest_hour            integer     NOT NULL DEFAULT 8
+        CONSTRAINT email_notify_settings_digest_hour CHECK (digest_hour BETWEEN 0 AND 23),
+    timezone               text        NOT NULL DEFAULT 'UTC',
+    next_digest_at         timestamptz,
+    created_at             timestamptz NOT NULL DEFAULT now(),
+    updated_at             timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT email_notify_settings_pkey PRIMARY KEY (tenant_id)
+);
+
+CREATE INDEX IF NOT EXISTS email_notify_settings_due_idx
+    ON email_notify_settings (next_digest_at)
+    WHERE digest_enabled AND enabled;
+
+ALTER TABLE email_notify_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_notify_settings FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY email_notify_settings_tenant_isolation ON email_notify_settings
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY email_notify_settings_agent ON email_notify_settings
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m62 — email_alert_state (per-site durable alert throttle state)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS email_alert_state (
+    tenant_id            uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id              uuid        NOT NULL REFERENCES sites  (id) ON DELETE CASCADE,
+    last_alert_at        timestamptz,
+    failures_since_alert bigint      NOT NULL DEFAULT 0,
+    updated_at           timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT email_alert_state_pkey PRIMARY KEY (tenant_id, site_id)
+);
+
+ALTER TABLE email_alert_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_alert_state FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY email_alert_state_tenant_isolation ON email_alert_state
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY email_alert_state_agent ON email_alert_state
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

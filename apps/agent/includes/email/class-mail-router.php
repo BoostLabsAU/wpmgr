@@ -175,6 +175,7 @@ final class MailRouter {
 		}
 
 		// -- Attachments -------------------------------------------------------
+		// Capture basename, path, mime, and size_bytes (cap 50, filesize guarded).
 		$raw_attachments = isset( $atts['attachments'] ) && is_array( $atts['attachments'] )
 			? $atts['attachments'] : array();
 
@@ -184,13 +185,21 @@ final class MailRouter {
 			if ( $path === '' || ! @is_file( $path ) ) {
 				continue;
 			}
+			if ( count( $attachments ) >= 50 ) {
+				break;
+			}
 			$mime = function_exists( 'mime_content_type' )
 				? (string) ( mime_content_type( $path ) ?: 'application/octet-stream' )
 				: 'application/octet-stream';
+			// filesize() returns int|false; treat false (unreadable) as 0 (unknown).
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_filesize -- headless agent; WP_Filesystem has no filesize() equivalent for local disk
+			$raw_size   = @filesize( $path );
+			$size_bytes = is_int( $raw_size ) && $raw_size >= 0 ? $raw_size : 0;
 			$attachments[] = array(
-				'name' => basename( $path ),
-				'path' => $path,
-				'mime' => $mime,
+				'name'       => basename( $path ),
+				'path'       => $path,
+				'mime'       => $mime,
+				'size_bytes' => $size_bytes,
 			);
 		}
 

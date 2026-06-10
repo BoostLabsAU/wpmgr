@@ -1,0 +1,51 @@
+{{template "header" .}}
+          <h1 class="ink" style="margin:0 0 14px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:24px;line-height:1.3;font-weight:700;color:#16302E;">Email delivery failures detected</h1>
+          <p class="body" style="margin:0 0 16px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#3A4A48;">
+            <strong>{{.FailureCount}}</strong> email{{if gt .FailureCount 1}}s{{end}} failed to deliver from <strong>{{.SiteName}}</strong> in the last {{.WindowMinutes}} minutes.
+          </p>
+
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FEF2F2;border:1px solid #FECACA;border-radius:8px;margin:0 0 20px 0;">
+            <tr><td style="padding:16px 18px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;width:100px;">Site</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#3A4A48;padding:0 0 6px 0;"><strong>{{.SiteName}}</strong></td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;">URL</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#3A4A48;padding:0 0 6px 0;word-break:break-all;">{{.SiteURL}}</td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0;">Failures</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#DC2626;padding:0;"><strong>{{.FailureCount}}</strong></td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+
+          {{if .Samples}}
+          <p class="body" style="margin:0 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#3A4A48;">Recent failures</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+            {{range .Samples}}
+            <tr>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#3A4A48;padding:4px 0;border-bottom:1px solid #E5E7EB;">
+                <strong>{{.Subject}}</strong> &rarr; <span style="color:#6B7280;">{{.To}}</span><br>
+                <span style="color:#DC2626;font-size:12px;">{{.Error}}</span>
+              </td>
+            </tr>
+            {{end}}
+          </table>
+          {{end}}
+
+          <p class="muted" style="margin:0 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#6B7280;">
+            Note: bounce webhook events are not included in this alert (v1 limitation — only agent-reported delivery failures trigger alerts). Check your provider dashboard for bounce details.
+          </p>
+
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+            <tr>
+              <td style="border-radius:6px;background:#16302E;">
+                <a href="{{.SiteEmailURL}}" style="display:inline-block;padding:12px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;">View Email Log</a>
+              </td>
+            </tr>
+          </table>
+{{template "footer" .}}

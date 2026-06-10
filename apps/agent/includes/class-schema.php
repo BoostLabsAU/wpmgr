@@ -42,7 +42,7 @@ class Schema
      * (add a column, add an index, etc). The migration runner reads the
      * stored option and compares it to this value; mismatch => run dbDelta.
      */
-    public const CURRENT_VERSION = '10';
+    public const CURRENT_VERSION = '11';
 
     /** Name of the M5.6 phpbu-runner dedup table (unprefixed). */
     public const BACKUP_RUNS_TABLE = 'wpmgr_backup_runs';
@@ -395,13 +395,15 @@ class Schema
                 KEY idx_lock (status, locked_at)
             ) {$charset};",
 
-            // Email (Phase 2) — per-site outgoing-mail send-event buffer.
-            // `id` AUTO_INCREMENT is the primary cursor for Phase-3 CP ingest
+            // Email (Phase 2 / v11) — per-site outgoing-mail send-event buffer.
+            // `id` AUTO_INCREMENT is the primary cursor for CP ingest
             // (keyset: WHERE (created_at, id) > (cursor_created_at, cursor_id)).
             // `status` is an enum-like VARCHAR: 'sent' | 'failed'.
             // `body` is NULL unless store_body=true (default false, GDPR-friendly).
             // `retries` counts fallback attempts (0 = first attempt only).
-            // `resent_count` is incremented by the Phase-3 resend command.
+            // `resent_count` is incremented by the resend command.
+            // `connection_key` records which named connection was used ('default' = primary).
+            // `attachments` stores [{name,size_bytes}] metadata (TEXT NULL, JSON).
             // Indexes:
             //   PRIMARY (id)         — keyset cursor.
             //   idx_created (created_at DESC, id DESC) — time-range queries.
@@ -420,6 +422,8 @@ class Schema
                 resent_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
                 body_stored TINYINT(1) NOT NULL DEFAULT 0,
                 body LONGTEXT NULL,
+                connection_key VARCHAR(32) NOT NULL DEFAULT '',
+                attachments TEXT NULL,
                 created_at DATETIME NOT NULL,
                 PRIMARY KEY  (id),
                 KEY idx_created (created_at, id),

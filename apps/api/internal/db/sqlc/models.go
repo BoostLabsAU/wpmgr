@@ -206,6 +206,14 @@ type CachePurgeAudit struct {
 	CreatedAt       time.Time   `json:"created_at"`
 }
 
+type EmailAlertState struct {
+	TenantID           uuid.UUID          `json:"tenant_id"`
+	SiteID             uuid.UUID          `json:"site_id"`
+	LastAlertAt        pgtype.Timestamptz `json:"last_alert_at"`
+	FailuresSinceAlert int64              `json:"failures_since_alert"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+}
+
 type EmailLog struct {
 	ID          uuid.UUID          `json:"id"`
 	TenantID    pgtype.UUID        `json:"tenant_id"`
@@ -217,6 +225,22 @@ type EmailLog struct {
 	Attempts    int32              `json:"attempts"`
 	CreatedAt   time.Time          `json:"created_at"`
 	SentAt      pgtype.Timestamptz `json:"sent_at"`
+}
+
+type EmailNotifySetting struct {
+	TenantID             uuid.UUID          `json:"tenant_id"`
+	Enabled              bool               `json:"enabled"`
+	Recipients           []byte             `json:"recipients"`
+	AlertOnFailure       bool               `json:"alert_on_failure"`
+	AlertThrottleMinutes int32              `json:"alert_throttle_minutes"`
+	DigestEnabled        bool               `json:"digest_enabled"`
+	DigestCadence        string             `json:"digest_cadence"`
+	DigestDay            int32              `json:"digest_day"`
+	DigestHour           int32              `json:"digest_hour"`
+	Timezone             string             `json:"timezone"`
+	NextDigestAt         pgtype.Timestamptz `json:"next_digest_at"`
+	CreatedAt            time.Time          `json:"created_at"`
+	UpdatedAt            time.Time          `json:"updated_at"`
 }
 
 type EmailSuppression struct {
@@ -558,25 +582,41 @@ type SiteEmailConfig struct {
 	UpdatedAt               time.Time          `json:"updated_at"`
 }
 
+type SiteEmailConnection struct {
+	ID                      uuid.UUID `json:"id"`
+	TenantID                uuid.UUID `json:"tenant_id"`
+	ConfigID                uuid.UUID `json:"config_id"`
+	ConnectionKey           string    `json:"connection_key"`
+	Provider                string    `json:"provider"`
+	FromAddress             string    `json:"from_address"`
+	FromName                string    `json:"from_name"`
+	Config                  []byte    `json:"config"`
+	ProviderSecretEncrypted []byte    `json:"provider_secret_encrypted"`
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
+}
+
 type SiteEmailLog struct {
-	ID          uuid.UUID `json:"id"`
-	TenantID    uuid.UUID `json:"tenant_id"`
-	SiteID      uuid.UUID `json:"site_id"`
-	AgentSeq    *int64    `json:"agent_seq"`
-	MessageID   *string   `json:"message_id"`
-	ToAddresses []string  `json:"to_addresses"`
-	FromAddress string    `json:"from_address"`
-	Subject     string    `json:"subject"`
-	Provider    string    `json:"provider"`
-	Status      string    `json:"status"`
-	Response    []byte    `json:"response"`
-	Error       string    `json:"error"`
-	Retries     int32     `json:"retries"`
-	ResentCount int32     `json:"resent_count"`
-	BodyStored  bool      `json:"body_stored"`
-	Body        *string   `json:"body"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID            uuid.UUID `json:"id"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	SiteID        uuid.UUID `json:"site_id"`
+	AgentSeq      *int64    `json:"agent_seq"`
+	MessageID     *string   `json:"message_id"`
+	ToAddresses   []string  `json:"to_addresses"`
+	FromAddress   string    `json:"from_address"`
+	Subject       string    `json:"subject"`
+	Provider      string    `json:"provider"`
+	Status        string    `json:"status"`
+	Response      []byte    `json:"response"`
+	Error         string    `json:"error"`
+	Retries       int32     `json:"retries"`
+	ResentCount   int32     `json:"resent_count"`
+	BodyStored    bool      `json:"body_stored"`
+	Body          *string   `json:"body"`
+	ConnectionKey string    `json:"connection_key"`
+	Attachments   []byte    `json:"attachments"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 type SiteEvent struct {

@@ -990,6 +990,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		rumRollupWorker: rumRollupWorker,
 		// m59 Phase 3 — email log retention GC (always wired).
 		emailLogGCWorker: emailLogGCWorker,
+		// m62 — org-config propagation + hourly digest workers (always wired).
+		emailOrgPropagateWorker: email.NewOrgConfigPropagateWorker(emailSvc, logger),
+		emailDigestWorker:       email.NewDigestWorker(emailSvc, logger),
 	})
 	if err != nil {
 		return err
@@ -1151,6 +1154,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// best-effort (sendBackupEmail swallows errors); nil mailer = no emails.
 	if backupSvc != nil {
 		backupSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient))
+	}
+
+	// m62 — wire the email service's post-River dependencies: the River enqueuer
+	// (org-config propagation), the mailer enqueuer + status (alert/digest), and
+	// the public base URL (for alert deep-link URLs in email bodies).
+	emailSvc.SetEnqueuer(email.NewRiverEnqueuer(riverClient))
+	emailSvc.SetMailer(mailer.NewEnqueuer(mailerSvc, riverClient))
+	emailSvc.SetMailerStatus(mailerSvc)
+	if emailPublicBase != "" {
+		emailSvc.SetPublicBase(emailPublicBase)
 	}
 
 	defer func() {
@@ -1781,6 +1794,9 @@ type riverDeps struct {
 	rumRollupWorker *rum.RumRollupWorker
 	// m59 Phase 3 — email log retention GC (always wired).
 	emailLogGCWorker *email.EmailLogGCWorker
+	// m62 — org-config propagation worker + hourly digest worker (always wired).
+	emailOrgPropagateWorker *email.OrgConfigPropagateWorker
+	emailDigestWorker       *email.DigestWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2077,6 +2093,22 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics, river.NewPeriodicJob(
 			river.PeriodicInterval(1*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) { return email.EmailLogGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// m62 — org-config propagation worker (on-demand, enqueued by UpsertOrgConfig).
+	if d.emailOrgPropagateWorker != nil {
+		river.AddWorker(workers, d.emailOrgPropagateWorker)
+	}
+
+	// m62 — hourly digest worker: fires once per hour, scans due tenant digests.
+	// RunOnStart: false — avoids sending a digest on every deploy/restart.
+	if d.emailDigestWorker != nil {
+		river.AddWorker(workers, d.emailDigestWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(1*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return email.DigestArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
 	}

@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.35.0
+Stable tag: 0.36.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -158,6 +158,12 @@ This plugin ships two minified JavaScript files. Their human-readable source and
 4. Performance settings -- page cache, Remove Unused CSS, self-hosted fonts, and image optimization controls.
 
 == Changelog ==
+
+= 0.36.0 =
+* New: multiple named email connections with per-connection encrypted credentials. Define additional provider connections (for example "ses-backup") alongside the primary, each with its own provider, settings, and encrypted secret stored separately in the agent keystore.
+* New: per-sender routing and automatic fallback retry. The agent routes outgoing mail by matching the FROM address to a connection key, falls back to the default connection, and retries exactly once via a configured fallback connection when the primary send fails (fallback is disabled for test sends). The email log records the connection key actually used and prefixes the response with the primary failure reason when a fallback fired.
+* New: attachment names and sizes in the local email log. Each logged email now stores attachment file names (capped to 255 characters, paths stripped) and sizes in bytes (up to 50 attachments per message). This data is included in the batch pushed to the control plane and appears in the dashboard log.
+* Internal: local email log schema bumped to v11 (two new columns: connection_key VARCHAR(32) NOT NULL DEFAULT '' and attachments TEXT NULL). Applied automatically via dbDelta on plugin update; no manual database change required.
 
 = 0.35.0 =
 * New: per-site email delivery and logging. Route this site's outgoing email through Amazon SES, SendGrid, Mailgun, Postmark, or any SMTP server, configured from the WPMgr dashboard. Every send is logged (with optional bounce and complaint suppression), and known-bad addresses are skipped automatically. Email sending is unchanged until you configure a provider.

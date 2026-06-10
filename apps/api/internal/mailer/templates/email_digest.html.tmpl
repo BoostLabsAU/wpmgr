@@ -1,0 +1,79 @@
+{{template "header" .}}
+          <h1 class="ink" style="margin:0 0 14px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:24px;line-height:1.3;font-weight:700;color:#16302E;">Your WPMgr email delivery digest</h1>
+          <p class="body" style="margin:0 0 16px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:16px;line-height:1.6;color:#3A4A48;">
+            Here is a summary of email delivery activity for <strong>{{.PeriodLabel}}</strong> ({{.From}} – {{.To}}).
+          </p>
+
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;margin:0 0 20px 0;">
+            <tr><td style="padding:16px 18px;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;width:110px;">Total sent</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#3A4A48;padding:0 0 6px 0;"><strong>{{.Total}}</strong></td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;">Delivered</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#16A34A;padding:0 0 6px 0;"><strong>{{.SentCount}}</strong></td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;">Failed</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#DC2626;padding:0 0 6px 0;"><strong>{{.FailedCount}}</strong></td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0 0 6px 0;">Bounced/complained</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#D97706;padding:0 0 6px 0;"><strong>{{.BouncedCount}}</strong></td>
+                </tr>
+                <tr>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#6B7280;padding:0;">Sites</td>
+                  <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;color:#3A4A48;padding:0;"><strong>{{.SiteCount}}</strong></td>
+                </tr>
+              </table>
+            </td></tr>
+          </table>
+
+          {{if .Sites}}
+          <p class="body" style="margin:0 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#3A4A48;">By site (top {{len .Sites}} by failures)</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;border-collapse:collapse;">
+            <tr style="background:#F9FAFB;">
+              <th style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:600;color:#6B7280;text-align:left;padding:6px 8px;border-bottom:1px solid #E5E7EB;">Site</th>
+              <th style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:600;color:#6B7280;text-align:right;padding:6px 8px;border-bottom:1px solid #E5E7EB;">Sent</th>
+              <th style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:600;color:#6B7280;text-align:right;padding:6px 8px;border-bottom:1px solid #E5E7EB;">Failed</th>
+              <th style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;font-weight:600;color:#6B7280;text-align:right;padding:6px 8px;border-bottom:1px solid #E5E7EB;">Bounced</th>
+            </tr>
+            {{range .Sites}}
+            <tr>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#3A4A48;padding:5px 8px;border-bottom:1px solid #F3F4F6;"><a href="{{.SiteURL}}" style="color:#16302E;text-decoration:none;">{{.SiteName}}</a></td>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#3A4A48;padding:5px 8px;border-bottom:1px solid #F3F4F6;text-align:right;">{{.Sent}}</td>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;{{if gt .Failed 0}}color:#DC2626;font-weight:600;{{else}}color:#3A4A48;{{end}}padding:5px 8px;border-bottom:1px solid #F3F4F6;text-align:right;">{{.Failed}}</td>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#3A4A48;padding:5px 8px;border-bottom:1px solid #F3F4F6;text-align:right;">{{.Bounced}}</td>
+            </tr>
+            {{end}}
+          </table>
+          {{end}}
+
+          {{if .TopFailures}}
+          <p class="body" style="margin:0 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#3A4A48;">Top failures</p>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+            {{range .TopFailures}}
+            <tr>
+              <td style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;color:#3A4A48;padding:4px 0;border-bottom:1px solid #E5E7EB;">
+                <strong>{{.SiteName}}</strong> — {{.Subject}}<br>
+                <span style="color:#DC2626;font-size:12px;">{{.Error}}</span>
+              </td>
+            </tr>
+            {{end}}
+          </table>
+          {{end}}
+
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+            <tr>
+              <td style="border-radius:6px;background:#16302E;">
+                <a href="{{.DashboardURL}}" style="display:inline-block;padding:12px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:14px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:6px;">Open Email Dashboard</a>
+              </td>
+            </tr>
+          </table>
+
+          <p class="muted" style="margin:0 0 8px 0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#6B7280;">
+            Note: bounce/complaint counts reflect webhook-ingested events. Webhook bounces do not trigger per-failure alerts (v1 limitation).
+          </p>
+{{template "footer" .}}

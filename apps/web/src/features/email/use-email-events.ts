@@ -6,6 +6,7 @@ import {
   type SiteEvent,
 } from "@/features/sites/use-site-events";
 import { emailKeys } from "./use-email";
+import { toast } from "@/components/toast";
 
 // useEmailEvents — projects the shared `/sites/events` SSE stream onto the
 // email feature caches. Mirrors the pattern from usePerfEvents.ts.
@@ -125,6 +126,33 @@ export function emailEventReducer(
       void queryClient.invalidateQueries({
         queryKey: emailKeys.fleetStats({}),
       });
+      break;
+    }
+
+    // Org-config propagation job completed — invalidate org/site configs
+    // and show a toast with the synced/failed counts.
+    case "email.config_propagated": {
+      const synced = typeof data.synced === "number" ? data.synced : 0;
+      const failed = typeof data.failed === "number" ? data.failed : 0;
+      const total = typeof data.total === "number" ? data.total : synced + failed;
+
+      // Refresh org config (the propagation source) and all site configs
+      // (they may now reflect the propagated values).
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.orgConfig(),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.all,
+      });
+
+      if (failed > 0) {
+        toast.error(
+          `Org email default synced to ${synced}/${total} sites`,
+          { description: `${failed} site${failed !== 1 ? "s" : ""} could not be reached and will sync on next heartbeat.` },
+        );
+      } else {
+        toast.success(`Org email default synced to ${synced}/${total} sites`);
+      }
       break;
     }
 

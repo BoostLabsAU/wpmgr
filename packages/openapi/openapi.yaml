@@ -5289,6 +5289,179 @@ paths:
         "403":
           $ref: "#/components/responses/Forbidden"
 
+  # ---------------------------------------------------------------------------
+  # m62 — Multi-connection CRUD
+  # ---------------------------------------------------------------------------
+
+  /api/v1/sites/{siteId}/email/connections:
+    get:
+      operationId: listEmailConnections
+      summary: List named email connections for a site
+      description: |
+        Returns all named provider connections that belong to the site's email
+        config. Empty array when no named connections exist.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: List of named connections (secrets masked)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connections]
+                properties:
+                  connections:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/EmailConnection"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/email/connections/{connKey}:
+    put:
+      operationId: putEmailConnection
+      summary: Create or update a named email connection
+      description: |
+        Creates or updates the named connection identified by `connKey` for the
+        site's email config. The key must match `^[a-z0-9][a-z0-9_-]{0,31}$`;
+        the value `default` is reserved and returns 400.
+
+        Omit `secret` to preserve the existing stored credential. Provide an
+        empty string to clear it.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: connKey
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Connection slug (^[a-z0-9][a-z0-9_-]{0,31}$).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailConnectionRequest"
+      responses:
+        "200":
+          description: Saved connection (secret masked)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailConnection"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+    delete:
+      operationId: deleteEmailConnection
+      summary: Delete a named email connection
+      description: |
+        Permanently deletes the named connection. Returns 404 when the key does
+        not exist. Returns 409 when the key is referenced as `default_connection`
+        or `fallback_connection` on the site's config row (remove the reference
+        first).
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: connKey
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Connection slug to delete.
+      responses:
+        "204":
+          description: Connection deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  # ---------------------------------------------------------------------------
+  # m62 — Org-level alert + digest notify settings
+  # ---------------------------------------------------------------------------
+
+  /api/v1/email/notify-settings:
+    get:
+      operationId: getEmailNotifySettings
+      summary: Get email alert and digest settings
+      description: |
+        Returns the tenant-level email alert and digest notification settings.
+        Always returns 200 with sensible defaults when no settings row exists
+        yet (alerts_enabled=false, digest_enabled=false).
+
+        Also returns `instance_mailer_configured` — when false, alerts and
+        digests cannot be delivered even if enabled.
+
+        Org-level route. Requires `site.email.manage` permission.
+      tags: [email]
+      responses:
+        "200":
+          description: Current notify settings (or defaults)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailNotifySettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    put:
+      operationId: putEmailNotifySettings
+      summary: Create or update email alert and digest settings
+      description: |
+        Creates or updates the tenant-level email notification settings.
+        All fields are optional — omitted fields are unchanged (PATCH semantics
+        within a PUT envelope).
+
+        Org-level route. Requires `site.email.manage` permission.
+      tags: [email]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailNotifySettingsRequest"
+      responses:
+        "200":
+          description: Saved notify settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailNotifySettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+
   /api/v1/sites/{siteId}/perf/fonts:
     get:
       operationId: listFontResults
@@ -5523,6 +5696,18 @@ components:
             $ref: "#/components/schemas/Error"
     BadRequest:
       description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    UnprocessableEntity:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Conflict:
+      description: Conflict — resource is referenced and cannot be deleted
       content:
         application/json:
           schema:
@@ -9535,6 +9720,13 @@ components:
           description: >
             Provider-specific field mappings (e.g. WP-Mail -> provider header
             mappings -- Phase 2+).
+        connections:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailConnection"
+          description: >
+            Named provider connections for this config (multi-connection, m62+).
+            Empty array when no named connections have been created.
         webhook_url:
           type: string
           nullable: true
@@ -9861,6 +10053,21 @@ components:
           description: >
             Full email body. Present only in the detail response and only when
             body_stored is true. Never returned in list or export responses.
+        connection_key:
+          type: string
+          description: >
+            Named connection slug that sent this email (m62+). Empty string
+            when the primary config was used (no named connection).
+        attachment_count:
+          type: integer
+          description: Number of attachments on this email (m62+). Zero when none.
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailAttachmentMeta"
+          description: >
+            Attachment metadata list. Populated in the detail response when
+            attachment_count > 0 and the agent sent attachment metadata (m62+).
         created_at:
           type: string
           format: date-time
@@ -10125,3 +10332,205 @@ components:
           type: integer
           format: int64
           description: Number of rows actually deleted (may be less than requested if some IDs did not exist).
+
+    # -------------------------------------------------------------------------
+    # m62 — Multi-connection, attachment metadata, alerts/digest
+    # -------------------------------------------------------------------------
+
+    EmailAttachmentMeta:
+      type: object
+      description: Metadata for one email attachment (m62+).
+      required: [name, size_bytes]
+      properties:
+        name:
+          type: string
+          description: Attachment filename (directory path stripped, max 255 runes).
+        size_bytes:
+          type: integer
+          format: int64
+          description: Attachment size in bytes (0 when unknown).
+
+    EmailConnection:
+      type: object
+      description: >
+        A named provider connection belonging to a site's email config (m62+).
+        The provider secret is never returned — only `secret_set` indicates
+        whether a credential is stored.
+      required:
+        - id
+        - tenant_id
+        - config_id
+        - connection_key
+        - provider
+        - from_address
+        - from_name
+        - secret_set
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Surrogate primary key.
+        tenant_id:
+          type: string
+          format: uuid
+        config_id:
+          type: string
+          format: uuid
+          description: ID of the parent SiteEmailConfig row.
+        connection_key:
+          type: string
+          description: >
+            Operator-chosen slug (^[a-z0-9][a-z0-9_-]{0,31}$). The value
+            'default' is reserved for the primary config row and cannot be
+            used for named connections.
+        provider:
+          type: string
+          description: Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+        from_address:
+          type: string
+          description: Sender envelope address for this connection.
+        from_name:
+          type: string
+          description: Sender display name for this connection.
+        config:
+          type: object
+          additionalProperties: true
+          description: Provider-specific non-secret fields.
+        secret_set:
+          type: boolean
+          description: True when an encrypted provider secret is stored for this connection.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PutEmailConnectionRequest:
+      type: object
+      description: >
+        Request body for PUT /sites/{siteId}/email/connections/{connKey}.
+        All fields are optional — omitted fields are unchanged (PATCH semantics
+        within a PUT envelope). Omitting `secret` preserves the existing stored
+        credential (nil-sentinel pattern).
+      properties:
+        provider:
+          type: string
+          description: Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+        from_address:
+          type: string
+          description: Sender envelope address for this connection.
+        from_name:
+          type: string
+          description: Sender display name for this connection.
+        config:
+          type: object
+          additionalProperties: true
+          description: Provider-specific non-secret fields.
+        secret:
+          type: string
+          nullable: true
+          description: >
+            Provider credential. Omit to preserve the existing stored secret.
+            Provide an empty string to clear it.
+
+    EmailNotifySettings:
+      type: object
+      description: >
+        Per-tenant email alert and digest settings (m62+).
+        Returns sensible defaults (alerts_enabled=false, digest_enabled=false)
+        when no settings row has been created yet — this endpoint never 404s.
+      required:
+        - alerts_enabled
+        - alert_failure_threshold
+        - alert_throttle_minutes
+        - alert_recipients
+        - digest_enabled
+        - digest_hour_utc
+        - digest_recipients
+        - instance_mailer_configured
+      properties:
+        alerts_enabled:
+          type: boolean
+          description: Whether per-failure email alerts are active.
+        alert_failure_threshold:
+          type: integer
+          description: >
+            Minimum consecutive failure count that triggers an alert.
+            Default 3.
+        alert_throttle_minutes:
+          type: integer
+          description: >
+            Minimum minutes between two alerts for the same site.
+            Default 60.
+        alert_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: List of email addresses that receive failure alerts.
+        digest_enabled:
+          type: boolean
+          description: Whether the hourly digest email is active.
+        digest_hour_utc:
+          type: integer
+          description: >
+            UTC hour (0-23) at which the daily digest fires. Default 8.
+        digest_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: List of email addresses that receive the hourly digest.
+        instance_mailer_configured:
+          type: boolean
+          description: >
+            True when the instance-level SMTP/mailer is configured. Alerts
+            and digests require this to be true to deliver.
+        tenant_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Present when a settings row exists; absent for default response.
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    PutEmailNotifySettingsRequest:
+      type: object
+      description: >
+        Request body for PUT /email/notify-settings. All fields are optional —
+        omitted fields are unchanged (PATCH semantics within a PUT envelope).
+      properties:
+        alerts_enabled:
+          type: boolean
+        alert_failure_threshold:
+          type: integer
+          description: Minimum failure count to trigger an alert (1-100).
+        alert_throttle_minutes:
+          type: integer
+          description: Minimum minutes between alerts per site (1-1440).
+        alert_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Replace the alert recipients list.
+        digest_enabled:
+          type: boolean
+        digest_hour_utc:
+          type: integer
+          description: UTC hour for the daily digest (0-23).
+        digest_recipients:
+          type: array
+          items:
+            type: string
+            format: email
+          description: Replace the digest recipients list.

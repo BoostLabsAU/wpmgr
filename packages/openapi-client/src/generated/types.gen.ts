@@ -3204,6 +3204,11 @@ export type SiteEmailConfig = {
     [key: string]: unknown;
   };
   /**
+   * Named provider connections for this config (multi-connection, m62+). Empty array when no named connections have been created.
+   *
+   */
+  connections?: Array<EmailConnection>;
+  /**
    * The full inbound webhook URL for this config row, e.g. https://manage.wpmgr.app/webhooks/email/{provider}/{token}. Shows a placeholder token segment when a token is stored but not freshly rotated. Absent when no token has been generated yet.
    *
    */
@@ -3474,6 +3479,20 @@ export type SiteEmailLogEntry = {
    */
   body?: string;
   /**
+   * Named connection slug that sent this email (m62+). Empty string when the primary config was used (no named connection).
+   *
+   */
+  connection_key?: string;
+  /**
+   * Number of attachments on this email (m62+). Zero when none.
+   */
+  attachment_count?: number;
+  /**
+   * Attachment metadata list. Populated in the detail response when attachment_count > 0 and the agent sent attachment metadata (m62+).
+   *
+   */
+  attachments?: Array<EmailAttachmentMeta>;
+  /**
    * Timestamp the email was sent (from the agent local clock).
    */
   created_at: string;
@@ -3658,6 +3677,173 @@ export type BulkDeleteLogsResponse = {
    * Number of rows actually deleted (may be less than requested if some IDs did not exist).
    */
   deleted: number;
+};
+
+/**
+ * Metadata for one email attachment (m62+).
+ */
+export type EmailAttachmentMeta = {
+  /**
+   * Attachment filename (directory path stripped, max 255 runes).
+   */
+  name: string;
+  /**
+   * Attachment size in bytes (0 when unknown).
+   */
+  size_bytes: number;
+};
+
+/**
+ * A named provider connection belonging to a site's email config (m62+). The provider secret is never returned — only `secret_set` indicates whether a credential is stored.
+ *
+ */
+export type EmailConnection = {
+  /**
+   * Surrogate primary key.
+   */
+  id: string;
+  tenant_id: string;
+  /**
+   * ID of the parent SiteEmailConfig row.
+   */
+  config_id: string;
+  /**
+   * Operator-chosen slug (^[a-z0-9][a-z0-9_-]{0,31}$). The value 'default' is reserved for the primary config row and cannot be used for named connections.
+   *
+   */
+  connection_key: string;
+  /**
+   * Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+   */
+  provider: string;
+  /**
+   * Sender envelope address for this connection.
+   */
+  from_address: string;
+  /**
+   * Sender display name for this connection.
+   */
+  from_name: string;
+  /**
+   * Provider-specific non-secret fields.
+   */
+  config?: {
+    [key: string]: unknown;
+  };
+  /**
+   * True when an encrypted provider secret is stored for this connection.
+   */
+  secret_set: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Request body for PUT /sites/{siteId}/email/connections/{connKey}. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting `secret` preserves the existing stored credential (nil-sentinel pattern).
+ *
+ */
+export type PutEmailConnectionRequest = {
+  /**
+   * Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+   */
+  provider?: string;
+  /**
+   * Sender envelope address for this connection.
+   */
+  from_address?: string;
+  /**
+   * Sender display name for this connection.
+   */
+  from_name?: string;
+  /**
+   * Provider-specific non-secret fields.
+   */
+  config?: {
+    [key: string]: unknown;
+  };
+  /**
+   * Provider credential. Omit to preserve the existing stored secret. Provide an empty string to clear it.
+   *
+   */
+  secret?: string;
+};
+
+/**
+ * Per-tenant email alert and digest settings (m62+). Returns sensible defaults (alerts_enabled=false, digest_enabled=false) when no settings row has been created yet — this endpoint never 404s.
+ *
+ */
+export type EmailNotifySettings = {
+  /**
+   * Whether per-failure email alerts are active.
+   */
+  alerts_enabled: boolean;
+  /**
+   * Minimum consecutive failure count that triggers an alert. Default 3.
+   *
+   */
+  alert_failure_threshold: number;
+  /**
+   * Minimum minutes between two alerts for the same site. Default 60.
+   *
+   */
+  alert_throttle_minutes: number;
+  /**
+   * List of email addresses that receive failure alerts.
+   */
+  alert_recipients: Array<string>;
+  /**
+   * Whether the hourly digest email is active.
+   */
+  digest_enabled: boolean;
+  /**
+   * UTC hour (0-23) at which the daily digest fires. Default 8.
+   *
+   */
+  digest_hour_utc: number;
+  /**
+   * List of email addresses that receive the hourly digest.
+   */
+  digest_recipients: Array<string>;
+  /**
+   * True when the instance-level SMTP/mailer is configured. Alerts and digests require this to be true to deliver.
+   *
+   */
+  instance_mailer_configured: boolean;
+  /**
+   * Present when a settings row exists; absent for default response.
+   */
+  tenant_id?: string;
+  created_at?: string;
+  updated_at?: string;
+};
+
+/**
+ * Request body for PUT /email/notify-settings. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope).
+ *
+ */
+export type PutEmailNotifySettingsRequest = {
+  alerts_enabled?: boolean;
+  /**
+   * Minimum failure count to trigger an alert (1-100).
+   */
+  alert_failure_threshold?: number;
+  /**
+   * Minimum minutes between alerts per site (1-1440).
+   */
+  alert_throttle_minutes?: number;
+  /**
+   * Replace the alert recipients list.
+   */
+  alert_recipients?: Array<string>;
+  digest_enabled?: boolean;
+  /**
+   * UTC hour for the daily digest (0-23).
+   */
+  digest_hour_utc?: number;
+  /**
+   * Replace the digest recipients list.
+   */
+  digest_recipients?: Array<string>;
 };
 
 /**
@@ -8696,6 +8882,209 @@ export type BulkDeleteEmailLogResponses = {
 
 export type BulkDeleteEmailLogResponse =
   BulkDeleteEmailLogResponses[keyof BulkDeleteEmailLogResponses];
+
+export type ListEmailConnectionsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/connections";
+};
+
+export type ListEmailConnectionsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListEmailConnectionsError =
+  ListEmailConnectionsErrors[keyof ListEmailConnectionsErrors];
+
+export type ListEmailConnectionsResponses = {
+  /**
+   * List of named connections (secrets masked)
+   */
+  200: {
+    connections: Array<EmailConnection>;
+  };
+};
+
+export type ListEmailConnectionsResponse =
+  ListEmailConnectionsResponses[keyof ListEmailConnectionsResponses];
+
+export type DeleteEmailConnectionData = {
+  body?: never;
+  path: {
+    siteId: string;
+    /**
+     * Connection slug to delete.
+     */
+    connKey: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/connections/{connKey}";
+};
+
+export type DeleteEmailConnectionErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type DeleteEmailConnectionError =
+  DeleteEmailConnectionErrors[keyof DeleteEmailConnectionErrors];
+
+export type DeleteEmailConnectionResponses = {
+  /**
+   * Connection deleted
+   */
+  204: void;
+};
+
+export type DeleteEmailConnectionResponse =
+  DeleteEmailConnectionResponses[keyof DeleteEmailConnectionResponses];
+
+export type PutEmailConnectionData = {
+  body: PutEmailConnectionRequest;
+  path: {
+    siteId: string;
+    /**
+     * Connection slug (^[a-z0-9][a-z0-9_-]{0,31}$).
+     */
+    connKey: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/connections/{connKey}";
+};
+
+export type PutEmailConnectionErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Validation failed
+   */
+  422: Error;
+};
+
+export type PutEmailConnectionError =
+  PutEmailConnectionErrors[keyof PutEmailConnectionErrors];
+
+export type PutEmailConnectionResponses = {
+  /**
+   * Saved connection (secret masked)
+   */
+  200: EmailConnection;
+};
+
+export type PutEmailConnectionResponse =
+  PutEmailConnectionResponses[keyof PutEmailConnectionResponses];
+
+export type GetEmailNotifySettingsData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/notify-settings";
+};
+
+export type GetEmailNotifySettingsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type GetEmailNotifySettingsError =
+  GetEmailNotifySettingsErrors[keyof GetEmailNotifySettingsErrors];
+
+export type GetEmailNotifySettingsResponses = {
+  /**
+   * Current notify settings (or defaults)
+   */
+  200: EmailNotifySettings;
+};
+
+export type GetEmailNotifySettingsResponse =
+  GetEmailNotifySettingsResponses[keyof GetEmailNotifySettingsResponses];
+
+export type PutEmailNotifySettingsData = {
+  body: PutEmailNotifySettingsRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/notify-settings";
+};
+
+export type PutEmailNotifySettingsErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Validation failed
+   */
+  422: Error;
+};
+
+export type PutEmailNotifySettingsError =
+  PutEmailNotifySettingsErrors[keyof PutEmailNotifySettingsErrors];
+
+export type PutEmailNotifySettingsResponses = {
+  /**
+   * Saved notify settings
+   */
+  200: EmailNotifySettings;
+};
+
+export type PutEmailNotifySettingsResponse =
+  PutEmailNotifySettingsResponses[keyof PutEmailNotifySettingsResponses];
 
 export type ListFontResultsData = {
   body?: never;

@@ -87,6 +87,10 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.PUT("/email/config", authz.RequirePermission(authz.PermEmailManage), h.putConfig)
 	// m61: per-site webhook security config (route token rotation, signing key, SES ARNs).
 	g.PUT("/email/webhook-config", authz.RequirePermission(authz.PermEmailManage), h.putWebhookConfig)
+	// m62 Area 2: named connections CRUD.
+	g.GET("/email/connections", authz.RequirePermission(authz.PermEmailManage), h.listConnections)
+	g.PUT("/email/connections/:connKey", authz.RequirePermission(authz.PermEmailManage), h.putConnection)
+	g.DELETE("/email/connections/:connKey", authz.RequirePermission(authz.PermEmailManage), h.deleteConnection)
 	g.POST("/email/test", authz.RequirePermission(authz.PermEmailManage), h.testSend)
 	g.POST("/email/sync", authz.RequirePermission(authz.PermEmailManage), h.syncToAgent)
 	// Phase 3 — log viewer + stats.
@@ -122,6 +126,9 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	org.GET("/suppression", authz.RequirePermission(authz.PermEmailManage), h.listFleetSuppression)
 	org.POST("/suppression", authz.RequirePermission(authz.PermEmailManage), h.addFleetSuppression)
 	org.DELETE("/suppression/:suppressionId", authz.RequirePermission(authz.PermEmailManage), h.deleteFleetSuppression)
+	// m62 Area 4: notify settings.
+	org.GET("/notify-settings", authz.RequirePermission(authz.PermEmailManage), h.getNotifySettings)
+	org.PUT("/notify-settings", authz.RequirePermission(authz.PermEmailManage), h.putNotifySettings)
 }
 
 // ---------------------------------------------------------------------------
@@ -769,6 +776,153 @@ func (h *Handler) deleteFleetSuppression(c *gin.Context) {
 	// tenant streams. Empty email: not available at delete time.
 	publishSuppressionUpdated(c.Request.Context(), h.pub, p.TenantID, nil, "", "manual")
 	c.Status(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// m62 Area 2 — connection CRUD handlers
+// ---------------------------------------------------------------------------
+
+// listConnections handles GET /sites/:siteId/email/connections.
+// Returns all named connections for the site's email config row.
+func (h *Handler) listConnections(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	// Resolve the config row ID.
+	cfg, err := h.svc.GetConfig(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	conns, serr := h.svc.ListConnections(c.Request.Context(), p.TenantID, cfg.ID)
+	if serr != nil {
+		httpx.Error(c, serr)
+		return
+	}
+	items := make([]connectionDTO, 0, len(conns))
+	for _, conn := range conns {
+		items = append(items, toConnectionDTO(conn))
+	}
+	c.JSON(http.StatusOK, gin.H{"connections": items})
+}
+
+// putConnection handles PUT /sites/:siteId/email/connections/:connKey.
+// Creates or updates a named connection.
+func (h *Handler) putConnection(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	connKey := c.Param("connKey")
+
+	cfg, err := h.svc.GetConfig(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	var body putConnectionBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	conn, serr := h.svc.UpsertConnection(c.Request.Context(), ConnectionUpsertInput{
+		TenantID:      p.TenantID,
+		ConfigID:      cfg.ID,
+		ConnectionKey: connKey,
+		Provider:      body.Provider,
+		Config:        body.Config,
+		SecretRaw:     body.Secret,
+		FromAddress:   body.FromAddress,
+		FromName:      body.FromName,
+	})
+	if serr != nil {
+		httpx.Error(c, serr)
+		return
+	}
+	h.record(c, p, audit.ActionEmailConfigUpdated, siteID, map[string]any{
+		"connection_key": connKey,
+		"provider":       body.Provider,
+	})
+	c.JSON(http.StatusOK, toConnectionDTO(conn))
+}
+
+// deleteConnection handles DELETE /sites/:siteId/email/connections/:connKey.
+func (h *Handler) deleteConnection(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	connKey := c.Param("connKey")
+
+	cfg, err := h.svc.GetConfig(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	if serr := h.svc.DeleteConnection(c.Request.Context(), p.TenantID, cfg.ID, connKey); serr != nil {
+		httpx.Error(c, serr)
+		return
+	}
+	h.record(c, p, audit.ActionEmailConfigUpdated, siteID, map[string]any{
+		"connection_key": connKey,
+		"deleted":        true,
+	})
+	c.Status(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// m62 Area 4 — notify settings handlers
+// ---------------------------------------------------------------------------
+
+// getNotifySettings handles GET /email/notify-settings.
+// Always 200; returns defaults when no row exists.
+func (h *Handler) getNotifySettings(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	settings, err := h.svc.GetNotifySettings(c.Request.Context(), p.TenantID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toNotifySettingsDTO(settings))
+}
+
+// putNotifySettings handles PUT /email/notify-settings.
+func (h *Handler) putNotifySettings(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	var body notifySettingsUpdateBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	settings, err := h.svc.PutNotifySettings(c.Request.Context(), NotifySettingsUpsertInput{
+		TenantID:             p.TenantID,
+		Enabled:              body.Enabled,
+		Recipients:           body.Recipients,
+		AlertOnFailure:       body.AlertOnFailure,
+		AlertThrottleMinutes: body.AlertThrottleMinutes,
+		DigestEnabled:        body.DigestEnabled,
+		DigestCadence:        body.DigestCadence,
+		DigestDay:            body.DigestDay,
+		DigestHour:           body.DigestHour,
+		Timezone:             body.Timezone,
+	})
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	h.record(c, p, audit.ActionEmailConfigUpdated, uuid.Nil, map[string]any{
+		"scope":          "notify_settings",
+		"enabled":        body.Enabled,
+		"digest_enabled": body.DigestEnabled,
+	})
+	c.JSON(http.StatusOK, toNotifySettingsDTO(settings))
 }
 
 // ---------------------------------------------------------------------------

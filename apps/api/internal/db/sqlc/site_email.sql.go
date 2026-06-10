@@ -13,6 +13,136 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const accumulateAlertFailures = `-- name: AccumulateAlertFailures :exec
+
+INSERT INTO email_alert_state (tenant_id, site_id, failures_since_alert, updated_at)
+VALUES ($1, $2, $3, now())
+ON CONFLICT (tenant_id, site_id)
+DO UPDATE SET
+    failures_since_alert = email_alert_state.failures_since_alert + $3,
+    updated_at           = now()
+`
+
+type AccumulateAlertFailuresParams struct {
+	TenantID uuid.UUID `json:"tenant_id"`
+	SiteID   uuid.UUID `json:"site_id"`
+	Delta    int64     `json:"delta"`
+}
+
+// ---------------------------------------------------------------------------
+// email_alert_state  (m62 — per-site durable alert throttle)
+// ---------------------------------------------------------------------------
+// Upsert: increment failures_since_alert by @delta. Creates the row if absent.
+// Runs under InAgentTx (called after IngestLogBatch for failed entries).
+func (q *Queries) AccumulateAlertFailures(ctx context.Context, arg AccumulateAlertFailuresParams) error {
+	_, err := q.db.Exec(ctx, accumulateAlertFailures, arg.TenantID, arg.SiteID, arg.Delta)
+	return err
+}
+
+const claimAdvanceDigest = `-- name: ClaimAdvanceDigest :one
+UPDATE email_notify_settings
+SET next_digest_at = $1,
+    updated_at     = now()
+WHERE tenant_id     = $2
+  AND next_digest_at <= now()
+RETURNING tenant_id, enabled, recipients, alert_on_failure, alert_throttle_minutes, digest_enabled, digest_cadence, digest_day, digest_hour, timezone, next_digest_at, created_at, updated_at
+`
+
+type ClaimAdvanceDigestParams struct {
+	NewNextDigestAt pgtype.Timestamptz `json:"new_next_digest_at"`
+	TenantID        uuid.UUID          `json:"tenant_id"`
+}
+
+// Advance next_digest_at to the next period as a conditional claim.
+// Returns the updated row if the claim succeeds (next_digest_at still <= now(),
+// guard against double-claim by concurrent workers). Runs under InAgentTx.
+func (q *Queries) ClaimAdvanceDigest(ctx context.Context, arg ClaimAdvanceDigestParams) (EmailNotifySetting, error) {
+	row := q.db.QueryRow(ctx, claimAdvanceDigest, arg.NewNextDigestAt, arg.TenantID)
+	var i EmailNotifySetting
+	err := row.Scan(
+		&i.TenantID,
+		&i.Enabled,
+		&i.Recipients,
+		&i.AlertOnFailure,
+		&i.AlertThrottleMinutes,
+		&i.DigestEnabled,
+		&i.DigestCadence,
+		&i.DigestDay,
+		&i.DigestHour,
+		&i.Timezone,
+		&i.NextDigestAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const claimAlertSlot = `-- name: ClaimAlertSlot :one
+UPDATE email_alert_state
+SET last_alert_at        = now(),
+    failures_since_alert = 0,
+    updated_at           = now()
+WHERE tenant_id = $1
+  AND site_id   = $2
+  AND failures_since_alert >= $3
+  AND (last_alert_at IS NULL OR last_alert_at < now() - (CAST($4 AS int) * INTERVAL '1 minute'))
+RETURNING tenant_id, site_id, last_alert_at, failures_since_alert, updated_at
+`
+
+type ClaimAlertSlotParams struct {
+	TenantID        uuid.UUID `json:"tenant_id"`
+	SiteID          uuid.UUID `json:"site_id"`
+	MinFailures     int64     `json:"min_failures"`
+	ThrottleMinutes int32     `json:"throttle_minutes"`
+}
+
+// Single-statement conditional claim: sets last_alert_at = now() and resets
+// failures_since_alert = 0 ONLY when:
+//   - failures_since_alert >= @min_failures (at least one new failure)
+//   - last_alert_at IS NULL OR last_alert_at < now() - @throttle_interval
+//
+// Returns the updated row (claim won) or no rows (pgx.ErrNoRows = throttled/skipped).
+// Multi-instance safe: no external SELECT, no RETURNING on nothing.
+// Runs under InAgentTx.
+func (q *Queries) ClaimAlertSlot(ctx context.Context, arg ClaimAlertSlotParams) (EmailAlertState, error) {
+	row := q.db.QueryRow(ctx, claimAlertSlot,
+		arg.TenantID,
+		arg.SiteID,
+		arg.MinFailures,
+		arg.ThrottleMinutes,
+	)
+	var i EmailAlertState
+	err := row.Scan(
+		&i.TenantID,
+		&i.SiteID,
+		&i.LastAlertAt,
+		&i.FailuresSinceAlert,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const deleteEmailConnection = `-- name: DeleteEmailConnection :exec
+DELETE FROM site_email_connection
+WHERE config_id      = $1
+  AND connection_key = $2
+  AND tenant_id      = $3
+`
+
+type DeleteEmailConnectionParams struct {
+	ConfigID      uuid.UUID `json:"config_id"`
+	ConnectionKey string    `json:"connection_key"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+}
+
+// Delete a named connection by (config_id, connection_key). The caller checks
+// for routing references (default/fallback/mappings) and returns 409 before
+// calling this. Runs under InTenantTx.
+func (q *Queries) DeleteEmailConnection(ctx context.Context, arg DeleteEmailConnectionParams) error {
+	_, err := q.db.Exec(ctx, deleteEmailConnection, arg.ConfigID, arg.ConnectionKey, arg.TenantID)
+	return err
+}
+
 const deleteEmailLogsBulk = `-- name: DeleteEmailLogsBulk :execrows
 DELETE FROM site_email_log
 WHERE tenant_id = $1
@@ -92,6 +222,46 @@ func (q *Queries) DeleteEmailSuppression(ctx context.Context, arg DeleteEmailSup
 	return err
 }
 
+const getConnectionSecretCiphertexts = `-- name: GetConnectionSecretCiphertexts :many
+SELECT connection_key, provider_secret_encrypted
+FROM site_email_connection
+WHERE config_id = $1
+  AND tenant_id = $2
+`
+
+type GetConnectionSecretCiphertextsParams struct {
+	ConfigID uuid.UUID `json:"config_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+type GetConnectionSecretCiphertextsRow struct {
+	ConnectionKey           string `json:"connection_key"`
+	ProviderSecretEncrypted []byte `json:"provider_secret_encrypted"`
+}
+
+// Fetch (connection_key, provider_secret_encrypted) for all connections under a
+// config row. Used by buildAgentConfigReq to decrypt and build the connections
+// registry. Runs under InTenantTx.
+func (q *Queries) GetConnectionSecretCiphertexts(ctx context.Context, arg GetConnectionSecretCiphertextsParams) ([]GetConnectionSecretCiphertextsRow, error) {
+	rows, err := q.db.Query(ctx, getConnectionSecretCiphertexts, arg.ConfigID, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetConnectionSecretCiphertextsRow
+	for rows.Next() {
+		var i GetConnectionSecretCiphertextsRow
+		if err := rows.Scan(&i.ConnectionKey, &i.ProviderSecretEncrypted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getEmailConfigByRouteTokenHash = `-- name: GetEmailConfigByRouteTokenHash :one
 SELECT id, tenant_id, site_id, provider, from_address, from_name, force_from_email, force_from_name, return_path, config, provider_secret_encrypted, oauth_refresh_encrypted, oauth_access_encrypted, oauth_expires_at, mappings, default_connection, fallback_connection, log_emails, store_body, retention_days, webhook_route_token_hash, webhook_signing_key_enc, ses_topic_arns, created_at, updated_at
 FROM site_email_config
@@ -135,8 +305,42 @@ func (q *Queries) GetEmailConfigByRouteTokenHash(ctx context.Context, tokenHash 
 	return i, err
 }
 
+const getEmailConnection = `-- name: GetEmailConnection :one
+SELECT id, tenant_id, config_id, connection_key, provider, from_address, from_name, config, provider_secret_encrypted, created_at, updated_at
+FROM site_email_connection
+WHERE config_id      = $1
+  AND connection_key = $2
+  AND tenant_id      = $3
+`
+
+type GetEmailConnectionParams struct {
+	ConfigID      uuid.UUID `json:"config_id"`
+	ConnectionKey string    `json:"connection_key"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+}
+
+// Fetch one connection by (config_id, connection_key). Runs under InTenantTx.
+func (q *Queries) GetEmailConnection(ctx context.Context, arg GetEmailConnectionParams) (SiteEmailConnection, error) {
+	row := q.db.QueryRow(ctx, getEmailConnection, arg.ConfigID, arg.ConnectionKey, arg.TenantID)
+	var i SiteEmailConnection
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.ConfigID,
+		&i.ConnectionKey,
+		&i.Provider,
+		&i.FromAddress,
+		&i.FromName,
+		&i.Config,
+		&i.ProviderSecretEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getEmailLog = `-- name: GetEmailLog :one
-SELECT id, tenant_id, site_id, agent_seq, message_id, to_addresses, from_address, subject, provider, status, response, error, retries, resent_count, body_stored, body, created_at, updated_at
+SELECT id, tenant_id, site_id, agent_seq, message_id, to_addresses, from_address, subject, provider, status, response, error, retries, resent_count, body_stored, body, connection_key, attachments, created_at, updated_at
 FROM site_email_log
 WHERE tenant_id = $1
   AND site_id   = $2
@@ -170,6 +374,8 @@ func (q *Queries) GetEmailLog(ctx context.Context, arg GetEmailLogParams) (SiteE
 		&i.ResentCount,
 		&i.BodyStored,
 		&i.Body,
+		&i.ConnectionKey,
+		&i.Attachments,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -555,6 +761,105 @@ func (q *Queries) GetFleetEmailStatsByDay(ctx context.Context, arg GetFleetEmail
 	return items, nil
 }
 
+const getFleetStatsBySite = `-- name: GetFleetStatsBySite :many
+SELECT
+    site_id,
+    COUNT(*)                                        AS total,
+    COUNT(*) FILTER (WHERE status = 'sent')         AS sent_count,
+    COUNT(*) FILTER (WHERE status = 'failed')       AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced'
+                        OR status = 'complained')   AS bounced_count
+FROM site_email_log
+WHERE tenant_id   = $1
+  AND created_at >= $2
+  AND created_at <= $3
+GROUP BY site_id
+ORDER BY failed_count DESC, total DESC
+LIMIT $4
+`
+
+type GetFleetStatsBySiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RangeFrom time.Time `json:"range_from"`
+	RangeTo   time.Time `json:"range_to"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type GetFleetStatsBySiteRow struct {
+	SiteID       uuid.UUID `json:"site_id"`
+	Total        int64     `json:"total"`
+	SentCount    int64     `json:"sent_count"`
+	FailedCount  int64     `json:"failed_count"`
+	BouncedCount int64     `json:"bounced_count"`
+}
+
+// Per-site stats for the digest [from, to] window. Returns top sites by failure
+// count. Runs under InAgentTx.
+func (q *Queries) GetFleetStatsBySite(ctx context.Context, arg GetFleetStatsBySiteParams) ([]GetFleetStatsBySiteRow, error) {
+	rows, err := q.db.Query(ctx, getFleetStatsBySite,
+		arg.TenantID,
+		arg.RangeFrom,
+		arg.RangeTo,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetFleetStatsBySiteRow
+	for rows.Next() {
+		var i GetFleetStatsBySiteRow
+		if err := rows.Scan(
+			&i.SiteID,
+			&i.Total,
+			&i.SentCount,
+			&i.FailedCount,
+			&i.BouncedCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getNotifySettings = `-- name: GetNotifySettings :one
+
+SELECT tenant_id, enabled, recipients, alert_on_failure, alert_throttle_minutes, digest_enabled, digest_cadence, digest_day, digest_hour, timezone, next_digest_at, created_at, updated_at
+FROM email_notify_settings
+WHERE tenant_id = $1
+`
+
+// ---------------------------------------------------------------------------
+// email_notify_settings  (m62 — alerts + digest)
+// ---------------------------------------------------------------------------
+// Fetch the notify settings row for a tenant. Returns pgx.ErrNoRows when not
+// configured (service returns defaults; GET NEVER 404s — 0.35.1 lesson).
+// Runs under InTenantTx.
+func (q *Queries) GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (EmailNotifySetting, error) {
+	row := q.db.QueryRow(ctx, getNotifySettings, tenantID)
+	var i EmailNotifySetting
+	err := row.Scan(
+		&i.TenantID,
+		&i.Enabled,
+		&i.Recipients,
+		&i.AlertOnFailure,
+		&i.AlertThrottleMinutes,
+		&i.DigestEnabled,
+		&i.DigestCadence,
+		&i.DigestDay,
+		&i.DigestHour,
+		&i.Timezone,
+		&i.NextDigestAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getOrgEmailConfig = `-- name: GetOrgEmailConfig :one
 SELECT id, tenant_id, site_id, provider, from_address, from_name, force_from_email, force_from_name, return_path, config, provider_secret_encrypted, oauth_refresh_encrypted, oauth_access_encrypted, oauth_expires_at, mappings, default_connection, fallback_connection, log_emails, store_body, retention_days, webhook_route_token_hash, webhook_signing_key_enc, ses_topic_arns, created_at, updated_at
 FROM site_email_config
@@ -654,6 +959,33 @@ func (q *Queries) GetSiteEmailConfig(ctx context.Context, arg GetSiteEmailConfig
 	return i, err
 }
 
+const getSiteRef = `-- name: GetSiteRef :one
+SELECT id, url, name
+FROM sites
+WHERE id        = $1
+  AND tenant_id = $2
+`
+
+type GetSiteRefParams struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+type GetSiteRefRow struct {
+	ID   uuid.UUID `json:"id"`
+	Url  string    `json:"url"`
+	Name string    `json:"name"`
+}
+
+// Fetch a site's URL by id. Used by the propagation worker and alert digest to
+// build per-site dashboard links. Runs under InAgentTx.
+func (q *Queries) GetSiteRef(ctx context.Context, arg GetSiteRefParams) (GetSiteRefRow, error) {
+	row := q.db.QueryRow(ctx, getSiteRef, arg.ID, arg.TenantID)
+	var i GetSiteRefRow
+	err := row.Scan(&i.ID, &i.Url, &i.Name)
+	return i, err
+}
+
 const incrEmailLogResentCount = `-- name: IncrEmailLogResentCount :exec
 UPDATE site_email_log
 SET resent_count = resent_count + 1,
@@ -682,6 +1014,7 @@ INSERT INTO site_email_log (
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored, body,
+    connection_key, attachments,
     created_at, updated_at
 ) VALUES (
     $1, $2, $3,
@@ -690,38 +1023,43 @@ INSERT INTO site_email_log (
     $14,
     -- Store body only when body_stored flag is set; otherwise NULL.
     CASE WHEN $14::boolean THEN $15::text ELSE NULL END,
-    $16, now()
+    $16, $17,
+    $18, now()
 )
 ON CONFLICT (tenant_id, site_id, agent_seq)
     WHERE agent_seq IS NOT NULL
 DO UPDATE SET
-    status        = EXCLUDED.status,
-    response      = EXCLUDED.response,
-    error         = EXCLUDED.error,
-    resent_count  = EXCLUDED.resent_count,
-    body_stored   = EXCLUDED.body_stored,
-    body          = CASE WHEN EXCLUDED.body_stored THEN EXCLUDED.body ELSE site_email_log.body END,
-    updated_at    = now()
-RETURNING id, tenant_id, site_id, agent_seq, message_id, to_addresses, from_address, subject, provider, status, response, error, retries, resent_count, body_stored, body, created_at, updated_at
+    status         = EXCLUDED.status,
+    response       = EXCLUDED.response,
+    error          = EXCLUDED.error,
+    resent_count   = EXCLUDED.resent_count,
+    body_stored    = EXCLUDED.body_stored,
+    body           = CASE WHEN EXCLUDED.body_stored THEN EXCLUDED.body ELSE site_email_log.body END,
+    connection_key = EXCLUDED.connection_key,
+    attachments    = EXCLUDED.attachments,
+    updated_at     = now()
+RETURNING id, tenant_id, site_id, agent_seq, message_id, to_addresses, from_address, subject, provider, status, response, error, retries, resent_count, body_stored, body, connection_key, attachments, created_at, updated_at
 `
 
 type IngestEmailLogEntryParams struct {
-	TenantID    uuid.UUID `json:"tenant_id"`
-	SiteID      uuid.UUID `json:"site_id"`
-	AgentSeq    *int64    `json:"agent_seq"`
-	MessageID   *string   `json:"message_id"`
-	ToAddresses []string  `json:"to_addresses"`
-	FromAddress string    `json:"from_address"`
-	Subject     string    `json:"subject"`
-	Provider    string    `json:"provider"`
-	Status      string    `json:"status"`
-	Response    []byte    `json:"response"`
-	Error       string    `json:"error"`
-	Retries     int32     `json:"retries"`
-	ResentCount int32     `json:"resent_count"`
-	BodyStored  bool      `json:"body_stored"`
-	Body        string    `json:"body"`
-	CreatedAt   time.Time `json:"created_at"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+	SiteID        uuid.UUID `json:"site_id"`
+	AgentSeq      *int64    `json:"agent_seq"`
+	MessageID     *string   `json:"message_id"`
+	ToAddresses   []string  `json:"to_addresses"`
+	FromAddress   string    `json:"from_address"`
+	Subject       string    `json:"subject"`
+	Provider      string    `json:"provider"`
+	Status        string    `json:"status"`
+	Response      []byte    `json:"response"`
+	Error         string    `json:"error"`
+	Retries       int32     `json:"retries"`
+	ResentCount   int32     `json:"resent_count"`
+	BodyStored    bool      `json:"body_stored"`
+	Body          string    `json:"body"`
+	ConnectionKey string    `json:"connection_key"`
+	Attachments   []byte    `json:"attachments"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // ---------------------------------------------------------------------------
@@ -731,6 +1069,7 @@ type IngestEmailLogEntryParams struct {
 // (tenant_id, site_id, agent_seq). Status/response/error/resent_count may
 // change on re-push (e.g. an asynchronous provider callback updates the
 // status after initial delivery). Body is only stored when body_stored=true.
+// m62: connection_key + attachments added (additive; old agents send ” / '[]').
 func (q *Queries) IngestEmailLogEntry(ctx context.Context, arg IngestEmailLogEntryParams) (SiteEmailLog, error) {
 	row := q.db.QueryRow(ctx, ingestEmailLogEntry,
 		arg.TenantID,
@@ -748,6 +1087,8 @@ func (q *Queries) IngestEmailLogEntry(ctx context.Context, arg IngestEmailLogEnt
 		arg.ResentCount,
 		arg.BodyStored,
 		arg.Body,
+		arg.ConnectionKey,
+		arg.Attachments,
 		arg.CreatedAt,
 	)
 	var i SiteEmailLog
@@ -768,6 +1109,8 @@ func (q *Queries) IngestEmailLogEntry(ctx context.Context, arg IngestEmailLogEnt
 		&i.ResentCount,
 		&i.BodyStored,
 		&i.Body,
+		&i.ConnectionKey,
+		&i.Attachments,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -854,6 +1197,155 @@ func (q *Queries) IsSuppressed(ctx context.Context, arg IsSuppressedParams) (boo
 	var suppressed bool
 	err := row.Scan(&suppressed)
 	return suppressed, err
+}
+
+const listDueDigests = `-- name: ListDueDigests :many
+
+SELECT tenant_id, enabled, recipients, alert_on_failure, alert_throttle_minutes, digest_enabled, digest_cadence, digest_day, digest_hour, timezone, next_digest_at, created_at, updated_at
+FROM email_notify_settings
+WHERE digest_enabled  = true
+  AND enabled         = true
+  AND next_digest_at IS NOT NULL
+  AND next_digest_at <= now()
+ORDER BY next_digest_at ASC
+LIMIT $1
+`
+
+// ---------------------------------------------------------------------------
+// Digest queries (m62)
+// ---------------------------------------------------------------------------
+// List notify-settings rows whose next_digest_at is in the past.
+// RunOnStart: false for the periodic job; this is called by DigestWorker on each run.
+// Runs under InAgentTx (cross-tenant worker).
+func (q *Queries) ListDueDigests(ctx context.Context, rowLimit int32) ([]EmailNotifySetting, error) {
+	rows, err := q.db.Query(ctx, listDueDigests, rowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []EmailNotifySetting
+	for rows.Next() {
+		var i EmailNotifySetting
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.Enabled,
+			&i.Recipients,
+			&i.AlertOnFailure,
+			&i.AlertThrottleMinutes,
+			&i.DigestEnabled,
+			&i.DigestCadence,
+			&i.DigestDay,
+			&i.DigestHour,
+			&i.Timezone,
+			&i.NextDigestAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmailConnections = `-- name: ListEmailConnections :many
+
+SELECT id, tenant_id, config_id, connection_key, provider, from_address, from_name, config, provider_secret_encrypted, created_at, updated_at
+FROM site_email_connection
+WHERE config_id = $1
+  AND tenant_id = $2
+ORDER BY created_at ASC, id ASC
+`
+
+type ListEmailConnectionsParams struct {
+	ConfigID uuid.UUID `json:"config_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+// ---------------------------------------------------------------------------
+// site_email_connection  (m62 — multi-connection + failover)
+// ---------------------------------------------------------------------------
+// List all named connections for a config row. Ordered created_at ASC, id ASC
+// (stable insertion order for the UI). Runs under InTenantTx.
+func (q *Queries) ListEmailConnections(ctx context.Context, arg ListEmailConnectionsParams) ([]SiteEmailConnection, error) {
+	rows, err := q.db.Query(ctx, listEmailConnections, arg.ConfigID, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SiteEmailConnection
+	for rows.Next() {
+		var i SiteEmailConnection
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.ConfigID,
+			&i.ConnectionKey,
+			&i.Provider,
+			&i.FromAddress,
+			&i.FromName,
+			&i.Config,
+			&i.ProviderSecretEncrypted,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listEmailInheritingSites = `-- name: ListEmailInheritingSites :many
+
+SELECT s.id, s.url
+FROM sites s
+WHERE s.tenant_id = $1
+  AND s.status IN ('connected', 'degraded')
+  AND NOT EXISTS (
+      SELECT 1 FROM site_email_config sec
+      WHERE sec.tenant_id = s.tenant_id
+        AND sec.site_id   = s.id
+  )
+`
+
+type ListEmailInheritingSitesRow struct {
+	ID  uuid.UUID `json:"id"`
+	Url string    `json:"url"`
+}
+
+// ---------------------------------------------------------------------------
+// Org-propagation (m62 — Area 1)
+// ---------------------------------------------------------------------------
+// Returns sites that should receive the org config propagation:
+//   - enrolled (status IN ('connected','degraded'))
+//   - no per-site email config row (NOT EXISTS site_email_config WHERE site_id=sites.id)
+//
+// Runs under InAgentTx (cross-tenant fan-out by the propagation River worker).
+func (q *Queries) ListEmailInheritingSites(ctx context.Context, tenantID uuid.UUID) ([]ListEmailInheritingSitesRow, error) {
+	rows, err := q.db.Query(ctx, listEmailInheritingSites, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListEmailInheritingSitesRow
+	for rows.Next() {
+		var i ListEmailInheritingSitesRow
+		if err := rows.Scan(&i.ID, &i.Url); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listEmailSuppression = `-- name: ListEmailSuppression :many
@@ -989,6 +1481,8 @@ SELECT
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored,
+    connection_key,
+    jsonb_array_length(attachments) AS attachment_count,
     created_at, updated_at
 FROM site_email_log
 WHERE tenant_id   = $1
@@ -1016,23 +1510,25 @@ type ListFleetEmailLogParams struct {
 }
 
 type ListFleetEmailLogRow struct {
-	ID          uuid.UUID `json:"id"`
-	TenantID    uuid.UUID `json:"tenant_id"`
-	SiteID      uuid.UUID `json:"site_id"`
-	AgentSeq    *int64    `json:"agent_seq"`
-	MessageID   *string   `json:"message_id"`
-	ToAddresses []string  `json:"to_addresses"`
-	FromAddress string    `json:"from_address"`
-	Subject     string    `json:"subject"`
-	Provider    string    `json:"provider"`
-	Status      string    `json:"status"`
-	Response    []byte    `json:"response"`
-	Error       string    `json:"error"`
-	Retries     int32     `json:"retries"`
-	ResentCount int32     `json:"resent_count"`
-	BodyStored  bool      `json:"body_stored"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID              uuid.UUID `json:"id"`
+	TenantID        uuid.UUID `json:"tenant_id"`
+	SiteID          uuid.UUID `json:"site_id"`
+	AgentSeq        *int64    `json:"agent_seq"`
+	MessageID       *string   `json:"message_id"`
+	ToAddresses     []string  `json:"to_addresses"`
+	FromAddress     string    `json:"from_address"`
+	Subject         string    `json:"subject"`
+	Provider        string    `json:"provider"`
+	Status          string    `json:"status"`
+	Response        []byte    `json:"response"`
+	Error           string    `json:"error"`
+	Retries         int32     `json:"retries"`
+	ResentCount     int32     `json:"resent_count"`
+	BodyStored      bool      `json:"body_stored"`
+	ConnectionKey   string    `json:"connection_key"`
+	AttachmentCount int32     `json:"attachment_count"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Cross-site keyset-paginated list for a tenant (fleet/agency dashboard).
@@ -1073,6 +1569,8 @@ func (q *Queries) ListFleetEmailLog(ctx context.Context, arg ListFleetEmailLogPa
 			&i.Retries,
 			&i.ResentCount,
 			&i.BodyStored,
+			&i.ConnectionKey,
+			&i.AttachmentCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -1213,6 +1711,8 @@ SELECT
     message_id, to_addresses, from_address, subject, provider,
     status, response, error, retries, resent_count,
     body_stored,
+    connection_key,
+    jsonb_array_length(attachments) AS attachment_count,
     created_at, updated_at
 FROM site_email_log
 WHERE tenant_id   = $1
@@ -1243,23 +1743,25 @@ type ListSiteEmailLogParams struct {
 }
 
 type ListSiteEmailLogRow struct {
-	ID          uuid.UUID `json:"id"`
-	TenantID    uuid.UUID `json:"tenant_id"`
-	SiteID      uuid.UUID `json:"site_id"`
-	AgentSeq    *int64    `json:"agent_seq"`
-	MessageID   *string   `json:"message_id"`
-	ToAddresses []string  `json:"to_addresses"`
-	FromAddress string    `json:"from_address"`
-	Subject     string    `json:"subject"`
-	Provider    string    `json:"provider"`
-	Status      string    `json:"status"`
-	Response    []byte    `json:"response"`
-	Error       string    `json:"error"`
-	Retries     int32     `json:"retries"`
-	ResentCount int32     `json:"resent_count"`
-	BodyStored  bool      `json:"body_stored"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID              uuid.UUID `json:"id"`
+	TenantID        uuid.UUID `json:"tenant_id"`
+	SiteID          uuid.UUID `json:"site_id"`
+	AgentSeq        *int64    `json:"agent_seq"`
+	MessageID       *string   `json:"message_id"`
+	ToAddresses     []string  `json:"to_addresses"`
+	FromAddress     string    `json:"from_address"`
+	Subject         string    `json:"subject"`
+	Provider        string    `json:"provider"`
+	Status          string    `json:"status"`
+	Response        []byte    `json:"response"`
+	Error           string    `json:"error"`
+	Retries         int32     `json:"retries"`
+	ResentCount     int32     `json:"resent_count"`
+	BodyStored      bool      `json:"body_stored"`
+	ConnectionKey   string    `json:"connection_key"`
+	AttachmentCount int32     `json:"attachment_count"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // Keyset-paginated list for a single site. Ordered created_at DESC, id DESC.
@@ -1306,6 +1808,8 @@ func (q *Queries) ListSiteEmailLog(ctx context.Context, arg ListSiteEmailLogPara
 			&i.Retries,
 			&i.ResentCount,
 			&i.BodyStored,
+			&i.ConnectionKey,
+			&i.AttachmentCount,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 		); err != nil {
@@ -1436,6 +1940,188 @@ func (q *Queries) SetEmailConfigWebhookFields(ctx context.Context, arg SetEmailC
 	return i, err
 }
 
+const topFailureSamples = `-- name: TopFailureSamples :many
+SELECT
+    site_id,
+    subject,
+    error
+FROM site_email_log
+WHERE tenant_id   = $1
+  AND status      = 'failed'
+  AND created_at >= $2
+  AND created_at <= $3
+ORDER BY created_at DESC
+LIMIT $4
+`
+
+type TopFailureSamplesParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RangeFrom time.Time `json:"range_from"`
+	RangeTo   time.Time `json:"range_to"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type TopFailureSamplesRow struct {
+	SiteID  uuid.UUID `json:"site_id"`
+	Subject string    `json:"subject"`
+	Error   string    `json:"error"`
+}
+
+// Top failure samples for the digest (subject + truncated error, no bodies).
+// Runs under InAgentTx.
+func (q *Queries) TopFailureSamples(ctx context.Context, arg TopFailureSamplesParams) ([]TopFailureSamplesRow, error) {
+	rows, err := q.db.Query(ctx, topFailureSamples,
+		arg.TenantID,
+		arg.RangeFrom,
+		arg.RangeTo,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TopFailureSamplesRow
+	for rows.Next() {
+		var i TopFailureSamplesRow
+		if err := rows.Scan(&i.SiteID, &i.Subject, &i.Error); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const topFailureSamplesBySite = `-- name: TopFailureSamplesBySite :many
+SELECT
+    site_id,
+    subject,
+    error
+FROM site_email_log
+WHERE tenant_id   = $1
+  AND site_id     = $2
+  AND status      = 'failed'
+  AND created_at >= $3
+  AND created_at <= $4
+ORDER BY created_at DESC
+LIMIT $5
+`
+
+type TopFailureSamplesBySiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	SiteID    uuid.UUID `json:"site_id"`
+	RangeFrom time.Time `json:"range_from"`
+	RangeTo   time.Time `json:"range_to"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type TopFailureSamplesBySiteRow struct {
+	SiteID  uuid.UUID `json:"site_id"`
+	Subject string    `json:"subject"`
+	Error   string    `json:"error"`
+}
+
+// Top failure samples for a per-site failure alert email (subject + error, no bodies).
+// Runs under InAgentTx.
+func (q *Queries) TopFailureSamplesBySite(ctx context.Context, arg TopFailureSamplesBySiteParams) ([]TopFailureSamplesBySiteRow, error) {
+	rows, err := q.db.Query(ctx, topFailureSamplesBySite,
+		arg.TenantID,
+		arg.SiteID,
+		arg.RangeFrom,
+		arg.RangeTo,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TopFailureSamplesBySiteRow
+	for rows.Next() {
+		var i TopFailureSamplesBySiteRow
+		if err := rows.Scan(&i.SiteID, &i.Subject, &i.Error); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const upsertEmailConnection = `-- name: UpsertEmailConnection :one
+INSERT INTO site_email_connection (
+    tenant_id, config_id, connection_key,
+    provider, from_address, from_name,
+    config,
+    provider_secret_encrypted,
+    updated_at
+) VALUES (
+    $1, $2, $3,
+    $4, $5, $6,
+    $7,
+    CASE WHEN $8::boolean THEN $9::bytea ELSE NULL END,
+    now()
+)
+ON CONFLICT (config_id, connection_key)
+DO UPDATE SET
+    provider                  = EXCLUDED.provider,
+    from_address              = EXCLUDED.from_address,
+    from_name                 = EXCLUDED.from_name,
+    config                    = EXCLUDED.config,
+    provider_secret_encrypted = CASE WHEN $8::boolean
+                                    THEN EXCLUDED.provider_secret_encrypted
+                                    ELSE site_email_connection.provider_secret_encrypted END,
+    updated_at                = now()
+RETURNING id, tenant_id, config_id, connection_key, provider, from_address, from_name, config, provider_secret_encrypted, created_at, updated_at
+`
+
+type UpsertEmailConnectionParams struct {
+	TenantID                uuid.UUID `json:"tenant_id"`
+	ConfigID                uuid.UUID `json:"config_id"`
+	ConnectionKey           string    `json:"connection_key"`
+	Provider                string    `json:"provider"`
+	FromAddress             string    `json:"from_address"`
+	FromName                string    `json:"from_name"`
+	Config                  []byte    `json:"config"`
+	SetSecret               bool      `json:"set_secret"`
+	ProviderSecretEncrypted []byte    `json:"provider_secret_encrypted"`
+}
+
+// Insert-or-update a named connection. secret uses the nil-sentinel pattern:
+// when @set_secret is false the existing ciphertext is preserved.
+// updated_at is set via now() (no trigger). Runs under InTenantTx.
+func (q *Queries) UpsertEmailConnection(ctx context.Context, arg UpsertEmailConnectionParams) (SiteEmailConnection, error) {
+	row := q.db.QueryRow(ctx, upsertEmailConnection,
+		arg.TenantID,
+		arg.ConfigID,
+		arg.ConnectionKey,
+		arg.Provider,
+		arg.FromAddress,
+		arg.FromName,
+		arg.Config,
+		arg.SetSecret,
+		arg.ProviderSecretEncrypted,
+	)
+	var i SiteEmailConnection
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.ConfigID,
+		&i.ConnectionKey,
+		&i.Provider,
+		&i.FromAddress,
+		&i.FromName,
+		&i.Config,
+		&i.ProviderSecretEncrypted,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const upsertEmailSuppression = `-- name: UpsertEmailSuppression :one
 
 INSERT INTO email_suppression (
@@ -1559,6 +2245,88 @@ func (q *Queries) UpsertEmailSuppressionFleet(ctx context.Context, arg UpsertEma
 		&i.EventAt,
 		&i.SourceMessageID,
 		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const upsertNotifySettings = `-- name: UpsertNotifySettings :one
+INSERT INTO email_notify_settings (
+    tenant_id,
+    enabled, recipients,
+    alert_on_failure, alert_throttle_minutes,
+    digest_enabled, digest_cadence, digest_day, digest_hour, timezone,
+    next_digest_at,
+    updated_at
+) VALUES (
+    $1,
+    $2, $3,
+    $4, $5,
+    $6, $7, $8, $9, $10,
+    $11,
+    now()
+)
+ON CONFLICT (tenant_id)
+DO UPDATE SET
+    enabled                = EXCLUDED.enabled,
+    recipients             = EXCLUDED.recipients,
+    alert_on_failure       = EXCLUDED.alert_on_failure,
+    alert_throttle_minutes = EXCLUDED.alert_throttle_minutes,
+    digest_enabled         = EXCLUDED.digest_enabled,
+    digest_cadence         = EXCLUDED.digest_cadence,
+    digest_day             = EXCLUDED.digest_day,
+    digest_hour            = EXCLUDED.digest_hour,
+    timezone               = EXCLUDED.timezone,
+    next_digest_at         = EXCLUDED.next_digest_at,
+    updated_at             = now()
+RETURNING tenant_id, enabled, recipients, alert_on_failure, alert_throttle_minutes, digest_enabled, digest_cadence, digest_day, digest_hour, timezone, next_digest_at, created_at, updated_at
+`
+
+type UpsertNotifySettingsParams struct {
+	TenantID             uuid.UUID          `json:"tenant_id"`
+	Enabled              bool               `json:"enabled"`
+	Recipients           []byte             `json:"recipients"`
+	AlertOnFailure       bool               `json:"alert_on_failure"`
+	AlertThrottleMinutes int32              `json:"alert_throttle_minutes"`
+	DigestEnabled        bool               `json:"digest_enabled"`
+	DigestCadence        string             `json:"digest_cadence"`
+	DigestDay            int32              `json:"digest_day"`
+	DigestHour           int32              `json:"digest_hour"`
+	Timezone             string             `json:"timezone"`
+	NextDigestAt         pgtype.Timestamptz `json:"next_digest_at"`
+}
+
+// Full-replace upsert of notify settings. next_digest_at is computed by the
+// service (time.LoadLocation + nextDigestAt helper) and passed here.
+// Runs under InTenantTx.
+func (q *Queries) UpsertNotifySettings(ctx context.Context, arg UpsertNotifySettingsParams) (EmailNotifySetting, error) {
+	row := q.db.QueryRow(ctx, upsertNotifySettings,
+		arg.TenantID,
+		arg.Enabled,
+		arg.Recipients,
+		arg.AlertOnFailure,
+		arg.AlertThrottleMinutes,
+		arg.DigestEnabled,
+		arg.DigestCadence,
+		arg.DigestDay,
+		arg.DigestHour,
+		arg.Timezone,
+		arg.NextDigestAt,
+	)
+	var i EmailNotifySetting
+	err := row.Scan(
+		&i.TenantID,
+		&i.Enabled,
+		&i.Recipients,
+		&i.AlertOnFailure,
+		&i.AlertThrottleMinutes,
+		&i.DigestEnabled,
+		&i.DigestCadence,
+		&i.DigestDay,
+		&i.DigestHour,
+		&i.Timezone,
+		&i.NextDigestAt,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }

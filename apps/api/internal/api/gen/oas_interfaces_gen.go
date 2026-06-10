@@ -145,6 +145,10 @@ type DeleteBackupRes interface {
 	deleteBackupRes()
 }
 
+type DeleteEmailConnectionRes interface {
+	deleteEmailConnectionRes()
+}
+
 type DeleteFleetEmailSuppressionRes interface {
 	deleteFleetEmailSuppressionRes()
 }
@@ -199,6 +203,10 @@ type GetBackupSettingsNotificationsRes interface {
 
 type GetBackupSqlInspectionRes interface {
 	getBackupSqlInspectionRes()
+}
+
+type GetEmailNotifySettingsRes interface {
+	getEmailNotifySettingsRes()
 }
 
 type GetFleetEmailStatsRes interface {
@@ -279,6 +287,10 @@ type ListApiKeysRes interface {
 
 type ListAuditRes interface {
 	listAuditRes()
+}
+
+type ListEmailConnectionsRes interface {
+	listEmailConnectionsRes()
 }
 
 type ListEmailProvidersRes interface {
@@ -375,6 +387,14 @@ type PutBackupSettingsContentsRes interface {
 
 type PutBackupSettingsNotificationsRes interface {
 	putBackupSettingsNotificationsRes()
+}
+
+type PutEmailConnectionRes interface {
+	putEmailConnectionRes()
+}
+
+type PutEmailNotifySettingsRes interface {
+	putEmailNotifySettingsRes()
 }
 
 type PutOrgEmailConfigRes interface {

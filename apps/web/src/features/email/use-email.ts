@@ -32,6 +32,11 @@ import {
   bulkDeleteEmailLog,
   putSiteEmailWebhookConfig,
   putOrgEmailWebhookConfig,
+  listEmailConnections,
+  putEmailConnection,
+  deleteEmailConnection,
+  getEmailNotifySettings,
+  putEmailNotifySettings,
   type SiteEmailConfig,
   type PutEmailConfigRequest,
   type EmailTestRequest,
@@ -49,6 +54,10 @@ import {
   type BulkDeleteLogsResponse,
   type PutEmailWebhookConfigRequest,
   type EmailWebhookConfigResponse,
+  type EmailConnection,
+  type EmailNotifySettings,
+  type PutEmailConnectionRequest,
+  type PutEmailNotifySettingsRequest,
 } from "@wpmgr/api";
 
 import { toError } from "@/features/auth/use-auth";
@@ -79,6 +88,11 @@ export const emailKeys = {
     [...emailKeys.all, "suppression", siteId, reason ?? ""] as const,
   fleetSuppression: (reason?: string) =>
     [...emailKeys.all, "fleet-suppression", reason ?? ""] as const,
+  // Connections (m62)
+  connections: (siteId: string) =>
+    [...emailKeys.all, "connections", siteId] as const,
+  // Notify settings (m62)
+  notifySettings: () => [...emailKeys.all, "notify-settings"] as const,
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -155,7 +169,7 @@ export function usePutOrgEmailConfig(): UseMutationResult<
     },
     onSuccess: (updated) => {
       queryClient.setQueryData(emailKeys.orgConfig(), updated);
-      toast.success("Org-wide email config saved");
+      toast.success("Saved — pushing to inheriting sites in the background");
     },
     onError: (err) => {
       toast.error("Could not save email config", { description: err.message });
@@ -898,3 +912,160 @@ export function usePutOrgEmailWebhookConfig(): UseMutationResult<
     },
   });
 }
+
+// ---------------------------------------------------------------------------
+// Named connections (m62 multi-connection)
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/sites/:siteId/email/connections */
+export function useEmailConnections(
+  siteId: string,
+): UseQueryResult<EmailConnection[], Error> {
+  return useQuery({
+    queryKey: emailKeys.connections(siteId),
+    queryFn: async () => {
+      const { data, error } = await listEmailConnections({
+        path: { siteId },
+      });
+      if (error) throw toError(error);
+      return data?.connections ?? [];
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** Error class for 409 connection-referenced delete rejection */
+export class ConnectionReferencedError extends Error {
+  constructor(message?: string) {
+    super(
+      message ??
+        "This connection is referenced by default_connection, fallback_connection, or a per-FROM mapping and cannot be deleted. Update routing first.",
+    );
+    this.name = "ConnectionReferencedError";
+  }
+}
+
+/** PUT /api/v1/sites/:siteId/email/connections/:connKey */
+export function usePutEmailConnection(
+  siteId: string,
+): UseMutationResult<
+  EmailConnection,
+  Error,
+  { connKey: string; body: PutEmailConnectionRequest }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ connKey, body }) => {
+      const { data, error } = await putEmailConnection({
+        path: { siteId, connKey },
+        body,
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.connections(siteId),
+      });
+      // Config query embeds connections, invalidate it too
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.siteConfig(siteId),
+      });
+      toast.success("Connection saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save connection", { description: err.message });
+    },
+  });
+}
+
+/** DELETE /api/v1/sites/:siteId/email/connections/:connKey */
+export function useDeleteEmailConnection(
+  siteId: string,
+): UseMutationResult<void, Error, string> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (connKey: string) => {
+      const { error, response } = await deleteEmailConnection({
+        path: { siteId, connKey },
+      });
+      if (response?.status === 409) {
+        throw new ConnectionReferencedError();
+      }
+      if (error) throw toError(error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.connections(siteId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.siteConfig(siteId),
+      });
+      toast.success("Connection deleted");
+    },
+    onError: (err) => {
+      if (err instanceof ConnectionReferencedError) {
+        toast.error("Cannot delete connection", { description: err.message });
+      } else {
+        toast.error("Could not delete connection", { description: err.message });
+      }
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Notify settings (m62 alerts + digest)
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/email/notify-settings
+ *
+ * This endpoint NEVER 404s — it returns defaults when no settings row exists
+ * yet (the 0.35.1 lesson applied to the new settings endpoint).
+ */
+export function useEmailNotifySettings(): UseQueryResult<
+  EmailNotifySettings,
+  Error
+> {
+  return useQuery({
+    queryKey: emailKeys.notifySettings(),
+    queryFn: async () => {
+      const { data, error, response } = await getEmailNotifySettings();
+      if (error) {
+        // Pre-0.36 API: treat 404 as feature-unavailable (return null; hide the card)
+        if (response?.status === 404) return null as unknown as EmailNotifySettings;
+        throw toError(error);
+      }
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** PUT /api/v1/email/notify-settings */
+export function usePutEmailNotifySettings(): UseMutationResult<
+  EmailNotifySettings,
+  Error,
+  PutEmailNotifySettingsRequest
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await putEmailNotifySettings({ body });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(emailKeys.notifySettings(), updated);
+      toast.success("Notification settings saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save notification settings", {
+        description: err.message,
+      });
+    },
+  });
+}
+
+// Re-export new types consumed by feature components
+export type { EmailConnection, EmailNotifySettings, PutEmailConnectionRequest, PutEmailNotifySettingsRequest };
