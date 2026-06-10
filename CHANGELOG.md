@@ -10,6 +10,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ### Fixed
 
+- **On-demand reports were stuck in pending forever.** The report job started but every status transition failed because the `generated_reports` table was missing its `updated_at` column (the m64 migration omitted it while all report mutations write it; the query compiler does not validate UPDATE SET column names, so it only surfaced at runtime). Migration m65 adds the column; stuck reports recover automatically on the job's next retry.
 - **Client rows were not clickable.** The Clients page listed clients with only Edit and Delete actions and no way to open a client's detail page (sites + reports). The client name is now a link, and the Client badge on the sites table also links to the client.
 
 ## [0.38.0] - 2026-06-11

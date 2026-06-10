@@ -2382,6 +2382,10 @@ CREATE TABLE generated_reports (
     pdf_blob_key   text        NOT NULL DEFAULT '',
     error          text        NOT NULL DEFAULT '',
     created_at     timestamptz NOT NULL DEFAULT now(),
+    -- m65: updated_at was omitted from m64 while every report mutation writes
+    -- it (sqlc does not validate UPDATE SET columns, so this only failed at
+    -- runtime). Keep in lockstep with the migration.
+    updated_at     timestamptz NOT NULL DEFAULT now(),
     completed_at   timestamptz,
 
     CONSTRAINT generated_reports_pkey PRIMARY KEY (id),
