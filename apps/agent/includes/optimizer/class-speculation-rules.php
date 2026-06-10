@@ -78,6 +78,7 @@ final class SpeculationRules
         ];
 
         $json = (string) json_encode($rules, JSON_UNESCAPED_SLASHES);
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the cache-write output buffer after wp_head has run; WP's enqueue API is inapplicable in this OB callback (see class-rum-injector.php for the canonical note)
         $tag  = '<script type="speculationrules">' . $json . '</script>';
 
         if (stripos($html, '</head>') !== false) {

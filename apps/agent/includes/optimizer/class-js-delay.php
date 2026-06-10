@@ -172,6 +172,7 @@ final class JsDelay
         if ($runtime === '') {
             return $html;
         }
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the cache-write output buffer after wp_footer has run; WP's enqueue API is inapplicable in this OB callback (see class-rum-injector.php for the canonical note)
         $tag = '<script data-wpmgr-delay-runtime>' . $runtime . '</script>';
         if (stripos($html, '</body>') !== false) {
             return (string) preg_replace('/<\/body>(?![\s\S]*<\/body>)/i', $tag . '</body>', $html, 1);

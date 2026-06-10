@@ -42,14 +42,15 @@ namespace WPMgr\Agent\Commands;
 
 use WPMgr\Agent\Backup\DbDumper;
 use WPMgr\Agent\Backup\DbRestorer;
+use WPMgr\Agent\Support\StoragePaths;
 
 /**
  * Handles the `db_snapshot` command: create / list / revert / delete.
  */
 final class DbSnapshotCommand implements CommandInterface
 {
-    /** Snapshot storage directory name under wp-content. */
-    private const STORE_DIR = 'wpmgr-snapshots/db';
+    /** Snapshot sub-directory under wpmgr-snapshots/. */
+    private const STORE_SUBDIR = 'db';
 
     /** Default retention cap (snapshots kept). */
     private const DEFAULT_RETENTION = 5;
@@ -367,11 +368,14 @@ final class DbSnapshotCommand implements CommandInterface
      */
     private function resolveStoreDir(): string
     {
-        if (!defined('WP_CONTENT_DIR') || (string) WP_CONTENT_DIR === '') {
-            throw new \RuntimeException('WP_CONTENT_DIR is not defined');
+        // Uploads-first (wp.org Guideline compliance): user-generated DB snapshots
+        // are stored under uploads/wpmgr-snapshots/db rather than wp-content/.
+        // Falls back to the legacy wp-content location for read-only-uploads hosts.
+        $base = StoragePaths::dataBase('snapshots');
+        if ($base === '') {
+            throw new \RuntimeException('WPMgr DB Snapshot: cannot resolve a writable base directory (uploads and WP_CONTENT_DIR both unavailable)');
         }
-
-        $base = rtrim((string) WP_CONTENT_DIR, '/\\') . '/' . self::STORE_DIR;
+        $base = $base . '/' . self::STORE_SUBDIR;
 
         // Create the parent dir tree if needed.
         if (!is_dir($base)) {

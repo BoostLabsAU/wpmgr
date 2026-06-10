@@ -258,8 +258,11 @@ if (!headers_sent()) {
             ? strtotime((string) $_SERVER['HTTP_IF_MODIFIED_SINCE'])
             : 0;
         if ($wpmgr_ims !== false && $wpmgr_ims >= $wpmgr_mtime) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value used only as the HTTP protocol string in a header
-            $wpmgr_proto = isset($_SERVER['SERVER_PROTOCOL']) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value allowlisted below before header() emission
+            $wpmgr_proto_raw = isset($_SERVER['SERVER_PROTOCOL']) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
+            // Allowlist SERVER_PROTOCOL before emitting it in the status line — defense-in-depth against header injection.
+            $wpmgr_proto = in_array($wpmgr_proto_raw, array('HTTP/1.0', 'HTTP/1.1', 'HTTP/2', 'HTTP/2.0', 'HTTP/3', 'HTTP/3.0'), true)
+                ? $wpmgr_proto_raw : 'HTTP/1.1';
             header($wpmgr_proto . ' 304 Not Modified', true, 304);
             exit();
         }

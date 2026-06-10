@@ -196,22 +196,23 @@ final class LocalDestination implements BackupDestination
     }
 
     /**
-     * Pick the dir under which we'll create wpmgr-backups/. WP_CONTENT_DIR is
-     * the preferred target (it's the canonical "writable WordPress dir") but
-     * we fall back to the uploads basedir on hosts where wp-content itself is
-     * read-only (e.g. some managed-WP providers).
+     * Pick the dir under which we'll create wpmgr-backups/. Uploads is the
+     * preferred target (wp.org Guideline compliance; matches UpdraftPlus default)
+     * with WP_CONTENT_DIR as a fallback for hosts where uploads is read-only.
      */
     private function resolveBaseDir(): string
     {
         $candidates = [];
-        if (defined('WP_CONTENT_DIR') && is_string(WP_CONTENT_DIR) && WP_CONTENT_DIR !== '') {
-            $candidates[] = rtrim((string) WP_CONTENT_DIR, '/\\') . DIRECTORY_SEPARATOR . self::BASE_DIR_NAME;
-        }
+        // Uploads-first: honors relocatable upload_path + multisite per-site subdirs.
         if (function_exists('wp_upload_dir')) {
             $upload = wp_upload_dir();
             if (is_array($upload) && isset($upload['basedir']) && is_string($upload['basedir']) && $upload['basedir'] !== '') {
                 $candidates[] = rtrim($upload['basedir'], '/\\') . DIRECTORY_SEPARATOR . self::BASE_DIR_NAME;
             }
+        }
+        // Fallback: wp-content (for managed-WP hosts where uploads may be read-only).
+        if (defined('WP_CONTENT_DIR') && is_string(WP_CONTENT_DIR) && WP_CONTENT_DIR !== '') {
+            $candidates[] = rtrim((string) WP_CONTENT_DIR, '/\\') . DIRECTORY_SEPARATOR . self::BASE_DIR_NAME;
         }
         foreach ($candidates as $candidate) {
             if (is_dir($candidate)) {

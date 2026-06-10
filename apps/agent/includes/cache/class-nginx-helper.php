@@ -37,8 +37,7 @@ final class NginxHelper
         if (!isset($_SERVER['SERVER_SOFTWARE']) || !is_string($_SERVER['SERVER_SOFTWARE'])) {
             return false;
         }
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- read-only server value used only for a string-contains detection; no output, no state change
-        return str_contains(strtolower($_SERVER['SERVER_SOFTWARE']), 'nginx');
+        return str_contains( strtolower( sanitize_text_field( wp_unslash( (string) $_SERVER['SERVER_SOFTWARE'] ) ) ), 'nginx' );
     }
 
     /**

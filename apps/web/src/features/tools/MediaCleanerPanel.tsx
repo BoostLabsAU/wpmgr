@@ -857,7 +857,6 @@ function ReferencedRow({ item }: ReferencedRowProps) {
         <ul role="list" className="space-y-1">
           {item.usages.map((usage, idx) => (
             <UsageChip
-              // eslint-disable-next-line react/no-array-index-key
               key={idx}
               usage={usage}
             />

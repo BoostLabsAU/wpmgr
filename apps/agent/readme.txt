@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.8
+Stable tag: 0.33.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -101,6 +101,38 @@ If you connect to the hosted WPMgr service, that service's Terms of Service (htt
 
 Commands arrive from the control plane over HTTPS. Each command carries an Ed25519 signature produced with the key established at enrollment; the agent verifies the signature before executing any action. The allow-list of permitted commands is compiled into the plugin -- no mechanism exists to add new command types at runtime, and there is no eval, remote include, or remote PHP execution. Core, plugin, and theme updates are applied using WordPress's own Upgrader against packages from wordpress.org only.
 
+== External services ==
+
+This plugin contacts external hosts only after you connect it to a control plane and only for the specific features you enable. The plugin is inert until connected. The wp.org build contains no self-update client; updates arrive through the WordPress.org directory only.
+
+**WPMgr control plane (the URL you supply)**
+
+Every management action (enrollment, diagnostics, heartbeat, backup progress, cache and performance operations, Remove Unused CSS, autologin token consumption, database clean, font transcoding) sends data to the WPMgr control plane URL you configured. Data transmitted includes: site URL and name, WordPress and PHP versions, active plugin and theme inventory, Site Health results, rendered HTML of selected pages (for used-CSS computation), encrypted backup archives, transcoded font bytes, and cache and performance statistics. All transmission is triggered by actions or schedules you initiate from the control plane, never autonomously. If you use the hosted control plane at https://manage.wpmgr.app its terms and privacy policy apply: Terms https://manage.wpmgr.app/terms -- Privacy https://manage.wpmgr.app/privacy. If you self-host the control plane, you operate the receiving service and your own policies apply.
+
+**Object storage (configured by your control plane)**
+
+Encrypted backup archives, restored backup chunks, optimized media files, and transcoded font bytes are transferred to and from a storage destination that your control plane supplies via short-lived presigned URLs. No storage endpoint is hardcoded in this plugin. The hosted WPMgr service uses Google Cloud Storage (storage.googleapis.com) by default; a self-hosted control plane operator may configure any S3-compatible destination. Trigger: backup, restore, and media or font optimization operations that you initiate. For the hosted default: Google Cloud Terms https://cloud.google.com/terms -- Google Privacy Policy https://policies.google.com/privacy.
+
+**ipify (https://api.ipify.org)**
+
+During diagnostics collection (triggered when you run or schedule a diagnostics check), the plugin makes a plain GET request to https://api.ipify.org to determine the site's public outbound IP address. No site data is included in the request; the response is the IP address, which is used for host-provider inference and cached locally for 8 hours. ipify has no separate terms of service or privacy policy beyond its homepage description at https://www.ipify.org.
+
+**Cloudflare API (https://api.cloudflare.com)**
+
+When Cloudflare integration is active (requires CLOUDFLARE_EMAIL/CLOUDFLARE_API_KEY or CLOUDFLARE_API_TOKEN constants in wp-config.php) and a cache purge runs, the plugin sends the configured Cloudflare zone ID and the API credentials from wp-config to https://api.cloudflare.com to purge the Cloudflare edge cache. This feature is inactive unless you configure those constants. Terms https://www.cloudflare.com/website-terms/ -- Privacy https://www.cloudflare.com/privacypolicy/
+
+**Google Fonts (https://fonts.googleapis.com, https://fonts.gstatic.com)**
+
+When the self-hosted fonts optimization is enabled and a page uses Google Fonts, the plugin downloads the Google Fonts CSS and the referenced WOFF2 files server-side to serve them from your own domain. Data sent: the font-family request derived from the page (the same request a browser would make). Trigger: on cache build when this optimization is on. Terms https://policies.google.com/terms -- Font API Privacy https://developers.google.com/fonts/faq/privacy
+
+**Gravatar (https://gravatar.com, https://secure.gravatar.com)**
+
+When the self-host Gravatars optimization is enabled, the plugin downloads avatar images from Gravatar server-side to serve them from your own domain. Data sent: the avatar hash derived from the page. Trigger: on cache build when this optimization is on. Gravatar is operated by Automattic. Terms https://wordpress.com/tos/ -- Privacy https://automattic.com/privacy/
+
+**Third-party asset hosts referenced by your pages**
+
+When the "self-host third-party assets" optimization is enabled, the plugin downloads cross-origin script and stylesheet URLs that your own pages already reference, to serve those assets locally. It contacts whatever third-party hosts your pages embed. Data sent: a plain GET request to the URL already present in your page. Trigger: on cache build when this optimization is on. No single provider; the specific hosts depend on your site's content.
+
 == Third-party / Credits ==
 
 **matthiasmullie/minify (MIT)**
@@ -111,6 +143,13 @@ Copyright (c) 2012 Matthias Mullie. Licensed under the MIT License.
 
 No other third-party libraries are bundled in the plugin zip. Image encoding and WOFF2 font transcoding run on the control-plane service, not inside this plugin.
 
+== Source code ==
+
+This plugin ships two minified JavaScript files. Their human-readable source and build tooling are in the public repository at https://github.com/mosamlife/wpmgr.
+
+* **assets/wpmgr-rum.min.js** -- Real User Monitoring collector. TypeScript source: apps/tracker/src/index.ts and apps/tracker/src/vitals.ts. Build: cd apps/tracker && npm install && npm run build (esbuild IIFE bundle, also bundles Google web-vitals under its Apache-2.0 license).
+* **assets/wpmgr-delay.min.js** -- deferred-script runtime. The readable source ships alongside the plugin at assets/src/wpmgr-delay.js in the same repository.
+
 == Screenshots ==
 
 1. Fleet Agent connect screen -- enter a control-plane URL and enrollment token to pair the site.
@@ -119,6 +158,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 4. Performance settings -- page cache, Remove Unused CSS, self-hosted fonts, and image optimization controls.
 
 == Changelog ==
+
+= 0.33.9 =
+* Hardening for WordPress.org guidelines: request inputs (including server and cookie values) are sanitized; the media quarantine and database-snapshot data now write under the uploads directory (with a read fallback to the legacy location so existing installs keep working); the diagnostics info REST endpoint binds its signed token to this site and endpoint; the login-screen branding style is enqueued; and the readme now documents every external service and the public source of the bundled scripts. No change to backups, cache, or other behavior.
 
 = 0.33.8 =
 * Fix: WooCommerce cart-fragments now inject reliably on themes whose body tag has attributes (e.g. `<body class="...">`); previously the shim only matched a bare body tag and skipped injection. Cart totals refresh correctly on cached catalog pages.
@@ -158,6 +200,9 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 * Fix: PHP and JS CI jobs green.
 
 == Upgrade Notice ==
+
+= 0.33.9 =
+WordPress.org compliance hardening: input sanitization, uploads-directory storage, REST token binding, enqueued login style, and external-service + source documentation. Safe to update in place.
 
 = 0.33.8 =
 Reliability fixes for WooCommerce cart-fragments injection on themed body tags and for cache hit-ratio accuracy (304/HEAD now counted, stats no longer lost on a failed upload). Safe to update in place.

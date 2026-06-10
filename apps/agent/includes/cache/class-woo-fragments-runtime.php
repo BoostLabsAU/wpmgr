@@ -79,6 +79,7 @@ final class WooFragmentsRuntime
             return $html;
         }
 
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the cache-write output buffer after wp_footer has run; WP's enqueue API is inapplicable in this OB callback (see class-rum-injector.php for the canonical note)
         $tag = '<script ' . self::MARKER_ATTR . '>' . $shim . '</script>';
 
         // Inject just before the closing </body> tag (whitespace-tolerant: accepts

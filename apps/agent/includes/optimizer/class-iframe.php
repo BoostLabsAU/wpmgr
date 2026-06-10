@@ -125,6 +125,7 @@ final class IFrame
             . 'f.setAttribute("allowfullscreen","1");f.style.position="absolute";f.style.inset="0";'
             . 'f.style.width="100%";f.style.height="100%";e.innerHTML="";e.appendChild(f);}';
 
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedStylesheet,WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the cache-write output buffer after wp_head has run; WP's enqueue API is inapplicable in this OB callback (see class-rum-injector.php for the canonical note)
         $assets = '<style data-wpmgr-yt-assets>' . $css . '</style><script data-wpmgr-yt-assets>' . $js . '</script>';
         if (stripos($html, '</head>') !== false) {
             return (string) preg_replace('/<\/head>/i', $assets . '</head>', $html, 1);

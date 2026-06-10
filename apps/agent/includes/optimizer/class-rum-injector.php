@@ -141,7 +141,9 @@ final class RumInjector
 
         // Build the snippet without heredoc/nowdoc (Plugin Check bans heredocs).
         // The inline config script sets a simple window variable; the external
-        // script loads the collector bundle. Both are standard practice.
+        // script loads the collector bundle. Both run inside the cache-write output
+        // buffer after wp_head has already printed — WP's enqueue API is inapplicable.
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedScript -- injected into the cache-write output buffer after wp_head has run; WP's enqueue API is inapplicable in this OB callback (see line 150 for the pattern)
         $inline_config = '<script data-wpmgr-rum-config>'
             . 'window.__WPMGR_RUM__=' . $config_json . ';'
             . '</script>';

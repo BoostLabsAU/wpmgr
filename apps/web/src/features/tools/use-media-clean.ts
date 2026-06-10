@@ -147,9 +147,9 @@ export function useMediaCleanScan(
       });
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response from media scan");
-      // Cast to the extended type — the extra fields are optional so old
-      // agents that do not send them degrade cleanly to undefined.
-      return data as MediaCleanScanResultV2;
+      // The extra V2 fields are optional, so older agents that omit them
+      // degrade cleanly to undefined.
+      return data;
     },
     enabled,
     // The reference scan is read-only but potentially expensive — don't
