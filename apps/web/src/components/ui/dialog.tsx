@@ -1,56 +1,45 @@
 import * as React from "react";
-import { createPortal } from "react-dom";
+import * as RadixDialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion } from "motion/react";
 
 import { cn } from "@/lib/utils";
 import { dur, ease, fade, scaleIn } from "@/lib/motion-presets";
 
-// Sprint 3 dialog primitive. Implements the DESIGN.md modal spec:
-//   - Centered panel, 12px radius, shadow-lg, popover bg
-//   - 480px max width (Modal section: "max 480px")
-//   - --scrim token backdrop (Sprint 1)
-//   - Enter: scaleIn preset (180ms fade + scale 0.96 -> 1, no width/height)
-//   - Exit:  135ms fade + slight scale (derived from scaleIn exit)
-//   - reduced-motion: animations zeroed via global CSS rule in globals.css
+// Dialog primitive built on @radix-ui/react-dialog.
 //
-// Phase 5: imports `scaleIn` + `fade` from @/lib/motion-presets so the dialog
-// stays locked to the shared duration/easing tiers. The previous inline
-// config matched the preset exactly; this is a mechanical refactor.
+// Why Radix: the previous hand-rolled implementation locked `document.body`
+// scroll but the content panel overflowed a viewport-tall dialog past the
+// top and bottom with no way to reach clipped content. Radix provides
+// scroll-lock, focus-trap, ESC handling, and ARIA semantics; we add
+// scrollable content and keep the framer-motion enter/exit animations via
+// `forceMount` + `AnimatePresence`.
 //
-// We intentionally avoid pulling in @radix-ui/react-dialog or
-// tailwindcss-animate (neither installed) and instead lean on `motion/react`
-// which is already in use in sites-toolbar.tsx. Focus management:
-//   - body scroll lock while open
-//   - Escape closes
-//   - First focusable element receives focus on open
-//   - Focus returns to the previously-active element on close
-//   - role="dialog" + aria-modal="true" + aria-labelledby/-describedby
+// Public API — identical to the previous implementation so all 24 call
+// sites compile without changes.
 //
-// Public API mirrors the shadcn dialog shape so call sites read familiarly:
-//   <Dialog open={...} onClose={...}>
-//     <DialogContent ariaLabelledBy="x-title">
-//       <DialogHeader>
-//         <DialogTitle id="x-title">...</DialogTitle>
-//         <DialogDescription>...</DialogDescription>
-//       </DialogHeader>
-//       {body}
-//       <DialogFooter>{buttons}</DialogFooter>
-//     </DialogContent>
-//   </Dialog>
+// Exit animation: Radix unmounts Portal content immediately when `open`
+// becomes false. To preserve the exit animation, `Dialog` passes `open`
+// into a context; `DialogContent` reads it, wraps its tree in
+// `AnimatePresence`, and gates on the boolean. When `open` is false the
+// exit variants animate out and then `AnimatePresence` removes the subtree
+// from the DOM at the end of the transition.
+//
+// Scroll fix: the content panel is capped at `max-h-[calc(100dvh-2rem)]`
+// and scrolls internally with `overflow-y-auto overscroll-contain`. `dvh`
+// tracks mobile browser chrome so the dialog top and bottom are always
+// reachable. The overlay is a fixed-inset flex container that centres the
+// panel with `p-4` clearance.
 
-interface DialogContextValue {
-  onClose: () => void;
-}
+// ---------------------------------------------------------------------------
+// Internal context — threads `open` from Dialog → DialogContent so the
+// AnimatePresence key inside the Portal can gate on it.
+// ---------------------------------------------------------------------------
 
-const DialogContext = React.createContext<DialogContextValue | null>(null);
+const DialogOpenContext = React.createContext<boolean>(false);
 
-function useDialogContext(component: string): DialogContextValue {
-  const ctx = React.useContext(DialogContext);
-  if (!ctx) {
-    throw new Error(`${component} must be used inside <Dialog>.`);
-  }
-  return ctx;
-}
+// ---------------------------------------------------------------------------
+// Dialog — controlled root
+// ---------------------------------------------------------------------------
 
 export interface DialogProps {
   open: boolean;
@@ -59,70 +48,26 @@ export interface DialogProps {
 }
 
 export function Dialog({ open, onClose, children }: DialogProps) {
-  // Lock body scroll while any dialog is open. Tracks via a counter so nested
-  // dialogs (rare here, but the api-keys page can stack create+confirm) don't
-  // prematurely unlock.
-  React.useEffect(() => {
-    if (!open) return;
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, [open]);
-
-  // Escape closes. Attached on document so it works even before focus lands
-  // inside the panel.
-  React.useEffect(() => {
-    if (!open) return;
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
-
-  if (typeof document === "undefined") return null;
-
-  const ctx: DialogContextValue = { onClose };
-
-  return createPortal(
-    <DialogContext.Provider value={ctx}>
-      <AnimatePresence>
-        {open ? (
-          <motion.div
-            key="dialog-root"
-            className="fixed inset-0 z-50 flex items-center justify-center p-4"
-            variants={fade}
-            initial="initial"
-            animate="animate"
-            exit="exit"
-          >
-            <DialogOverlay />
-            {children}
-          </motion.div>
-        ) : null}
-      </AnimatePresence>
-    </DialogContext.Provider>,
-    document.body,
-  );
-}
-
-function DialogOverlay() {
-  const { onClose } = useDialogContext("DialogOverlay");
   return (
-    <button
-      type="button"
-      aria-label="Close dialog"
-      tabIndex={-1}
-      onClick={onClose}
-      className="absolute inset-0 cursor-default bg-[var(--scrim)]"
-    />
+    <RadixDialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        // Radix fires onOpenChange(false) on: ESC keydown, overlay click, and
+        // any programmatic close. Route all three to onClose so existing call
+        // sites keep working — they never interact with Radix directly.
+        if (!next) onClose();
+      }}
+    >
+      <DialogOpenContext.Provider value={open}>
+        {children}
+      </DialogOpenContext.Provider>
+    </RadixDialog.Root>
   );
 }
+
+// ---------------------------------------------------------------------------
+// DialogContent — portal, overlay, animated panel
+// ---------------------------------------------------------------------------
 
 export interface DialogContentProps {
   ariaLabelledBy?: string;
@@ -137,58 +82,94 @@ export function DialogContent({
   className,
   children,
 }: DialogContentProps) {
-  const panelRef = React.useRef<HTMLDivElement>(null);
-  const previouslyFocused = React.useRef<HTMLElement | null>(null);
-
-  // Save the previously-focused element on mount, restore on unmount.
-  React.useEffect(() => {
-    previouslyFocused.current = document.activeElement as HTMLElement | null;
-    // Focus the first focusable element inside the panel after one frame so
-    // motion's mount transition is committed and inputs are interactive.
-    const id = window.requestAnimationFrame(() => {
-      const el = panelRef.current;
-      if (!el) return;
-      const focusable = el.querySelector<HTMLElement>(
-        "[data-autofocus], input:not([disabled]), textarea:not([disabled]), button:not([disabled]), select:not([disabled])",
-      );
-      focusable?.focus();
-    });
-    return () => {
-      window.cancelAnimationFrame(id);
-      previouslyFocused.current?.focus?.();
-    };
-  }, []);
+  // Read `open` from the context set by <Dialog> so AnimatePresence can key
+  // on it and the exit animation plays before the Portal removes the subtree.
+  const open = React.useContext(DialogOpenContext);
 
   return (
-    <motion.div
-      ref={panelRef}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={ariaLabelledBy}
-      aria-describedby={ariaDescribedBy}
-      // Enter/exit shape comes from the shared `scaleIn` preset:
-      //   • enter — 180ms fade + scale 0.96 → 1 on ease.out
-      //   • exit  — 135ms fade + scale 1 → 0.98 on ease.in
-      // No width/height animation per DESIGN.md ("Don't animate width, height").
-      variants={scaleIn}
-      initial="initial"
-      animate="animate"
-      exit="exit"
-      // Override the preset's `ease.out` with `ease.outExpo` here only — the
-      // dialog is the most prominent floating surface in the app and the
-      // sharper deceleration helps it read as "placed", not "drifted in".
-      transition={{ duration: dur.fast, ease: ease.outExpo }}
-      className={cn(
-        "relative z-10 w-full max-w-[min(480px,calc(100vw-2rem))] rounded-xl border border-[var(--color-border)]",
-        "bg-[var(--color-popover)] text-[var(--color-popover-foreground)] shadow-lg",
-        "p-6",
-        className,
-      )}
-    >
-      {children}
-    </motion.div>
+    // forceMount: the Portal stays in the DOM at all times so AnimatePresence
+    // can run the exit animation before Radix clears the content. When the
+    // AnimatePresence exit finishes, the motion elements are removed and the
+    // Portal is empty (but still mounted as a zero-content div).
+    <RadixDialog.Portal forceMount>
+      <AnimatePresence>
+        {open ? (
+          // Overlay: the fixed centering container + scrim backdrop.
+          // RadixDialog.Overlay's `asChild` forwards Radix's data-state to
+          // the motion.div while framer-motion drives the opacity transition.
+          <RadixDialog.Overlay asChild forceMount>
+            <motion.div
+              key="dialog-overlay"
+              variants={fade}
+              initial="initial"
+              animate="animate"
+              exit="exit"
+              // Fixed inset centres the panel across the full viewport.
+              // z-50 places it above the app shell (z-40).
+              className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[var(--scrim)]"
+            >
+              {/* Content: RadixDialog.Content provides role="dialog",
+                  aria-modal="true", focus-trap, ESC handling, and the
+                  scroll-lock. `asChild` forwards all of that to the
+                  motion.div so ARIA attributes land on the visible element. */}
+              <RadixDialog.Content
+                asChild
+                forceMount
+                aria-labelledby={ariaLabelledBy}
+                aria-describedby={ariaDescribedBy}
+                // Stop panel clicks from bubbling to the overlay and
+                // triggering a second onOpenChange(false) call.
+                onClick={(e) => e.stopPropagation()}
+              >
+                <motion.div
+                  key="dialog-panel"
+                  variants={scaleIn}
+                  initial="initial"
+                  animate="animate"
+                  exit="exit"
+                  // Override the preset ease with outExpo for the dialog: the
+                  // sharpest deceleration makes the panel read as "placed", not
+                  // "drifted in". Matches the original implementation exactly.
+                  transition={{ duration: dur.fast, ease: ease.outExpo }}
+                  className={cn(
+                    "relative z-10 w-full max-w-[min(480px,calc(100vw-2rem))]",
+                    "rounded-xl border border-[var(--color-border)]",
+                    "bg-[var(--color-popover)] text-[var(--color-popover-foreground)]",
+                    "shadow-lg",
+                    // Scroll fix: cap height to the viewport (minus the p-4
+                    // clearance = 2rem) and scroll the panel internally. `dvh`
+                    // tracks mobile browser chrome so the dialog top and bottom
+                    // are always reachable. `overscroll-contain` stops the
+                    // internal scroll from chaining to the locked body once the
+                    // panel hits its limits.
+                    "max-h-[calc(100dvh-2rem)] overflow-y-auto overscroll-contain",
+                    "p-6",
+                    className,
+                  )}
+                >
+                  {children}
+                </motion.div>
+              </RadixDialog.Content>
+            </motion.div>
+          </RadixDialog.Overlay>
+        ) : null}
+      </AnimatePresence>
+    </RadixDialog.Portal>
   );
 }
+
+// ---------------------------------------------------------------------------
+// Styled sub-components — identical API and classNames to the original.
+//
+// These are kept as plain styled wrappers (not mapped to RadixDialog.Title /
+// RadixDialog.Description) because:
+//   1. All call sites use explicit id= / ariaLabelledBy / ariaDescribedBy
+//      wiring which already satisfies ARIA without Radix's own primitives.
+//   2. Radix would log a dev warning if RadixDialog.Title is absent from
+//      RadixDialog.Content — we suppress that by passing aria-labelledby
+//      directly on Content (via the ariaLabelledBy prop) so Radix considers
+//      the labelling requirement met without requiring its own Title element.
+// ---------------------------------------------------------------------------
 
 export function DialogHeader({
   children,

@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.34.3] - 2026-06-10
+
+### Fixed
+
+- **Dialogs taller than the screen could not be scrolled** (most visible on the long backup dialog) on both desktop and mobile: the popup was frozen with its top and bottom cut off. The dialog component was rebuilt on Radix UI, which scroll-locks the page background correctly, and the dialog panel now caps to the viewport height and scrolls internally.
+
 ## [0.34.2] - 2026-06-10
 
 ### Fixed
