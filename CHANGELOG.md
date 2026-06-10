@@ -6,6 +6,13 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.35.1] - 2026-06-10
+
+### Fixed
+
+- **Email tab showed "Could not load email configuration" on sites that had never set up email.** A site with no per-site email config and no org-wide default returns a 404 by design, but the dashboard rendered it as an error instead of the first-run setup state. The Email tab now shows the provider setup form with a short "not configured yet" hint when no config exists.
+- **Provider bounce and complaint webhooks could not reach the API behind the hosted load balancer.** The `/webhooks/*` path was not routed to the API service, so provider callbacks fell through to the web app. Self-hosters are unaffected (single service); the hosted load balancer now routes `/webhooks/*` to the API.
+
 ## [0.35.0] - 2026-06-10
 
 ### Added
