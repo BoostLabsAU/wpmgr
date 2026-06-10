@@ -44,16 +44,15 @@ A "client" is **one nullable FK column on sites** (`sites.client_id`) plus a ten
 **Table stakes (covered):** client as a first-class record with auto-default report recipient; auto-compiled white-label report (Updates + Uptime + Backups + Security/Health + Performance + free-text "work performed"), logo + intro/closing, section toggles, date range, email + download, recurring schedule; "remove powered-by".
 **Differentiators (parity-plus):** real **Core Web Vitals field data** in the Performance section (most tools only show synthetic); the existing **secure backup/restore + media optimization** surfaced per client; Ed25519-signed agent telemetry behind it.
 
-## Open decisions (need a product call before each phase)
-Recommended default in **bold**.
-1. Report delivery floor — **HTML email digest + browser print-to-PDF (v1)** vs binary PDF required now.
-2. Client↔site cardinality — **1:1 nullable FK (`sites.client_id`)** vs many-to-many join.
-3. Tags vs clients — **keep tags fully separate** from the new client entity (today's "client" UI aliases tags) vs offer a one-time migrate path.
-4. `sites.client_id` ON DELETE — **SET NULL (unassign, non-destructive)** vs RESTRICT. Never CASCADE.
-5. "Remove powered-by" — free in OSS vs gated behind `WPMGR_HOSTED` paid tiers. **Decide up-front** to avoid re-architecting.
-6. Report cadence/timezone default — weekly vs monthly; **client-level timezone field** vs infer from first site.
-7. Portal routing — **`/portal` subpath gated on Role==client** (no DNS/TLS/cookie rework) vs subdomain-per-client.
-8. Portal role — **new `RoleClient` below viewer** (home for future client-only perms) vs hard-clamp to RoleViewer.
+## Decisions — LOCKED (user, 2026-06-10)
+1. Report delivery floor — HTML email digest + print-optimized page **AND binary PDF download required in v1** (pure-Go `go-pdf/fpdf` rendering the same aggregated ReportData; still no headless Chrome).
+2. Client↔site cardinality — **1:1 nullable FK (`sites.client_id`)**, no join table.
+3. Tags vs clients — **fully separate**; the mislabeled "Client" UI column (which renders tags) is fixed in Foundation; no tag-migration path.
+4. `sites.client_id` ON DELETE — **SET NULL** (deleting a client unassigns its sites, never deletes them).
+5. "Remove powered-by" — **free everywhere** (reports default to a small powered-by footer with a free toggle to remove; OSS stays full-featured, hosted monetizes elsewhere).
+6. Report schedule defaults — **monthly cadence default** (weekly selectable) + a **client-level timezone field** (defaulted from the agency) governing send time.
+7. Portal routing — **`/portal` subpath** on the main app gated on the client role (no DNS/TLS/cookie rework; subdomains revisitable later).
+8. Portal role — **new `RoleClient` ranked below viewer**, zero write perms (a home for future client-only perms).
 
 ## Roadmap slot
 Sits **after** per-site email v1 reaches functional-QA-clean (Phase 2 reports send through the v0.35.0 mailer + suppression + central log, so it depends on that infra). **Foundation (Phase 1) can start in parallel** with email QA (no email dependency). Also competes for time with the in-flight font-subsetting Phase 2.
