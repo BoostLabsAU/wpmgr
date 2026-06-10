@@ -3,6 +3,14 @@
 package gen
 
 // setDefaults set default value of fields.
+func (s *AddSuppressionRequest) setDefaults() {
+	{
+		val := string("manual")
+		s.Reason.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *AlertConfigUpdate) setDefaults() {
 	{
 		val := bool(true)

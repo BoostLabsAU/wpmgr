@@ -86,6 +86,12 @@ final class Scheduler
     public const SCHEDULE_60SEC = 'wpmgr_60sec';
 
     /**
+     * Custom cron schedule key for the 15-minute interval used by the
+     * suppression-cache pull.
+     */
+    public const SCHEDULE_15MIN = 'wpmgr_agent_15min';
+
+    /**
      * Custom cron schedule key for the 30-minute interval used by the metadata
      * push. v0.9.0: was `daily`; bumped to 30 min so dashboards refresh
      * available-update counts within an operational SLA without thrashing the
@@ -163,6 +169,11 @@ final class Scheduler
         $schedules[self::SCHEDULE_5MIN] = [
             'interval' => 300,
             'display'  => 'Every 5 minutes (WPMgr Agent)',
+        ];
+
+        $schedules[self::SCHEDULE_15MIN] = [
+            'interval' => 900,
+            'display'  => 'Every 15 minutes (WPMgr Agent)',
         ];
 
         $schedules[self::SCHEDULE_30MIN] = [

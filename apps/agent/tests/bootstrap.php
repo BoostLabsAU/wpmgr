@@ -119,6 +119,23 @@ if (!function_exists('sanitize_text_field')) {
     }
 }
 
+if (!function_exists('sanitize_email')) {
+    /**
+     * Strips out all characters not allowed in an email address — mirrors the
+     * real WP implementation closely enough for unit tests (real WP uses a
+     * regex allow-list; here we validate with PHP's native filter, which is
+     * sufficient for the addresses used in tests).
+     *
+     * @param string $email Candidate email address.
+     * @return string The sanitized address, or '' if invalid.
+     */
+    function sanitize_email(string $email): string
+    {
+        $email = trim($email);
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false ? $email : '';
+    }
+}
+
 
 if (!class_exists('WP_Error')) {
     class WP_Error
@@ -146,6 +163,12 @@ if (!class_exists('WP_Error')) {
         {
             $codes = array_keys($this->errors);
             return $codes === [] ? '' : (string) $codes[0];
+        }
+
+        public function get_error_message(?string $code = null): string
+        {
+            $code = $code ?? $this->get_error_code();
+            return $this->errors[$code] ?? '';
         }
 
         /**

@@ -9,6 +9,12 @@ import type {
   ActivateOrgData,
   ActivateOrgErrors,
   ActivateOrgResponses,
+  AddFleetEmailSuppressionData,
+  AddFleetEmailSuppressionErrors,
+  AddFleetEmailSuppressionResponses,
+  AddSiteEmailSuppressionData,
+  AddSiteEmailSuppressionErrors,
+  AddSiteEmailSuppressionResponses,
   AgentAutologinConsumeData,
   AgentAutologinConsumeErrors,
   AgentAutologinConsumeResponses,
@@ -57,8 +63,14 @@ import type {
   BulkConfigCacheData,
   BulkConfigCacheErrors,
   BulkConfigCacheResponses,
+  BulkDeleteEmailLogData,
+  BulkDeleteEmailLogErrors,
+  BulkDeleteEmailLogResponses,
   BulkPurgeCacheData,
   BulkPurgeCacheResponses,
+  BulkResendEmailLogData,
+  BulkResendEmailLogErrors,
+  BulkResendEmailLogResponses,
   CancelBackupData,
   CancelBackupErrors,
   CancelBackupResponses,
@@ -113,6 +125,9 @@ import type {
   DeleteBackupResponses,
   DeleteDbSnapshotData,
   DeleteDbSnapshotResponses,
+  DeleteFleetEmailSuppressionData,
+  DeleteFleetEmailSuppressionErrors,
+  DeleteFleetEmailSuppressionResponses,
   DeleteIsolatedMediaData,
   DeleteIsolatedMediaResponses,
   DeleteMediaOriginalsData,
@@ -124,6 +139,9 @@ import type {
   DeleteSiteDestinationData,
   DeleteSiteDestinationErrors,
   DeleteSiteDestinationResponses,
+  DeleteSiteEmailSuppressionData,
+  DeleteSiteEmailSuppressionErrors,
+  DeleteSiteEmailSuppressionResponses,
   DeleteSiteErrors,
   DeleteSiteResponses,
   DeleteSiteShareData,
@@ -136,6 +154,11 @@ import type {
   EnrollData,
   EnrollErrors,
   EnrollResponses,
+  ExportSiteEmailLogData,
+  ExportSiteEmailLogErrors,
+  ExportSiteEmailLogResponses,
+  ForgotPasswordData,
+  ForgotPasswordResponses,
   GetAlertConfigData,
   GetAlertConfigResponses,
   GetBackupData,
@@ -160,6 +183,9 @@ import type {
   GetCacheStatsResponses,
   GetDbScanResultData,
   GetDbScanResultResponses,
+  GetFleetEmailStatsData,
+  GetFleetEmailStatsErrors,
+  GetFleetEmailStatsResponses,
   GetHealthzData,
   GetHealthzResponses,
   GetMeData,
@@ -167,6 +193,9 @@ import type {
   GetMediaJobResponses,
   GetMeErrors,
   GetMeResponses,
+  GetOrgEmailConfigData,
+  GetOrgEmailConfigErrors,
+  GetOrgEmailConfigResponses,
   GetPerfConfigData,
   GetPerfConfigResponses,
   GetReadyzData,
@@ -190,6 +219,15 @@ import type {
   GetSiteDiagnosticsData,
   GetSiteDiagnosticsErrors,
   GetSiteDiagnosticsResponses,
+  GetSiteEmailConfigData,
+  GetSiteEmailConfigErrors,
+  GetSiteEmailConfigResponses,
+  GetSiteEmailLogEntryData,
+  GetSiteEmailLogEntryErrors,
+  GetSiteEmailLogEntryResponses,
+  GetSiteEmailStatsData,
+  GetSiteEmailStatsErrors,
+  GetSiteEmailStatsResponses,
   GetSiteErrorConfigData,
   GetSiteErrorConfigErrors,
   GetSiteErrorConfigResponses,
@@ -225,6 +263,15 @@ import type {
   ListBackupsResponses,
   ListDbSnapshotsData,
   ListDbSnapshotsResponses,
+  ListEmailProvidersData,
+  ListEmailProvidersErrors,
+  ListEmailProvidersResponses,
+  ListFleetEmailLogData,
+  ListFleetEmailLogErrors,
+  ListFleetEmailLogResponses,
+  ListFleetEmailSuppressionData,
+  ListFleetEmailSuppressionErrors,
+  ListFleetEmailSuppressionResponses,
   ListFontResultsData,
   ListFontResultsResponses,
   ListMediaAssetsData,
@@ -257,6 +304,12 @@ import type {
   ListSiteDestinationsData,
   ListSiteDestinationsErrors,
   ListSiteDestinationsResponses,
+  ListSiteEmailLogData,
+  ListSiteEmailLogErrors,
+  ListSiteEmailLogResponses,
+  ListSiteEmailSuppressionData,
+  ListSiteEmailSuppressionErrors,
+  ListSiteEmailSuppressionResponses,
   ListSiteLoginEventsData,
   ListSiteLoginEventsResponses,
   ListSitePhpErrorsData,
@@ -309,9 +362,21 @@ import type {
   PutBackupSettingsNotificationsData,
   PutBackupSettingsNotificationsErrors,
   PutBackupSettingsNotificationsResponses,
+  PutOrgEmailConfigData,
+  PutOrgEmailConfigErrors,
+  PutOrgEmailConfigResponses,
+  PutOrgEmailWebhookConfigData,
+  PutOrgEmailWebhookConfigErrors,
+  PutOrgEmailWebhookConfigResponses,
   PutPerfConfigData,
   PutPerfConfigErrors,
   PutPerfConfigResponses,
+  PutSiteEmailConfigData,
+  PutSiteEmailConfigErrors,
+  PutSiteEmailConfigResponses,
+  PutSiteEmailWebhookConfigData,
+  PutSiteEmailWebhookConfigErrors,
+  PutSiteEmailWebhookConfigResponses,
   PutSiteLoginBrandData,
   PutSiteLoginBrandErrors,
   PutSiteLoginBrandResponses,
@@ -327,6 +392,14 @@ import type {
   RegisterData,
   RegisterErrors,
   RegisterResponses,
+  ResendEmailLogData,
+  ResendEmailLogErrors,
+  ResendEmailLogResponses,
+  ResendVerificationData,
+  ResendVerificationResponses,
+  ResetPasswordData,
+  ResetPasswordErrors,
+  ResetPasswordResponses,
   RestoreIsolatedMediaData,
   RestoreIsolatedMediaResponses,
   RestoreMediaData,
@@ -346,6 +419,9 @@ import type {
   RunSearchReplaceResponses,
   ScanUnusedMediaData,
   ScanUnusedMediaResponses,
+  SendTestEmailData,
+  SendTestEmailErrors,
+  SendTestEmailResponses,
   SetSiteTagsData,
   SetSiteTagsErrors,
   SetSiteTagsResponses,
@@ -382,6 +458,9 @@ import type {
   VerifyAuditData,
   VerifyAuditErrors,
   VerifyAuditResponses,
+  VerifyEmailData,
+  VerifyEmailErrors,
+  VerifyEmailResponses,
   VerifySiteActivityData,
   VerifySiteActivityResponses,
 } from "./types.gen";
@@ -430,11 +509,15 @@ export const getReadyz = <ThrowOnError extends boolean = false>(
   >({ url: "/readyz", ...options });
 
 /**
- * Register (first-run bootstrap or invited)
+ * Register (first-run bootstrap or self-serve)
  *
- * On first run (zero users) this creates the first user, a tenant, and an
- * owner membership. Once any user exists, open registration is closed and
- * this returns 403; new users are added via the authenticated invite flow.
+ * On first run (zero users in the database) this bootstraps the instance:
+ * creates the first user verified and active, creates their tenant, and
+ * establishes an immediate session (201 + Me). After the first user exists,
+ * registration is open self-serve: the account is created in a pending
+ * state, a verification email is sent, and the response is 200
+ * {ok: true, pending: true}. The user must verify their email via
+ * POST /auth/verify-email before they can log in.
  *
  */
 export const register = <ThrowOnError extends boolean = false>(
@@ -446,6 +529,103 @@ export const register = <ThrowOnError extends boolean = false>(
     ThrowOnError
   >({
     url: "/auth/register",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Request a password-reset email
+ *
+ * Always returns 200 {ok: true} whether or not the email maps to an
+ * account (enumeration-safe). A reset-link email is sent when the account
+ * exists and is active.
+ *
+ */
+export const forgotPassword = <ThrowOnError extends boolean = false>(
+  options: Options<ForgotPasswordData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ForgotPasswordResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/auth/password/forgot",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Consume a password-reset token and set a new password
+ *
+ * Validates the one-time reset token and replaces the user's password.
+ * Does not establish a session; the user must log in separately. Returns
+ * 410 when the token is expired, already used, or not found.
+ *
+ */
+export const resetPassword = <ThrowOnError extends boolean = false>(
+  options: Options<ResetPasswordData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ResetPasswordResponses,
+    ResetPasswordErrors,
+    ThrowOnError
+  >({
+    url: "/auth/password/reset",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Verify a self-serve signup email and establish a session
+ *
+ * Consumes the one-time verification token sent during self-serve
+ * registration, activates the account, and establishes a session so the
+ * user lands logged in. Returns 410 when the token is expired or already
+ * consumed.
+ *
+ */
+export const verifyEmail = <ThrowOnError extends boolean = false>(
+  options: Options<VerifyEmailData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    VerifyEmailResponses,
+    VerifyEmailErrors,
+    ThrowOnError
+  >({
+    url: "/auth/verify-email",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Re-send the email verification link
+ *
+ * Always returns 200 {ok: true} whether or not the email maps to a
+ * pending account (enumeration-safe). A new verification email is sent
+ * when the account exists and is still pending verification.
+ *
+ */
+export const resendVerification = <ThrowOnError extends boolean = false>(
+  options: Options<ResendVerificationData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ResendVerificationResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/auth/verification/resend",
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -3104,6 +3284,539 @@ export const listQuarantinedMedia = <ThrowOnError extends boolean = false>(
     unknown,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/media/clean/quarantine", ...options });
+
+/**
+ * List available email provider configurations
+ *
+ * Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
+ * SendGrid, Mailgun, and Postmark. Each entry includes the provider slug,
+ * display label, and the field schema (non-secret and secret fields, types,
+ * required flags, options).
+ *
+ * Org-level route — requires RequireOrgScope (org members only, not
+ * site-collaborators). Requires the `site.email.manage` permission.
+ *
+ */
+export const listEmailProviders = <ThrowOnError extends boolean = false>(
+  options?: Options<ListEmailProvidersData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListEmailProvidersResponses,
+    ListEmailProvidersErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/providers", ...options });
+
+/**
+ * Get the org-wide default email config
+ *
+ * Returns the org-wide default email configuration. Sites with no per-site
+ * config inherit this row. Includes `secret_set: bool` — the actual
+ * provider secret is never returned.
+ *
+ * Org-level route. Requires `site.email.manage` permission (operator+).
+ *
+ */
+export const getOrgEmailConfig = <ThrowOnError extends boolean = false>(
+  options?: Options<GetOrgEmailConfigData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetOrgEmailConfigResponses,
+    GetOrgEmailConfigErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/org-config", ...options });
+
+/**
+ * Create or update the org-wide default email config
+ *
+ * Creates or updates the org-wide default email configuration. This row is
+ * inherited by any site that has no per-site override. Provide `secret` in
+ * the body to store a new provider secret (age-encrypted at rest); omit
+ * `secret` to preserve the existing stored credential.
+ *
+ * Org-level route. Requires `site.email.manage` permission (operator+).
+ *
+ */
+export const putOrgEmailConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutOrgEmailConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutOrgEmailConfigResponses,
+    PutOrgEmailConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/email/org-config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get per-site email config (with org-wide fallback)
+ *
+ * Returns the email config for a site. If no per-site row exists the
+ * org-wide default is returned (with `site_id` set to the queried site so
+ * the frontend knows the row was inherited). Includes `secret_set: bool`;
+ * the actual provider secret is never returned.
+ *
+ * Requires `site.email.manage` permission (operator+) and site access.
+ *
+ */
+export const getSiteEmailConfig = <ThrowOnError extends boolean = false>(
+  options: Options<GetSiteEmailConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetSiteEmailConfigResponses,
+    GetSiteEmailConfigErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/config", ...options });
+
+/**
+ * Create or update per-site email config
+ *
+ * Creates or updates the per-site email configuration. Provide `secret` in
+ * the body to store a new provider secret (age-encrypted at rest); omit
+ * `secret` to preserve the existing stored credential (nil-sentinel pattern).
+ *
+ * Requires `site.email.manage` permission (operator+) and site access.
+ *
+ */
+export const putSiteEmailConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutSiteEmailConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutSiteEmailConfigResponses,
+    PutSiteEmailConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Update per-site email webhook settings
+ *
+ * Updates the inbound webhook route token and/or signing key for the
+ * per-site email config. When rotate_token is true a new route token is
+ * generated (the old URL is immediately invalid) and the plain token is
+ * returned once in webhook_route_token.
+ *
+ * Requires `site.email.manage` permission (operator+) and site access.
+ *
+ */
+export const putSiteEmailWebhookConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutSiteEmailWebhookConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutSiteEmailWebhookConfigResponses,
+    PutSiteEmailWebhookConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/webhook-config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Update org-wide email webhook settings
+ *
+ * Updates the inbound webhook route token and/or signing key for the
+ * org-wide email config. When rotate_token is true a new route token is
+ * generated (the old URL is immediately invalid) and the plain token is
+ * returned once in webhook_route_token.
+ *
+ * Org-level route. Requires `site.email.manage` permission (operator+).
+ *
+ */
+export const putOrgEmailWebhookConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutOrgEmailWebhookConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutOrgEmailWebhookConfigResponses,
+    PutOrgEmailWebhookConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/email/org-config/webhook-config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Dispatch a test email via the site agent
+ *
+ * Dispatches the signed `send_test_email` command to the site's agent.
+ * The agent uses its current email config (previously synced via
+ * sync_email_config) to send the test message.
+ *
+ * **Phase 1 note**: the agent does not yet implement this command (Phase 2
+ * will add the PHP handler). Until then the response will be
+ * `{ok: false, detail: "command not found"}`. This is expected and not an
+ * error state — wire the UI and handle the graceful failure.
+ *
+ * Requires `site.email.manage` permission (operator+) and site access.
+ *
+ */
+export const sendTestEmail = <ThrowOnError extends boolean = false>(
+  options: Options<SendTestEmailData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    SendTestEmailResponses,
+    SendTestEmailErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/test",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List the email log for a site (keyset-paginated)
+ *
+ * Returns a keyset-paginated list of outgoing email log entries for a
+ * site, ordered by `created_at DESC, id DESC`. The composite cursor
+ * predicate `(created_at, id)` ensures no rows are skipped when multiple
+ * sends share the same timestamp (batch sends).
+ *
+ * **Body privacy**: `body` is never returned in the list response,
+ * regardless of `body_stored`. Use `GET /email/log/{logId}` to retrieve
+ * the full detail including body.
+ *
+ * Requires `site.email.manage` permission and site access.
+ *
+ */
+export const listSiteEmailLog = <ThrowOnError extends boolean = false>(
+  options: Options<ListSiteEmailLogData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListSiteEmailLogResponses,
+    ListSiteEmailLogErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/log", ...options });
+
+/**
+ * Export email log as CSV or JSON
+ *
+ * Streams up to 10,000 filtered log entries as CSV (default) or JSON.
+ * Body content is excluded from the export regardless of `body_stored`
+ * (privacy-by-default). Pass `format=json` for JSON output.
+ *
+ * Requires `site.email.manage` permission and site access.
+ *
+ */
+export const exportSiteEmailLog = <ThrowOnError extends boolean = false>(
+  options: Options<ExportSiteEmailLogData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ExportSiteEmailLogResponses,
+    ExportSiteEmailLogErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/log/export", ...options });
+
+/**
+ * Get a single email log entry (detail + body + prev/next navigation)
+ *
+ * Returns a single email log entry. When `body_stored` is true and a
+ * body was captured at send time, it is included in this response.
+ * Also returns `prev_id` and `next_id` for in-detail navigation.
+ *
+ * Requires `site.email.manage` permission and site access.
+ *
+ */
+export const getSiteEmailLogEntry = <ThrowOnError extends boolean = false>(
+  options: Options<GetSiteEmailLogEntryData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetSiteEmailLogEntryResponses,
+    GetSiteEmailLogEntryErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/log/{logId}", ...options });
+
+/**
+ * Per-site email stats (sent/failed + per-day + per-provider)
+ *
+ * Returns summary counts (total, sent, failed, provider count),
+ * a per-day time-series, and a per-provider breakdown for the given
+ * date range. Date range defaults to the last 30 days when omitted.
+ *
+ * Requires `site.email.manage` permission and site access.
+ *
+ */
+export const getSiteEmailStats = <ThrowOnError extends boolean = false>(
+  options: Options<GetSiteEmailStatsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetSiteEmailStatsResponses,
+    GetSiteEmailStatsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/stats", ...options });
+
+/**
+ * Fleet cross-site email log (all sites in tenant)
+ *
+ * Returns a keyset-paginated cross-site email log for the tenant.
+ * Org-scope only (site-collaborators are blocked).
+ * Body is never included in the list.
+ *
+ * **Collaborator note**: collaborators who can read specific sites see
+ * those sites' data through the per-site `/sites/{siteId}/email/log`
+ * route. This fleet-level route is for full org members only.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const listFleetEmailLog = <ThrowOnError extends boolean = false>(
+  options?: Options<ListFleetEmailLogData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListFleetEmailLogResponses,
+    ListFleetEmailLogErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/log", ...options });
+
+/**
+ * Fleet cross-site email stats
+ *
+ * Returns tenant-wide summary counts and a per-day time-series for the
+ * given date range. Org-scope only.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const getFleetEmailStats = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetEmailStatsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetEmailStatsResponses,
+    GetFleetEmailStatsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/stats", ...options });
+
+/**
+ * List suppression entries for a site
+ *
+ * Returns a keyset-paginated list of suppression entries for this site
+ * (including fleet-wide entries). Each entry was created either by a
+ * provider webhook (hard_bounce / complaint) or manually added by an
+ * operator (manual / unsubscribe).
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const listSiteEmailSuppression = <ThrowOnError extends boolean = false>(
+  options: Options<ListSiteEmailSuppressionData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListSiteEmailSuppressionResponses,
+    ListSiteEmailSuppressionErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/suppression", ...options });
+
+/**
+ * Manually add a suppression entry for a site
+ *
+ * Manually suppresses an email address for this site. `reason` must be
+ * `manual` or `unsubscribe` — hard_bounce and complaint entries are
+ * created automatically via provider webhooks and cannot be added manually
+ * (to prevent accidental data loss for transient bounces).
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const addSiteEmailSuppression = <ThrowOnError extends boolean = false>(
+  options: Options<AddSiteEmailSuppressionData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    AddSiteEmailSuppressionResponses,
+    AddSiteEmailSuppressionErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/suppression",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete a suppression entry
+ *
+ * Removes a suppression entry by id. The operator is responsible for
+ * ensuring the removal is appropriate (e.g. the email address has
+ * unsubscribed from a suppression request rather than a hard bounce).
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const deleteSiteEmailSuppression = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<DeleteSiteEmailSuppressionData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteSiteEmailSuppressionResponses,
+    DeleteSiteEmailSuppressionErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/suppression/{suppressionId}",
+    ...options,
+  });
+
+/**
+ * Fleet-scope suppression list (all sites in tenant)
+ *
+ * Returns all suppression entries across the tenant fleet. Org-scope only.
+ * Entries with `site_id=null` are fleet-wide suppressions that apply to
+ * every site in the tenant.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const listFleetEmailSuppression = <ThrowOnError extends boolean = false>(
+  options?: Options<ListFleetEmailSuppressionData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListFleetEmailSuppressionResponses,
+    ListFleetEmailSuppressionErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/suppression", ...options });
+
+/**
+ * Manually add a fleet-wide suppression entry
+ *
+ * Adds a suppression entry with `site_id=null`, applying to all sites
+ * in the tenant. Useful for globally suppressing an address that generates
+ * bounces across multiple sites. `reason` must be `manual` or `unsubscribe`.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const addFleetEmailSuppression = <ThrowOnError extends boolean = false>(
+  options: Options<AddFleetEmailSuppressionData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    AddFleetEmailSuppressionResponses,
+    AddFleetEmailSuppressionErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/email/suppression",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete a fleet-scope suppression entry
+ *
+ * Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
+ * belongs to a specific site, use the per-site delete route instead.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const deleteFleetEmailSuppression = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<DeleteFleetEmailSuppressionData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    DeleteFleetEmailSuppressionResponses,
+    DeleteFleetEmailSuppressionErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/suppression/{suppressionId}", ...options });
+
+/**
+ * Resend a single email log entry
+ *
+ * Dispatches the `resend_email` agent command for the given log entry.
+ * Only available when `body_stored=true` on the log entry — returns 409
+ * otherwise. The resend is best-effort: if the agent is offline or returns
+ * an error the response contains `ok=false` with the agent's detail message
+ * but HTTP 200 is returned (matching the test-email pattern).
+ *
+ * The `resent_count` counter is incremented before the agent dispatch so
+ * operators can see how many resend attempts were made even if the agent
+ * was unavailable.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const resendEmailLog = <ThrowOnError extends boolean = false>(
+  options: Options<ResendEmailLogData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ResendEmailLogResponses,
+    ResendEmailLogErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/email/log/{logId}/resend", ...options });
+
+/**
+ * Bulk resend email log entries (max 100)
+ *
+ * Dispatches `resend_email` for multiple log entries. Each entry is
+ * processed independently. Entries without body_stored are skipped with
+ * `ok=false` in the per-entry result array (no overall 4xx).
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const bulkResendEmailLog = <ThrowOnError extends boolean = false>(
+  options: Options<BulkResendEmailLogData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    BulkResendEmailLogResponses,
+    BulkResendEmailLogErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/log/bulk-resend",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Bulk delete email log entries (max 500)
+ *
+ * Deletes a list of email log entries by id. RLS ensures only entries
+ * belonging to the operator's tenant are deleted regardless of the id list.
+ * Maximum 500 ids per request.
+ *
+ * Requires `site.email.manage` permission.
+ *
+ */
+export const bulkDeleteEmailLog = <ThrowOnError extends boolean = false>(
+  options: Options<BulkDeleteEmailLogData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    BulkDeleteEmailLogResponses,
+    BulkDeleteEmailLogErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/email/log/bulk-delete",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
 
 /**
  * List font processing results for a site

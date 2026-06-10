@@ -43,6 +43,25 @@ type Invoker interface {
 	//
 	// POST /api/v1/orgs/{orgId}/activate
 	ActivateOrg(ctx context.Context, params ActivateOrgParams) (ActivateOrgRes, error)
+	// AddFleetEmailSuppression invokes addFleetEmailSuppression operation.
+	//
+	// Adds a suppression entry with `site_id=null`, applying to all sites
+	// in the tenant. Useful for globally suppressing an address that generates
+	// bounces across multiple sites. `reason` must be `manual` or `unsubscribe`.
+	// Requires `site.email.manage` permission.
+	//
+	// POST /api/v1/email/suppression
+	AddFleetEmailSuppression(ctx context.Context, request *AddSuppressionRequest) (AddFleetEmailSuppressionRes, error)
+	// AddSiteEmailSuppression invokes addSiteEmailSuppression operation.
+	//
+	// Manually suppresses an email address for this site. `reason` must be
+	// `manual` or `unsubscribe` — hard_bounce and complaint entries are
+	// created automatically via provider webhooks and cannot be added manually
+	// (to prevent accidental data loss for transient bounces).
+	// Requires `site.email.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/email/suppression
+	AddSiteEmailSuppression(ctx context.Context, request *AddSuppressionRequest, params AddSiteEmailSuppressionParams) (AddSiteEmailSuppressionRes, error)
 	// AgentAutologinConsume invokes agentAutologinConsume operation.
 	//
 	// Called by the WordPress agent after it has verified the operator's
@@ -225,6 +244,15 @@ type Invoker interface {
 	//
 	// PUT /api/v1/cache/bulk-config
 	BulkConfigCache(ctx context.Context, request *BulkConfigRequest) (BulkConfigCacheRes, error)
+	// BulkDeleteEmailLog invokes bulkDeleteEmailLog operation.
+	//
+	// Deletes a list of email log entries by id. RLS ensures only entries
+	// belonging to the operator's tenant are deleted regardless of the id list.
+	// Maximum 500 ids per request.
+	// Requires `site.email.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/email/log/bulk-delete
+	BulkDeleteEmailLog(ctx context.Context, request *BulkDeleteLogsRequest, params BulkDeleteEmailLogParams) (BulkDeleteEmailLogRes, error)
 	// BulkPurgeCache invokes bulkPurgeCache operation.
 	//
 	// Purges the whole cache for each site in `site_ids`. Each site id is
@@ -235,6 +263,15 @@ type Invoker interface {
 	//
 	// POST /api/v1/cache/bulk-purge
 	BulkPurgeCache(ctx context.Context, request *BulkPurgeRequest) (*BulkResultList, error)
+	// BulkResendEmailLog invokes bulkResendEmailLog operation.
+	//
+	// Dispatches `resend_email` for multiple log entries. Each entry is
+	// processed independently. Entries without body_stored are skipped with
+	// `ok=false` in the per-entry result array (no overall 4xx).
+	// Requires `site.email.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/email/log/bulk-resend
+	BulkResendEmailLog(ctx context.Context, request *BulkResendRequest, params BulkResendEmailLogParams) (BulkResendEmailLogRes, error)
 	// CancelBackup invokes cancelBackup operation.
 	//
 	// Stops an in-flight backup by marking the snapshot failed
@@ -441,6 +478,14 @@ type Invoker interface {
 	//
 	// DELETE /api/v1/sites/{siteId}/perf/db/snapshots/{snapshotId}
 	DeleteDbSnapshot(ctx context.Context, params DeleteDbSnapshotParams) (*DeleteDbSnapshotOK, error)
+	// DeleteFleetEmailSuppression invokes deleteFleetEmailSuppression operation.
+	//
+	// Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
+	// belongs to a specific site, use the per-site delete route instead.
+	// Requires `site.email.manage` permission.
+	//
+	// DELETE /api/v1/email/suppression/{suppressionId}
+	DeleteFleetEmailSuppression(ctx context.Context, params DeleteFleetEmailSuppressionParams) (DeleteFleetEmailSuppressionRes, error)
 	// DeleteIsolatedMedia invokes deleteIsolatedMedia operation.
 	//
 	// Permanently removes quarantined attachment files from disk and deletes
@@ -477,6 +522,15 @@ type Invoker interface {
 	//
 	// DELETE /api/v1/sites/{siteId}/destinations/{destinationId}
 	DeleteSiteDestination(ctx context.Context, params DeleteSiteDestinationParams) (DeleteSiteDestinationRes, error)
+	// DeleteSiteEmailSuppression invokes deleteSiteEmailSuppression operation.
+	//
+	// Removes a suppression entry by id. The operator is responsible for
+	// ensuring the removal is appropriate (e.g. the email address has
+	// unsubscribed from a suppression request rather than a hard bounce).
+	// Requires `site.email.manage` permission.
+	//
+	// DELETE /api/v1/sites/{siteId}/email/suppression/{suppressionId}
+	DeleteSiteEmailSuppression(ctx context.Context, params DeleteSiteEmailSuppressionParams) (DeleteSiteEmailSuppressionRes, error)
 	// DeleteSiteShare invokes deleteSiteShare operation.
 	//
 	// Revoke a collaborator's site access (admin+; org-scope only).
@@ -509,6 +563,23 @@ type Invoker interface {
 	//
 	// POST /enroll
 	Enroll(ctx context.Context, request *EnrollRequest) (EnrollRes, error)
+	// ExportSiteEmailLog invokes exportSiteEmailLog operation.
+	//
+	// Streams up to 10,000 filtered log entries as CSV (default) or JSON.
+	// Body content is excluded from the export regardless of `body_stored`
+	// (privacy-by-default). Pass `format=json` for JSON output.
+	// Requires `site.email.manage` permission and site access.
+	//
+	// GET /api/v1/sites/{siteId}/email/log/export
+	ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (ExportSiteEmailLogRes, error)
+	// ForgotPassword invokes forgotPassword operation.
+	//
+	// Always returns 200 {ok: true} whether or not the email maps to an
+	// account (enumeration-safe). A reset-link email is sent when the account
+	// exists and is active.
+	//
+	// POST /auth/password/forgot
+	ForgotPassword(ctx context.Context, request *ForgotPasswordReq) (*ForgotPasswordOK, error)
 	// GetAlertConfig invokes getAlertConfig operation.
 	//
 	// Returns the tenant's downtime/recovery alert channel: email recipients,
@@ -586,6 +657,14 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/db/scan
 	GetDbScanResult(ctx context.Context, params GetDbScanResultParams) (*GetDbScanResultOK, error)
+	// GetFleetEmailStats invokes getFleetEmailStats operation.
+	//
+	// Returns tenant-wide summary counts and a per-day time-series for the
+	// given date range. Org-scope only.
+	// Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/email/stats
+	GetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (GetFleetEmailStatsRes, error)
 	// GetHealthz invokes getHealthz operation.
 	//
 	// Liveness probe.
@@ -604,6 +683,15 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 	GetMediaJob(ctx context.Context, params GetMediaJobParams) (*MediaJobDetail, error)
+	// GetOrgEmailConfig invokes getOrgEmailConfig operation.
+	//
+	// Returns the org-wide default email configuration. Sites with no per-site
+	// config inherit this row. Includes `secret_set: bool` — the actual
+	// provider secret is never returned.
+	// Org-level route. Requires `site.email.manage` permission (operator+).
+	//
+	// GET /api/v1/email/org-config
+	GetOrgEmailConfig(ctx context.Context) (GetOrgEmailConfigRes, error)
 	// GetPerfConfig invokes getPerfConfig operation.
 	//
 	// Returns the full per-site performance config. CDN credentials are
@@ -681,6 +769,34 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/diagnostics
 	GetSiteDiagnostics(ctx context.Context, params GetSiteDiagnosticsParams) (GetSiteDiagnosticsRes, error)
+	// GetSiteEmailConfig invokes getSiteEmailConfig operation.
+	//
+	// Returns the email config for a site. If no per-site row exists the
+	// org-wide default is returned (with `site_id` set to the queried site so
+	// the frontend knows the row was inherited). Includes `secret_set: bool`;
+	// the actual provider secret is never returned.
+	// Requires `site.email.manage` permission (operator+) and site access.
+	//
+	// GET /api/v1/sites/{siteId}/email/config
+	GetSiteEmailConfig(ctx context.Context, params GetSiteEmailConfigParams) (GetSiteEmailConfigRes, error)
+	// GetSiteEmailLogEntry invokes getSiteEmailLogEntry operation.
+	//
+	// Returns a single email log entry. When `body_stored` is true and a
+	// body was captured at send time, it is included in this response.
+	// Also returns `prev_id` and `next_id` for in-detail navigation.
+	// Requires `site.email.manage` permission and site access.
+	//
+	// GET /api/v1/sites/{siteId}/email/log/{logId}
+	GetSiteEmailLogEntry(ctx context.Context, params GetSiteEmailLogEntryParams) (GetSiteEmailLogEntryRes, error)
+	// GetSiteEmailStats invokes getSiteEmailStats operation.
+	//
+	// Returns summary counts (total, sent, failed, provider count),
+	// a per-day time-series, and a per-provider breakdown for the given
+	// date range. Date range defaults to the last 30 days when omitted.
+	// Requires `site.email.manage` permission and site access.
+	//
+	// GET /api/v1/sites/{siteId}/email/stats
+	GetSiteEmailStats(ctx context.Context, params GetSiteEmailStatsParams) (GetSiteEmailStatsRes, error)
 	// GetSiteErrorConfig invokes getSiteErrorConfig operation.
 	//
 	// Returns the site's PHP error-level mask and md5 ignore-list. When no
@@ -783,6 +899,38 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/db/snapshots
 	ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (*DbSnapshotList, error)
+	// ListEmailProviders invokes listEmailProviders operation.
+	//
+	// Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
+	// SendGrid, Mailgun, and Postmark. Each entry includes the provider slug,
+	// display label, and the field schema (non-secret and secret fields, types,
+	// required flags, options).
+	// Org-level route — requires RequireOrgScope (org members only, not
+	// site-collaborators). Requires the `site.email.manage` permission.
+	//
+	// GET /api/v1/email/providers
+	ListEmailProviders(ctx context.Context) (ListEmailProvidersRes, error)
+	// ListFleetEmailLog invokes listFleetEmailLog operation.
+	//
+	// Returns a keyset-paginated cross-site email log for the tenant.
+	// Org-scope only (site-collaborators are blocked).
+	// Body is never included in the list.
+	// **Collaborator note**: collaborators who can read specific sites see
+	// those sites' data through the per-site `/sites/{siteId}/email/log`
+	// route. This fleet-level route is for full org members only.
+	// Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/email/log
+	ListFleetEmailLog(ctx context.Context, params ListFleetEmailLogParams) (ListFleetEmailLogRes, error)
+	// ListFleetEmailSuppression invokes listFleetEmailSuppression operation.
+	//
+	// Returns all suppression entries across the tenant fleet. Org-scope only.
+	// Entries with `site_id=null` are fleet-wide suppressions that apply to
+	// every site in the tenant.
+	// Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/email/suppression
+	ListFleetEmailSuppression(ctx context.Context, params ListFleetEmailSuppressionParams) (ListFleetEmailSuppressionRes, error)
 	// ListFontResults invokes listFontResults operation.
 	//
 	// Returns a page of the site's font_results catalog rows — the per-site
@@ -899,6 +1047,29 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/destinations
 	ListSiteDestinations(ctx context.Context, params ListSiteDestinationsParams) (ListSiteDestinationsRes, error)
+	// ListSiteEmailLog invokes listSiteEmailLog operation.
+	//
+	// Returns a keyset-paginated list of outgoing email log entries for a
+	// site, ordered by `created_at DESC, id DESC`. The composite cursor
+	// predicate `(created_at, id)` ensures no rows are skipped when multiple
+	// sends share the same timestamp (batch sends).
+	// **Body privacy**: `body` is never returned in the list response,
+	// regardless of `body_stored`. Use `GET /email/log/{logId}` to retrieve
+	// the full detail including body.
+	// Requires `site.email.manage` permission and site access.
+	//
+	// GET /api/v1/sites/{siteId}/email/log
+	ListSiteEmailLog(ctx context.Context, params ListSiteEmailLogParams) (ListSiteEmailLogRes, error)
+	// ListSiteEmailSuppression invokes listSiteEmailSuppression operation.
+	//
+	// Returns a keyset-paginated list of suppression entries for this site
+	// (including fleet-wide entries). Each entry was created either by a
+	// provider webhook (hard_bounce / complaint) or manually added by an
+	// operator (manual / unsubscribe).
+	// Requires `site.email.manage` permission.
+	//
+	// GET /api/v1/sites/{siteId}/email/suppression
+	ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (ListSiteEmailSuppressionRes, error)
 	// ListSiteLoginEvents invokes listSiteLoginEvents operation.
 	//
 	// Returns the agent-ingested login events for the site, ordered by
@@ -1051,6 +1222,26 @@ type Invoker interface {
 	//
 	// PUT /api/v1/sites/{siteId}/backup-settings/notifications
 	PutBackupSettingsNotifications(ctx context.Context, request *SiteBackupSettingsNotificationsUpdate, params PutBackupSettingsNotificationsParams) (PutBackupSettingsNotificationsRes, error)
+	// PutOrgEmailConfig invokes putOrgEmailConfig operation.
+	//
+	// Creates or updates the org-wide default email configuration. This row is
+	// inherited by any site that has no per-site override. Provide `secret` in
+	// the body to store a new provider secret (age-encrypted at rest); omit
+	// `secret` to preserve the existing stored credential.
+	// Org-level route. Requires `site.email.manage` permission (operator+).
+	//
+	// PUT /api/v1/email/org-config
+	PutOrgEmailConfig(ctx context.Context, request *PutEmailConfigRequest) (PutOrgEmailConfigRes, error)
+	// PutOrgEmailWebhookConfig invokes putOrgEmailWebhookConfig operation.
+	//
+	// Updates the inbound webhook route token and/or signing key for the
+	// org-wide email config. When rotate_token is true a new route token is
+	// generated (the old URL is immediately invalid) and the plain token is
+	// returned once in webhook_route_token.
+	// Org-level route. Requires `site.email.manage` permission (operator+).
+	//
+	// PUT /api/v1/email/org-config/webhook-config
+	PutOrgEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest) (PutOrgEmailWebhookConfigRes, error)
 	// PutPerfConfig invokes putPerfConfig operation.
 	//
 	// Stores the new performance config and pushes it to the agent. If the
@@ -1062,6 +1253,25 @@ type Invoker interface {
 	//
 	// PUT /api/v1/sites/{siteId}/perf/config
 	PutPerfConfig(ctx context.Context, request *PerfConfig, params PutPerfConfigParams) (PutPerfConfigRes, error)
+	// PutSiteEmailConfig invokes putSiteEmailConfig operation.
+	//
+	// Creates or updates the per-site email configuration. Provide `secret` in
+	// the body to store a new provider secret (age-encrypted at rest); omit
+	// `secret` to preserve the existing stored credential (nil-sentinel pattern).
+	// Requires `site.email.manage` permission (operator+) and site access.
+	//
+	// PUT /api/v1/sites/{siteId}/email/config
+	PutSiteEmailConfig(ctx context.Context, request *PutEmailConfigRequest, params PutSiteEmailConfigParams) (PutSiteEmailConfigRes, error)
+	// PutSiteEmailWebhookConfig invokes putSiteEmailWebhookConfig operation.
+	//
+	// Updates the inbound webhook route token and/or signing key for the
+	// per-site email config. When rotate_token is true a new route token is
+	// generated (the old URL is immediately invalid) and the plain token is
+	// returned once in webhook_route_token.
+	// Requires `site.email.manage` permission (operator+) and site access.
+	//
+	// PUT /api/v1/sites/{siteId}/email/webhook-config
+	PutSiteEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest, params PutSiteEmailWebhookConfigParams) (PutSiteEmailWebhookConfigRes, error)
 	// PutSiteLoginBrand invokes putSiteLoginBrand operation.
 	//
 	// Stores the new login brand config and pushes it to the agent via the
@@ -1114,12 +1324,46 @@ type Invoker interface {
 	RefreshSiteUpdates(ctx context.Context, params RefreshSiteUpdatesParams) (RefreshSiteUpdatesRes, error)
 	// Register invokes register operation.
 	//
-	// On first run (zero users) this creates the first user, a tenant, and an
-	// owner membership. Once any user exists, open registration is closed and
-	// this returns 403; new users are added via the authenticated invite flow.
+	// On first run (zero users in the database) this bootstraps the instance:
+	// creates the first user verified and active, creates their tenant, and
+	// establishes an immediate session (201 + Me). After the first user exists,
+	// registration is open self-serve: the account is created in a pending
+	// state, a verification email is sent, and the response is 200
+	// {ok: true, pending: true}. The user must verify their email via
+	// POST /auth/verify-email before they can log in.
 	//
 	// POST /auth/register
 	Register(ctx context.Context, request *RegisterRequest) (RegisterRes, error)
+	// ResendEmailLog invokes resendEmailLog operation.
+	//
+	// Dispatches the `resend_email` agent command for the given log entry.
+	// Only available when `body_stored=true` on the log entry — returns 409
+	// otherwise. The resend is best-effort: if the agent is offline or returns
+	// an error the response contains `ok=false` with the agent's detail message
+	// but HTTP 200 is returned (matching the test-email pattern).
+	// The `resent_count` counter is incremented before the agent dispatch so
+	// operators can see how many resend attempts were made even if the agent
+	// was unavailable.
+	// Requires `site.email.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/email/log/{logId}/resend
+	ResendEmailLog(ctx context.Context, params ResendEmailLogParams) (ResendEmailLogRes, error)
+	// ResendVerification invokes resendVerification operation.
+	//
+	// Always returns 200 {ok: true} whether or not the email maps to a
+	// pending account (enumeration-safe). A new verification email is sent
+	// when the account exists and is still pending verification.
+	//
+	// POST /auth/verification/resend
+	ResendVerification(ctx context.Context, request *ResendVerificationReq) (*ResendVerificationOK, error)
+	// ResetPassword invokes resetPassword operation.
+	//
+	// Validates the one-time reset token and replaces the user's password.
+	// Does not establish a session; the user must log in separately. Returns
+	// 410 when the token is expired, already used, or not found.
+	//
+	// POST /auth/password/reset
+	ResetPassword(ctx context.Context, request *ResetPasswordReq) (ResetPasswordRes, error)
 	// RestoreIsolatedMedia invokes restoreIsolatedMedia operation.
 	//
 	// Moves quarantined attachment files back to the WordPress uploads directory
@@ -1204,6 +1448,19 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/clean/scan
 	ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (*MediaCleanScanResult, error)
+	// SendTestEmail invokes sendTestEmail operation.
+	//
+	// Dispatches the signed `send_test_email` command to the site's agent.
+	// The agent uses its current email config (previously synced via
+	// sync_email_config) to send the test message.
+	// **Phase 1 note**: the agent does not yet implement this command (Phase 2
+	// will add the PHP handler). Until then the response will be
+	// `{ok: false, detail: "command not found"}`. This is expected and not an
+	// error state — wire the UI and handle the graceful failure.
+	// Requires `site.email.manage` permission (operator+) and site access.
+	//
+	// POST /api/v1/sites/{siteId}/email/test
+	SendTestEmail(ctx context.Context, request *EmailTestRequest, params SendTestEmailParams) (SendTestEmailRes, error)
 	// SetSiteTags invokes setSiteTags operation.
 	//
 	// Replace the tag set on a site.
@@ -1283,6 +1540,15 @@ type Invoker interface {
 	//
 	// GET /api/v1/audit/verify
 	VerifyAudit(ctx context.Context) (VerifyAuditRes, error)
+	// VerifyEmail invokes verifyEmail operation.
+	//
+	// Consumes the one-time verification token sent during self-serve
+	// registration, activates the account, and establishes a session so the
+	// user lands logged in. Returns 410 when the token is expired or already
+	// consumed.
+	//
+	// POST /auth/verify-email
+	VerifyEmail(ctx context.Context, request *VerifyEmailReq) (VerifyEmailRes, error)
 	// VerifySiteActivity invokes verifySiteActivity operation.
 	//
 	// Recomputes the entire hash chain for the site server-side from genesis
@@ -1502,6 +1768,186 @@ func (c *Client) sendActivateOrg(ctx context.Context, params ActivateOrgParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeActivateOrgResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// AddFleetEmailSuppression invokes addFleetEmailSuppression operation.
+//
+// Adds a suppression entry with `site_id=null`, applying to all sites
+// in the tenant. Useful for globally suppressing an address that generates
+// bounces across multiple sites. `reason` must be `manual` or `unsubscribe`.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/email/suppression
+func (c *Client) AddFleetEmailSuppression(ctx context.Context, request *AddSuppressionRequest) (AddFleetEmailSuppressionRes, error) {
+	res, err := c.sendAddFleetEmailSuppression(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendAddFleetEmailSuppression(ctx context.Context, request *AddSuppressionRequest) (res AddFleetEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("addFleetEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/email/suppression"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, AddFleetEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/suppression"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeAddFleetEmailSuppressionRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeAddFleetEmailSuppressionResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// AddSiteEmailSuppression invokes addSiteEmailSuppression operation.
+//
+// Manually suppresses an email address for this site. `reason` must be
+// `manual` or `unsubscribe` — hard_bounce and complaint entries are
+// created automatically via provider webhooks and cannot be added manually
+// (to prevent accidental data loss for transient bounces).
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/suppression
+func (c *Client) AddSiteEmailSuppression(ctx context.Context, request *AddSuppressionRequest, params AddSiteEmailSuppressionParams) (AddSiteEmailSuppressionRes, error) {
+	res, err := c.sendAddSiteEmailSuppression(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendAddSiteEmailSuppression(ctx context.Context, request *AddSuppressionRequest, params AddSiteEmailSuppressionParams) (res AddSiteEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("addSiteEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/suppression"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, AddSiteEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/suppression"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeAddSiteEmailSuppressionRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeAddSiteEmailSuppressionResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -3291,6 +3737,105 @@ func (c *Client) sendBulkConfigCache(ctx context.Context, request *BulkConfigReq
 	return result, nil
 }
 
+// BulkDeleteEmailLog invokes bulkDeleteEmailLog operation.
+//
+// Deletes a list of email log entries by id. RLS ensures only entries
+// belonging to the operator's tenant are deleted regardless of the id list.
+// Maximum 500 ids per request.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/bulk-delete
+func (c *Client) BulkDeleteEmailLog(ctx context.Context, request *BulkDeleteLogsRequest, params BulkDeleteEmailLogParams) (BulkDeleteEmailLogRes, error) {
+	res, err := c.sendBulkDeleteEmailLog(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendBulkDeleteEmailLog(ctx context.Context, request *BulkDeleteLogsRequest, params BulkDeleteEmailLogParams) (res BulkDeleteEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("bulkDeleteEmailLog"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log/bulk-delete"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, BulkDeleteEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log/bulk-delete"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeBulkDeleteEmailLogRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeBulkDeleteEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // BulkPurgeCache invokes bulkPurgeCache operation.
 //
 // Purges the whole cache for each site in `site_ids`. Each site id is
@@ -3365,6 +3910,105 @@ func (c *Client) sendBulkPurgeCache(ctx context.Context, request *BulkPurgeReque
 
 	stage = "DecodeResponse"
 	result, err := decodeBulkPurgeCacheResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// BulkResendEmailLog invokes bulkResendEmailLog operation.
+//
+// Dispatches `resend_email` for multiple log entries. Each entry is
+// processed independently. Entries without body_stored are skipped with
+// `ok=false` in the per-entry result array (no overall 4xx).
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/bulk-resend
+func (c *Client) BulkResendEmailLog(ctx context.Context, request *BulkResendRequest, params BulkResendEmailLogParams) (BulkResendEmailLogRes, error) {
+	res, err := c.sendBulkResendEmailLog(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendBulkResendEmailLog(ctx context.Context, request *BulkResendRequest, params BulkResendEmailLogParams) (res BulkResendEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("bulkResendEmailLog"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log/bulk-resend"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, BulkResendEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log/bulk-resend"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeBulkResendEmailLogRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeBulkResendEmailLogResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -5260,6 +5904,100 @@ func (c *Client) sendDeleteDbSnapshot(ctx context.Context, params DeleteDbSnapsh
 	return result, nil
 }
 
+// DeleteFleetEmailSuppression invokes deleteFleetEmailSuppression operation.
+//
+// Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
+// belongs to a specific site, use the per-site delete route instead.
+// Requires `site.email.manage` permission.
+//
+// DELETE /api/v1/email/suppression/{suppressionId}
+func (c *Client) DeleteFleetEmailSuppression(ctx context.Context, params DeleteFleetEmailSuppressionParams) (DeleteFleetEmailSuppressionRes, error) {
+	res, err := c.sendDeleteFleetEmailSuppression(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteFleetEmailSuppression(ctx context.Context, params DeleteFleetEmailSuppressionParams) (res DeleteFleetEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteFleetEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/email/suppression/{suppressionId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteFleetEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [2]string
+	pathParts[0] = "/api/v1/email/suppression/"
+	{
+		// Encode "suppressionId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "suppressionId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SuppressionId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteFleetEmailSuppressionResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // DeleteIsolatedMedia invokes deleteIsolatedMedia operation.
 //
 // Permanently removes quarantined attachment files from disk and deletes
@@ -5753,6 +6491,120 @@ func (c *Client) sendDeleteSiteDestination(ctx context.Context, params DeleteSit
 	return result, nil
 }
 
+// DeleteSiteEmailSuppression invokes deleteSiteEmailSuppression operation.
+//
+// Removes a suppression entry by id. The operator is responsible for
+// ensuring the removal is appropriate (e.g. the email address has
+// unsubscribed from a suppression request rather than a hard bounce).
+// Requires `site.email.manage` permission.
+//
+// DELETE /api/v1/sites/{siteId}/email/suppression/{suppressionId}
+func (c *Client) DeleteSiteEmailSuppression(ctx context.Context, params DeleteSiteEmailSuppressionParams) (DeleteSiteEmailSuppressionRes, error) {
+	res, err := c.sendDeleteSiteEmailSuppression(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDeleteSiteEmailSuppression(ctx context.Context, params DeleteSiteEmailSuppressionParams) (res DeleteSiteEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("deleteSiteEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("DELETE"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/suppression/{suppressionId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DeleteSiteEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [4]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/suppression/"
+	{
+		// Encode "suppressionId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "suppressionId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SuppressionId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "DELETE", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDeleteSiteEmailSuppressionResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // DeleteSiteShare invokes deleteSiteShare operation.
 //
 // Revoke a collaborator's site access (admin+; org-scope only).
@@ -6128,6 +6980,270 @@ func (c *Client) sendEnroll(ctx context.Context, request *EnrollRequest) (res En
 
 	stage = "DecodeResponse"
 	result, err := decodeEnrollResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ExportSiteEmailLog invokes exportSiteEmailLog operation.
+//
+// Streams up to 10,000 filtered log entries as CSV (default) or JSON.
+// Body content is excluded from the export regardless of `body_stored`
+// (privacy-by-default). Pass `format=json` for JSON output.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log/export
+func (c *Client) ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (ExportSiteEmailLogRes, error) {
+	res, err := c.sendExportSiteEmailLog(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (res ExportSiteEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("exportSiteEmailLog"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log/export"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ExportSiteEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log/export"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "format" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "format",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Format.Get(); ok {
+				return e.EncodeValue(conv.StringToString(string(val)))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "status" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "status",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Status.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "from" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "from",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.From.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "to" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "to",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.To.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "q" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "q",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Q.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeExportSiteEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ForgotPassword invokes forgotPassword operation.
+//
+// Always returns 200 {ok: true} whether or not the email maps to an
+// account (enumeration-safe). A reset-link email is sent when the account
+// exists and is active.
+//
+// POST /auth/password/forgot
+func (c *Client) ForgotPassword(ctx context.Context, request *ForgotPasswordReq) (*ForgotPasswordOK, error) {
+	res, err := c.sendForgotPassword(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendForgotPassword(ctx context.Context, request *ForgotPasswordReq) (res *ForgotPasswordOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("forgotPassword"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/auth/password/forgot"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ForgotPasswordOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/auth/password/forgot"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeForgotPasswordRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeForgotPasswordResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -6975,6 +8091,120 @@ func (c *Client) sendGetDbScanResult(ctx context.Context, params GetDbScanResult
 	return result, nil
 }
 
+// GetFleetEmailStats invokes getFleetEmailStats operation.
+//
+// Returns tenant-wide summary counts and a per-day time-series for the
+// given date range. Org-scope only.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/stats
+func (c *Client) GetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (GetFleetEmailStatsRes, error) {
+	res, err := c.sendGetFleetEmailStats(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (res GetFleetEmailStatsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetEmailStats"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/stats"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetEmailStatsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/stats"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "from" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "from",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.From.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "to" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "to",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.To.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetEmailStatsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetHealthz invokes getHealthz operation.
 //
 // Liveness probe.
@@ -7227,6 +8457,83 @@ func (c *Client) sendGetMediaJob(ctx context.Context, params GetMediaJobParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeGetMediaJobResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetOrgEmailConfig invokes getOrgEmailConfig operation.
+//
+// Returns the org-wide default email configuration. Sites with no per-site
+// config inherit this row. Includes `secret_set: bool` — the actual
+// provider secret is never returned.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// GET /api/v1/email/org-config
+func (c *Client) GetOrgEmailConfig(ctx context.Context) (GetOrgEmailConfigRes, error) {
+	res, err := c.sendGetOrgEmailConfig(ctx)
+	return res, err
+}
+
+func (c *Client) sendGetOrgEmailConfig(ctx context.Context) (res GetOrgEmailConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getOrgEmailConfig"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/org-config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetOrgEmailConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/org-config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetOrgEmailConfigResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -8104,6 +9411,351 @@ func (c *Client) sendGetSiteDiagnostics(ctx context.Context, params GetSiteDiagn
 
 	stage = "DecodeResponse"
 	result, err := decodeGetSiteDiagnosticsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetSiteEmailConfig invokes getSiteEmailConfig operation.
+//
+// Returns the email config for a site. If no per-site row exists the
+// org-wide default is returned (with `site_id` set to the queried site so
+// the frontend knows the row was inherited). Includes `secret_set: bool`;
+// the actual provider secret is never returned.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// GET /api/v1/sites/{siteId}/email/config
+func (c *Client) GetSiteEmailConfig(ctx context.Context, params GetSiteEmailConfigParams) (GetSiteEmailConfigRes, error) {
+	res, err := c.sendGetSiteEmailConfig(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetSiteEmailConfig(ctx context.Context, params GetSiteEmailConfigParams) (res GetSiteEmailConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getSiteEmailConfig"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetSiteEmailConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetSiteEmailConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetSiteEmailLogEntry invokes getSiteEmailLogEntry operation.
+//
+// Returns a single email log entry. When `body_stored` is true and a
+// body was captured at send time, it is included in this response.
+// Also returns `prev_id` and `next_id` for in-detail navigation.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log/{logId}
+func (c *Client) GetSiteEmailLogEntry(ctx context.Context, params GetSiteEmailLogEntryParams) (GetSiteEmailLogEntryRes, error) {
+	res, err := c.sendGetSiteEmailLogEntry(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetSiteEmailLogEntry(ctx context.Context, params GetSiteEmailLogEntryParams) (res GetSiteEmailLogEntryRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getSiteEmailLogEntry"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log/{logId}"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetSiteEmailLogEntryOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [4]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log/"
+	{
+		// Encode "logId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "logId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.LogId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetSiteEmailLogEntryResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetSiteEmailStats invokes getSiteEmailStats operation.
+//
+// Returns summary counts (total, sent, failed, provider count),
+// a per-day time-series, and a per-provider breakdown for the given
+// date range. Date range defaults to the last 30 days when omitted.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/stats
+func (c *Client) GetSiteEmailStats(ctx context.Context, params GetSiteEmailStatsParams) (GetSiteEmailStatsRes, error) {
+	res, err := c.sendGetSiteEmailStats(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetSiteEmailStats(ctx context.Context, params GetSiteEmailStatsParams) (res GetSiteEmailStatsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getSiteEmailStats"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/stats"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetSiteEmailStatsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/stats"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "from" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "from",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.From.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "to" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "to",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.To.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetSiteEmailStatsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -9400,6 +11052,403 @@ func (c *Client) sendListDbSnapshots(ctx context.Context, params ListDbSnapshots
 
 	stage = "DecodeResponse"
 	result, err := decodeListDbSnapshotsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListEmailProviders invokes listEmailProviders operation.
+//
+// Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
+// SendGrid, Mailgun, and Postmark. Each entry includes the provider slug,
+// display label, and the field schema (non-secret and secret fields, types,
+// required flags, options).
+// Org-level route — requires RequireOrgScope (org members only, not
+// site-collaborators). Requires the `site.email.manage` permission.
+//
+// GET /api/v1/email/providers
+func (c *Client) ListEmailProviders(ctx context.Context) (ListEmailProvidersRes, error) {
+	res, err := c.sendListEmailProviders(ctx)
+	return res, err
+}
+
+func (c *Client) sendListEmailProviders(ctx context.Context) (res ListEmailProvidersRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listEmailProviders"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/providers"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListEmailProvidersOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/providers"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListEmailProvidersResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListFleetEmailLog invokes listFleetEmailLog operation.
+//
+// Returns a keyset-paginated cross-site email log for the tenant.
+// Org-scope only (site-collaborators are blocked).
+// Body is never included in the list.
+// **Collaborator note**: collaborators who can read specific sites see
+// those sites' data through the per-site `/sites/{siteId}/email/log`
+// route. This fleet-level route is for full org members only.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/log
+func (c *Client) ListFleetEmailLog(ctx context.Context, params ListFleetEmailLogParams) (ListFleetEmailLogRes, error) {
+	res, err := c.sendListFleetEmailLog(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListFleetEmailLog(ctx context.Context, params ListFleetEmailLogParams) (res ListFleetEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listFleetEmailLog"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/log"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListFleetEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/log"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "status" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "status",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Status.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "from" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "from",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.From.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "to" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "to",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.To.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "q" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "q",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Q.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListFleetEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListFleetEmailSuppression invokes listFleetEmailSuppression operation.
+//
+// Returns all suppression entries across the tenant fleet. Org-scope only.
+// Entries with `site_id=null` are fleet-wide suppressions that apply to
+// every site in the tenant.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/suppression
+func (c *Client) ListFleetEmailSuppression(ctx context.Context, params ListFleetEmailSuppressionParams) (ListFleetEmailSuppressionRes, error) {
+	res, err := c.sendListFleetEmailSuppression(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListFleetEmailSuppression(ctx context.Context, params ListFleetEmailSuppressionParams) (res ListFleetEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listFleetEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/suppression"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListFleetEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/suppression"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "reason" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "reason",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Reason.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListFleetEmailSuppressionResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -11159,6 +13208,364 @@ func (c *Client) sendListSiteDestinations(ctx context.Context, params ListSiteDe
 
 	stage = "DecodeResponse"
 	result, err := decodeListSiteDestinationsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListSiteEmailLog invokes listSiteEmailLog operation.
+//
+// Returns a keyset-paginated list of outgoing email log entries for a
+// site, ordered by `created_at DESC, id DESC`. The composite cursor
+// predicate `(created_at, id)` ensures no rows are skipped when multiple
+// sends share the same timestamp (batch sends).
+// **Body privacy**: `body` is never returned in the list response,
+// regardless of `body_stored`. Use `GET /email/log/{logId}` to retrieve
+// the full detail including body.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log
+func (c *Client) ListSiteEmailLog(ctx context.Context, params ListSiteEmailLogParams) (ListSiteEmailLogRes, error) {
+	res, err := c.sendListSiteEmailLog(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListSiteEmailLog(ctx context.Context, params ListSiteEmailLogParams) (res ListSiteEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listSiteEmailLog"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListSiteEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "status" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "status",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Status.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "from" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "from",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.From.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "to" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "to",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.To.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "q" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "q",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Q.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListSiteEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListSiteEmailSuppression invokes listSiteEmailSuppression operation.
+//
+// Returns a keyset-paginated list of suppression entries for this site
+// (including fleet-wide entries). Each entry was created either by a
+// provider webhook (hard_bounce / complaint) or manually added by an
+// operator (manual / unsubscribe).
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/sites/{siteId}/email/suppression
+func (c *Client) ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (ListSiteEmailSuppressionRes, error) {
+	res, err := c.sendListSiteEmailSuppression(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (res ListSiteEmailSuppressionRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listSiteEmailSuppression"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/suppression"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListSiteEmailSuppressionOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/suppression"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "reason" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "reason",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Reason.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListSiteEmailSuppressionResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -13245,6 +15652,168 @@ func (c *Client) sendPutBackupSettingsNotifications(ctx context.Context, request
 	return result, nil
 }
 
+// PutOrgEmailConfig invokes putOrgEmailConfig operation.
+//
+// Creates or updates the org-wide default email configuration. This row is
+// inherited by any site that has no per-site override. Provide `secret` in
+// the body to store a new provider secret (age-encrypted at rest); omit
+// `secret` to preserve the existing stored credential.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// PUT /api/v1/email/org-config
+func (c *Client) PutOrgEmailConfig(ctx context.Context, request *PutEmailConfigRequest) (PutOrgEmailConfigRes, error) {
+	res, err := c.sendPutOrgEmailConfig(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendPutOrgEmailConfig(ctx context.Context, request *PutEmailConfigRequest) (res PutOrgEmailConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putOrgEmailConfig"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/email/org-config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutOrgEmailConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/org-config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutOrgEmailConfigRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutOrgEmailConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PutOrgEmailWebhookConfig invokes putOrgEmailWebhookConfig operation.
+//
+// Updates the inbound webhook route token and/or signing key for the
+// org-wide email config. When rotate_token is true a new route token is
+// generated (the old URL is immediately invalid) and the plain token is
+// returned once in webhook_route_token.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// PUT /api/v1/email/org-config/webhook-config
+func (c *Client) PutOrgEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest) (PutOrgEmailWebhookConfigRes, error) {
+	res, err := c.sendPutOrgEmailWebhookConfig(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendPutOrgEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest) (res PutOrgEmailWebhookConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putOrgEmailWebhookConfig"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/email/org-config/webhook-config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutOrgEmailWebhookConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/org-config/webhook-config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutOrgEmailWebhookConfigRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutOrgEmailWebhookConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // PutPerfConfig invokes putPerfConfig operation.
 //
 // Stores the new performance config and pushes it to the agent. If the
@@ -13339,6 +15908,205 @@ func (c *Client) sendPutPerfConfig(ctx context.Context, request *PerfConfig, par
 
 	stage = "DecodeResponse"
 	result, err := decodePutPerfConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PutSiteEmailConfig invokes putSiteEmailConfig operation.
+//
+// Creates or updates the per-site email configuration. Provide `secret` in
+// the body to store a new provider secret (age-encrypted at rest); omit
+// `secret` to preserve the existing stored credential (nil-sentinel pattern).
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// PUT /api/v1/sites/{siteId}/email/config
+func (c *Client) PutSiteEmailConfig(ctx context.Context, request *PutEmailConfigRequest, params PutSiteEmailConfigParams) (PutSiteEmailConfigRes, error) {
+	res, err := c.sendPutSiteEmailConfig(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutSiteEmailConfig(ctx context.Context, request *PutEmailConfigRequest, params PutSiteEmailConfigParams) (res PutSiteEmailConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putSiteEmailConfig"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutSiteEmailConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutSiteEmailConfigRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutSiteEmailConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// PutSiteEmailWebhookConfig invokes putSiteEmailWebhookConfig operation.
+//
+// Updates the inbound webhook route token and/or signing key for the
+// per-site email config. When rotate_token is true a new route token is
+// generated (the old URL is immediately invalid) and the plain token is
+// returned once in webhook_route_token.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// PUT /api/v1/sites/{siteId}/email/webhook-config
+func (c *Client) PutSiteEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest, params PutSiteEmailWebhookConfigParams) (PutSiteEmailWebhookConfigRes, error) {
+	res, err := c.sendPutSiteEmailWebhookConfig(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutSiteEmailWebhookConfig(ctx context.Context, request *PutEmailWebhookConfigRequest, params PutSiteEmailWebhookConfigParams) (res PutSiteEmailWebhookConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putSiteEmailWebhookConfig"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/webhook-config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutSiteEmailWebhookConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/webhook-config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutSiteEmailWebhookConfigRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutSiteEmailWebhookConfigResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -13752,9 +16520,13 @@ func (c *Client) sendRefreshSiteUpdates(ctx context.Context, params RefreshSiteU
 
 // Register invokes register operation.
 //
-// On first run (zero users) this creates the first user, a tenant, and an
-// owner membership. Once any user exists, open registration is closed and
-// this returns 403; new users are added via the authenticated invite flow.
+// On first run (zero users in the database) this bootstraps the instance:
+// creates the first user verified and active, creates their tenant, and
+// establishes an immediate session (201 + Me). After the first user exists,
+// registration is open self-serve: the account is created in a pending
+// state, a verification email is sent, and the response is 200
+// {ok: true, pending: true}. The user must verify their email via
+// POST /auth/verify-email before they can log in.
 //
 // POST /auth/register
 func (c *Client) Register(ctx context.Context, request *RegisterRequest) (RegisterRes, error) {
@@ -13822,6 +16594,284 @@ func (c *Client) sendRegister(ctx context.Context, request *RegisterRequest) (re
 
 	stage = "DecodeResponse"
 	result, err := decodeRegisterResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ResendEmailLog invokes resendEmailLog operation.
+//
+// Dispatches the `resend_email` agent command for the given log entry.
+// Only available when `body_stored=true` on the log entry — returns 409
+// otherwise. The resend is best-effort: if the agent is offline or returns
+// an error the response contains `ok=false` with the agent's detail message
+// but HTTP 200 is returned (matching the test-email pattern).
+// The `resent_count` counter is incremented before the agent dispatch so
+// operators can see how many resend attempts were made even if the agent
+// was unavailable.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/{logId}/resend
+func (c *Client) ResendEmailLog(ctx context.Context, params ResendEmailLogParams) (ResendEmailLogRes, error) {
+	res, err := c.sendResendEmailLog(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendResendEmailLog(ctx context.Context, params ResendEmailLogParams) (res ResendEmailLogRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("resendEmailLog"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/log/{logId}/resend"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ResendEmailLogOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [5]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/log/"
+	{
+		// Encode "logId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "logId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.LogId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[3] = encoded
+	}
+	pathParts[4] = "/resend"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeResendEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ResendVerification invokes resendVerification operation.
+//
+// Always returns 200 {ok: true} whether or not the email maps to a
+// pending account (enumeration-safe). A new verification email is sent
+// when the account exists and is still pending verification.
+//
+// POST /auth/verification/resend
+func (c *Client) ResendVerification(ctx context.Context, request *ResendVerificationReq) (*ResendVerificationOK, error) {
+	res, err := c.sendResendVerification(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendResendVerification(ctx context.Context, request *ResendVerificationReq) (res *ResendVerificationOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("resendVerification"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/auth/verification/resend"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ResendVerificationOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/auth/verification/resend"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeResendVerificationRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeResendVerificationResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ResetPassword invokes resetPassword operation.
+//
+// Validates the one-time reset token and replaces the user's password.
+// Does not establish a session; the user must log in separately. Returns
+// 410 when the token is expired, already used, or not found.
+//
+// POST /auth/password/reset
+func (c *Client) ResetPassword(ctx context.Context, request *ResetPasswordReq) (ResetPasswordRes, error) {
+	res, err := c.sendResetPassword(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendResetPassword(ctx context.Context, request *ResetPasswordReq) (res ResetPasswordRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("resetPassword"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/auth/password/reset"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ResetPasswordOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/auth/password/reset"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeResetPasswordRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeResetPasswordResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -14673,6 +17723,109 @@ func (c *Client) sendScanUnusedMedia(ctx context.Context, params ScanUnusedMedia
 
 	stage = "DecodeResponse"
 	result, err := decodeScanUnusedMediaResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// SendTestEmail invokes sendTestEmail operation.
+//
+// Dispatches the signed `send_test_email` command to the site's agent.
+// The agent uses its current email config (previously synced via
+// sync_email_config) to send the test message.
+// **Phase 1 note**: the agent does not yet implement this command (Phase 2
+// will add the PHP handler). Until then the response will be
+// `{ok: false, detail: "command not found"}`. This is expected and not an
+// error state — wire the UI and handle the graceful failure.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// POST /api/v1/sites/{siteId}/email/test
+func (c *Client) SendTestEmail(ctx context.Context, request *EmailTestRequest, params SendTestEmailParams) (SendTestEmailRes, error) {
+	res, err := c.sendSendTestEmail(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendSendTestEmail(ctx context.Context, request *EmailTestRequest, params SendTestEmailParams) (res SendTestEmailRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("sendTestEmail"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/email/test"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, SendTestEmailOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/email/test"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeSendTestEmailRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeSendTestEmailResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -15660,6 +18813,86 @@ func (c *Client) sendVerifyAudit(ctx context.Context) (res VerifyAuditRes, err e
 
 	stage = "DecodeResponse"
 	result, err := decodeVerifyAuditResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// VerifyEmail invokes verifyEmail operation.
+//
+// Consumes the one-time verification token sent during self-serve
+// registration, activates the account, and establishes a session so the
+// user lands logged in. Returns 410 when the token is expired or already
+// consumed.
+//
+// POST /auth/verify-email
+func (c *Client) VerifyEmail(ctx context.Context, request *VerifyEmailReq) (VerifyEmailRes, error) {
+	res, err := c.sendVerifyEmail(ctx, request)
+	return res, err
+}
+
+func (c *Client) sendVerifyEmail(ctx context.Context, request *VerifyEmailReq) (res VerifyEmailRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("verifyEmail"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/auth/verify-email"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, VerifyEmailOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/auth/verify-email"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeVerifyEmailRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeVerifyEmailResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

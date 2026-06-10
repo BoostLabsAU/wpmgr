@@ -4207,6 +4207,1042 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaCleanQuarantineList"
+
+  # ---------------------------------------------------------------------------
+  # m59 — Per-site Email / SMTP Management (Phase 0 + 1)
+  # ---------------------------------------------------------------------------
+
+  /api/v1/email/providers:
+    get:
+      operationId: listEmailProviders
+      summary: List available email provider configurations
+      description: |
+        Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
+        SendGrid, Mailgun, and Postmark. Each entry includes the provider slug,
+        display label, and the field schema (non-secret and secret fields, types,
+        required flags, options).
+
+        Org-level route — requires RequireOrgScope (org members only, not
+        site-collaborators). Requires the `site.email.manage` permission.
+      tags: [email]
+      responses:
+        "200":
+          description: Provider catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailProviderCatalog"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/email/org-config:
+    get:
+      operationId: getOrgEmailConfig
+      summary: Get the org-wide default email config
+      description: |
+        Returns the org-wide default email configuration. Sites with no per-site
+        config inherit this row. Includes `secret_set: bool` — the actual
+        provider secret is never returned.
+
+        Org-level route. Requires `site.email.manage` permission (operator+).
+      tags: [email]
+      responses:
+        "200":
+          description: Org-wide email config (masked read)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEmailConfig"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No org-wide email config found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: putOrgEmailConfig
+      summary: Create or update the org-wide default email config
+      description: |
+        Creates or updates the org-wide default email configuration. This row is
+        inherited by any site that has no per-site override. Provide `secret` in
+        the body to store a new provider secret (age-encrypted at rest); omit
+        `secret` to preserve the existing stored credential.
+
+        Org-level route. Requires `site.email.manage` permission (operator+).
+      tags: [email]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailConfigRequest"
+      responses:
+        "200":
+          description: Saved org-wide email config (masked read)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEmailConfig"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Service unavailable (e.g. crypto not configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/config:
+    get:
+      operationId: getSiteEmailConfig
+      summary: Get per-site email config (with org-wide fallback)
+      description: |
+        Returns the email config for a site. If no per-site row exists the
+        org-wide default is returned (with `site_id` set to the queried site so
+        the frontend knows the row was inherited). Includes `secret_set: bool`;
+        the actual provider secret is never returned.
+
+        Requires `site.email.manage` permission (operator+) and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Site email config (masked read)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEmailConfig"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: putSiteEmailConfig
+      summary: Create or update per-site email config
+      description: |
+        Creates or updates the per-site email configuration. Provide `secret` in
+        the body to store a new provider secret (age-encrypted at rest); omit
+        `secret` to preserve the existing stored credential (nil-sentinel pattern).
+
+        Requires `site.email.manage` permission (operator+) and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailConfigRequest"
+      responses:
+        "200":
+          description: Saved site email config (masked read)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SiteEmailConfig"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Service unavailable (e.g. crypto not configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/webhook-config:
+    put:
+      operationId: putSiteEmailWebhookConfig
+      summary: Update per-site email webhook settings
+      description: |
+        Updates the inbound webhook route token and/or signing key for the
+        per-site email config. When rotate_token is true a new route token is
+        generated (the old URL is immediately invalid) and the plain token is
+        returned once in webhook_route_token.
+
+        Requires `site.email.manage` permission (operator+) and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailWebhookConfigRequest"
+      responses:
+        "200":
+          description: Updated webhook config (masked read; token shown once on rotate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailWebhookConfigResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site or email config not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Service unavailable (e.g. crypto not configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/email/org-config/webhook-config:
+    put:
+      operationId: putOrgEmailWebhookConfig
+      summary: Update org-wide email webhook settings
+      description: |
+        Updates the inbound webhook route token and/or signing key for the
+        org-wide email config. When rotate_token is true a new route token is
+        generated (the old URL is immediately invalid) and the plain token is
+        returned once in webhook_route_token.
+
+        Org-level route. Requires `site.email.manage` permission (operator+).
+      tags: [email]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutEmailWebhookConfigRequest"
+      responses:
+        "200":
+          description: Updated webhook config (masked read; token shown once on rotate)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailWebhookConfigResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: No org-wide email config found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "503":
+          description: Service unavailable (e.g. crypto not configured)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/test:
+    post:
+      operationId: sendTestEmail
+      summary: Dispatch a test email via the site agent
+      description: |
+        Dispatches the signed `send_test_email` command to the site's agent.
+        The agent uses its current email config (previously synced via
+        sync_email_config) to send the test message.
+
+        **Phase 1 note**: the agent does not yet implement this command (Phase 2
+        will add the PHP handler). Until then the response will be
+        `{ok: false, detail: "command not found"}`. This is expected and not an
+        error state — wire the UI and handle the graceful failure.
+
+        Requires `site.email.manage` permission (operator+) and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailTestRequest"
+      responses:
+        "200":
+          description: Test send result (ok may be false when agent returns error)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailTestResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # m59 Phase 3 — Email log viewer + stats
+  # ---------------------------------------------------------------------------
+
+  /api/v1/sites/{siteId}/email/log:
+    get:
+      operationId: listSiteEmailLog
+      summary: List the email log for a site (keyset-paginated)
+      description: |
+        Returns a keyset-paginated list of outgoing email log entries for a
+        site, ordered by `created_at DESC, id DESC`. The composite cursor
+        predicate `(created_at, id)` ensures no rows are skipped when multiple
+        sends share the same timestamp (batch sends).
+
+        **Body privacy**: `body` is never returned in the list response,
+        regardless of `body_stored`. Use `GET /email/log/{logId}` to retrieve
+        the full detail including body.
+
+        Requires `site.email.manage` permission and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: cursor
+          in: query
+          description: Opaque keyset cursor from a previous page's `next_cursor`.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Maximum entries to return (default 50, max 200).
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: status
+          in: query
+          description: Filter by status (sent | failed | pending).
+          schema:
+            type: string
+        - name: from
+          in: query
+          description: >
+            Start of date range (inclusive). RFC3339 or YYYY-MM-DD.
+          schema:
+            type: string
+        - name: to
+          in: query
+          description: >
+            End of date range (inclusive). RFC3339 or YYYY-MM-DD.
+          schema:
+            type: string
+        - name: q
+          in: query
+          description: >
+            Free-text search against subject, from_address, and to_addresses.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Email log page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailLogList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/log/export:
+    get:
+      operationId: exportSiteEmailLog
+      summary: Export email log as CSV or JSON
+      description: |
+        Streams up to 10,000 filtered log entries as CSV (default) or JSON.
+        Body content is excluded from the export regardless of `body_stored`
+        (privacy-by-default). Pass `format=json` for JSON output.
+
+        Requires `site.email.manage` permission and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: format
+          in: query
+          description: Output format — `csv` (default) or `json`.
+          schema:
+            type: string
+            enum: [csv, json]
+            default: csv
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+        - name: to
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: CSV or JSON export stream
+          content:
+            text/csv:
+              schema:
+                type: string
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailLogList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/log/{logId}:
+    get:
+      operationId: getSiteEmailLogEntry
+      summary: Get a single email log entry (detail + body + prev/next navigation)
+      description: |
+        Returns a single email log entry. When `body_stored` is true and a
+        body was captured at send time, it is included in this response.
+        Also returns `prev_id` and `next_id` for in-detail navigation.
+
+        Requires `site.email.manage` permission and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: logId
+          in: path
+          required: true
+          description: UUID of the email log entry.
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Email log detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailLogDetail"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Log entry not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/stats:
+    get:
+      operationId: getSiteEmailStats
+      summary: Per-site email stats (sent/failed + per-day + per-provider)
+      description: |
+        Returns summary counts (total, sent, failed, provider count),
+        a per-day time-series, and a per-provider breakdown for the given
+        date range. Date range defaults to the last 30 days when omitted.
+
+        Requires `site.email.manage` permission and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: from
+          in: query
+          description: Start of date range (RFC3339 or YYYY-MM-DD).
+          schema:
+            type: string
+        - name: to
+          in: query
+          description: End of date range (RFC3339 or YYYY-MM-DD).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Email stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailStats"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/email/log:
+    get:
+      operationId: listFleetEmailLog
+      summary: Fleet cross-site email log (all sites in tenant)
+      description: |
+        Returns a keyset-paginated cross-site email log for the tenant.
+        Org-scope only (site-collaborators are blocked).
+        Body is never included in the list.
+
+        **Collaborator note**: collaborators who can read specific sites see
+        those sites' data through the per-site `/sites/{siteId}/email/log`
+        route. This fleet-level route is for full org members only.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+        - name: to
+          in: query
+          schema:
+            type: string
+        - name: q
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fleet email log page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailLogList"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/email/stats:
+    get:
+      operationId: getFleetEmailStats
+      summary: Fleet cross-site email stats
+      description: |
+        Returns tenant-wide summary counts and a per-day time-series for the
+        given date range. Org-scope only.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - name: from
+          in: query
+          schema:
+            type: string
+        - name: to
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fleet email stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailStats"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ---------------------------------------------------------------------------
+  # Phase 4a — Suppression list + email log actions
+  # ---------------------------------------------------------------------------
+
+  /api/v1/sites/{siteId}/email/suppression:
+    get:
+      operationId: listSiteEmailSuppression
+      summary: List suppression entries for a site
+      description: |
+        Returns a keyset-paginated list of suppression entries for this site
+        (including fleet-wide entries). Each entry was created either by a
+        provider webhook (hard_bounce / complaint) or manually added by an
+        operator (manual / unsubscribe).
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: reason
+          in: query
+          description: Filter by suppression reason (hard_bounce | complaint | unsubscribe | manual)
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Suppression page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSuppressionPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: addSiteEmailSuppression
+      summary: Manually add a suppression entry for a site
+      description: |
+        Manually suppresses an email address for this site. `reason` must be
+        `manual` or `unsubscribe` — hard_bounce and complaint entries are
+        created automatically via provider webhooks and cannot be added manually
+        (to prevent accidental data loss for transient bounces).
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSuppressionRequest"
+      responses:
+        "201":
+          description: Suppression entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSuppressionEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/sites/{siteId}/email/suppression/{suppressionId}:
+    delete:
+      operationId: deleteSiteEmailSuppression
+      summary: Delete a suppression entry
+      description: |
+        Removes a suppression entry by id. The operator is responsible for
+        ensuring the removal is appropriate (e.g. the email address has
+        unsubscribed from a suppression request rather than a hard bounce).
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: suppressionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Suppression entry deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/email/suppression:
+    get:
+      operationId: listFleetEmailSuppression
+      summary: Fleet-scope suppression list (all sites in tenant)
+      description: |
+        Returns all suppression entries across the tenant fleet. Org-scope only.
+        Entries with `site_id=null` are fleet-wide suppressions that apply to
+        every site in the tenant.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - name: cursor
+          in: query
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: reason
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Fleet suppression page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSuppressionPage"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+    post:
+      operationId: addFleetEmailSuppression
+      summary: Manually add a fleet-wide suppression entry
+      description: |
+        Adds a suppression entry with `site_id=null`, applying to all sites
+        in the tenant. Useful for globally suppressing an address that generates
+        bounces across multiple sites. `reason` must be `manual` or `unsubscribe`.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddSuppressionRequest"
+      responses:
+        "201":
+          description: Fleet suppression entry created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailSuppressionEntry"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/email/suppression/{suppressionId}:
+    delete:
+      operationId: deleteFleetEmailSuppression
+      summary: Delete a fleet-scope suppression entry
+      description: |
+        Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
+        belongs to a specific site, use the per-site delete route instead.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - name: suppressionId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: Suppression entry deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/email/log/{logId}/resend:
+    post:
+      operationId: resendEmailLog
+      summary: Resend a single email log entry
+      description: |
+        Dispatches the `resend_email` agent command for the given log entry.
+        Only available when `body_stored=true` on the log entry — returns 409
+        otherwise. The resend is best-effort: if the agent is offline or returns
+        an error the response contains `ok=false` with the agent's detail message
+        but HTTP 200 is returned (matching the test-email pattern).
+
+        The `resent_count` counter is incremented before the agent dispatch so
+        operators can see how many resend attempts were made even if the agent
+        was unavailable.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: logId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Resend dispatched (or gracefully failed — check `ok` field)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResendEmailResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: Body not stored — resend unavailable
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/email/log/bulk-resend:
+    post:
+      operationId: bulkResendEmailLog
+      summary: Bulk resend email log entries (max 100)
+      description: |
+        Dispatches `resend_email` for multiple log entries. Each entry is
+        processed independently. Entries without body_stored are skipped with
+        `ok=false` in the per-entry result array (no overall 4xx).
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkResendRequest"
+      responses:
+        "200":
+          description: Per-entry resend results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkResendResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/sites/{siteId}/email/log/bulk-delete:
+    post:
+      operationId: bulkDeleteEmailLog
+      summary: Bulk delete email log entries (max 500)
+      description: |
+        Deletes a list of email log entries by id. RLS ensures only entries
+        belonging to the operator's tenant are deleted regardless of the id list.
+        Maximum 500 ids per request.
+
+        Requires `site.email.manage` permission.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BulkDeleteLogsRequest"
+      responses:
+        "200":
+          description: Number of rows deleted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BulkDeleteLogsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
   /api/v1/sites/{siteId}/perf/fonts:
     get:
       operationId: listFontResults
@@ -4420,6 +5456,31 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 components:
+  responses:
+    Unauthorized:
+      description: Not authenticated
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    Forbidden:
+      description: Insufficient permission
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+    BadRequest:
+      description: Validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
   parameters:
     Limit:
       name: limit
@@ -8329,3 +9390,692 @@ components:
           type: array
           items: { $ref: "#/components/schemas/MediaCleanQuarantineManifest" }
           description: All quarantine manifests currently held on the site.
+
+    # -------------------------------------------------------------------------
+    # Email / SMTP (Phase 0+1)
+    # -------------------------------------------------------------------------
+    SiteEmailConfig:
+      type: object
+      description: >
+        Per-site (or org-wide default) email configuration.
+        The provider secret is never returned — only `secret_set` indicates
+        whether a credential is stored. When `site_id` is present, the row is
+        a per-site override; when absent it is the org-wide default.
+        A GET for a site that inherits the org default sets `site_id` to the
+        queried site so the frontend can detect inheritance.
+      required:
+        - id
+        - tenant_id
+        - provider
+        - from_address
+        - from_name
+        - force_from_email
+        - force_from_name
+        - return_path
+        - secret_set
+        - log_emails
+        - store_body
+        - retention_days
+        - config
+        - mappings
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Surrogate primary key for this config row.
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Present for per-site rows; absent for the org-wide default.
+        provider:
+          type: string
+          description: >
+            Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+            Must match a slug in the provider catalog.
+        from_address:
+          type: string
+          description: Sender envelope address (e.g. no-reply@example.com).
+        from_name:
+          type: string
+          description: Sender display name shown in the From header.
+        force_from_email:
+          type: boolean
+          description: >
+            When true the agent overrides any plugin-supplied From address
+            with `from_address`.
+        force_from_name:
+          type: boolean
+          description: >
+            When true the agent overrides any plugin-supplied From name
+            with `from_name`.
+        return_path:
+          type: boolean
+          description: Set the Return-Path / Bounce-To header to `from_address`.
+        secret_set:
+          type: boolean
+          description: True when an encrypted provider secret is stored for this row.
+        default_connection:
+          type: string
+          nullable: true
+          description: >
+            Slug of the connection to use for regular mail (for providers that
+            support multiple connections, e.g. SMTP-Multi — Phase 2+).
+        fallback_connection:
+          type: string
+          nullable: true
+          description: Slug of the fallback connection (Phase 2+).
+        log_emails:
+          type: boolean
+          description: Whether outgoing emails are recorded in site_email_log.
+        store_body:
+          type: boolean
+          description: When log_emails is true, also persist the full email body.
+        retention_days:
+          type: integer
+          description: Number of days email log rows are retained (1-365).
+        config:
+          type: object
+          additionalProperties: true
+          description: Provider-specific configuration fields (non-secret).
+        mappings:
+          type: object
+          additionalProperties: true
+          description: >
+            Provider-specific field mappings (e.g. WP-Mail -> provider header
+            mappings -- Phase 2+).
+        webhook_url:
+          type: string
+          nullable: true
+          description: >
+            The full inbound webhook URL for this config row, e.g.
+            https://manage.wpmgr.app/webhooks/email/{provider}/{token}.
+            Shows a placeholder token segment when a token is stored but not
+            freshly rotated. Absent when no token has been generated yet.
+        webhook_signing_key_set:
+          type: boolean
+          description: >
+            True when an HMAC signing key is stored for this row. The key
+            itself is never returned.
+        ses_topic_arns:
+          type: array
+          items:
+            type: string
+          description: >
+            SES only. SNS TopicArn allowlist -- only events delivered from
+            these topics are accepted. Empty array means no filter is applied.
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PutEmailWebhookConfigRequest:
+      type: object
+      description: >
+        Request body for PUT /email/org-config/webhook-config and
+        PUT /sites/{siteId}/email/webhook-config. All fields are optional.
+        Omit webhook_signing_key to preserve the stored key (nil-sentinel).
+        Send null to clear it. rotate_token: true generates a new route token
+        and returns webhook_route_token in the response (shown once).
+      properties:
+        rotate_token:
+          type: boolean
+          description: >
+            When true, a new route token is generated (invalidating the old
+            URL) and returned once in webhook_route_token.
+        webhook_signing_key:
+          type: string
+          nullable: true
+          description: >
+            HMAC signing key for verifying provider webhook payloads.
+            Write-only. Omit to preserve the existing key. Send null to clear.
+        ses_topic_arns:
+          type: array
+          nullable: true
+          items:
+            type: string
+          description: >
+            SES only. Replace the SNS TopicArn allowlist. null preserves the
+            existing list. Empty array clears the list (no filter).
+
+    EmailWebhookConfigResponse:
+      type: object
+      description: >
+        Response for PUT webhook-config. Always returns the updated masked
+        config fields. When rotate_token was true, also includes
+        webhook_route_token (plain token, shown once).
+      required:
+        - webhook_url
+        - webhook_signing_key_set
+        - ses_topic_arns
+      properties:
+        webhook_url:
+          type: string
+          description: >
+            The full inbound webhook URL including the (possibly new) token.
+            Present whenever a token exists after the operation.
+        webhook_signing_key_set:
+          type: boolean
+          description: True when an HMAC signing key is stored.
+        ses_topic_arns:
+          type: array
+          items:
+            type: string
+          description: Current SNS TopicArn allowlist (may be empty).
+        webhook_route_token:
+          type: string
+          nullable: true
+          description: >
+            Plain route token, returned once when rotate_token was true.
+            Store it immediately -- it will not be shown again.
+
+    PutEmailConfigRequest:
+      type: object
+      description: >
+        Request body for PUT /email/org-config and PUT /sites/{siteId}/email/config.
+        All fields are optional — omitted fields are unchanged (PATCH semantics
+        within a PUT envelope). Omitting `secret` preserves the existing stored
+        credential (nil-sentinel pattern).
+      properties:
+        provider:
+          type: string
+          description: Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+        from_address:
+          type: string
+          description: Sender envelope address.
+        from_name:
+          type: string
+          description: Sender display name.
+        force_from_email:
+          type: boolean
+        force_from_name:
+          type: boolean
+        return_path:
+          type: boolean
+        secret:
+          type: string
+          nullable: true
+          description: >
+            Provider credential (API key, SMTP password, etc.). Omit to
+            preserve the existing stored secret. Provide an empty string to
+            clear the stored secret.
+        default_connection:
+          type: string
+          nullable: true
+        fallback_connection:
+          type: string
+          nullable: true
+        log_emails:
+          type: boolean
+        store_body:
+          type: boolean
+        retention_days:
+          type: integer
+          description: Days to retain email log rows (1-365).
+        config:
+          type: object
+          additionalProperties: true
+          description: Provider-specific non-secret fields.
+        mappings:
+          type: object
+          additionalProperties: true
+
+    EmailTestRequest:
+      type: object
+      description: Request body for POST /sites/{siteId}/email/test.
+      required: [to]
+      properties:
+        to:
+          type: string
+          description: Recipient address for the test email.
+        subject:
+          type: string
+          description: >
+            Subject line. Defaults to "WPMgr test email" when omitted.
+        body:
+          type: string
+          description: >
+            Plain-text body. Defaults to a standard test message when omitted.
+
+    EmailTestResult:
+      type: object
+      description: >
+        Result of a test-send dispatch. `ok` may be false when the agent returns
+        an error or when the agent does not yet implement the command (Phase 1
+        expected behaviour — see endpoint description).
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          description: True when the agent confirmed the email was dispatched.
+        detail:
+          type: string
+          nullable: true
+          description: >
+            Human-readable detail or error message from the agent. Present when
+            ok is false.
+        message_id:
+          type: string
+          nullable: true
+          description: Provider-assigned message-id returned by the agent (Phase 2+).
+
+    EmailProviderCatalog:
+      type: object
+      description: Static catalog of supported email providers and their field schemas.
+      required: [providers]
+      properties:
+        providers:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailProviderSpec"
+
+    EmailProviderSpec:
+      type: object
+      description: Descriptor for a single email provider.
+      required: [slug, label, fields]
+      properties:
+        slug:
+          type: string
+          description: Machine-readable provider identifier (e.g. smtp, ses, sendgrid).
+        label:
+          type: string
+          description: Human-readable provider name.
+        docs_url:
+          type: string
+          nullable: true
+          description: URL to provider-specific setup documentation.
+        fields:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailProviderField"
+
+    EmailProviderField:
+      type: object
+      description: Schema descriptor for one provider configuration field.
+      required: [key, label, type, is_secret, is_required]
+      properties:
+        key:
+          type: string
+          description: Field key used in the `config` map of PutEmailConfigRequest.
+        label:
+          type: string
+          description: Human-readable field label.
+        type:
+          type: string
+          description: >
+            Input type hint: text | password | select | boolean | number.
+        is_secret:
+          type: boolean
+          description: >
+            When true the field value is a credential that must be sent via
+            the top-level `secret` field, not inside `config`.
+        is_required:
+          type: boolean
+        options:
+          type: array
+          nullable: true
+          description: Valid option values for select fields.
+          items:
+            type: string
+        default:
+          type: string
+          nullable: true
+          description: Default value hint for the UI.
+        help:
+          type: string
+          nullable: true
+          description: Short helper text shown below the field in the UI.
+
+    # -------------------------------------------------------------------------
+    # Email Log (Phase 3)
+    # -------------------------------------------------------------------------
+
+    SiteEmailLogEntry:
+      type: object
+      description: >
+        One outgoing email log entry. In list responses `body` is always
+        omitted. In the detail response (`GET /email/log/{logId}`) `body` is
+        present only when `body_stored` is true and a body was captured.
+      required:
+        - id
+        - tenant_id
+        - site_id
+        - to_addresses
+        - from_address
+        - subject
+        - provider
+        - status
+        - response
+        - error
+        - retries
+        - resent_count
+        - body_stored
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+        agent_seq:
+          type: integer
+          format: int64
+          nullable: true
+          description: Agent-local sequence number (cursor for the agent push).
+        message_id:
+          type: string
+          nullable: true
+          description: Provider-assigned Message-ID header value.
+        to_addresses:
+          type: array
+          items:
+            type: string
+          description: Recipient addresses.
+        from_address:
+          type: string
+        subject:
+          type: string
+        provider:
+          type: string
+          description: Provider slug used for this send (smtp | ses | sendgrid | mailgun | postmark).
+        status:
+          type: string
+          description: Delivery status (sent | failed | pending | bounced | complained).
+        response:
+          type: object
+          additionalProperties: true
+          description: Raw provider API response or SMTP response detail.
+        error:
+          type: string
+          description: Error message when status is failed. Empty string when no error.
+        retries:
+          type: integer
+          description: Number of delivery retries attempted.
+        resent_count:
+          type: integer
+          description: Number of times this message was manually resent.
+        body_stored:
+          type: boolean
+          description: Whether the email body was captured at send time.
+        body:
+          type: string
+          nullable: true
+          description: >
+            Full email body. Present only in the detail response and only when
+            body_stored is true. Never returned in list or export responses.
+        created_at:
+          type: string
+          format: date-time
+          description: Timestamp the email was sent (from the agent local clock).
+        updated_at:
+          type: string
+          format: date-time
+
+    EmailLogList:
+      type: object
+      description: A page of email log entries.
+      required: [entries, next_cursor]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteEmailLogEntry"
+        next_cursor:
+          type: string
+          description: >
+            Opaque keyset cursor for the next page. Empty string when this is
+            the last page.
+
+    EmailLogDetail:
+      type: object
+      description: Single email log entry with prev/next navigation IDs.
+      required: [entry]
+      properties:
+        entry:
+          $ref: "#/components/schemas/SiteEmailLogEntry"
+        prev_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the next-older entry (for the Prev button). Null when at the oldest.
+        next_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: ID of the next-newer entry (for the Next button). Null when at the newest.
+
+    EmailStatsByDay:
+      type: object
+      description: One day's aggregate email stats.
+      required: [day, total, sent_count, failed_count]
+      properties:
+        day:
+          type: string
+          description: Calendar day in YYYY-MM-DD format (UTC).
+        total:
+          type: integer
+          format: int64
+        sent_count:
+          type: integer
+          format: int64
+        failed_count:
+          type: integer
+          format: int64
+
+    EmailStatsByProvider:
+      type: object
+      description: One provider's aggregate email stats.
+      required: [provider, total, sent_count, failed_count]
+      properties:
+        provider:
+          type: string
+        total:
+          type: integer
+          format: int64
+        sent_count:
+          type: integer
+          format: int64
+        failed_count:
+          type: integer
+          format: int64
+
+    EmailStats:
+      type: object
+      description: >
+        Email statistics summary for a site or the whole fleet.
+        `site_count` is only populated for fleet stats.
+      required: [total, sent_count, failed_count, provider_count, by_day, by_provider]
+      properties:
+        total:
+          type: integer
+          format: int64
+        sent_count:
+          type: integer
+          format: int64
+        failed_count:
+          type: integer
+          format: int64
+        provider_count:
+          type: integer
+          format: int64
+          description: Number of distinct providers used in the range.
+        site_count:
+          type: integer
+          format: int64
+          nullable: true
+          description: Number of distinct sites in the range (fleet stats only).
+        by_day:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailStatsByDay"
+        by_provider:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailStatsByProvider"
+
+    # -------------------------------------------------------------------------
+    # Phase 4a — Suppression + log actions schemas
+    # -------------------------------------------------------------------------
+
+    EmailSuppressionEntry:
+      type: object
+      description: |
+        A single suppression entry. `email` is the plaintext address (present
+        when `store_plaintext=true` at create time). `email_hash` is always
+        present (SHA-256 of the lower-cased address, hex-encoded) for
+        privacy-preserving checks without storing the full address.
+      required: [id, tenant_id, email_hash, reason, provider, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        site_id:
+          type: string
+          format: uuid
+          nullable: true
+          description: Null for fleet-wide entries (applies to all sites in tenant).
+        email_hash:
+          type: string
+          description: SHA-256 of the lower-cased email address (hex).
+        email:
+          type: string
+          format: email
+          nullable: true
+          description: Plaintext email address (null when not stored at create time).
+        reason:
+          type: string
+          description: hard_bounce | complaint | unsubscribe | manual
+        provider:
+          type: string
+          description: ses | sendgrid | mailgun | postmark | manual
+        event_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the provider event occurred (null for manual entries).
+        source_message_id:
+          type: string
+          nullable: true
+          description: Provider message ID that triggered this suppression (if known).
+        created_at:
+          type: string
+          format: date-time
+
+    EmailSuppressionPage:
+      type: object
+      required: [entries, has_more]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/EmailSuppressionEntry"
+        next_cursor:
+          type: string
+          nullable: true
+        has_more:
+          type: boolean
+
+    AddSuppressionRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+          description: Email address to suppress.
+        reason:
+          type: string
+          default: manual
+          description: |
+            Must be `manual` or `unsubscribe`. Hard_bounce and complaint entries
+            are created automatically via provider webhooks.
+
+    ResendEmailResult:
+      type: object
+      required: [ok]
+      description: |
+        Result of a resend_email agent command. `ok=true` means the agent
+        confirmed the email was re-dispatched. `ok=false` means the agent was
+        unavailable or returned an error — check `detail` for the reason.
+        HTTP 200 is returned in both cases (matches test-send pattern).
+      properties:
+        ok:
+          type: boolean
+        detail:
+          type: string
+          nullable: true
+          description: Agent response message or error detail.
+        message_id:
+          type: string
+          nullable: true
+          description: Provider message ID assigned to the resent email (if agent returned it).
+
+    BulkResendRequest:
+      type: object
+      required: [log_ids]
+      properties:
+        log_ids:
+          type: array
+          maxItems: 100
+          items:
+            type: string
+            format: uuid
+          description: List of log entry IDs to resend (max 100).
+
+    BulkResendItemResult:
+      type: object
+      required: [log_id, ok]
+      properties:
+        log_id:
+          type: string
+          format: uuid
+        ok:
+          type: boolean
+        detail:
+          type: string
+          nullable: true
+
+    BulkResendResponse:
+      type: object
+      required: [results]
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BulkResendItemResult"
+
+    BulkDeleteLogsRequest:
+      type: object
+      required: [log_ids]
+      properties:
+        log_ids:
+          type: array
+          maxItems: 500
+          items:
+            type: string
+            format: uuid
+          description: List of log entry IDs to delete (max 500).
+
+    BulkDeleteLogsResponse:
+      type: object
+      required: [deleted]
+      properties:
+        deleted:
+          type: integer
+          format: int64
+          description: Number of rows actually deleted (may be less than requested if some IDs did not exist).

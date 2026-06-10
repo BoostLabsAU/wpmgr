@@ -117,9 +117,44 @@ final class AutologinCommand implements CommandInterface
      */
     public function handle(\WP_REST_Request $request)
     {
+        // ---- Shutdown trap: belt-and-suspenders guard so a hard die()/exit()
+        //      inside a hooked third-party plugin can never send a raw 502 to
+        //      the browser.  $finished is set to true on every normal exit path
+        //      so the closure is a genuine no-op in the success case.
+        //      register_shutdown_function fires AFTER wp_safe_redirect's own
+        //      exit(), so we gate on headers_sent() in addition to $finished to
+        //      avoid a double-send.
+        $finished = false;
+        if (function_exists('register_shutdown_function')) {
+            register_shutdown_function(static function () use (&$finished): void {
+                if ($finished) {
+                    return;
+                }
+                $e     = function_exists('error_get_last') ? error_get_last() : null;
+                $fatal = is_array($e) && in_array(
+                    $e['type'] ?? 0,
+                    [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR],
+                    true
+                );
+                if ($fatal && function_exists('headers_sent') && !headers_sent()) {
+                    // A fatal escaped our try/catch (e.g. a third-party hook
+                    // called die()/exit() unconditionally).  Redirect the browser
+                    // to wp-admin: if the session cookie is still valid, WP lands
+                    // in the dashboard; otherwise it bounces to wp-login.php.
+                    // Either outcome is vastly better than a raw nginx 502.
+                    if (function_exists('wp_safe_redirect') && function_exists('admin_url')) {
+                        wp_safe_redirect(admin_url(), 302);
+                    } else {
+                        header('Location: /wp-admin/', true, 302);
+                    }
+                }
+            });
+        }
+
         $token = $request->get_param('token');
         $token = is_string($token) ? $token : '';
         if ($token === '') {
+            $finished = true;
             return $this->fail('invalid_signature', 401, '');
         }
 
@@ -128,17 +163,20 @@ final class AutologinCommand implements CommandInterface
             $claims = $this->connector->verifyCommand($token, 'autologin');
         } catch (\Throwable $e) {
             // Generic code; never leak the verifier's specific failure reason.
+            $finished = true;
             return $this->fail('invalid_signature', 401, '');
         }
 
         // ---- Step 2: extract jti (Connector already enforced its presence). ----
         $jti = isset($claims['jti']) && is_string($claims['jti']) ? $claims['jti'] : '';
         if ($jti === '') {
+            $finished = true;
             return $this->fail('invalid_signature', 401, '');
         }
 
         // ---- Step 3: local single-use shield. ----
         if ($this->replay->seen($jti)) {
+            $finished = true;
             return $this->fail('replay_detected', 410, $jti);
         }
 
@@ -151,6 +189,7 @@ final class AutologinCommand implements CommandInterface
             $consume = $this->consume($jti, $request);
             if (!$consume['ok']) {
                 // CP rejected the consume (already used / expired / not found / down).
+                $finished = true;
                 return $this->fail('consume_rejected', 410, $jti);
             }
 
@@ -160,11 +199,13 @@ final class AutologinCommand implements CommandInterface
             // ---- Step 5: resolve a local WP user. ----
             $user = $this->resolveUser($targetLogin);
             if ($user === null) {
+                $finished = true;
                 return $this->fail('wp_user_not_found', 404, $jti);
             }
 
             // ---- Step 6: role allow-list (CP-supplied policy is authoritative). ----
             if (!$this->rolesAllowed($user, $allowedRoles)) {
+                $finished = true;
                 return $this->fail('role_not_allowed', 403, $jti);
             }
 
@@ -188,6 +229,7 @@ final class AutologinCommand implements CommandInterface
                     // If we still can't durably mark this jti, do NOT issue a
                     // cookie: a race-window with a parallel presentation would
                     // defeat single-use.
+                    $finished = true;
                     return $this->fail('replay_mark_failed', 500, $jti);
                 }
             }
@@ -196,11 +238,28 @@ final class AutologinCommand implements CommandInterface
             //      already authenticated (re-click fast-path). Account-switch
             //      (different user) still issues a fresh cookie as usual.
             //      This avoids re-firing wp_login over a live session, which can
-            //      trip hooked 2FA/security plugins and cause a 502. ----
-            $sameUserAlreadyLoggedIn = function_exists('is_user_logged_in')
-                && function_exists('get_current_user_id')
-                && is_user_logged_in()
-                && get_current_user_id() === (int) $user->ID;
+            //      trip hooked 2FA/security plugins and cause a 502.
+            //
+            //      Detection uses wp_validate_auth_cookie('', 'logged_in') as the
+            //      PRIMARY check because this endpoint is reached via a top-level
+            //      browser GET with no X-WP-Nonce header.  WordPress's REST
+            //      cookie-authentication path requires a valid nonce to set the
+            //      current user, so wp_get_current_user() / is_user_logged_in()
+            //      return 0 / false inside REST handlers reached without a nonce —
+            //      even when the browser DID send a valid logged_in cookie.
+            //      wp_validate_auth_cookie() parses $_COOKIE[LOGGED_IN_COOKIE]
+            //      directly and bypasses the nonce-gated REST path, so it returns
+            //      the real user ID when a valid session is present.
+            //      is_user_logged_in() is kept as an OR-fallback for environments
+            //      where the current user IS populated (e.g. cookie-auth REST
+            //      requests that also carry a nonce). ----
+            $loggedInUserId = function_exists('wp_validate_auth_cookie')
+                ? (int) wp_validate_auth_cookie('', 'logged_in')
+                : 0;
+            $sameUserAlreadyLoggedIn =
+                ($loggedInUserId > 0 && $loggedInUserId === (int) $user->ID)
+                || (function_exists('is_user_logged_in') && is_user_logged_in()
+                    && function_exists('get_current_user_id') && get_current_user_id() === (int) $user->ID);
 
             if (!$sameUserAlreadyLoggedIn) {
                 $this->issueAuthCookie($user);
@@ -216,6 +275,7 @@ final class AutologinCommand implements CommandInterface
             $rawRedirect = is_string($rawRedirect) ? $rawRedirect : '';
             $target      = $this->sanitizeRedirect($rawRedirect);
 
+            $finished = true;
             if (function_exists('wp_safe_redirect')) {
                 wp_safe_redirect($target, 302);
             }
@@ -224,6 +284,7 @@ final class AutologinCommand implements CommandInterface
             // not, so we return a 302 response so callers can assert the target.
             return new \WP_REST_Response(null, 302, ['Location' => $target]);
         } catch (\Throwable $e) {
+            $finished = true;
             return $this->fail('autologin_error', 500, $jti);
         }
     }

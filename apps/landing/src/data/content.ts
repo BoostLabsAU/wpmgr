@@ -155,6 +155,12 @@ export const FEATURES = {
         "Configure your own SMTP server in Settings and send a test message before saving. Credentials are encrypted at rest so the control plane never stores a plain-text password. All transactional email flows, including password resets and verification codes, route through the server you choose.",
     },
     {
+      icon: "MailCheck",
+      title: "Per-site email delivery and log",
+      desc:
+        "Configure each managed site's outgoing email directly from the dashboard. Connect Amazon SES, SendGrid, Mailgun, Postmark, or any SMTP server per site, or set an org-wide default that all sites inherit. Provider credentials are encrypted at rest and never returned by the API. Send a test email before saving. Every email a site sends is logged centrally with full detail, searchable and filterable by status and date, with CSV/JSON export and a per-site deliverability chart. A fleet-wide cross-site view shows sent, failed, bounced, and complained counts across every client site at once so you can catch a delivery problem before the client notices. Connect a provider webhook and hard bounces and complaints are suppressed automatically, per-site or fleet-wide. Email bodies are not stored by default; logs prune after 14 days. Live updates over SSE.",
+    },
+    {
       icon: "KeyRound",
       title: "Self-serve account recovery",
       desc:

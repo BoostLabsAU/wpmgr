@@ -1,0 +1,861 @@
+import {
+  useQuery,
+  useMutation,
+  useInfiniteQuery,
+  useQueryClient,
+  type UseQueryResult,
+  type UseMutationResult,
+  type UseInfiniteQueryResult,
+  type InfiniteData,
+} from "@tanstack/react-query";
+import {
+  getSiteEmailConfig,
+  putSiteEmailConfig,
+  sendTestEmail,
+  listEmailProviders,
+  getOrgEmailConfig,
+  putOrgEmailConfig,
+  listSiteEmailLog,
+  getSiteEmailLogEntry,
+  getSiteEmailStats,
+  listFleetEmailLog,
+  getFleetEmailStats,
+  listSiteEmailSuppression,
+  addSiteEmailSuppression,
+  deleteSiteEmailSuppression,
+  listFleetEmailSuppression,
+  addFleetEmailSuppression,
+  deleteFleetEmailSuppression,
+  resendEmailLog,
+  bulkResendEmailLog,
+  bulkDeleteEmailLog,
+  putSiteEmailWebhookConfig,
+  putOrgEmailWebhookConfig,
+  type SiteEmailConfig,
+  type PutEmailConfigRequest,
+  type EmailTestRequest,
+  type EmailTestResult,
+  type EmailProviderCatalog,
+  type SiteEmailLogEntry,
+  type EmailLogList,
+  type EmailLogDetail,
+  type EmailStats,
+  type EmailSuppressionEntry,
+  type EmailSuppressionPage,
+  type AddSuppressionRequest,
+  type ResendEmailResult,
+  type BulkResendResponse,
+  type BulkDeleteLogsResponse,
+  type PutEmailWebhookConfigRequest,
+  type EmailWebhookConfigResponse,
+} from "@wpmgr/api";
+
+import { toError } from "@/features/auth/use-auth";
+import { toast } from "@/components/toast";
+
+// ---------------------------------------------------------------------------
+// Query-key factory
+// ---------------------------------------------------------------------------
+
+export const emailKeys = {
+  all: ["email"] as const,
+  providers: () => [...emailKeys.all, "providers"] as const,
+  orgConfig: () => [...emailKeys.all, "org-config"] as const,
+  siteConfig: (siteId: string) =>
+    [...emailKeys.all, "config", siteId] as const,
+  log: (siteId: string, filters: EmailLogFilters) =>
+    [...emailKeys.all, "log", siteId, filters] as const,
+  logDetail: (siteId: string, logId: string) =>
+    [...emailKeys.all, "log", siteId, "detail", logId] as const,
+  stats: (siteId: string, range: EmailStatsRange) =>
+    [...emailKeys.all, "stats", siteId, range] as const,
+  fleetLog: (filters: FleetEmailLogFilters) =>
+    [...emailKeys.all, "fleet-log", filters] as const,
+  fleetStats: (range: EmailStatsRange) =>
+    [...emailKeys.all, "fleet-stats", range] as const,
+  // Suppression lists (Phase 4a)
+  suppression: (siteId: string, reason?: string) =>
+    [...emailKeys.all, "suppression", siteId, reason ?? ""] as const,
+  fleetSuppression: (reason?: string) =>
+    [...emailKeys.all, "fleet-suppression", reason ?? ""] as const,
+} as const;
+
+// ---------------------------------------------------------------------------
+// Filter types
+// ---------------------------------------------------------------------------
+
+export interface EmailLogFilters {
+  status?: "sent" | "failed" | "";
+  from?: string;
+  to?: string;
+  q?: string;
+  limit?: number;
+}
+
+export interface FleetEmailLogFilters {
+  status?: "sent" | "failed" | "";
+  from?: string;
+  to?: string;
+  q?: string;
+  limit?: number;
+}
+
+export interface EmailStatsRange {
+  from?: string;
+  to?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Provider catalog
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/email/providers — static catalog, long stale time. */
+export function useProviders(): UseQueryResult<EmailProviderCatalog, Error> {
+  return useQuery({
+    queryKey: emailKeys.providers(),
+    queryFn: async () => {
+      const { data, error } = await listEmailProviders();
+      if (error) throw toError(error);
+      return data;
+    },
+    staleTime: 5 * 60_000, // provider catalog changes very rarely
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Org-wide email config
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/email/org-config */
+export function useOrgEmailConfig(): UseQueryResult<SiteEmailConfig, Error> {
+  return useQuery({
+    queryKey: emailKeys.orgConfig(),
+    queryFn: async () => {
+      const { data, error } = await getOrgEmailConfig();
+      if (error) throw toError(error);
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+/** PUT /api/v1/email/org-config */
+export function usePutOrgEmailConfig(): UseMutationResult<
+  SiteEmailConfig,
+  Error,
+  PutEmailConfigRequest
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await putOrgEmailConfig({ body });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(emailKeys.orgConfig(), updated);
+      toast.success("Org-wide email config saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save email config", { description: err.message });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Per-site email config
+// ---------------------------------------------------------------------------
+
+/**
+ * GET /api/v1/sites/:siteId/email/config
+ *
+ * The secret is NEVER returned — only `secret_set` (a boolean). The UI shows a
+ * "configured" indicator when secret_set is true and a "Replace" affordance to
+ * allow entering a new credential (which is write-only on PUT).
+ */
+export function useEmailConfig(
+  siteId: string,
+): UseQueryResult<SiteEmailConfig, Error> {
+  return useQuery({
+    queryKey: emailKeys.siteConfig(siteId),
+    queryFn: async () => {
+      const { data, error } = await getSiteEmailConfig({
+        path: { siteId },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+/**
+ * PUT /api/v1/sites/:siteId/email/config
+ *
+ * Nil-sentinel: omitting `secret` preserves the stored credential. To clear,
+ * send an empty string. The UI NEVER reads back the secret value — only
+ * secret_set from the GET response.
+ */
+export function usePutEmailConfig(
+  siteId: string,
+): UseMutationResult<SiteEmailConfig, Error, PutEmailConfigRequest> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await putSiteEmailConfig({
+        path: { siteId },
+        body,
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (updated) => {
+      queryClient.setQueryData(emailKeys.siteConfig(siteId), updated);
+      toast.success("Email settings saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save email settings", {
+        description: err.message,
+      });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Test email
+// ---------------------------------------------------------------------------
+
+/** POST /api/v1/sites/:siteId/email/test */
+export function useTestEmail(
+  siteId: string,
+): UseMutationResult<EmailTestResult, Error, EmailTestRequest> {
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await sendTestEmail({
+        path: { siteId },
+        body,
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Email log (per-site, infinite/keyset pagination)
+// ---------------------------------------------------------------------------
+
+export interface UseEmailLogResult {
+  entries: SiteEmailLogEntry[];
+  fetchNextPage: UseInfiniteQueryResult<
+    InfiniteData<EmailLogList>,
+    Error
+  >["fetchNextPage"];
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  refetch: UseInfiniteQueryResult<
+    InfiniteData<EmailLogList>,
+    Error
+  >["refetch"];
+}
+
+/**
+ * GET /api/v1/sites/:siteId/email/log (keyset infinite pagination via next_cursor).
+ * Bodies are never returned in list responses — only in the detail response.
+ */
+export function useEmailLog(
+  siteId: string,
+  filters: EmailLogFilters,
+): UseEmailLogResult {
+  const result = useInfiniteQuery<
+    EmailLogList,
+    Error,
+    InfiniteData<EmailLogList>,
+    ReturnType<typeof emailKeys.log>,
+    string | undefined
+  >({
+    queryKey: emailKeys.log(siteId, filters),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await listSiteEmailLog({
+        path: { siteId },
+        query: {
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.from ? { from: filters.from } : {}),
+          ...(filters.to ? { to: filters.to } : {}),
+          ...(filters.q ? { q: filters.q } : {}),
+          limit: filters.limit ?? 50,
+          ...(pageParam !== undefined ? { cursor: pageParam } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data ?? { entries: [], next_cursor: "" };
+    },
+    staleTime: 30_000,
+  });
+
+  const entries = result.data?.pages.flatMap((p) => p.entries) ?? [];
+
+  return {
+    entries,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+    isPending: result.isPending,
+    isError: result.isError,
+    error: result.error,
+    refetch: result.refetch,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Email log detail (single entry with prev/next navigation)
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/sites/:siteId/email/log/:logId */
+export function useEmailLogDetail(
+  siteId: string,
+  logId: string | null,
+): UseQueryResult<EmailLogDetail, Error> {
+  return useQuery({
+    queryKey: emailKeys.logDetail(siteId, logId ?? ""),
+    queryFn: async () => {
+      if (!logId) throw new Error("No log entry selected");
+      const { data, error } = await getSiteEmailLogEntry({
+        path: { siteId, logId },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    enabled: logId !== null,
+    staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Email stats (per-site)
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/sites/:siteId/email/stats?from=&to= */
+export function useEmailStats(
+  siteId: string,
+  range: EmailStatsRange = {},
+): UseQueryResult<EmailStats, Error> {
+  return useQuery({
+    queryKey: emailKeys.stats(siteId, range),
+    queryFn: async () => {
+      const { data, error } = await getSiteEmailStats({
+        path: { siteId },
+        query: {
+          ...(range.from ? { from: range.from } : {}),
+          ...(range.to ? { to: range.to } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fleet email log (org-scope, cross-site)
+// ---------------------------------------------------------------------------
+
+export interface UseFleetEmailLogResult {
+  entries: SiteEmailLogEntry[];
+  fetchNextPage: UseInfiniteQueryResult<
+    InfiniteData<EmailLogList>,
+    Error
+  >["fetchNextPage"];
+  hasNextPage: boolean;
+  isFetchingNextPage: boolean;
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  refetch: UseInfiniteQueryResult<
+    InfiniteData<EmailLogList>,
+    Error
+  >["refetch"];
+}
+
+/** GET /api/v1/email/log (org-scope, keyset paginated) */
+export function useFleetEmailLog(
+  filters: FleetEmailLogFilters,
+): UseFleetEmailLogResult {
+  const result = useInfiniteQuery<
+    EmailLogList,
+    Error,
+    InfiniteData<EmailLogList>,
+    ReturnType<typeof emailKeys.fleetLog>,
+    string | undefined
+  >({
+    queryKey: emailKeys.fleetLog(filters),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor || undefined,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await listFleetEmailLog({
+        query: {
+          ...(filters.status ? { status: filters.status } : {}),
+          ...(filters.from ? { from: filters.from } : {}),
+          ...(filters.to ? { to: filters.to } : {}),
+          ...(filters.q ? { q: filters.q } : {}),
+          limit: filters.limit ?? 50,
+          ...(pageParam !== undefined ? { cursor: pageParam } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data ?? { entries: [], next_cursor: "" };
+    },
+    staleTime: 30_000,
+  });
+
+  const entries = result.data?.pages.flatMap((p) => p.entries) ?? [];
+
+  return {
+    entries,
+    fetchNextPage: result.fetchNextPage,
+    hasNextPage: result.hasNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+    isPending: result.isPending,
+    isError: result.isError,
+    error: result.error,
+    refetch: result.refetch,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Fleet email stats
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/email/stats (org-scope; site_count populated) */
+export function useFleetEmailStats(
+  range: EmailStatsRange = {},
+): UseQueryResult<EmailStats, Error> {
+  return useQuery({
+    queryKey: emailKeys.fleetStats(range),
+    queryFn: async () => {
+      const { data, error } = await getFleetEmailStats({
+        query: {
+          ...(range.from ? { from: range.from } : {}),
+          ...(range.to ? { to: range.to } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Suppression list (per-site, Phase 4a)
+// ---------------------------------------------------------------------------
+
+export interface SuppressionFilters {
+  reason?: string;
+  limit?: number;
+}
+
+export interface UseSuppressionResult {
+  entries: EmailSuppressionEntry[];
+  hasMore: boolean;
+  nextCursor: string | undefined;
+  isPending: boolean;
+  isError: boolean;
+  error: Error | null;
+  refetch: UseInfiniteQueryResult<
+    InfiniteData<EmailSuppressionPage>,
+    Error
+  >["refetch"];
+  fetchNextPage: UseInfiniteQueryResult<
+    InfiniteData<EmailSuppressionPage>,
+    Error
+  >["fetchNextPage"];
+  isFetchingNextPage: boolean;
+}
+
+/** GET /api/v1/sites/:siteId/email/suppression (keyset paginated) */
+export function useSiteEmailSuppression(
+  siteId: string,
+  filters: SuppressionFilters = {},
+): UseSuppressionResult {
+  const result = useInfiniteQuery<
+    EmailSuppressionPage,
+    Error,
+    InfiniteData<EmailSuppressionPage>,
+    ReturnType<typeof emailKeys.suppression>,
+    string | undefined
+  >({
+    queryKey: emailKeys.suppression(siteId, filters.reason),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await listSiteEmailSuppression({
+        path: { siteId },
+        query: {
+          ...(filters.reason ? { reason: filters.reason } : {}),
+          limit: filters.limit ?? 50,
+          ...(pageParam !== undefined ? { cursor: pageParam } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data ?? { entries: [], has_more: false };
+    },
+    staleTime: 30_000,
+  });
+
+  return {
+    entries: result.data?.pages.flatMap((p) => p.entries) ?? [],
+    hasMore: result.hasNextPage,
+    nextCursor: result.data?.pages.at(-1)?.next_cursor ?? undefined,
+    isPending: result.isPending,
+    isError: result.isError,
+    error: result.error,
+    refetch: result.refetch,
+    fetchNextPage: result.fetchNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+  };
+}
+
+/** POST /api/v1/sites/:siteId/email/suppression */
+export function useAddSiteEmailSuppression(
+  siteId: string,
+): UseMutationResult<EmailSuppressionEntry, Error, AddSuppressionRequest> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await addSiteEmailSuppression({
+        path: { siteId },
+        body,
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.suppression(siteId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.fleetSuppression(),
+      });
+      toast.success("Address suppressed");
+    },
+    onError: (err) => {
+      toast.error("Could not add suppression", { description: err.message });
+    },
+  });
+}
+
+/** DELETE /api/v1/sites/:siteId/email/suppression/:suppressionId */
+export function useDeleteSiteEmailSuppression(
+  siteId: string,
+): UseMutationResult<void, Error, string> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (suppressionId: string) => {
+      const { error } = await deleteSiteEmailSuppression({
+        path: { siteId, suppressionId },
+      });
+      if (error) throw toError(error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.suppression(siteId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.fleetSuppression(),
+      });
+      toast.success("Suppression removed");
+    },
+    onError: (err) => {
+      toast.error("Could not remove suppression", { description: err.message });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Suppression list (fleet scope, Phase 4a)
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/email/suppression (org-scope keyset paginated) */
+export function useFleetEmailSuppression(
+  filters: SuppressionFilters = {},
+): UseSuppressionResult {
+  const result = useInfiniteQuery<
+    EmailSuppressionPage,
+    Error,
+    InfiniteData<EmailSuppressionPage>,
+    ReturnType<typeof emailKeys.fleetSuppression>,
+    string | undefined
+  >({
+    queryKey: emailKeys.fleetSuppression(filters.reason),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) =>
+      lastPage.has_more ? (lastPage.next_cursor ?? undefined) : undefined,
+    queryFn: async ({ pageParam }) => {
+      const { data, error } = await listFleetEmailSuppression({
+        query: {
+          ...(filters.reason ? { reason: filters.reason } : {}),
+          limit: filters.limit ?? 50,
+          ...(pageParam !== undefined ? { cursor: pageParam } : {}),
+        },
+      });
+      if (error) throw toError(error);
+      return data ?? { entries: [], has_more: false };
+    },
+    staleTime: 30_000,
+  });
+
+  return {
+    entries: result.data?.pages.flatMap((p) => p.entries) ?? [],
+    hasMore: result.hasNextPage,
+    nextCursor: result.data?.pages.at(-1)?.next_cursor ?? undefined,
+    isPending: result.isPending,
+    isError: result.isError,
+    error: result.error,
+    refetch: result.refetch,
+    fetchNextPage: result.fetchNextPage,
+    isFetchingNextPage: result.isFetchingNextPage,
+  };
+}
+
+/** POST /api/v1/email/suppression (fleet-wide, site_id=null) */
+export function useAddFleetEmailSuppression(): UseMutationResult<
+  EmailSuppressionEntry,
+  Error,
+  AddSuppressionRequest
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await addFleetEmailSuppression({ body });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.fleetSuppression(),
+      });
+      toast.success("Address suppressed fleet-wide");
+    },
+    onError: (err) => {
+      toast.error("Could not add suppression", { description: err.message });
+    },
+  });
+}
+
+/** DELETE /api/v1/email/suppression/:suppressionId (fleet scope) */
+export function useDeleteFleetEmailSuppression(): UseMutationResult<
+  void,
+  Error,
+  string
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (suppressionId: string) => {
+      const { error } = await deleteFleetEmailSuppression({
+        path: { suppressionId },
+      });
+      if (error) throw toError(error);
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.fleetSuppression(),
+      });
+      toast.success("Suppression removed");
+    },
+    onError: (err) => {
+      toast.error("Could not remove suppression", { description: err.message });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Log actions — resend + bulk operations (Phase 4a)
+// ---------------------------------------------------------------------------
+
+/** Error class for 409 body-not-stored resend rejection */
+export class BodyNotStoredError extends Error {
+  constructor() {
+    super("Email body was not stored — resend unavailable for this message.");
+    this.name = "BodyNotStoredError";
+  }
+}
+
+/** POST /api/v1/sites/:siteId/email/log/:logId/resend */
+export function useResendEmail(
+  siteId: string,
+): UseMutationResult<ResendEmailResult, Error, string> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (logId: string) => {
+      const { data, error, response } = await resendEmailLog({
+        path: { siteId, logId },
+      });
+      if (response?.status === 409) {
+        throw new BodyNotStoredError();
+      }
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (result) => {
+      if (result.ok) {
+        toast.success("Email queued for resend");
+      } else {
+        toast.error("Resend failed", { description: result.detail });
+      }
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.all,
+      });
+    },
+    onError: (err) => {
+      if (err instanceof BodyNotStoredError) {
+        toast.error("Resend unavailable", {
+          description: "Email body was not stored for this message.",
+        });
+      } else {
+        toast.error("Could not resend email", { description: err.message });
+      }
+    },
+  });
+}
+
+/** POST /api/v1/sites/:siteId/email/log/bulk-resend */
+export function useBulkResendEmail(
+  siteId: string,
+): UseMutationResult<BulkResendResponse, Error, string[]> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (logIds: string[]) => {
+      const { data, error } = await bulkResendEmailLog({
+        path: { siteId },
+        body: { log_ids: logIds },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (result) => {
+      const succeeded = result.results.filter((r) => r.ok).length;
+      const failed = result.results.filter((r) => !r.ok).length;
+      if (failed === 0) {
+        toast.success(`${succeeded} email${succeeded !== 1 ? "s" : ""} queued for resend`);
+      } else {
+        toast.error(`${failed} resend${failed !== 1 ? "s" : ""} failed`, {
+          description: `${succeeded} succeeded, ${failed} could not be resent`,
+        });
+      }
+      void queryClient.invalidateQueries({ queryKey: emailKeys.all });
+    },
+    onError: (err) => {
+      toast.error("Bulk resend failed", { description: err.message });
+    },
+  });
+}
+
+/** POST /api/v1/sites/:siteId/email/log/bulk-delete */
+export function useBulkDeleteEmail(
+  siteId: string,
+): UseMutationResult<BulkDeleteLogsResponse, Error, string[]> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (logIds: string[]) => {
+      const { data, error } = await bulkDeleteEmailLog({
+        path: { siteId },
+        body: { log_ids: logIds },
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: (result) => {
+      toast.success(
+        `${result.deleted} log entr${result.deleted !== 1 ? "ies" : "y"} deleted`,
+      );
+      void queryClient.invalidateQueries({ queryKey: emailKeys.all });
+    },
+    onError: (err) => {
+      toast.error("Bulk delete failed", { description: err.message });
+    },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Webhook config mutations (Phase 4b)
+// ---------------------------------------------------------------------------
+
+/**
+ * PUT /api/v1/sites/:siteId/email/webhook-config
+ *
+ * Rotate the webhook route token or update the signing key / SES TopicArn
+ * allowlist. When rotate_token is true the response contains
+ * webhook_route_token (plain token, returned exactly once — surface it to
+ * the operator immediately).
+ */
+export function usePutSiteEmailWebhookConfig(
+  siteId: string,
+): UseMutationResult<
+  EmailWebhookConfigResponse,
+  Error,
+  PutEmailWebhookConfigRequest
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await putSiteEmailWebhookConfig({
+        path: { siteId },
+        body,
+      });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: () => {
+      // Invalidate the full config query so webhook_url / webhook_signing_key_set
+      // are refreshed from the server after the mutation.
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.siteConfig(siteId),
+      });
+      toast.success("Webhook settings saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save webhook settings", {
+        description: err.message,
+      });
+    },
+  });
+}
+
+/**
+ * PUT /api/v1/email/org-config/webhook-config
+ *
+ * Org-level equivalent of usePutSiteEmailWebhookConfig.
+ */
+export function usePutOrgEmailWebhookConfig(): UseMutationResult<
+  EmailWebhookConfigResponse,
+  Error,
+  PutEmailWebhookConfigRequest
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (body) => {
+      const { data, error } = await putOrgEmailWebhookConfig({ body });
+      if (error) throw toError(error);
+      return data;
+    },
+    onSuccess: () => {
+      void queryClient.invalidateQueries({
+        queryKey: emailKeys.orgConfig(),
+      });
+      toast.success("Webhook settings saved");
+    },
+    onError: (err) => {
+      toast.error("Could not save webhook settings", {
+        description: err.message,
+      });
+    },
+  });
+}

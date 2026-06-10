@@ -4,6 +4,7 @@ import {
   Activity,
   Globe,
   LineChart,
+  Mail,
   Settings,
   Share2,
   Shield,
@@ -82,6 +83,11 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
       { label: "Uptime", to: "/uptime" },
       { label: "Performance", to: "/performance" },
     ],
+  },
+  {
+    label: "Email",
+    icon: Mail,
+    to: "/email",
   },
   {
     label: "Security",

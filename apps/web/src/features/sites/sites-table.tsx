@@ -452,9 +452,15 @@ function RowActions({
   // Remove is only surfaced for archived/disconnected sites — states where
   // neither connecting nor active management is possible.
   const canRemove = isReconnectable(connectionState);
-  // Re-check is only meaningful for sites that are actively heartbeating.
+  // Re-check is available for any enrolled, signing-capable site — including
+  // disconnected, where it is the primary way to recover a site that merely
+  // fell behind on heartbeats (an unreachable agent returns a calm error, not
+  // a hard failure). pending_enrollment/revoked/archived have no signed command
+  // channel, so they stay excluded.
   const canRecheck =
-    connectionState === "connected" || connectionState === "degraded";
+    connectionState === "connected" ||
+    connectionState === "degraded" ||
+    connectionState === "disconnected";
   const recheck = useRecheckConnection();
 
   return (

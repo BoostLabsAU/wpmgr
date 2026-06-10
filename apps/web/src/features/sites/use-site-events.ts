@@ -119,6 +119,14 @@ const SITE_EVENT_TYPES = [
   // per-beacon streaming. Any new rum.* type NOT listed here is silently dropped
   // by z.enum(SITE_EVENT_TYPES) validation before it reaches usePerfEvents.
   "rum.rollup_updated",
+  // Email Phase 4b live events. Published on this SAME shared tenant bus
+  // (filtered by site_id, or site_id="" for fleet-wide suppressions). Any
+  // email.* type MISSING from this array is silently dropped by the
+  // z.enum(SITE_EVENT_TYPES) frame validation before it reaches
+  // useEmailEvents — every email event must be listed.
+  "email.log_ingested",
+  "email.suppression_updated",
+  "email.bounce",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

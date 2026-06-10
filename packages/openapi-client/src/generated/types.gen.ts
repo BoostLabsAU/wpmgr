@@ -3125,6 +3125,542 @@ export type MediaCleanQuarantineList = {
 };
 
 /**
+ * Per-site (or org-wide default) email configuration. The provider secret is never returned — only `secret_set` indicates whether a credential is stored. When `site_id` is present, the row is a per-site override; when absent it is the org-wide default. A GET for a site that inherits the org default sets `site_id` to the queried site so the frontend can detect inheritance.
+ *
+ */
+export type SiteEmailConfig = {
+  /**
+   * Surrogate primary key for this config row.
+   */
+  id: string;
+  tenant_id: string;
+  /**
+   * Present for per-site rows; absent for the org-wide default.
+   */
+  site_id?: string;
+  /**
+   * Provider slug (smtp | ses | sendgrid | mailgun | postmark). Must match a slug in the provider catalog.
+   *
+   */
+  provider: string;
+  /**
+   * Sender envelope address (e.g. no-reply@example.com).
+   */
+  from_address: string;
+  /**
+   * Sender display name shown in the From header.
+   */
+  from_name: string;
+  /**
+   * When true the agent overrides any plugin-supplied From address with `from_address`.
+   *
+   */
+  force_from_email: boolean;
+  /**
+   * When true the agent overrides any plugin-supplied From name with `from_name`.
+   *
+   */
+  force_from_name: boolean;
+  /**
+   * Set the Return-Path / Bounce-To header to `from_address`.
+   */
+  return_path: boolean;
+  /**
+   * True when an encrypted provider secret is stored for this row.
+   */
+  secret_set: boolean;
+  /**
+   * Slug of the connection to use for regular mail (for providers that support multiple connections, e.g. SMTP-Multi — Phase 2+).
+   *
+   */
+  default_connection?: string;
+  /**
+   * Slug of the fallback connection (Phase 2+).
+   */
+  fallback_connection?: string;
+  /**
+   * Whether outgoing emails are recorded in site_email_log.
+   */
+  log_emails: boolean;
+  /**
+   * When log_emails is true, also persist the full email body.
+   */
+  store_body: boolean;
+  /**
+   * Number of days email log rows are retained (1-365).
+   */
+  retention_days: number;
+  /**
+   * Provider-specific configuration fields (non-secret).
+   */
+  config: {
+    [key: string]: unknown;
+  };
+  /**
+   * Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).
+   *
+   */
+  mappings: {
+    [key: string]: unknown;
+  };
+  /**
+   * The full inbound webhook URL for this config row, e.g. https://manage.wpmgr.app/webhooks/email/{provider}/{token}. Shows a placeholder token segment when a token is stored but not freshly rotated. Absent when no token has been generated yet.
+   *
+   */
+  webhook_url?: string;
+  /**
+   * True when an HMAC signing key is stored for this row. The key itself is never returned.
+   *
+   */
+  webhook_signing_key_set?: boolean;
+  /**
+   * SES only. SNS TopicArn allowlist -- only events delivered from these topics are accepted. Empty array means no filter is applied.
+   *
+   */
+  ses_topic_arns?: Array<string>;
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * Request body for PUT /email/org-config/webhook-config and PUT /sites/{siteId}/email/webhook-config. All fields are optional. Omit webhook_signing_key to preserve the stored key (nil-sentinel). Send null to clear it. rotate_token: true generates a new route token and returns webhook_route_token in the response (shown once).
+ *
+ */
+export type PutEmailWebhookConfigRequest = {
+  /**
+   * When true, a new route token is generated (invalidating the old URL) and returned once in webhook_route_token.
+   *
+   */
+  rotate_token?: boolean;
+  /**
+   * HMAC signing key for verifying provider webhook payloads. Write-only. Omit to preserve the existing key. Send null to clear.
+   *
+   */
+  webhook_signing_key?: string;
+  /**
+   * SES only. Replace the SNS TopicArn allowlist. null preserves the existing list. Empty array clears the list (no filter).
+   *
+   */
+  ses_topic_arns?: Array<string>;
+};
+
+/**
+ * Response for PUT webhook-config. Always returns the updated masked config fields. When rotate_token was true, also includes webhook_route_token (plain token, shown once).
+ *
+ */
+export type EmailWebhookConfigResponse = {
+  /**
+   * The full inbound webhook URL including the (possibly new) token. Present whenever a token exists after the operation.
+   *
+   */
+  webhook_url: string;
+  /**
+   * True when an HMAC signing key is stored.
+   */
+  webhook_signing_key_set: boolean;
+  /**
+   * Current SNS TopicArn allowlist (may be empty).
+   */
+  ses_topic_arns: Array<string>;
+  /**
+   * Plain route token, returned once when rotate_token was true. Store it immediately -- it will not be shown again.
+   *
+   */
+  webhook_route_token?: string;
+};
+
+/**
+ * Request body for PUT /email/org-config and PUT /sites/{siteId}/email/config. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting `secret` preserves the existing stored credential (nil-sentinel pattern).
+ *
+ */
+export type PutEmailConfigRequest = {
+  /**
+   * Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+   */
+  provider?: string;
+  /**
+   * Sender envelope address.
+   */
+  from_address?: string;
+  /**
+   * Sender display name.
+   */
+  from_name?: string;
+  force_from_email?: boolean;
+  force_from_name?: boolean;
+  return_path?: boolean;
+  /**
+   * Provider credential (API key, SMTP password, etc.). Omit to preserve the existing stored secret. Provide an empty string to clear the stored secret.
+   *
+   */
+  secret?: string;
+  default_connection?: string;
+  fallback_connection?: string;
+  log_emails?: boolean;
+  store_body?: boolean;
+  /**
+   * Days to retain email log rows (1-365).
+   */
+  retention_days?: number;
+  /**
+   * Provider-specific non-secret fields.
+   */
+  config?: {
+    [key: string]: unknown;
+  };
+  mappings?: {
+    [key: string]: unknown;
+  };
+};
+
+/**
+ * Request body for POST /sites/{siteId}/email/test.
+ */
+export type EmailTestRequest = {
+  /**
+   * Recipient address for the test email.
+   */
+  to: string;
+  /**
+   * Subject line. Defaults to "WPMgr test email" when omitted.
+   *
+   */
+  subject?: string;
+  /**
+   * Plain-text body. Defaults to a standard test message when omitted.
+   *
+   */
+  body?: string;
+};
+
+/**
+ * Result of a test-send dispatch. `ok` may be false when the agent returns an error or when the agent does not yet implement the command (Phase 1 expected behaviour — see endpoint description).
+ *
+ */
+export type EmailTestResult = {
+  /**
+   * True when the agent confirmed the email was dispatched.
+   */
+  ok: boolean;
+  /**
+   * Human-readable detail or error message from the agent. Present when ok is false.
+   *
+   */
+  detail?: string;
+  /**
+   * Provider-assigned message-id returned by the agent (Phase 2+).
+   */
+  message_id?: string;
+};
+
+/**
+ * Static catalog of supported email providers and their field schemas.
+ */
+export type EmailProviderCatalog = {
+  providers: Array<EmailProviderSpec>;
+};
+
+/**
+ * Descriptor for a single email provider.
+ */
+export type EmailProviderSpec = {
+  /**
+   * Machine-readable provider identifier (e.g. smtp, ses, sendgrid).
+   */
+  slug: string;
+  /**
+   * Human-readable provider name.
+   */
+  label: string;
+  /**
+   * URL to provider-specific setup documentation.
+   */
+  docs_url?: string;
+  fields: Array<EmailProviderField>;
+};
+
+/**
+ * Schema descriptor for one provider configuration field.
+ */
+export type EmailProviderField = {
+  /**
+   * Field key used in the `config` map of PutEmailConfigRequest.
+   */
+  key: string;
+  /**
+   * Human-readable field label.
+   */
+  label: string;
+  /**
+   * Input type hint: text | password | select | boolean | number.
+   *
+   */
+  type: string;
+  /**
+   * When true the field value is a credential that must be sent via the top-level `secret` field, not inside `config`.
+   *
+   */
+  is_secret: boolean;
+  is_required: boolean;
+  /**
+   * Valid option values for select fields.
+   */
+  options?: Array<string>;
+  /**
+   * Default value hint for the UI.
+   */
+  default?: string;
+  /**
+   * Short helper text shown below the field in the UI.
+   */
+  help?: string;
+};
+
+/**
+ * One outgoing email log entry. In list responses `body` is always omitted. In the detail response (`GET /email/log/{logId}`) `body` is present only when `body_stored` is true and a body was captured.
+ *
+ */
+export type SiteEmailLogEntry = {
+  id: string;
+  tenant_id: string;
+  site_id: string;
+  /**
+   * Agent-local sequence number (cursor for the agent push).
+   */
+  agent_seq?: number;
+  /**
+   * Provider-assigned Message-ID header value.
+   */
+  message_id?: string;
+  /**
+   * Recipient addresses.
+   */
+  to_addresses: Array<string>;
+  from_address: string;
+  subject: string;
+  /**
+   * Provider slug used for this send (smtp | ses | sendgrid | mailgun | postmark).
+   */
+  provider: string;
+  /**
+   * Delivery status (sent | failed | pending | bounced | complained).
+   */
+  status: string;
+  /**
+   * Raw provider API response or SMTP response detail.
+   */
+  response: {
+    [key: string]: unknown;
+  };
+  /**
+   * Error message when status is failed. Empty string when no error.
+   */
+  error: string;
+  /**
+   * Number of delivery retries attempted.
+   */
+  retries: number;
+  /**
+   * Number of times this message was manually resent.
+   */
+  resent_count: number;
+  /**
+   * Whether the email body was captured at send time.
+   */
+  body_stored: boolean;
+  /**
+   * Full email body. Present only in the detail response and only when body_stored is true. Never returned in list or export responses.
+   *
+   */
+  body?: string;
+  /**
+   * Timestamp the email was sent (from the agent local clock).
+   */
+  created_at: string;
+  updated_at: string;
+};
+
+/**
+ * A page of email log entries.
+ */
+export type EmailLogList = {
+  entries: Array<SiteEmailLogEntry>;
+  /**
+   * Opaque keyset cursor for the next page. Empty string when this is the last page.
+   *
+   */
+  next_cursor: string;
+};
+
+/**
+ * Single email log entry with prev/next navigation IDs.
+ */
+export type EmailLogDetail = {
+  entry: SiteEmailLogEntry;
+  /**
+   * ID of the next-older entry (for the Prev button). Null when at the oldest.
+   */
+  prev_id?: string;
+  /**
+   * ID of the next-newer entry (for the Next button). Null when at the newest.
+   */
+  next_id?: string;
+};
+
+/**
+ * One day's aggregate email stats.
+ */
+export type EmailStatsByDay = {
+  /**
+   * Calendar day in YYYY-MM-DD format (UTC).
+   */
+  day: string;
+  total: number;
+  sent_count: number;
+  failed_count: number;
+};
+
+/**
+ * One provider's aggregate email stats.
+ */
+export type EmailStatsByProvider = {
+  provider: string;
+  total: number;
+  sent_count: number;
+  failed_count: number;
+};
+
+/**
+ * Email statistics summary for a site or the whole fleet. `site_count` is only populated for fleet stats.
+ *
+ */
+export type EmailStats = {
+  total: number;
+  sent_count: number;
+  failed_count: number;
+  /**
+   * Number of distinct providers used in the range.
+   */
+  provider_count: number;
+  /**
+   * Number of distinct sites in the range (fleet stats only).
+   */
+  site_count?: number;
+  by_day: Array<EmailStatsByDay>;
+  by_provider: Array<EmailStatsByProvider>;
+};
+
+/**
+ * A single suppression entry. `email` is the plaintext address (present
+ * when `store_plaintext=true` at create time). `email_hash` is always
+ * present (SHA-256 of the lower-cased address, hex-encoded) for
+ * privacy-preserving checks without storing the full address.
+ *
+ */
+export type EmailSuppressionEntry = {
+  id: string;
+  tenant_id: string;
+  /**
+   * Null for fleet-wide entries (applies to all sites in tenant).
+   */
+  site_id?: string;
+  /**
+   * SHA-256 of the lower-cased email address (hex).
+   */
+  email_hash: string;
+  /**
+   * Plaintext email address (null when not stored at create time).
+   */
+  email?: string;
+  /**
+   * hard_bounce | complaint | unsubscribe | manual
+   */
+  reason: string;
+  /**
+   * ses | sendgrid | mailgun | postmark | manual
+   */
+  provider: string;
+  /**
+   * When the provider event occurred (null for manual entries).
+   */
+  event_at?: string;
+  /**
+   * Provider message ID that triggered this suppression (if known).
+   */
+  source_message_id?: string;
+  created_at: string;
+};
+
+export type EmailSuppressionPage = {
+  entries: Array<EmailSuppressionEntry>;
+  next_cursor?: string;
+  has_more: boolean;
+};
+
+export type AddSuppressionRequest = {
+  /**
+   * Email address to suppress.
+   */
+  email: string;
+  /**
+   * Must be `manual` or `unsubscribe`. Hard_bounce and complaint entries
+   * are created automatically via provider webhooks.
+   *
+   */
+  reason?: string;
+};
+
+/**
+ * Result of a resend_email agent command. `ok=true` means the agent
+ * confirmed the email was re-dispatched. `ok=false` means the agent was
+ * unavailable or returned an error — check `detail` for the reason.
+ * HTTP 200 is returned in both cases (matches test-send pattern).
+ *
+ */
+export type ResendEmailResult = {
+  ok: boolean;
+  /**
+   * Agent response message or error detail.
+   */
+  detail?: string;
+  /**
+   * Provider message ID assigned to the resent email (if agent returned it).
+   */
+  message_id?: string;
+};
+
+export type BulkResendRequest = {
+  /**
+   * List of log entry IDs to resend (max 100).
+   */
+  log_ids: Array<string>;
+};
+
+export type BulkResendItemResult = {
+  log_id: string;
+  ok: boolean;
+  detail?: string;
+};
+
+export type BulkResendResponse = {
+  results: Array<BulkResendItemResult>;
+};
+
+export type BulkDeleteLogsRequest = {
+  /**
+   * List of log entry IDs to delete (max 500).
+   */
+  log_ids: Array<string>;
+};
+
+export type BulkDeleteLogsResponse = {
+  /**
+   * Number of rows actually deleted (may be less than requested if some IDs did not exist).
+   */
+  deleted: number;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -3294,10 +3830,6 @@ export type RegisterData = {
 
 export type RegisterErrors = {
   /**
-   * Open registration is closed
-   */
-  403: Error;
-  /**
    * Email already exists
    */
   409: Error;
@@ -3311,12 +3843,124 @@ export type RegisterError = RegisterErrors[keyof RegisterErrors];
 
 export type RegisterResponses = {
   /**
-   * User registered and session established
+   * Self-serve signup accepted; verification email sent
+   */
+  200: {
+    ok: boolean;
+    pending: boolean;
+  };
+  /**
+   * First-run bootstrap — user registered, session established
    */
   201: Me;
 };
 
 export type RegisterResponse = RegisterResponses[keyof RegisterResponses];
+
+export type ForgotPasswordData = {
+  body: {
+    email: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/auth/password/forgot";
+};
+
+export type ForgotPasswordResponses = {
+  /**
+   * Request accepted (enumeration-safe)
+   */
+  200: {
+    ok: boolean;
+  };
+};
+
+export type ForgotPasswordResponse =
+  ForgotPasswordResponses[keyof ForgotPasswordResponses];
+
+export type ResetPasswordData = {
+  body: {
+    token: string;
+    password: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/auth/password/reset";
+};
+
+export type ResetPasswordErrors = {
+  /**
+   * Token expired, already used, or not found
+   */
+  410: Error;
+  /**
+   * Validation failed (e.g. password too weak)
+   */
+  422: Error;
+};
+
+export type ResetPasswordError = ResetPasswordErrors[keyof ResetPasswordErrors];
+
+export type ResetPasswordResponses = {
+  /**
+   * Password updated
+   */
+  200: {
+    ok: boolean;
+  };
+};
+
+export type ResetPasswordResponse =
+  ResetPasswordResponses[keyof ResetPasswordResponses];
+
+export type VerifyEmailData = {
+  body: {
+    token: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/auth/verify-email";
+};
+
+export type VerifyEmailErrors = {
+  /**
+   * Token expired or already consumed
+   */
+  410: Error;
+};
+
+export type VerifyEmailError = VerifyEmailErrors[keyof VerifyEmailErrors];
+
+export type VerifyEmailResponses = {
+  /**
+   * Email verified; session established
+   */
+  200: Me;
+};
+
+export type VerifyEmailResponse =
+  VerifyEmailResponses[keyof VerifyEmailResponses];
+
+export type ResendVerificationData = {
+  body: {
+    email: string;
+  };
+  path?: never;
+  query?: never;
+  url: "/auth/verification/resend";
+};
+
+export type ResendVerificationResponses = {
+  /**
+   * Request accepted (enumeration-safe)
+   */
+  200: {
+    ok: boolean;
+  };
+};
+
+export type ResendVerificationResponse =
+  ResendVerificationResponses[keyof ResendVerificationResponses];
 
 export type LoginData = {
   body: LoginRequest;
@@ -7096,6 +7740,925 @@ export type ListQuarantinedMediaResponses = {
 
 export type ListQuarantinedMediaResponse =
   ListQuarantinedMediaResponses[keyof ListQuarantinedMediaResponses];
+
+export type ListEmailProvidersData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/providers";
+};
+
+export type ListEmailProvidersErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListEmailProvidersError =
+  ListEmailProvidersErrors[keyof ListEmailProvidersErrors];
+
+export type ListEmailProvidersResponses = {
+  /**
+   * Provider catalog
+   */
+  200: EmailProviderCatalog;
+};
+
+export type ListEmailProvidersResponse =
+  ListEmailProvidersResponses[keyof ListEmailProvidersResponses];
+
+export type GetOrgEmailConfigData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/org-config";
+};
+
+export type GetOrgEmailConfigErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * No org-wide email config found
+   */
+  404: Error;
+};
+
+export type GetOrgEmailConfigError =
+  GetOrgEmailConfigErrors[keyof GetOrgEmailConfigErrors];
+
+export type GetOrgEmailConfigResponses = {
+  /**
+   * Org-wide email config (masked read)
+   */
+  200: SiteEmailConfig;
+};
+
+export type GetOrgEmailConfigResponse =
+  GetOrgEmailConfigResponses[keyof GetOrgEmailConfigResponses];
+
+export type PutOrgEmailConfigData = {
+  body: PutEmailConfigRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/org-config";
+};
+
+export type PutOrgEmailConfigErrors = {
+  /**
+   * Bad request
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Validation failed
+   */
+  422: Error;
+  /**
+   * Service unavailable (e.g. crypto not configured)
+   */
+  503: Error;
+};
+
+export type PutOrgEmailConfigError =
+  PutOrgEmailConfigErrors[keyof PutOrgEmailConfigErrors];
+
+export type PutOrgEmailConfigResponses = {
+  /**
+   * Saved org-wide email config (masked read)
+   */
+  200: SiteEmailConfig;
+};
+
+export type PutOrgEmailConfigResponse =
+  PutOrgEmailConfigResponses[keyof PutOrgEmailConfigResponses];
+
+export type GetSiteEmailConfigData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/config";
+};
+
+export type GetSiteEmailConfigErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type GetSiteEmailConfigError =
+  GetSiteEmailConfigErrors[keyof GetSiteEmailConfigErrors];
+
+export type GetSiteEmailConfigResponses = {
+  /**
+   * Site email config (masked read)
+   */
+  200: SiteEmailConfig;
+};
+
+export type GetSiteEmailConfigResponse =
+  GetSiteEmailConfigResponses[keyof GetSiteEmailConfigResponses];
+
+export type PutSiteEmailConfigData = {
+  body: PutEmailConfigRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/config";
+};
+
+export type PutSiteEmailConfigErrors = {
+  /**
+   * Bad request
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Validation failed
+   */
+  422: Error;
+  /**
+   * Service unavailable (e.g. crypto not configured)
+   */
+  503: Error;
+};
+
+export type PutSiteEmailConfigError =
+  PutSiteEmailConfigErrors[keyof PutSiteEmailConfigErrors];
+
+export type PutSiteEmailConfigResponses = {
+  /**
+   * Saved site email config (masked read)
+   */
+  200: SiteEmailConfig;
+};
+
+export type PutSiteEmailConfigResponse =
+  PutSiteEmailConfigResponses[keyof PutSiteEmailConfigResponses];
+
+export type PutSiteEmailWebhookConfigData = {
+  body: PutEmailWebhookConfigRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/webhook-config";
+};
+
+export type PutSiteEmailWebhookConfigErrors = {
+  /**
+   * Bad request
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Site or email config not found
+   */
+  404: Error;
+  /**
+   * Service unavailable (e.g. crypto not configured)
+   */
+  503: Error;
+};
+
+export type PutSiteEmailWebhookConfigError =
+  PutSiteEmailWebhookConfigErrors[keyof PutSiteEmailWebhookConfigErrors];
+
+export type PutSiteEmailWebhookConfigResponses = {
+  /**
+   * Updated webhook config (masked read; token shown once on rotate)
+   */
+  200: EmailWebhookConfigResponse;
+};
+
+export type PutSiteEmailWebhookConfigResponse =
+  PutSiteEmailWebhookConfigResponses[keyof PutSiteEmailWebhookConfigResponses];
+
+export type PutOrgEmailWebhookConfigData = {
+  body: PutEmailWebhookConfigRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/org-config/webhook-config";
+};
+
+export type PutOrgEmailWebhookConfigErrors = {
+  /**
+   * Bad request
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * No org-wide email config found
+   */
+  404: Error;
+  /**
+   * Service unavailable (e.g. crypto not configured)
+   */
+  503: Error;
+};
+
+export type PutOrgEmailWebhookConfigError =
+  PutOrgEmailWebhookConfigErrors[keyof PutOrgEmailWebhookConfigErrors];
+
+export type PutOrgEmailWebhookConfigResponses = {
+  /**
+   * Updated webhook config (masked read; token shown once on rotate)
+   */
+  200: EmailWebhookConfigResponse;
+};
+
+export type PutOrgEmailWebhookConfigResponse =
+  PutOrgEmailWebhookConfigResponses[keyof PutOrgEmailWebhookConfigResponses];
+
+export type SendTestEmailData = {
+  body: EmailTestRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/test";
+};
+
+export type SendTestEmailErrors = {
+  /**
+   * Bad request
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type SendTestEmailError = SendTestEmailErrors[keyof SendTestEmailErrors];
+
+export type SendTestEmailResponses = {
+  /**
+   * Test send result (ok may be false when agent returns error)
+   */
+  200: EmailTestResult;
+};
+
+export type SendTestEmailResponse =
+  SendTestEmailResponses[keyof SendTestEmailResponses];
+
+export type ListSiteEmailLogData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Opaque keyset cursor from a previous page's `next_cursor`.
+     */
+    cursor?: string;
+    /**
+     * Maximum entries to return (default 50, max 200).
+     */
+    limit?: number;
+    /**
+     * Filter by status (sent | failed | pending).
+     */
+    status?: string;
+    /**
+     * Start of date range (inclusive). RFC3339 or YYYY-MM-DD.
+     *
+     */
+    from?: string;
+    /**
+     * End of date range (inclusive). RFC3339 or YYYY-MM-DD.
+     *
+     */
+    to?: string;
+    /**
+     * Free-text search against subject, from_address, and to_addresses.
+     *
+     */
+    q?: string;
+  };
+  url: "/api/v1/sites/{siteId}/email/log";
+};
+
+export type ListSiteEmailLogErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Site not found
+   */
+  404: Error;
+};
+
+export type ListSiteEmailLogError =
+  ListSiteEmailLogErrors[keyof ListSiteEmailLogErrors];
+
+export type ListSiteEmailLogResponses = {
+  /**
+   * Email log page
+   */
+  200: EmailLogList;
+};
+
+export type ListSiteEmailLogResponse =
+  ListSiteEmailLogResponses[keyof ListSiteEmailLogResponses];
+
+export type ExportSiteEmailLogData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Output format — `csv` (default) or `json`.
+     */
+    format?: "csv" | "json";
+    status?: string;
+    from?: string;
+    to?: string;
+    q?: string;
+  };
+  url: "/api/v1/sites/{siteId}/email/log/export";
+};
+
+export type ExportSiteEmailLogErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ExportSiteEmailLogError =
+  ExportSiteEmailLogErrors[keyof ExportSiteEmailLogErrors];
+
+export type ExportSiteEmailLogResponses = {
+  /**
+   * CSV or JSON export stream
+   */
+  200: EmailLogList;
+};
+
+export type ExportSiteEmailLogResponse =
+  ExportSiteEmailLogResponses[keyof ExportSiteEmailLogResponses];
+
+export type GetSiteEmailLogEntryData = {
+  body?: never;
+  path: {
+    siteId: string;
+    /**
+     * UUID of the email log entry.
+     */
+    logId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/log/{logId}";
+};
+
+export type GetSiteEmailLogEntryErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Log entry not found
+   */
+  404: Error;
+};
+
+export type GetSiteEmailLogEntryError =
+  GetSiteEmailLogEntryErrors[keyof GetSiteEmailLogEntryErrors];
+
+export type GetSiteEmailLogEntryResponses = {
+  /**
+   * Email log detail
+   */
+  200: EmailLogDetail;
+};
+
+export type GetSiteEmailLogEntryResponse =
+  GetSiteEmailLogEntryResponses[keyof GetSiteEmailLogEntryResponses];
+
+export type GetSiteEmailStatsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Start of date range (RFC3339 or YYYY-MM-DD).
+     */
+    from?: string;
+    /**
+     * End of date range (RFC3339 or YYYY-MM-DD).
+     */
+    to?: string;
+  };
+  url: "/api/v1/sites/{siteId}/email/stats";
+};
+
+export type GetSiteEmailStatsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type GetSiteEmailStatsError =
+  GetSiteEmailStatsErrors[keyof GetSiteEmailStatsErrors];
+
+export type GetSiteEmailStatsResponses = {
+  /**
+   * Email stats
+   */
+  200: EmailStats;
+};
+
+export type GetSiteEmailStatsResponse =
+  GetSiteEmailStatsResponses[keyof GetSiteEmailStatsResponses];
+
+export type ListFleetEmailLogData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+    status?: string;
+    from?: string;
+    to?: string;
+    q?: string;
+  };
+  url: "/api/v1/email/log";
+};
+
+export type ListFleetEmailLogErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListFleetEmailLogError =
+  ListFleetEmailLogErrors[keyof ListFleetEmailLogErrors];
+
+export type ListFleetEmailLogResponses = {
+  /**
+   * Fleet email log page
+   */
+  200: EmailLogList;
+};
+
+export type ListFleetEmailLogResponse =
+  ListFleetEmailLogResponses[keyof ListFleetEmailLogResponses];
+
+export type GetFleetEmailStatsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    from?: string;
+    to?: string;
+  };
+  url: "/api/v1/email/stats";
+};
+
+export type GetFleetEmailStatsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type GetFleetEmailStatsError =
+  GetFleetEmailStatsErrors[keyof GetFleetEmailStatsErrors];
+
+export type GetFleetEmailStatsResponses = {
+  /**
+   * Fleet email stats
+   */
+  200: EmailStats;
+};
+
+export type GetFleetEmailStatsResponse =
+  GetFleetEmailStatsResponses[keyof GetFleetEmailStatsResponses];
+
+export type ListSiteEmailSuppressionData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    cursor?: string;
+    limit?: number;
+    /**
+     * Filter by suppression reason (hard_bounce | complaint | unsubscribe | manual)
+     */
+    reason?: string;
+  };
+  url: "/api/v1/sites/{siteId}/email/suppression";
+};
+
+export type ListSiteEmailSuppressionErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListSiteEmailSuppressionError =
+  ListSiteEmailSuppressionErrors[keyof ListSiteEmailSuppressionErrors];
+
+export type ListSiteEmailSuppressionResponses = {
+  /**
+   * Suppression page
+   */
+  200: EmailSuppressionPage;
+};
+
+export type ListSiteEmailSuppressionResponse =
+  ListSiteEmailSuppressionResponses[keyof ListSiteEmailSuppressionResponses];
+
+export type AddSiteEmailSuppressionData = {
+  body: AddSuppressionRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/suppression";
+};
+
+export type AddSiteEmailSuppressionErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type AddSiteEmailSuppressionError =
+  AddSiteEmailSuppressionErrors[keyof AddSiteEmailSuppressionErrors];
+
+export type AddSiteEmailSuppressionResponses = {
+  /**
+   * Suppression entry created
+   */
+  201: EmailSuppressionEntry;
+};
+
+export type AddSiteEmailSuppressionResponse =
+  AddSiteEmailSuppressionResponses[keyof AddSiteEmailSuppressionResponses];
+
+export type DeleteSiteEmailSuppressionData = {
+  body?: never;
+  path: {
+    siteId: string;
+    suppressionId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/suppression/{suppressionId}";
+};
+
+export type DeleteSiteEmailSuppressionErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteSiteEmailSuppressionError =
+  DeleteSiteEmailSuppressionErrors[keyof DeleteSiteEmailSuppressionErrors];
+
+export type DeleteSiteEmailSuppressionResponses = {
+  /**
+   * Suppression entry deleted
+   */
+  204: void;
+};
+
+export type DeleteSiteEmailSuppressionResponse =
+  DeleteSiteEmailSuppressionResponses[keyof DeleteSiteEmailSuppressionResponses];
+
+export type ListFleetEmailSuppressionData = {
+  body?: never;
+  path?: never;
+  query?: {
+    cursor?: string;
+    limit?: number;
+    reason?: string;
+  };
+  url: "/api/v1/email/suppression";
+};
+
+export type ListFleetEmailSuppressionErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListFleetEmailSuppressionError =
+  ListFleetEmailSuppressionErrors[keyof ListFleetEmailSuppressionErrors];
+
+export type ListFleetEmailSuppressionResponses = {
+  /**
+   * Fleet suppression page
+   */
+  200: EmailSuppressionPage;
+};
+
+export type ListFleetEmailSuppressionResponse =
+  ListFleetEmailSuppressionResponses[keyof ListFleetEmailSuppressionResponses];
+
+export type AddFleetEmailSuppressionData = {
+  body: AddSuppressionRequest;
+  path?: never;
+  query?: never;
+  url: "/api/v1/email/suppression";
+};
+
+export type AddFleetEmailSuppressionErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type AddFleetEmailSuppressionError =
+  AddFleetEmailSuppressionErrors[keyof AddFleetEmailSuppressionErrors];
+
+export type AddFleetEmailSuppressionResponses = {
+  /**
+   * Fleet suppression entry created
+   */
+  201: EmailSuppressionEntry;
+};
+
+export type AddFleetEmailSuppressionResponse =
+  AddFleetEmailSuppressionResponses[keyof AddFleetEmailSuppressionResponses];
+
+export type DeleteFleetEmailSuppressionData = {
+  body?: never;
+  path: {
+    suppressionId: string;
+  };
+  query?: never;
+  url: "/api/v1/email/suppression/{suppressionId}";
+};
+
+export type DeleteFleetEmailSuppressionErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteFleetEmailSuppressionError =
+  DeleteFleetEmailSuppressionErrors[keyof DeleteFleetEmailSuppressionErrors];
+
+export type DeleteFleetEmailSuppressionResponses = {
+  /**
+   * Suppression entry deleted
+   */
+  204: void;
+};
+
+export type DeleteFleetEmailSuppressionResponse =
+  DeleteFleetEmailSuppressionResponses[keyof DeleteFleetEmailSuppressionResponses];
+
+export type ResendEmailLogData = {
+  body?: never;
+  path: {
+    siteId: string;
+    logId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/log/{logId}/resend";
+};
+
+export type ResendEmailLogErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Body not stored — resend unavailable
+   */
+  409: Error;
+};
+
+export type ResendEmailLogError =
+  ResendEmailLogErrors[keyof ResendEmailLogErrors];
+
+export type ResendEmailLogResponses = {
+  /**
+   * Resend dispatched (or gracefully failed — check `ok` field)
+   */
+  200: ResendEmailResult;
+};
+
+export type ResendEmailLogResponse =
+  ResendEmailLogResponses[keyof ResendEmailLogResponses];
+
+export type BulkResendEmailLogData = {
+  body: BulkResendRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/log/bulk-resend";
+};
+
+export type BulkResendEmailLogErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type BulkResendEmailLogError =
+  BulkResendEmailLogErrors[keyof BulkResendEmailLogErrors];
+
+export type BulkResendEmailLogResponses = {
+  /**
+   * Per-entry resend results
+   */
+  200: BulkResendResponse;
+};
+
+export type BulkResendEmailLogResponse =
+  BulkResendEmailLogResponses[keyof BulkResendEmailLogResponses];
+
+export type BulkDeleteEmailLogData = {
+  body: BulkDeleteLogsRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/email/log/bulk-delete";
+};
+
+export type BulkDeleteEmailLogErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type BulkDeleteEmailLogError =
+  BulkDeleteEmailLogErrors[keyof BulkDeleteEmailLogErrors];
+
+export type BulkDeleteEmailLogResponses = {
+  /**
+   * Number of rows deleted
+   */
+  200: BulkDeleteLogsResponse;
+};
+
+export type BulkDeleteEmailLogResponse =
+  BulkDeleteEmailLogResponses[keyof BulkDeleteEmailLogResponses];
 
 export type ListFontResultsData = {
   body?: never;

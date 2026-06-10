@@ -152,6 +152,21 @@ const (
 	// ActionMediaCleanQuarantine is recorded on every successful quarantine list
 	// read (READ-ONLY; PermMediaCleanScan). Metadata: manifest_count.
 	ActionMediaCleanQuarantine = "site.media.clean.quarantine"
+
+	// Per-site Email Management (m59). Recorded when the per-site or org-wide
+	// email config is created or updated. Metadata: provider, secret_set, scope
+	// (site|org).
+	ActionEmailConfigUpdated = "site.email.config.updated"
+
+	// Phase 4a — email log actions and suppression management.
+	// ActionEmailResent: metadata: log_id (single) or count (bulk).
+	ActionEmailResent = "site.email.log.resent"
+	// ActionEmailLogDeleted: metadata: deleted (count of rows removed).
+	ActionEmailLogDeleted = "site.email.log.deleted"
+	// ActionEmailSuppressionAdded: metadata: reason, scope (site|fleet).
+	ActionEmailSuppressionAdded = "site.email.suppression.added"
+	// ActionEmailSuppressionDeleted: metadata: suppression_id, scope (site|fleet).
+	ActionEmailSuppressionDeleted = "site.email.suppression.deleted"
 )
 
 // Entry is one audit record.

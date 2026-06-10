@@ -233,6 +233,59 @@ func (s *ActivityVerifyResult) SetTotal(val int) {
 	s.Total = val
 }
 
+type AddFleetEmailSuppressionBadRequest Error
+
+func (*AddFleetEmailSuppressionBadRequest) addFleetEmailSuppressionRes() {}
+
+type AddFleetEmailSuppressionForbidden Error
+
+func (*AddFleetEmailSuppressionForbidden) addFleetEmailSuppressionRes() {}
+
+type AddFleetEmailSuppressionUnauthorized Error
+
+func (*AddFleetEmailSuppressionUnauthorized) addFleetEmailSuppressionRes() {}
+
+type AddSiteEmailSuppressionBadRequest Error
+
+func (*AddSiteEmailSuppressionBadRequest) addSiteEmailSuppressionRes() {}
+
+type AddSiteEmailSuppressionForbidden Error
+
+func (*AddSiteEmailSuppressionForbidden) addSiteEmailSuppressionRes() {}
+
+type AddSiteEmailSuppressionUnauthorized Error
+
+func (*AddSiteEmailSuppressionUnauthorized) addSiteEmailSuppressionRes() {}
+
+// Ref: #/components/schemas/AddSuppressionRequest
+type AddSuppressionRequest struct {
+	// Email address to suppress.
+	Email string `json:"email"`
+	// Must be `manual` or `unsubscribe`. Hard_bounce and complaint entries
+	// are created automatically via provider webhooks.
+	Reason OptString `json:"reason"`
+}
+
+// GetEmail returns the value of Email.
+func (s *AddSuppressionRequest) GetEmail() string {
+	return s.Email
+}
+
+// GetReason returns the value of Reason.
+func (s *AddSuppressionRequest) GetReason() OptString {
+	return s.Reason
+}
+
+// SetEmail sets the value of Email.
+func (s *AddSuppressionRequest) SetEmail(val string) {
+	s.Email = val
+}
+
+// SetReason sets the value of Reason.
+func (s *AddSuppressionRequest) SetReason(val OptString) {
+	s.Reason = val
+}
+
 type AgentAutologinConsumeForbidden Error
 
 func (*AgentAutologinConsumeForbidden) agentAutologinConsumeRes() {}
@@ -3268,6 +3321,52 @@ func (s *BulkConfigRequestPreset) UnmarshalText(data []byte) error {
 	}
 }
 
+type BulkDeleteEmailLogBadRequest Error
+
+func (*BulkDeleteEmailLogBadRequest) bulkDeleteEmailLogRes() {}
+
+type BulkDeleteEmailLogForbidden Error
+
+func (*BulkDeleteEmailLogForbidden) bulkDeleteEmailLogRes() {}
+
+type BulkDeleteEmailLogUnauthorized Error
+
+func (*BulkDeleteEmailLogUnauthorized) bulkDeleteEmailLogRes() {}
+
+// Ref: #/components/schemas/BulkDeleteLogsRequest
+type BulkDeleteLogsRequest struct {
+	// List of log entry IDs to delete (max 500).
+	LogIds []uuid.UUID `json:"log_ids"`
+}
+
+// GetLogIds returns the value of LogIds.
+func (s *BulkDeleteLogsRequest) GetLogIds() []uuid.UUID {
+	return s.LogIds
+}
+
+// SetLogIds sets the value of LogIds.
+func (s *BulkDeleteLogsRequest) SetLogIds(val []uuid.UUID) {
+	s.LogIds = val
+}
+
+// Ref: #/components/schemas/BulkDeleteLogsResponse
+type BulkDeleteLogsResponse struct {
+	// Number of rows actually deleted (may be less than requested if some IDs did not exist).
+	Deleted int64 `json:"deleted"`
+}
+
+// GetDeleted returns the value of Deleted.
+func (s *BulkDeleteLogsResponse) GetDeleted() int64 {
+	return s.Deleted
+}
+
+// SetDeleted sets the value of Deleted.
+func (s *BulkDeleteLogsResponse) SetDeleted(val int64) {
+	s.Deleted = val
+}
+
+func (*BulkDeleteLogsResponse) bulkDeleteEmailLogRes() {}
+
 // Ref: #/components/schemas/BulkPurgeRequest
 type BulkPurgeRequest struct {
 	SiteIds []uuid.UUID `json:"site_ids"`
@@ -3282,6 +3381,88 @@ func (s *BulkPurgeRequest) GetSiteIds() []uuid.UUID {
 func (s *BulkPurgeRequest) SetSiteIds(val []uuid.UUID) {
 	s.SiteIds = val
 }
+
+type BulkResendEmailLogBadRequest Error
+
+func (*BulkResendEmailLogBadRequest) bulkResendEmailLogRes() {}
+
+type BulkResendEmailLogForbidden Error
+
+func (*BulkResendEmailLogForbidden) bulkResendEmailLogRes() {}
+
+type BulkResendEmailLogUnauthorized Error
+
+func (*BulkResendEmailLogUnauthorized) bulkResendEmailLogRes() {}
+
+// Ref: #/components/schemas/BulkResendItemResult
+type BulkResendItemResult struct {
+	LogID  uuid.UUID    `json:"log_id"`
+	Ok     bool         `json:"ok"`
+	Detail OptNilString `json:"detail"`
+}
+
+// GetLogID returns the value of LogID.
+func (s *BulkResendItemResult) GetLogID() uuid.UUID {
+	return s.LogID
+}
+
+// GetOk returns the value of Ok.
+func (s *BulkResendItemResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *BulkResendItemResult) GetDetail() OptNilString {
+	return s.Detail
+}
+
+// SetLogID sets the value of LogID.
+func (s *BulkResendItemResult) SetLogID(val uuid.UUID) {
+	s.LogID = val
+}
+
+// SetOk sets the value of Ok.
+func (s *BulkResendItemResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *BulkResendItemResult) SetDetail(val OptNilString) {
+	s.Detail = val
+}
+
+// Ref: #/components/schemas/BulkResendRequest
+type BulkResendRequest struct {
+	// List of log entry IDs to resend (max 100).
+	LogIds []uuid.UUID `json:"log_ids"`
+}
+
+// GetLogIds returns the value of LogIds.
+func (s *BulkResendRequest) GetLogIds() []uuid.UUID {
+	return s.LogIds
+}
+
+// SetLogIds sets the value of LogIds.
+func (s *BulkResendRequest) SetLogIds(val []uuid.UUID) {
+	s.LogIds = val
+}
+
+// Ref: #/components/schemas/BulkResendResponse
+type BulkResendResponse struct {
+	Results []BulkResendItemResult `json:"results"`
+}
+
+// GetResults returns the value of Results.
+func (s *BulkResendResponse) GetResults() []BulkResendItemResult {
+	return s.Results
+}
+
+// SetResults sets the value of Results.
+func (s *BulkResendResponse) SetResults(val []BulkResendItemResult) {
+	s.Results = val
+}
+
+func (*BulkResendResponse) bulkResendEmailLogRes() {}
 
 // One per-site result in a portfolio bulk-cache response.
 // Ref: #/components/schemas/BulkResult
@@ -4852,6 +5033,23 @@ func (s *DeleteDbSnapshotOK) SetDetail(val OptString) {
 	s.Detail = val
 }
 
+type DeleteFleetEmailSuppressionForbidden Error
+
+func (*DeleteFleetEmailSuppressionForbidden) deleteFleetEmailSuppressionRes() {}
+
+// DeleteFleetEmailSuppressionNoContent is response for DeleteFleetEmailSuppression operation.
+type DeleteFleetEmailSuppressionNoContent struct{}
+
+func (*DeleteFleetEmailSuppressionNoContent) deleteFleetEmailSuppressionRes() {}
+
+type DeleteFleetEmailSuppressionNotFound Error
+
+func (*DeleteFleetEmailSuppressionNotFound) deleteFleetEmailSuppressionRes() {}
+
+type DeleteFleetEmailSuppressionUnauthorized Error
+
+func (*DeleteFleetEmailSuppressionUnauthorized) deleteFleetEmailSuppressionRes() {}
+
 // Merged schema.
 type DeleteMediaOriginalsAccepted struct {
 	BatchJobID   OptString `json:"batch_job_id"`
@@ -4919,6 +5117,23 @@ type DeleteSiteDestinationUnauthorized Error
 
 func (*DeleteSiteDestinationUnauthorized) deleteSiteDestinationRes() {}
 
+type DeleteSiteEmailSuppressionForbidden Error
+
+func (*DeleteSiteEmailSuppressionForbidden) deleteSiteEmailSuppressionRes() {}
+
+// DeleteSiteEmailSuppressionNoContent is response for DeleteSiteEmailSuppression operation.
+type DeleteSiteEmailSuppressionNoContent struct{}
+
+func (*DeleteSiteEmailSuppressionNoContent) deleteSiteEmailSuppressionRes() {}
+
+type DeleteSiteEmailSuppressionNotFound Error
+
+func (*DeleteSiteEmailSuppressionNotFound) deleteSiteEmailSuppressionRes() {}
+
+type DeleteSiteEmailSuppressionUnauthorized Error
+
+func (*DeleteSiteEmailSuppressionUnauthorized) deleteSiteEmailSuppressionRes() {}
+
 // DeleteSiteNoContent is response for DeleteSite operation.
 type DeleteSiteNoContent struct{}
 
@@ -4940,6 +5155,750 @@ func (*DeleteSiteShareNotFound) deleteSiteShareRes() {}
 type DeleteSiteShareUnauthorized Error
 
 func (*DeleteSiteShareUnauthorized) deleteSiteShareRes() {}
+
+// Single email log entry with prev/next navigation IDs.
+// Ref: #/components/schemas/EmailLogDetail
+type EmailLogDetail struct {
+	Entry SiteEmailLogEntry `json:"entry"`
+	// ID of the next-older entry (for the Prev button). Null when at the oldest.
+	PrevID OptNilUUID `json:"prev_id"`
+	// ID of the next-newer entry (for the Next button). Null when at the newest.
+	NextID OptNilUUID `json:"next_id"`
+}
+
+// GetEntry returns the value of Entry.
+func (s *EmailLogDetail) GetEntry() SiteEmailLogEntry {
+	return s.Entry
+}
+
+// GetPrevID returns the value of PrevID.
+func (s *EmailLogDetail) GetPrevID() OptNilUUID {
+	return s.PrevID
+}
+
+// GetNextID returns the value of NextID.
+func (s *EmailLogDetail) GetNextID() OptNilUUID {
+	return s.NextID
+}
+
+// SetEntry sets the value of Entry.
+func (s *EmailLogDetail) SetEntry(val SiteEmailLogEntry) {
+	s.Entry = val
+}
+
+// SetPrevID sets the value of PrevID.
+func (s *EmailLogDetail) SetPrevID(val OptNilUUID) {
+	s.PrevID = val
+}
+
+// SetNextID sets the value of NextID.
+func (s *EmailLogDetail) SetNextID(val OptNilUUID) {
+	s.NextID = val
+}
+
+func (*EmailLogDetail) getSiteEmailLogEntryRes() {}
+
+// A page of email log entries.
+// Ref: #/components/schemas/EmailLogList
+type EmailLogList struct {
+	Entries []SiteEmailLogEntry `json:"entries"`
+	// Opaque keyset cursor for the next page. Empty string when this is the last page.
+	NextCursor string `json:"next_cursor"`
+}
+
+// GetEntries returns the value of Entries.
+func (s *EmailLogList) GetEntries() []SiteEmailLogEntry {
+	return s.Entries
+}
+
+// GetNextCursor returns the value of NextCursor.
+func (s *EmailLogList) GetNextCursor() string {
+	return s.NextCursor
+}
+
+// SetEntries sets the value of Entries.
+func (s *EmailLogList) SetEntries(val []SiteEmailLogEntry) {
+	s.Entries = val
+}
+
+// SetNextCursor sets the value of NextCursor.
+func (s *EmailLogList) SetNextCursor(val string) {
+	s.NextCursor = val
+}
+
+func (*EmailLogList) exportSiteEmailLogRes() {}
+func (*EmailLogList) listFleetEmailLogRes()  {}
+func (*EmailLogList) listSiteEmailLogRes()   {}
+
+// Static catalog of supported email providers and their field schemas.
+// Ref: #/components/schemas/EmailProviderCatalog
+type EmailProviderCatalog struct {
+	Providers []EmailProviderSpec `json:"providers"`
+}
+
+// GetProviders returns the value of Providers.
+func (s *EmailProviderCatalog) GetProviders() []EmailProviderSpec {
+	return s.Providers
+}
+
+// SetProviders sets the value of Providers.
+func (s *EmailProviderCatalog) SetProviders(val []EmailProviderSpec) {
+	s.Providers = val
+}
+
+func (*EmailProviderCatalog) listEmailProvidersRes() {}
+
+// Schema descriptor for one provider configuration field.
+// Ref: #/components/schemas/EmailProviderField
+type EmailProviderField struct {
+	// Field key used in the `config` map of PutEmailConfigRequest.
+	Key string `json:"key"`
+	// Human-readable field label.
+	Label string `json:"label"`
+	// Input type hint: text | password | select | boolean | number.
+	Type string `json:"type"`
+	// When true the field value is a credential that must be sent via the top-level `secret` field, not
+	// inside `config`.
+	IsSecret   bool `json:"is_secret"`
+	IsRequired bool `json:"is_required"`
+	// Valid option values for select fields.
+	Options OptNilStringArray `json:"options"`
+	// Default value hint for the UI.
+	Default OptNilString `json:"default"`
+	// Short helper text shown below the field in the UI.
+	Help OptNilString `json:"help"`
+}
+
+// GetKey returns the value of Key.
+func (s *EmailProviderField) GetKey() string {
+	return s.Key
+}
+
+// GetLabel returns the value of Label.
+func (s *EmailProviderField) GetLabel() string {
+	return s.Label
+}
+
+// GetType returns the value of Type.
+func (s *EmailProviderField) GetType() string {
+	return s.Type
+}
+
+// GetIsSecret returns the value of IsSecret.
+func (s *EmailProviderField) GetIsSecret() bool {
+	return s.IsSecret
+}
+
+// GetIsRequired returns the value of IsRequired.
+func (s *EmailProviderField) GetIsRequired() bool {
+	return s.IsRequired
+}
+
+// GetOptions returns the value of Options.
+func (s *EmailProviderField) GetOptions() OptNilStringArray {
+	return s.Options
+}
+
+// GetDefault returns the value of Default.
+func (s *EmailProviderField) GetDefault() OptNilString {
+	return s.Default
+}
+
+// GetHelp returns the value of Help.
+func (s *EmailProviderField) GetHelp() OptNilString {
+	return s.Help
+}
+
+// SetKey sets the value of Key.
+func (s *EmailProviderField) SetKey(val string) {
+	s.Key = val
+}
+
+// SetLabel sets the value of Label.
+func (s *EmailProviderField) SetLabel(val string) {
+	s.Label = val
+}
+
+// SetType sets the value of Type.
+func (s *EmailProviderField) SetType(val string) {
+	s.Type = val
+}
+
+// SetIsSecret sets the value of IsSecret.
+func (s *EmailProviderField) SetIsSecret(val bool) {
+	s.IsSecret = val
+}
+
+// SetIsRequired sets the value of IsRequired.
+func (s *EmailProviderField) SetIsRequired(val bool) {
+	s.IsRequired = val
+}
+
+// SetOptions sets the value of Options.
+func (s *EmailProviderField) SetOptions(val OptNilStringArray) {
+	s.Options = val
+}
+
+// SetDefault sets the value of Default.
+func (s *EmailProviderField) SetDefault(val OptNilString) {
+	s.Default = val
+}
+
+// SetHelp sets the value of Help.
+func (s *EmailProviderField) SetHelp(val OptNilString) {
+	s.Help = val
+}
+
+// Descriptor for a single email provider.
+// Ref: #/components/schemas/EmailProviderSpec
+type EmailProviderSpec struct {
+	// Machine-readable provider identifier (e.g. smtp, ses, sendgrid).
+	Slug string `json:"slug"`
+	// Human-readable provider name.
+	Label string `json:"label"`
+	// URL to provider-specific setup documentation.
+	DocsURL OptNilString         `json:"docs_url"`
+	Fields  []EmailProviderField `json:"fields"`
+}
+
+// GetSlug returns the value of Slug.
+func (s *EmailProviderSpec) GetSlug() string {
+	return s.Slug
+}
+
+// GetLabel returns the value of Label.
+func (s *EmailProviderSpec) GetLabel() string {
+	return s.Label
+}
+
+// GetDocsURL returns the value of DocsURL.
+func (s *EmailProviderSpec) GetDocsURL() OptNilString {
+	return s.DocsURL
+}
+
+// GetFields returns the value of Fields.
+func (s *EmailProviderSpec) GetFields() []EmailProviderField {
+	return s.Fields
+}
+
+// SetSlug sets the value of Slug.
+func (s *EmailProviderSpec) SetSlug(val string) {
+	s.Slug = val
+}
+
+// SetLabel sets the value of Label.
+func (s *EmailProviderSpec) SetLabel(val string) {
+	s.Label = val
+}
+
+// SetDocsURL sets the value of DocsURL.
+func (s *EmailProviderSpec) SetDocsURL(val OptNilString) {
+	s.DocsURL = val
+}
+
+// SetFields sets the value of Fields.
+func (s *EmailProviderSpec) SetFields(val []EmailProviderField) {
+	s.Fields = val
+}
+
+// Email statistics summary for a site or the whole fleet. `site_count` is only populated for fleet
+// stats.
+// Ref: #/components/schemas/EmailStats
+type EmailStats struct {
+	Total       int64 `json:"total"`
+	SentCount   int64 `json:"sent_count"`
+	FailedCount int64 `json:"failed_count"`
+	// Number of distinct providers used in the range.
+	ProviderCount int64 `json:"provider_count"`
+	// Number of distinct sites in the range (fleet stats only).
+	SiteCount  OptNilInt64            `json:"site_count"`
+	ByDay      []EmailStatsByDay      `json:"by_day"`
+	ByProvider []EmailStatsByProvider `json:"by_provider"`
+}
+
+// GetTotal returns the value of Total.
+func (s *EmailStats) GetTotal() int64 {
+	return s.Total
+}
+
+// GetSentCount returns the value of SentCount.
+func (s *EmailStats) GetSentCount() int64 {
+	return s.SentCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *EmailStats) GetFailedCount() int64 {
+	return s.FailedCount
+}
+
+// GetProviderCount returns the value of ProviderCount.
+func (s *EmailStats) GetProviderCount() int64 {
+	return s.ProviderCount
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *EmailStats) GetSiteCount() OptNilInt64 {
+	return s.SiteCount
+}
+
+// GetByDay returns the value of ByDay.
+func (s *EmailStats) GetByDay() []EmailStatsByDay {
+	return s.ByDay
+}
+
+// GetByProvider returns the value of ByProvider.
+func (s *EmailStats) GetByProvider() []EmailStatsByProvider {
+	return s.ByProvider
+}
+
+// SetTotal sets the value of Total.
+func (s *EmailStats) SetTotal(val int64) {
+	s.Total = val
+}
+
+// SetSentCount sets the value of SentCount.
+func (s *EmailStats) SetSentCount(val int64) {
+	s.SentCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *EmailStats) SetFailedCount(val int64) {
+	s.FailedCount = val
+}
+
+// SetProviderCount sets the value of ProviderCount.
+func (s *EmailStats) SetProviderCount(val int64) {
+	s.ProviderCount = val
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *EmailStats) SetSiteCount(val OptNilInt64) {
+	s.SiteCount = val
+}
+
+// SetByDay sets the value of ByDay.
+func (s *EmailStats) SetByDay(val []EmailStatsByDay) {
+	s.ByDay = val
+}
+
+// SetByProvider sets the value of ByProvider.
+func (s *EmailStats) SetByProvider(val []EmailStatsByProvider) {
+	s.ByProvider = val
+}
+
+func (*EmailStats) getFleetEmailStatsRes() {}
+func (*EmailStats) getSiteEmailStatsRes()  {}
+
+// One day's aggregate email stats.
+// Ref: #/components/schemas/EmailStatsByDay
+type EmailStatsByDay struct {
+	// Calendar day in YYYY-MM-DD format (UTC).
+	Day         string `json:"day"`
+	Total       int64  `json:"total"`
+	SentCount   int64  `json:"sent_count"`
+	FailedCount int64  `json:"failed_count"`
+}
+
+// GetDay returns the value of Day.
+func (s *EmailStatsByDay) GetDay() string {
+	return s.Day
+}
+
+// GetTotal returns the value of Total.
+func (s *EmailStatsByDay) GetTotal() int64 {
+	return s.Total
+}
+
+// GetSentCount returns the value of SentCount.
+func (s *EmailStatsByDay) GetSentCount() int64 {
+	return s.SentCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *EmailStatsByDay) GetFailedCount() int64 {
+	return s.FailedCount
+}
+
+// SetDay sets the value of Day.
+func (s *EmailStatsByDay) SetDay(val string) {
+	s.Day = val
+}
+
+// SetTotal sets the value of Total.
+func (s *EmailStatsByDay) SetTotal(val int64) {
+	s.Total = val
+}
+
+// SetSentCount sets the value of SentCount.
+func (s *EmailStatsByDay) SetSentCount(val int64) {
+	s.SentCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *EmailStatsByDay) SetFailedCount(val int64) {
+	s.FailedCount = val
+}
+
+// One provider's aggregate email stats.
+// Ref: #/components/schemas/EmailStatsByProvider
+type EmailStatsByProvider struct {
+	Provider    string `json:"provider"`
+	Total       int64  `json:"total"`
+	SentCount   int64  `json:"sent_count"`
+	FailedCount int64  `json:"failed_count"`
+}
+
+// GetProvider returns the value of Provider.
+func (s *EmailStatsByProvider) GetProvider() string {
+	return s.Provider
+}
+
+// GetTotal returns the value of Total.
+func (s *EmailStatsByProvider) GetTotal() int64 {
+	return s.Total
+}
+
+// GetSentCount returns the value of SentCount.
+func (s *EmailStatsByProvider) GetSentCount() int64 {
+	return s.SentCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *EmailStatsByProvider) GetFailedCount() int64 {
+	return s.FailedCount
+}
+
+// SetProvider sets the value of Provider.
+func (s *EmailStatsByProvider) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetTotal sets the value of Total.
+func (s *EmailStatsByProvider) SetTotal(val int64) {
+	s.Total = val
+}
+
+// SetSentCount sets the value of SentCount.
+func (s *EmailStatsByProvider) SetSentCount(val int64) {
+	s.SentCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *EmailStatsByProvider) SetFailedCount(val int64) {
+	s.FailedCount = val
+}
+
+// A single suppression entry. `email` is the plaintext address (present
+// when `store_plaintext=true` at create time). `email_hash` is always
+// present (SHA-256 of the lower-cased address, hex-encoded) for
+// privacy-preserving checks without storing the full address.
+// Ref: #/components/schemas/EmailSuppressionEntry
+type EmailSuppressionEntry struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	// Null for fleet-wide entries (applies to all sites in tenant).
+	SiteID OptNilUUID `json:"site_id"`
+	// SHA-256 of the lower-cased email address (hex).
+	EmailHash string `json:"email_hash"`
+	// Plaintext email address (null when not stored at create time).
+	Email OptNilString `json:"email"`
+	// Hard_bounce | complaint | unsubscribe | manual.
+	Reason string `json:"reason"`
+	// Ses | sendgrid | mailgun | postmark | manual.
+	Provider string `json:"provider"`
+	// When the provider event occurred (null for manual entries).
+	EventAt OptNilDateTime `json:"event_at"`
+	// Provider message ID that triggered this suppression (if known).
+	SourceMessageID OptNilString `json:"source_message_id"`
+	CreatedAt       time.Time    `json:"created_at"`
+}
+
+// GetID returns the value of ID.
+func (s *EmailSuppressionEntry) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *EmailSuppressionEntry) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *EmailSuppressionEntry) GetSiteID() OptNilUUID {
+	return s.SiteID
+}
+
+// GetEmailHash returns the value of EmailHash.
+func (s *EmailSuppressionEntry) GetEmailHash() string {
+	return s.EmailHash
+}
+
+// GetEmail returns the value of Email.
+func (s *EmailSuppressionEntry) GetEmail() OptNilString {
+	return s.Email
+}
+
+// GetReason returns the value of Reason.
+func (s *EmailSuppressionEntry) GetReason() string {
+	return s.Reason
+}
+
+// GetProvider returns the value of Provider.
+func (s *EmailSuppressionEntry) GetProvider() string {
+	return s.Provider
+}
+
+// GetEventAt returns the value of EventAt.
+func (s *EmailSuppressionEntry) GetEventAt() OptNilDateTime {
+	return s.EventAt
+}
+
+// GetSourceMessageID returns the value of SourceMessageID.
+func (s *EmailSuppressionEntry) GetSourceMessageID() OptNilString {
+	return s.SourceMessageID
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *EmailSuppressionEntry) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// SetID sets the value of ID.
+func (s *EmailSuppressionEntry) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *EmailSuppressionEntry) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *EmailSuppressionEntry) SetSiteID(val OptNilUUID) {
+	s.SiteID = val
+}
+
+// SetEmailHash sets the value of EmailHash.
+func (s *EmailSuppressionEntry) SetEmailHash(val string) {
+	s.EmailHash = val
+}
+
+// SetEmail sets the value of Email.
+func (s *EmailSuppressionEntry) SetEmail(val OptNilString) {
+	s.Email = val
+}
+
+// SetReason sets the value of Reason.
+func (s *EmailSuppressionEntry) SetReason(val string) {
+	s.Reason = val
+}
+
+// SetProvider sets the value of Provider.
+func (s *EmailSuppressionEntry) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetEventAt sets the value of EventAt.
+func (s *EmailSuppressionEntry) SetEventAt(val OptNilDateTime) {
+	s.EventAt = val
+}
+
+// SetSourceMessageID sets the value of SourceMessageID.
+func (s *EmailSuppressionEntry) SetSourceMessageID(val OptNilString) {
+	s.SourceMessageID = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *EmailSuppressionEntry) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+func (*EmailSuppressionEntry) addFleetEmailSuppressionRes() {}
+func (*EmailSuppressionEntry) addSiteEmailSuppressionRes()  {}
+
+// Ref: #/components/schemas/EmailSuppressionPage
+type EmailSuppressionPage struct {
+	Entries    []EmailSuppressionEntry `json:"entries"`
+	NextCursor OptNilString            `json:"next_cursor"`
+	HasMore    bool                    `json:"has_more"`
+}
+
+// GetEntries returns the value of Entries.
+func (s *EmailSuppressionPage) GetEntries() []EmailSuppressionEntry {
+	return s.Entries
+}
+
+// GetNextCursor returns the value of NextCursor.
+func (s *EmailSuppressionPage) GetNextCursor() OptNilString {
+	return s.NextCursor
+}
+
+// GetHasMore returns the value of HasMore.
+func (s *EmailSuppressionPage) GetHasMore() bool {
+	return s.HasMore
+}
+
+// SetEntries sets the value of Entries.
+func (s *EmailSuppressionPage) SetEntries(val []EmailSuppressionEntry) {
+	s.Entries = val
+}
+
+// SetNextCursor sets the value of NextCursor.
+func (s *EmailSuppressionPage) SetNextCursor(val OptNilString) {
+	s.NextCursor = val
+}
+
+// SetHasMore sets the value of HasMore.
+func (s *EmailSuppressionPage) SetHasMore(val bool) {
+	s.HasMore = val
+}
+
+func (*EmailSuppressionPage) listFleetEmailSuppressionRes() {}
+func (*EmailSuppressionPage) listSiteEmailSuppressionRes()  {}
+
+// Request body for POST /sites/{siteId}/email/test.
+// Ref: #/components/schemas/EmailTestRequest
+type EmailTestRequest struct {
+	// Recipient address for the test email.
+	To string `json:"to"`
+	// Subject line. Defaults to "WPMgr test email" when omitted.
+	Subject OptString `json:"subject"`
+	// Plain-text body. Defaults to a standard test message when omitted.
+	Body OptString `json:"body"`
+}
+
+// GetTo returns the value of To.
+func (s *EmailTestRequest) GetTo() string {
+	return s.To
+}
+
+// GetSubject returns the value of Subject.
+func (s *EmailTestRequest) GetSubject() OptString {
+	return s.Subject
+}
+
+// GetBody returns the value of Body.
+func (s *EmailTestRequest) GetBody() OptString {
+	return s.Body
+}
+
+// SetTo sets the value of To.
+func (s *EmailTestRequest) SetTo(val string) {
+	s.To = val
+}
+
+// SetSubject sets the value of Subject.
+func (s *EmailTestRequest) SetSubject(val OptString) {
+	s.Subject = val
+}
+
+// SetBody sets the value of Body.
+func (s *EmailTestRequest) SetBody(val OptString) {
+	s.Body = val
+}
+
+// Result of a test-send dispatch. `ok` may be false when the agent returns an error or when the
+// agent does not yet implement the command (Phase 1 expected behaviour — see endpoint description).
+// Ref: #/components/schemas/EmailTestResult
+type EmailTestResult struct {
+	// True when the agent confirmed the email was dispatched.
+	Ok bool `json:"ok"`
+	// Human-readable detail or error message from the agent. Present when ok is false.
+	Detail OptNilString `json:"detail"`
+	// Provider-assigned message-id returned by the agent (Phase 2+).
+	MessageID OptNilString `json:"message_id"`
+}
+
+// GetOk returns the value of Ok.
+func (s *EmailTestResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *EmailTestResult) GetDetail() OptNilString {
+	return s.Detail
+}
+
+// GetMessageID returns the value of MessageID.
+func (s *EmailTestResult) GetMessageID() OptNilString {
+	return s.MessageID
+}
+
+// SetOk sets the value of Ok.
+func (s *EmailTestResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *EmailTestResult) SetDetail(val OptNilString) {
+	s.Detail = val
+}
+
+// SetMessageID sets the value of MessageID.
+func (s *EmailTestResult) SetMessageID(val OptNilString) {
+	s.MessageID = val
+}
+
+func (*EmailTestResult) sendTestEmailRes() {}
+
+// Response for PUT webhook-config. Always returns the updated masked config fields. When
+// rotate_token was true, also includes webhook_route_token (plain token, shown once).
+// Ref: #/components/schemas/EmailWebhookConfigResponse
+type EmailWebhookConfigResponse struct {
+	// The full inbound webhook URL including the (possibly new) token. Present whenever a token exists
+	// after the operation.
+	WebhookURL string `json:"webhook_url"`
+	// True when an HMAC signing key is stored.
+	WebhookSigningKeySet bool `json:"webhook_signing_key_set"`
+	// Current SNS TopicArn allowlist (may be empty).
+	SesTopicArns []string `json:"ses_topic_arns"`
+	// Plain route token, returned once when rotate_token was true. Store it immediately -- it will not
+	// be shown again.
+	WebhookRouteToken OptNilString `json:"webhook_route_token"`
+}
+
+// GetWebhookURL returns the value of WebhookURL.
+func (s *EmailWebhookConfigResponse) GetWebhookURL() string {
+	return s.WebhookURL
+}
+
+// GetWebhookSigningKeySet returns the value of WebhookSigningKeySet.
+func (s *EmailWebhookConfigResponse) GetWebhookSigningKeySet() bool {
+	return s.WebhookSigningKeySet
+}
+
+// GetSesTopicArns returns the value of SesTopicArns.
+func (s *EmailWebhookConfigResponse) GetSesTopicArns() []string {
+	return s.SesTopicArns
+}
+
+// GetWebhookRouteToken returns the value of WebhookRouteToken.
+func (s *EmailWebhookConfigResponse) GetWebhookRouteToken() OptNilString {
+	return s.WebhookRouteToken
+}
+
+// SetWebhookURL sets the value of WebhookURL.
+func (s *EmailWebhookConfigResponse) SetWebhookURL(val string) {
+	s.WebhookURL = val
+}
+
+// SetWebhookSigningKeySet sets the value of WebhookSigningKeySet.
+func (s *EmailWebhookConfigResponse) SetWebhookSigningKeySet(val bool) {
+	s.WebhookSigningKeySet = val
+}
+
+// SetSesTopicArns sets the value of SesTopicArns.
+func (s *EmailWebhookConfigResponse) SetSesTopicArns(val []string) {
+	s.SesTopicArns = val
+}
+
+// SetWebhookRouteToken sets the value of WebhookRouteToken.
+func (s *EmailWebhookConfigResponse) SetWebhookRouteToken(val OptNilString) {
+	s.WebhookRouteToken = val
+}
+
+func (*EmailWebhookConfigResponse) putOrgEmailWebhookConfigRes()  {}
+func (*EmailWebhookConfigResponse) putSiteEmailWebhookConfigRes() {}
 
 type EnrollConflict Error
 
@@ -5165,6 +6124,7 @@ func (*Error) revokeSiteRes()                     {}
 func (*Error) setSiteTagsRes()                    {}
 func (*Error) silenceSitePHPErrorRes()            {}
 func (*Error) unlockBackupRes()                   {}
+func (*Error) verifyEmailRes()                    {}
 
 type ErrorDetails map[string]jx.Raw
 
@@ -5176,6 +6136,71 @@ func (s *ErrorDetails) init() ErrorDetails {
 	}
 	return m
 }
+
+type ExportSiteEmailLogForbidden Error
+
+func (*ExportSiteEmailLogForbidden) exportSiteEmailLogRes() {}
+
+type ExportSiteEmailLogFormat string
+
+const (
+	ExportSiteEmailLogFormatCsv  ExportSiteEmailLogFormat = "csv"
+	ExportSiteEmailLogFormatJSON ExportSiteEmailLogFormat = "json"
+)
+
+// AllValues returns all ExportSiteEmailLogFormat values.
+func (ExportSiteEmailLogFormat) AllValues() []ExportSiteEmailLogFormat {
+	return []ExportSiteEmailLogFormat{
+		ExportSiteEmailLogFormatCsv,
+		ExportSiteEmailLogFormatJSON,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ExportSiteEmailLogFormat) MarshalText() ([]byte, error) {
+	switch s {
+	case ExportSiteEmailLogFormatCsv:
+		return []byte(s), nil
+	case ExportSiteEmailLogFormatJSON:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ExportSiteEmailLogFormat) UnmarshalText(data []byte) error {
+	switch ExportSiteEmailLogFormat(data) {
+	case ExportSiteEmailLogFormatCsv:
+		*s = ExportSiteEmailLogFormatCsv
+		return nil
+	case ExportSiteEmailLogFormatJSON:
+		*s = ExportSiteEmailLogFormatJSON
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ExportSiteEmailLogOKTextCsv struct {
+	Data io.Reader
+}
+
+// Read reads data from the Data reader.
+//
+// Kept to satisfy the io.Reader interface.
+func (s ExportSiteEmailLogOKTextCsv) Read(p []byte) (n int, err error) {
+	if s.Data == nil {
+		return 0, io.EOF
+	}
+	return s.Data.Read(p)
+}
+
+func (*ExportSiteEmailLogOKTextCsv) exportSiteEmailLogRes() {}
+
+type ExportSiteEmailLogUnauthorized Error
+
+func (*ExportSiteEmailLogUnauthorized) exportSiteEmailLogRes() {}
 
 // One font_results catalog row — the dashboard view of a processed self-hosted font.
 // Ref: #/components/schemas/FontResult
@@ -5813,6 +6838,34 @@ func (s *FontTranscodeResponseState) UnmarshalText(data []byte) error {
 	}
 }
 
+type ForgotPasswordOK struct {
+	Ok bool `json:"ok"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ForgotPasswordOK) GetOk() bool {
+	return s.Ok
+}
+
+// SetOk sets the value of Ok.
+func (s *ForgotPasswordOK) SetOk(val bool) {
+	s.Ok = val
+}
+
+type ForgotPasswordReq struct {
+	Email string `json:"email"`
+}
+
+// GetEmail returns the value of Email.
+func (s *ForgotPasswordReq) GetEmail() string {
+	return s.Email
+}
+
+// SetEmail sets the value of Email.
+func (s *ForgotPasswordReq) SetEmail(val string) {
+	s.Email = val
+}
+
 type GetBackupEnvironmentNotFound Error
 
 func (*GetBackupEnvironmentNotFound) getBackupEnvironmentRes() {}
@@ -5865,6 +6918,26 @@ func (s *GetDbScanResultOK) SetResult(val OptDbScanResult) {
 	s.Result = val
 }
 
+type GetFleetEmailStatsForbidden Error
+
+func (*GetFleetEmailStatsForbidden) getFleetEmailStatsRes() {}
+
+type GetFleetEmailStatsUnauthorized Error
+
+func (*GetFleetEmailStatsUnauthorized) getFleetEmailStatsRes() {}
+
+type GetOrgEmailConfigForbidden Error
+
+func (*GetOrgEmailConfigForbidden) getOrgEmailConfigRes() {}
+
+type GetOrgEmailConfigNotFound Error
+
+func (*GetOrgEmailConfigNotFound) getOrgEmailConfigRes() {}
+
+type GetOrgEmailConfigUnauthorized Error
+
+func (*GetOrgEmailConfigUnauthorized) getOrgEmailConfigRes() {}
+
 type GetReadyzOK Readiness
 
 func (*GetReadyzOK) getReadyzRes() {}
@@ -5896,6 +6969,38 @@ func (*GetSiteDestinationNotFound) getSiteDestinationRes() {}
 type GetSiteDestinationUnauthorized Error
 
 func (*GetSiteDestinationUnauthorized) getSiteDestinationRes() {}
+
+type GetSiteEmailConfigForbidden Error
+
+func (*GetSiteEmailConfigForbidden) getSiteEmailConfigRes() {}
+
+type GetSiteEmailConfigNotFound Error
+
+func (*GetSiteEmailConfigNotFound) getSiteEmailConfigRes() {}
+
+type GetSiteEmailConfigUnauthorized Error
+
+func (*GetSiteEmailConfigUnauthorized) getSiteEmailConfigRes() {}
+
+type GetSiteEmailLogEntryForbidden Error
+
+func (*GetSiteEmailLogEntryForbidden) getSiteEmailLogEntryRes() {}
+
+type GetSiteEmailLogEntryNotFound Error
+
+func (*GetSiteEmailLogEntryNotFound) getSiteEmailLogEntryRes() {}
+
+type GetSiteEmailLogEntryUnauthorized Error
+
+func (*GetSiteEmailLogEntryUnauthorized) getSiteEmailLogEntryRes() {}
+
+type GetSiteEmailStatsForbidden Error
+
+func (*GetSiteEmailStatsForbidden) getSiteEmailStatsRes() {}
+
+type GetSiteEmailStatsUnauthorized Error
+
+func (*GetSiteEmailStatsUnauthorized) getSiteEmailStatsRes() {}
 
 type GetSiteUptimeWindow string
 
@@ -6085,6 +7190,30 @@ type ListAuditUnauthorized Error
 
 func (*ListAuditUnauthorized) listAuditRes() {}
 
+type ListEmailProvidersForbidden Error
+
+func (*ListEmailProvidersForbidden) listEmailProvidersRes() {}
+
+type ListEmailProvidersUnauthorized Error
+
+func (*ListEmailProvidersUnauthorized) listEmailProvidersRes() {}
+
+type ListFleetEmailLogForbidden Error
+
+func (*ListFleetEmailLogForbidden) listFleetEmailLogRes() {}
+
+type ListFleetEmailLogUnauthorized Error
+
+func (*ListFleetEmailLogUnauthorized) listFleetEmailLogRes() {}
+
+type ListFleetEmailSuppressionForbidden Error
+
+func (*ListFleetEmailSuppressionForbidden) listFleetEmailSuppressionRes() {}
+
+type ListFleetEmailSuppressionUnauthorized Error
+
+func (*ListFleetEmailSuppressionUnauthorized) listFleetEmailSuppressionRes() {}
+
 type ListMembersForbidden Error
 
 func (*ListMembersForbidden) listMembersRes() {}
@@ -6197,6 +7326,26 @@ func (*ListSiteDestinationsForbidden) listSiteDestinationsRes() {}
 type ListSiteDestinationsUnauthorized Error
 
 func (*ListSiteDestinationsUnauthorized) listSiteDestinationsRes() {}
+
+type ListSiteEmailLogForbidden Error
+
+func (*ListSiteEmailLogForbidden) listSiteEmailLogRes() {}
+
+type ListSiteEmailLogNotFound Error
+
+func (*ListSiteEmailLogNotFound) listSiteEmailLogRes() {}
+
+type ListSiteEmailLogUnauthorized Error
+
+func (*ListSiteEmailLogUnauthorized) listSiteEmailLogRes() {}
+
+type ListSiteEmailSuppressionForbidden Error
+
+func (*ListSiteEmailSuppressionForbidden) listSiteEmailSuppressionRes() {}
+
+type ListSiteEmailSuppressionUnauthorized Error
+
+func (*ListSiteEmailSuppressionUnauthorized) listSiteEmailSuppressionRes() {}
 
 type ListSiteLoginEventsStatus int32
 
@@ -6425,6 +7574,7 @@ func (*Me) getMeRes()        {}
 func (*Me) loginRes()        {}
 func (*Me) oidcCallbackRes() {}
 func (*Me) registerRes()     {}
+func (*Me) verifyEmailRes()  {}
 
 // Ref: #/components/schemas/MediaAsset
 type MediaAsset struct {
@@ -9486,6 +10636,52 @@ func (o OptErrorDetails) Or(d ErrorDetails) ErrorDetails {
 	return d
 }
 
+// NewOptExportSiteEmailLogFormat returns new OptExportSiteEmailLogFormat with value set to v.
+func NewOptExportSiteEmailLogFormat(v ExportSiteEmailLogFormat) OptExportSiteEmailLogFormat {
+	return OptExportSiteEmailLogFormat{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptExportSiteEmailLogFormat is optional ExportSiteEmailLogFormat.
+type OptExportSiteEmailLogFormat struct {
+	Value ExportSiteEmailLogFormat
+	Set   bool
+}
+
+// IsSet returns true if OptExportSiteEmailLogFormat was set.
+func (o OptExportSiteEmailLogFormat) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptExportSiteEmailLogFormat) Reset() {
+	var v ExportSiteEmailLogFormat
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptExportSiteEmailLogFormat) SetTo(v ExportSiteEmailLogFormat) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptExportSiteEmailLogFormat) Get() (v ExportSiteEmailLogFormat, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptExportSiteEmailLogFormat) Or(d ExportSiteEmailLogFormat) ExportSiteEmailLogFormat {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptFloat32 returns new OptFloat32 with value set to v.
 func NewOptFloat32(v float32) OptFloat32 {
 	return OptFloat32{
@@ -11438,6 +12634,69 @@ func (o OptNilURI) Or(d url.URL) url.URL {
 	return d
 }
 
+// NewOptNilUUID returns new OptNilUUID with value set to v.
+func NewOptNilUUID(v uuid.UUID) OptNilUUID {
+	return OptNilUUID{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilUUID is optional nullable uuid.UUID.
+type OptNilUUID struct {
+	Value uuid.UUID
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilUUID was set.
+func (o OptNilUUID) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilUUID) Reset() {
+	var v uuid.UUID
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilUUID) SetTo(v uuid.UUID) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilUUID) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilUUID) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v uuid.UUID
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilUUID) Get() (v uuid.UUID, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilUUID) Or(d uuid.UUID) uuid.UUID {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptPHPErrorSilence returns new OptPHPErrorSilence with value set to v.
 func NewOptPHPErrorSilence(v PHPErrorSilence) OptPHPErrorSilence {
 	return OptPHPErrorSilence{
@@ -11524,6 +12783,98 @@ func (o OptPairingCodeCreate) Get() (v PairingCodeCreate, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptPairingCodeCreate) Or(d PairingCodeCreate) PairingCodeCreate {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPutEmailConfigRequestConfig returns new OptPutEmailConfigRequestConfig with value set to v.
+func NewOptPutEmailConfigRequestConfig(v PutEmailConfigRequestConfig) OptPutEmailConfigRequestConfig {
+	return OptPutEmailConfigRequestConfig{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPutEmailConfigRequestConfig is optional PutEmailConfigRequestConfig.
+type OptPutEmailConfigRequestConfig struct {
+	Value PutEmailConfigRequestConfig
+	Set   bool
+}
+
+// IsSet returns true if OptPutEmailConfigRequestConfig was set.
+func (o OptPutEmailConfigRequestConfig) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPutEmailConfigRequestConfig) Reset() {
+	var v PutEmailConfigRequestConfig
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPutEmailConfigRequestConfig) SetTo(v PutEmailConfigRequestConfig) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPutEmailConfigRequestConfig) Get() (v PutEmailConfigRequestConfig, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPutEmailConfigRequestConfig) Or(d PutEmailConfigRequestConfig) PutEmailConfigRequestConfig {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPutEmailConfigRequestMappings returns new OptPutEmailConfigRequestMappings with value set to v.
+func NewOptPutEmailConfigRequestMappings(v PutEmailConfigRequestMappings) OptPutEmailConfigRequestMappings {
+	return OptPutEmailConfigRequestMappings{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPutEmailConfigRequestMappings is optional PutEmailConfigRequestMappings.
+type OptPutEmailConfigRequestMappings struct {
+	Value PutEmailConfigRequestMappings
+	Set   bool
+}
+
+// IsSet returns true if OptPutEmailConfigRequestMappings was set.
+func (o OptPutEmailConfigRequestMappings) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPutEmailConfigRequestMappings) Reset() {
+	var v PutEmailConfigRequestMappings
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPutEmailConfigRequestMappings) SetTo(v PutEmailConfigRequestMappings) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPutEmailConfigRequestMappings) Get() (v PutEmailConfigRequestMappings, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPutEmailConfigRequestMappings) Or(d PutEmailConfigRequestMappings) PutEmailConfigRequestMappings {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -13645,6 +14996,326 @@ func (s *PurgeRequestScope) UnmarshalText(data []byte) error {
 	}
 }
 
+// Request body for PUT /email/org-config and PUT /sites/{siteId}/email/config. All fields are
+// optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting
+// `secret` preserves the existing stored credential (nil-sentinel pattern).
+// Ref: #/components/schemas/PutEmailConfigRequest
+type PutEmailConfigRequest struct {
+	// Provider slug (smtp | ses | sendgrid | mailgun | postmark).
+	Provider OptString `json:"provider"`
+	// Sender envelope address.
+	FromAddress OptString `json:"from_address"`
+	// Sender display name.
+	FromName       OptString `json:"from_name"`
+	ForceFromEmail OptBool   `json:"force_from_email"`
+	ForceFromName  OptBool   `json:"force_from_name"`
+	ReturnPath     OptBool   `json:"return_path"`
+	// Provider credential (API key, SMTP password, etc.). Omit to preserve the existing stored secret.
+	// Provide an empty string to clear the stored secret.
+	Secret             OptNilString `json:"secret"`
+	DefaultConnection  OptNilString `json:"default_connection"`
+	FallbackConnection OptNilString `json:"fallback_connection"`
+	LogEmails          OptBool      `json:"log_emails"`
+	StoreBody          OptBool      `json:"store_body"`
+	// Days to retain email log rows (1-365).
+	RetentionDays OptInt `json:"retention_days"`
+	// Provider-specific non-secret fields.
+	Config   OptPutEmailConfigRequestConfig   `json:"config"`
+	Mappings OptPutEmailConfigRequestMappings `json:"mappings"`
+}
+
+// GetProvider returns the value of Provider.
+func (s *PutEmailConfigRequest) GetProvider() OptString {
+	return s.Provider
+}
+
+// GetFromAddress returns the value of FromAddress.
+func (s *PutEmailConfigRequest) GetFromAddress() OptString {
+	return s.FromAddress
+}
+
+// GetFromName returns the value of FromName.
+func (s *PutEmailConfigRequest) GetFromName() OptString {
+	return s.FromName
+}
+
+// GetForceFromEmail returns the value of ForceFromEmail.
+func (s *PutEmailConfigRequest) GetForceFromEmail() OptBool {
+	return s.ForceFromEmail
+}
+
+// GetForceFromName returns the value of ForceFromName.
+func (s *PutEmailConfigRequest) GetForceFromName() OptBool {
+	return s.ForceFromName
+}
+
+// GetReturnPath returns the value of ReturnPath.
+func (s *PutEmailConfigRequest) GetReturnPath() OptBool {
+	return s.ReturnPath
+}
+
+// GetSecret returns the value of Secret.
+func (s *PutEmailConfigRequest) GetSecret() OptNilString {
+	return s.Secret
+}
+
+// GetDefaultConnection returns the value of DefaultConnection.
+func (s *PutEmailConfigRequest) GetDefaultConnection() OptNilString {
+	return s.DefaultConnection
+}
+
+// GetFallbackConnection returns the value of FallbackConnection.
+func (s *PutEmailConfigRequest) GetFallbackConnection() OptNilString {
+	return s.FallbackConnection
+}
+
+// GetLogEmails returns the value of LogEmails.
+func (s *PutEmailConfigRequest) GetLogEmails() OptBool {
+	return s.LogEmails
+}
+
+// GetStoreBody returns the value of StoreBody.
+func (s *PutEmailConfigRequest) GetStoreBody() OptBool {
+	return s.StoreBody
+}
+
+// GetRetentionDays returns the value of RetentionDays.
+func (s *PutEmailConfigRequest) GetRetentionDays() OptInt {
+	return s.RetentionDays
+}
+
+// GetConfig returns the value of Config.
+func (s *PutEmailConfigRequest) GetConfig() OptPutEmailConfigRequestConfig {
+	return s.Config
+}
+
+// GetMappings returns the value of Mappings.
+func (s *PutEmailConfigRequest) GetMappings() OptPutEmailConfigRequestMappings {
+	return s.Mappings
+}
+
+// SetProvider sets the value of Provider.
+func (s *PutEmailConfigRequest) SetProvider(val OptString) {
+	s.Provider = val
+}
+
+// SetFromAddress sets the value of FromAddress.
+func (s *PutEmailConfigRequest) SetFromAddress(val OptString) {
+	s.FromAddress = val
+}
+
+// SetFromName sets the value of FromName.
+func (s *PutEmailConfigRequest) SetFromName(val OptString) {
+	s.FromName = val
+}
+
+// SetForceFromEmail sets the value of ForceFromEmail.
+func (s *PutEmailConfigRequest) SetForceFromEmail(val OptBool) {
+	s.ForceFromEmail = val
+}
+
+// SetForceFromName sets the value of ForceFromName.
+func (s *PutEmailConfigRequest) SetForceFromName(val OptBool) {
+	s.ForceFromName = val
+}
+
+// SetReturnPath sets the value of ReturnPath.
+func (s *PutEmailConfigRequest) SetReturnPath(val OptBool) {
+	s.ReturnPath = val
+}
+
+// SetSecret sets the value of Secret.
+func (s *PutEmailConfigRequest) SetSecret(val OptNilString) {
+	s.Secret = val
+}
+
+// SetDefaultConnection sets the value of DefaultConnection.
+func (s *PutEmailConfigRequest) SetDefaultConnection(val OptNilString) {
+	s.DefaultConnection = val
+}
+
+// SetFallbackConnection sets the value of FallbackConnection.
+func (s *PutEmailConfigRequest) SetFallbackConnection(val OptNilString) {
+	s.FallbackConnection = val
+}
+
+// SetLogEmails sets the value of LogEmails.
+func (s *PutEmailConfigRequest) SetLogEmails(val OptBool) {
+	s.LogEmails = val
+}
+
+// SetStoreBody sets the value of StoreBody.
+func (s *PutEmailConfigRequest) SetStoreBody(val OptBool) {
+	s.StoreBody = val
+}
+
+// SetRetentionDays sets the value of RetentionDays.
+func (s *PutEmailConfigRequest) SetRetentionDays(val OptInt) {
+	s.RetentionDays = val
+}
+
+// SetConfig sets the value of Config.
+func (s *PutEmailConfigRequest) SetConfig(val OptPutEmailConfigRequestConfig) {
+	s.Config = val
+}
+
+// SetMappings sets the value of Mappings.
+func (s *PutEmailConfigRequest) SetMappings(val OptPutEmailConfigRequestMappings) {
+	s.Mappings = val
+}
+
+// Provider-specific non-secret fields.
+type PutEmailConfigRequestConfig map[string]jx.Raw
+
+func (s *PutEmailConfigRequestConfig) init() PutEmailConfigRequestConfig {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+type PutEmailConfigRequestMappings map[string]jx.Raw
+
+func (s *PutEmailConfigRequestMappings) init() PutEmailConfigRequestMappings {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+// Request body for PUT /email/org-config/webhook-config and PUT /sites/{siteId}/email/webhook-config.
+//
+//	All fields are optional. Omit webhook_signing_key to preserve the stored key (nil-sentinel). Send
+//
+// null to clear it. rotate_token: true generates a new route token and returns webhook_route_token
+// in the response (shown once).
+// Ref: #/components/schemas/PutEmailWebhookConfigRequest
+type PutEmailWebhookConfigRequest struct {
+	// When true, a new route token is generated (invalidating the old URL) and returned once in
+	// webhook_route_token.
+	RotateToken OptBool `json:"rotate_token"`
+	// HMAC signing key for verifying provider webhook payloads. Write-only. Omit to preserve the
+	// existing key. Send null to clear.
+	WebhookSigningKey OptNilString `json:"webhook_signing_key"`
+	// SES only. Replace the SNS TopicArn allowlist. null preserves the existing list. Empty array clears
+	// the list (no filter).
+	SesTopicArns OptNilStringArray `json:"ses_topic_arns"`
+}
+
+// GetRotateToken returns the value of RotateToken.
+func (s *PutEmailWebhookConfigRequest) GetRotateToken() OptBool {
+	return s.RotateToken
+}
+
+// GetWebhookSigningKey returns the value of WebhookSigningKey.
+func (s *PutEmailWebhookConfigRequest) GetWebhookSigningKey() OptNilString {
+	return s.WebhookSigningKey
+}
+
+// GetSesTopicArns returns the value of SesTopicArns.
+func (s *PutEmailWebhookConfigRequest) GetSesTopicArns() OptNilStringArray {
+	return s.SesTopicArns
+}
+
+// SetRotateToken sets the value of RotateToken.
+func (s *PutEmailWebhookConfigRequest) SetRotateToken(val OptBool) {
+	s.RotateToken = val
+}
+
+// SetWebhookSigningKey sets the value of WebhookSigningKey.
+func (s *PutEmailWebhookConfigRequest) SetWebhookSigningKey(val OptNilString) {
+	s.WebhookSigningKey = val
+}
+
+// SetSesTopicArns sets the value of SesTopicArns.
+func (s *PutEmailWebhookConfigRequest) SetSesTopicArns(val OptNilStringArray) {
+	s.SesTopicArns = val
+}
+
+type PutOrgEmailConfigBadRequest Error
+
+func (*PutOrgEmailConfigBadRequest) putOrgEmailConfigRes() {}
+
+type PutOrgEmailConfigForbidden Error
+
+func (*PutOrgEmailConfigForbidden) putOrgEmailConfigRes() {}
+
+type PutOrgEmailConfigServiceUnavailable Error
+
+func (*PutOrgEmailConfigServiceUnavailable) putOrgEmailConfigRes() {}
+
+type PutOrgEmailConfigUnauthorized Error
+
+func (*PutOrgEmailConfigUnauthorized) putOrgEmailConfigRes() {}
+
+type PutOrgEmailConfigUnprocessableEntity Error
+
+func (*PutOrgEmailConfigUnprocessableEntity) putOrgEmailConfigRes() {}
+
+type PutOrgEmailWebhookConfigBadRequest Error
+
+func (*PutOrgEmailWebhookConfigBadRequest) putOrgEmailWebhookConfigRes() {}
+
+type PutOrgEmailWebhookConfigForbidden Error
+
+func (*PutOrgEmailWebhookConfigForbidden) putOrgEmailWebhookConfigRes() {}
+
+type PutOrgEmailWebhookConfigNotFound Error
+
+func (*PutOrgEmailWebhookConfigNotFound) putOrgEmailWebhookConfigRes() {}
+
+type PutOrgEmailWebhookConfigServiceUnavailable Error
+
+func (*PutOrgEmailWebhookConfigServiceUnavailable) putOrgEmailWebhookConfigRes() {}
+
+type PutOrgEmailWebhookConfigUnauthorized Error
+
+func (*PutOrgEmailWebhookConfigUnauthorized) putOrgEmailWebhookConfigRes() {}
+
+type PutSiteEmailConfigBadRequest Error
+
+func (*PutSiteEmailConfigBadRequest) putSiteEmailConfigRes() {}
+
+type PutSiteEmailConfigForbidden Error
+
+func (*PutSiteEmailConfigForbidden) putSiteEmailConfigRes() {}
+
+type PutSiteEmailConfigServiceUnavailable Error
+
+func (*PutSiteEmailConfigServiceUnavailable) putSiteEmailConfigRes() {}
+
+type PutSiteEmailConfigUnauthorized Error
+
+func (*PutSiteEmailConfigUnauthorized) putSiteEmailConfigRes() {}
+
+type PutSiteEmailConfigUnprocessableEntity Error
+
+func (*PutSiteEmailConfigUnprocessableEntity) putSiteEmailConfigRes() {}
+
+type PutSiteEmailWebhookConfigBadRequest Error
+
+func (*PutSiteEmailWebhookConfigBadRequest) putSiteEmailWebhookConfigRes() {}
+
+type PutSiteEmailWebhookConfigForbidden Error
+
+func (*PutSiteEmailWebhookConfigForbidden) putSiteEmailWebhookConfigRes() {}
+
+type PutSiteEmailWebhookConfigNotFound Error
+
+func (*PutSiteEmailWebhookConfigNotFound) putSiteEmailWebhookConfigRes() {}
+
+type PutSiteEmailWebhookConfigServiceUnavailable Error
+
+func (*PutSiteEmailWebhookConfigServiceUnavailable) putSiteEmailWebhookConfigRes() {}
+
+type PutSiteEmailWebhookConfigUnauthorized Error
+
+func (*PutSiteEmailWebhookConfigUnauthorized) putSiteEmailWebhookConfigRes() {}
+
 // Ref: #/components/schemas/Readiness
 type Readiness struct {
 	Status ReadinessStatus `json:"status"`
@@ -13745,9 +15416,32 @@ type RegisterConflict Error
 
 func (*RegisterConflict) registerRes() {}
 
-type RegisterForbidden Error
+type RegisterOK struct {
+	Ok      bool `json:"ok"`
+	Pending bool `json:"pending"`
+}
 
-func (*RegisterForbidden) registerRes() {}
+// GetOk returns the value of Ok.
+func (s *RegisterOK) GetOk() bool {
+	return s.Ok
+}
+
+// GetPending returns the value of Pending.
+func (s *RegisterOK) GetPending() bool {
+	return s.Pending
+}
+
+// SetOk sets the value of Ok.
+func (s *RegisterOK) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetPending sets the value of Pending.
+func (s *RegisterOK) SetPending(val bool) {
+	s.Pending = val
+}
+
+func (*RegisterOK) registerRes() {}
 
 // Ref: #/components/schemas/RegisterRequest
 type RegisterRequest struct {
@@ -13811,6 +15505,144 @@ func (s *RegisterRequest) SetTenantSlug(val OptString) {
 type RegisterUnprocessableEntity Error
 
 func (*RegisterUnprocessableEntity) registerRes() {}
+
+type ResendEmailLogConflict Error
+
+func (*ResendEmailLogConflict) resendEmailLogRes() {}
+
+type ResendEmailLogForbidden Error
+
+func (*ResendEmailLogForbidden) resendEmailLogRes() {}
+
+type ResendEmailLogNotFound Error
+
+func (*ResendEmailLogNotFound) resendEmailLogRes() {}
+
+type ResendEmailLogUnauthorized Error
+
+func (*ResendEmailLogUnauthorized) resendEmailLogRes() {}
+
+// Result of a resend_email agent command. `ok=true` means the agent
+// confirmed the email was re-dispatched. `ok=false` means the agent was
+// unavailable or returned an error — check `detail` for the reason.
+// HTTP 200 is returned in both cases (matches test-send pattern).
+// Ref: #/components/schemas/ResendEmailResult
+type ResendEmailResult struct {
+	Ok bool `json:"ok"`
+	// Agent response message or error detail.
+	Detail OptNilString `json:"detail"`
+	// Provider message ID assigned to the resent email (if agent returned it).
+	MessageID OptNilString `json:"message_id"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ResendEmailResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *ResendEmailResult) GetDetail() OptNilString {
+	return s.Detail
+}
+
+// GetMessageID returns the value of MessageID.
+func (s *ResendEmailResult) GetMessageID() OptNilString {
+	return s.MessageID
+}
+
+// SetOk sets the value of Ok.
+func (s *ResendEmailResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *ResendEmailResult) SetDetail(val OptNilString) {
+	s.Detail = val
+}
+
+// SetMessageID sets the value of MessageID.
+func (s *ResendEmailResult) SetMessageID(val OptNilString) {
+	s.MessageID = val
+}
+
+func (*ResendEmailResult) resendEmailLogRes() {}
+
+type ResendVerificationOK struct {
+	Ok bool `json:"ok"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ResendVerificationOK) GetOk() bool {
+	return s.Ok
+}
+
+// SetOk sets the value of Ok.
+func (s *ResendVerificationOK) SetOk(val bool) {
+	s.Ok = val
+}
+
+type ResendVerificationReq struct {
+	Email string `json:"email"`
+}
+
+// GetEmail returns the value of Email.
+func (s *ResendVerificationReq) GetEmail() string {
+	return s.Email
+}
+
+// SetEmail sets the value of Email.
+func (s *ResendVerificationReq) SetEmail(val string) {
+	s.Email = val
+}
+
+type ResetPasswordGone Error
+
+func (*ResetPasswordGone) resetPasswordRes() {}
+
+type ResetPasswordOK struct {
+	Ok bool `json:"ok"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ResetPasswordOK) GetOk() bool {
+	return s.Ok
+}
+
+// SetOk sets the value of Ok.
+func (s *ResetPasswordOK) SetOk(val bool) {
+	s.Ok = val
+}
+
+func (*ResetPasswordOK) resetPasswordRes() {}
+
+type ResetPasswordReq struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// GetToken returns the value of Token.
+func (s *ResetPasswordReq) GetToken() string {
+	return s.Token
+}
+
+// GetPassword returns the value of Password.
+func (s *ResetPasswordReq) GetPassword() string {
+	return s.Password
+}
+
+// SetToken sets the value of Token.
+func (s *ResetPasswordReq) SetToken(val string) {
+	s.Token = val
+}
+
+// SetPassword sets the value of Password.
+func (s *ResetPasswordReq) SetPassword(val string) {
+	s.Password = val
+}
+
+type ResetPasswordUnprocessableEntity Error
+
+func (*ResetPasswordUnprocessableEntity) resetPasswordRes() {}
 
 // Restore selection. Omit both arrays (or set full=true) for a full
 // restore; provide paths for partial file restore, or db_tables for partial
@@ -15824,6 +17656,22 @@ func (s *SecurityThresholds) SetSuccessLoginGap(val int32) {
 func (s *SecurityThresholds) SetAllBlockedGap(val int32) {
 	s.AllBlockedGap = val
 }
+
+type SendTestEmailBadRequest Error
+
+func (*SendTestEmailBadRequest) sendTestEmailRes() {}
+
+type SendTestEmailForbidden Error
+
+func (*SendTestEmailForbidden) sendTestEmailRes() {}
+
+type SendTestEmailNotFound Error
+
+func (*SendTestEmailNotFound) sendTestEmailRes() {}
+
+type SendTestEmailUnauthorized Error
+
+func (*SendTestEmailUnauthorized) sendTestEmailRes() {}
 
 // SilenceSitePHPErrorNoContent is response for SilenceSitePHPError operation.
 type SilenceSitePHPErrorNoContent struct{}
@@ -18226,6 +20074,539 @@ func (s *SiteDiagnosticsList) SetItems(val []SiteDiagnosticsCard) {
 }
 
 func (*SiteDiagnosticsList) getSiteDiagnosticsRes() {}
+
+// Per-site (or org-wide default) email configuration. The provider secret is never returned — only
+// `secret_set` indicates whether a credential is stored. When `site_id` is present, the row is a
+// per-site override; when absent it is the org-wide default. A GET for a site that inherits the org
+// default sets `site_id` to the queried site so the frontend can detect inheritance.
+// Ref: #/components/schemas/SiteEmailConfig
+type SiteEmailConfig struct {
+	// Surrogate primary key for this config row.
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	// Present for per-site rows; absent for the org-wide default.
+	SiteID OptNilUUID `json:"site_id"`
+	// Provider slug (smtp | ses | sendgrid | mailgun | postmark). Must match a slug in the provider
+	// catalog.
+	Provider string `json:"provider"`
+	// Sender envelope address (e.g. no-reply@example.com).
+	FromAddress string `json:"from_address"`
+	// Sender display name shown in the From header.
+	FromName string `json:"from_name"`
+	// When true the agent overrides any plugin-supplied From address with `from_address`.
+	ForceFromEmail bool `json:"force_from_email"`
+	// When true the agent overrides any plugin-supplied From name with `from_name`.
+	ForceFromName bool `json:"force_from_name"`
+	// Set the Return-Path / Bounce-To header to `from_address`.
+	ReturnPath bool `json:"return_path"`
+	// True when an encrypted provider secret is stored for this row.
+	SecretSet bool `json:"secret_set"`
+	// Slug of the connection to use for regular mail (for providers that support multiple connections, e.
+	// g. SMTP-Multi — Phase 2+).
+	DefaultConnection OptNilString `json:"default_connection"`
+	// Slug of the fallback connection (Phase 2+).
+	FallbackConnection OptNilString `json:"fallback_connection"`
+	// Whether outgoing emails are recorded in site_email_log.
+	LogEmails bool `json:"log_emails"`
+	// When log_emails is true, also persist the full email body.
+	StoreBody bool `json:"store_body"`
+	// Number of days email log rows are retained (1-365).
+	RetentionDays int `json:"retention_days"`
+	// Provider-specific configuration fields (non-secret).
+	Config SiteEmailConfigConfig `json:"config"`
+	// Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).
+	Mappings SiteEmailConfigMappings `json:"mappings"`
+	// The full inbound webhook URL for this config row, e.g. https://manage.wpmgr.
+	// app/webhooks/email/{provider}/{token}. Shows a placeholder token segment when a token is stored
+	// but not freshly rotated. Absent when no token has been generated yet.
+	WebhookURL OptNilString `json:"webhook_url"`
+	// True when an HMAC signing key is stored for this row. The key itself is never returned.
+	WebhookSigningKeySet OptBool `json:"webhook_signing_key_set"`
+	// SES only. SNS TopicArn allowlist -- only events delivered from these topics are accepted. Empty
+	// array means no filter is applied.
+	SesTopicArns []string  `json:"ses_topic_arns"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// GetID returns the value of ID.
+func (s *SiteEmailConfig) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *SiteEmailConfig) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *SiteEmailConfig) GetSiteID() OptNilUUID {
+	return s.SiteID
+}
+
+// GetProvider returns the value of Provider.
+func (s *SiteEmailConfig) GetProvider() string {
+	return s.Provider
+}
+
+// GetFromAddress returns the value of FromAddress.
+func (s *SiteEmailConfig) GetFromAddress() string {
+	return s.FromAddress
+}
+
+// GetFromName returns the value of FromName.
+func (s *SiteEmailConfig) GetFromName() string {
+	return s.FromName
+}
+
+// GetForceFromEmail returns the value of ForceFromEmail.
+func (s *SiteEmailConfig) GetForceFromEmail() bool {
+	return s.ForceFromEmail
+}
+
+// GetForceFromName returns the value of ForceFromName.
+func (s *SiteEmailConfig) GetForceFromName() bool {
+	return s.ForceFromName
+}
+
+// GetReturnPath returns the value of ReturnPath.
+func (s *SiteEmailConfig) GetReturnPath() bool {
+	return s.ReturnPath
+}
+
+// GetSecretSet returns the value of SecretSet.
+func (s *SiteEmailConfig) GetSecretSet() bool {
+	return s.SecretSet
+}
+
+// GetDefaultConnection returns the value of DefaultConnection.
+func (s *SiteEmailConfig) GetDefaultConnection() OptNilString {
+	return s.DefaultConnection
+}
+
+// GetFallbackConnection returns the value of FallbackConnection.
+func (s *SiteEmailConfig) GetFallbackConnection() OptNilString {
+	return s.FallbackConnection
+}
+
+// GetLogEmails returns the value of LogEmails.
+func (s *SiteEmailConfig) GetLogEmails() bool {
+	return s.LogEmails
+}
+
+// GetStoreBody returns the value of StoreBody.
+func (s *SiteEmailConfig) GetStoreBody() bool {
+	return s.StoreBody
+}
+
+// GetRetentionDays returns the value of RetentionDays.
+func (s *SiteEmailConfig) GetRetentionDays() int {
+	return s.RetentionDays
+}
+
+// GetConfig returns the value of Config.
+func (s *SiteEmailConfig) GetConfig() SiteEmailConfigConfig {
+	return s.Config
+}
+
+// GetMappings returns the value of Mappings.
+func (s *SiteEmailConfig) GetMappings() SiteEmailConfigMappings {
+	return s.Mappings
+}
+
+// GetWebhookURL returns the value of WebhookURL.
+func (s *SiteEmailConfig) GetWebhookURL() OptNilString {
+	return s.WebhookURL
+}
+
+// GetWebhookSigningKeySet returns the value of WebhookSigningKeySet.
+func (s *SiteEmailConfig) GetWebhookSigningKeySet() OptBool {
+	return s.WebhookSigningKeySet
+}
+
+// GetSesTopicArns returns the value of SesTopicArns.
+func (s *SiteEmailConfig) GetSesTopicArns() []string {
+	return s.SesTopicArns
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *SiteEmailConfig) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *SiteEmailConfig) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetID sets the value of ID.
+func (s *SiteEmailConfig) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *SiteEmailConfig) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *SiteEmailConfig) SetSiteID(val OptNilUUID) {
+	s.SiteID = val
+}
+
+// SetProvider sets the value of Provider.
+func (s *SiteEmailConfig) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetFromAddress sets the value of FromAddress.
+func (s *SiteEmailConfig) SetFromAddress(val string) {
+	s.FromAddress = val
+}
+
+// SetFromName sets the value of FromName.
+func (s *SiteEmailConfig) SetFromName(val string) {
+	s.FromName = val
+}
+
+// SetForceFromEmail sets the value of ForceFromEmail.
+func (s *SiteEmailConfig) SetForceFromEmail(val bool) {
+	s.ForceFromEmail = val
+}
+
+// SetForceFromName sets the value of ForceFromName.
+func (s *SiteEmailConfig) SetForceFromName(val bool) {
+	s.ForceFromName = val
+}
+
+// SetReturnPath sets the value of ReturnPath.
+func (s *SiteEmailConfig) SetReturnPath(val bool) {
+	s.ReturnPath = val
+}
+
+// SetSecretSet sets the value of SecretSet.
+func (s *SiteEmailConfig) SetSecretSet(val bool) {
+	s.SecretSet = val
+}
+
+// SetDefaultConnection sets the value of DefaultConnection.
+func (s *SiteEmailConfig) SetDefaultConnection(val OptNilString) {
+	s.DefaultConnection = val
+}
+
+// SetFallbackConnection sets the value of FallbackConnection.
+func (s *SiteEmailConfig) SetFallbackConnection(val OptNilString) {
+	s.FallbackConnection = val
+}
+
+// SetLogEmails sets the value of LogEmails.
+func (s *SiteEmailConfig) SetLogEmails(val bool) {
+	s.LogEmails = val
+}
+
+// SetStoreBody sets the value of StoreBody.
+func (s *SiteEmailConfig) SetStoreBody(val bool) {
+	s.StoreBody = val
+}
+
+// SetRetentionDays sets the value of RetentionDays.
+func (s *SiteEmailConfig) SetRetentionDays(val int) {
+	s.RetentionDays = val
+}
+
+// SetConfig sets the value of Config.
+func (s *SiteEmailConfig) SetConfig(val SiteEmailConfigConfig) {
+	s.Config = val
+}
+
+// SetMappings sets the value of Mappings.
+func (s *SiteEmailConfig) SetMappings(val SiteEmailConfigMappings) {
+	s.Mappings = val
+}
+
+// SetWebhookURL sets the value of WebhookURL.
+func (s *SiteEmailConfig) SetWebhookURL(val OptNilString) {
+	s.WebhookURL = val
+}
+
+// SetWebhookSigningKeySet sets the value of WebhookSigningKeySet.
+func (s *SiteEmailConfig) SetWebhookSigningKeySet(val OptBool) {
+	s.WebhookSigningKeySet = val
+}
+
+// SetSesTopicArns sets the value of SesTopicArns.
+func (s *SiteEmailConfig) SetSesTopicArns(val []string) {
+	s.SesTopicArns = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *SiteEmailConfig) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *SiteEmailConfig) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*SiteEmailConfig) getOrgEmailConfigRes()  {}
+func (*SiteEmailConfig) getSiteEmailConfigRes() {}
+func (*SiteEmailConfig) putOrgEmailConfigRes()  {}
+func (*SiteEmailConfig) putSiteEmailConfigRes() {}
+
+// Provider-specific configuration fields (non-secret).
+type SiteEmailConfigConfig map[string]jx.Raw
+
+func (s *SiteEmailConfigConfig) init() SiteEmailConfigConfig {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+// Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).
+type SiteEmailConfigMappings map[string]jx.Raw
+
+func (s *SiteEmailConfigMappings) init() SiteEmailConfigMappings {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
+
+// One outgoing email log entry. In list responses `body` is always omitted. In the detail response
+// (`GET /email/log/{logId}`) `body` is present only when `body_stored` is true and a body was
+// captured.
+// Ref: #/components/schemas/SiteEmailLogEntry
+type SiteEmailLogEntry struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	SiteID   uuid.UUID `json:"site_id"`
+	// Agent-local sequence number (cursor for the agent push).
+	AgentSeq OptNilInt64 `json:"agent_seq"`
+	// Provider-assigned Message-ID header value.
+	MessageID OptNilString `json:"message_id"`
+	// Recipient addresses.
+	ToAddresses []string `json:"to_addresses"`
+	FromAddress string   `json:"from_address"`
+	Subject     string   `json:"subject"`
+	// Provider slug used for this send (smtp | ses | sendgrid | mailgun | postmark).
+	Provider string `json:"provider"`
+	// Delivery status (sent | failed | pending | bounced | complained).
+	Status string `json:"status"`
+	// Raw provider API response or SMTP response detail.
+	Response SiteEmailLogEntryResponse `json:"response"`
+	// Error message when status is failed. Empty string when no error.
+	Error string `json:"error"`
+	// Number of delivery retries attempted.
+	Retries int `json:"retries"`
+	// Number of times this message was manually resent.
+	ResentCount int `json:"resent_count"`
+	// Whether the email body was captured at send time.
+	BodyStored bool `json:"body_stored"`
+	// Full email body. Present only in the detail response and only when body_stored is true. Never
+	// returned in list or export responses.
+	Body OptNilString `json:"body"`
+	// Timestamp the email was sent (from the agent local clock).
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// GetID returns the value of ID.
+func (s *SiteEmailLogEntry) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetTenantID returns the value of TenantID.
+func (s *SiteEmailLogEntry) GetTenantID() uuid.UUID {
+	return s.TenantID
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *SiteEmailLogEntry) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetAgentSeq returns the value of AgentSeq.
+func (s *SiteEmailLogEntry) GetAgentSeq() OptNilInt64 {
+	return s.AgentSeq
+}
+
+// GetMessageID returns the value of MessageID.
+func (s *SiteEmailLogEntry) GetMessageID() OptNilString {
+	return s.MessageID
+}
+
+// GetToAddresses returns the value of ToAddresses.
+func (s *SiteEmailLogEntry) GetToAddresses() []string {
+	return s.ToAddresses
+}
+
+// GetFromAddress returns the value of FromAddress.
+func (s *SiteEmailLogEntry) GetFromAddress() string {
+	return s.FromAddress
+}
+
+// GetSubject returns the value of Subject.
+func (s *SiteEmailLogEntry) GetSubject() string {
+	return s.Subject
+}
+
+// GetProvider returns the value of Provider.
+func (s *SiteEmailLogEntry) GetProvider() string {
+	return s.Provider
+}
+
+// GetStatus returns the value of Status.
+func (s *SiteEmailLogEntry) GetStatus() string {
+	return s.Status
+}
+
+// GetResponse returns the value of Response.
+func (s *SiteEmailLogEntry) GetResponse() SiteEmailLogEntryResponse {
+	return s.Response
+}
+
+// GetError returns the value of Error.
+func (s *SiteEmailLogEntry) GetError() string {
+	return s.Error
+}
+
+// GetRetries returns the value of Retries.
+func (s *SiteEmailLogEntry) GetRetries() int {
+	return s.Retries
+}
+
+// GetResentCount returns the value of ResentCount.
+func (s *SiteEmailLogEntry) GetResentCount() int {
+	return s.ResentCount
+}
+
+// GetBodyStored returns the value of BodyStored.
+func (s *SiteEmailLogEntry) GetBodyStored() bool {
+	return s.BodyStored
+}
+
+// GetBody returns the value of Body.
+func (s *SiteEmailLogEntry) GetBody() OptNilString {
+	return s.Body
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *SiteEmailLogEntry) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *SiteEmailLogEntry) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetID sets the value of ID.
+func (s *SiteEmailLogEntry) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetTenantID sets the value of TenantID.
+func (s *SiteEmailLogEntry) SetTenantID(val uuid.UUID) {
+	s.TenantID = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *SiteEmailLogEntry) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetAgentSeq sets the value of AgentSeq.
+func (s *SiteEmailLogEntry) SetAgentSeq(val OptNilInt64) {
+	s.AgentSeq = val
+}
+
+// SetMessageID sets the value of MessageID.
+func (s *SiteEmailLogEntry) SetMessageID(val OptNilString) {
+	s.MessageID = val
+}
+
+// SetToAddresses sets the value of ToAddresses.
+func (s *SiteEmailLogEntry) SetToAddresses(val []string) {
+	s.ToAddresses = val
+}
+
+// SetFromAddress sets the value of FromAddress.
+func (s *SiteEmailLogEntry) SetFromAddress(val string) {
+	s.FromAddress = val
+}
+
+// SetSubject sets the value of Subject.
+func (s *SiteEmailLogEntry) SetSubject(val string) {
+	s.Subject = val
+}
+
+// SetProvider sets the value of Provider.
+func (s *SiteEmailLogEntry) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetStatus sets the value of Status.
+func (s *SiteEmailLogEntry) SetStatus(val string) {
+	s.Status = val
+}
+
+// SetResponse sets the value of Response.
+func (s *SiteEmailLogEntry) SetResponse(val SiteEmailLogEntryResponse) {
+	s.Response = val
+}
+
+// SetError sets the value of Error.
+func (s *SiteEmailLogEntry) SetError(val string) {
+	s.Error = val
+}
+
+// SetRetries sets the value of Retries.
+func (s *SiteEmailLogEntry) SetRetries(val int) {
+	s.Retries = val
+}
+
+// SetResentCount sets the value of ResentCount.
+func (s *SiteEmailLogEntry) SetResentCount(val int) {
+	s.ResentCount = val
+}
+
+// SetBodyStored sets the value of BodyStored.
+func (s *SiteEmailLogEntry) SetBodyStored(val bool) {
+	s.BodyStored = val
+}
+
+// SetBody sets the value of Body.
+func (s *SiteEmailLogEntry) SetBody(val OptNilString) {
+	s.Body = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *SiteEmailLogEntry) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *SiteEmailLogEntry) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+// Raw provider API response or SMTP response detail.
+type SiteEmailLogEntryResponse map[string]jx.Raw
+
+func (s *SiteEmailLogEntryResponse) init() SiteEmailLogEntryResponse {
+	m := *s
+	if m == nil {
+		m = map[string]jx.Raw{}
+		*s = m
+	}
+	return m
+}
 
 // M21 — the once-shown enrollment code returned by the site-first create
 // and the begin-re-enrollment endpoints. The plaintext code is never
@@ -20764,3 +23145,17 @@ func (*VerifyAuditForbidden) verifyAuditRes() {}
 type VerifyAuditUnauthorized Error
 
 func (*VerifyAuditUnauthorized) verifyAuditRes() {}
+
+type VerifyEmailReq struct {
+	Token string `json:"token"`
+}
+
+// GetToken returns the value of Token.
+func (s *VerifyEmailReq) GetToken() string {
+	return s.Token
+}
+
+// SetToken sets the value of Token.
+func (s *VerifyEmailReq) SetToken(val string) {
+	s.Token = val
+}

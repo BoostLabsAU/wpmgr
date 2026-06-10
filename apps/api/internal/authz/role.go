@@ -100,6 +100,13 @@ const (
 	// PermMediaCleanDelete authorises the PERMANENT deletion of quarantined
 	// attachments (#190). Admin+ — irreversible, mirrors PermMediaDeleteOriginals.
 	PermMediaCleanDelete Permission = "site.media.clean.delete"
+
+	// PermEmailManage configures and reads per-site outgoing email (SMTP /
+	// provider config, secrets, test-send). Operator+ (same tier as
+	// PermSiteCacheManage and PermSitePerfConfig) — site-write-class, NOT in
+	// orgLevelPerms. A site collaborator with access to a site can manage
+	// that site's email config.
+	PermEmailManage Permission = "site.email.manage"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -131,6 +138,8 @@ var minRoleFor = map[Permission]Role{
 	PermMediaCleanScan:   RoleViewer,
 	PermMediaCleanWrite:  RoleOperator,
 	PermMediaCleanDelete: RoleAdmin,
+	// Per-site Email Management (m59). Operator+ — site-write-class.
+	PermEmailManage: RoleOperator,
 }
 
 // Allows reports whether role r is permitted to perform p.

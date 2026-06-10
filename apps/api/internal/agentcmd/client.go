@@ -611,6 +611,58 @@ func joinCommandURL(siteURL, command string) (string, error) {
 	return u.String(), nil
 }
 
+// ResendEmail sends the signed `resend_email` command to the site's agent,
+// asking it to re-send a previously logged email using the stored body.
+// The gate (body_stored=true) is enforced by the CP service before this call.
+//
+// Phase 4a: this command is DEFINED here but the agent does not yet implement
+// it (Phase 4b). Old agents will return a 404 from the REST router — the CP
+// surfaces that as ok=false + a descriptive detail rather than a hard error.
+func (c *Client) ResendEmail(ctx context.Context, siteID uuid.UUID, siteURL string, req ResendEmailRequest) (ResendEmailResult, error) {
+	var out ResendEmailResult
+	if err := c.post(ctx, siteID, siteURL, "resend_email", req, &out); err != nil {
+		return ResendEmailResult{OK: false, Detail: err.Error()}, nil
+	}
+	return out, nil
+}
+
+// SyncEmailConfig sends the signed `sync_email_config` command to the site's
+// agent, pushing the full per-site email configuration including the DECRYPTED
+// provider secret so the agent can store it in its own keystore (m59, Phase 1
+// foundation / Phase 2 implementation by the wp-agent-engineer).
+// siteID is bound into the JWT's aud claim. An ok=false response (HTTP 200) is
+// treated as an error with the agent's detail message.
+//
+// TODO(phase2-agent): agent must implement the sync_email_config command handler.
+func (c *Client) SyncEmailConfig(ctx context.Context, siteID uuid.UUID, siteURL string, req EmailConfigRequest) (EmailConfigResult, error) {
+	var out EmailConfigResult
+	if err := c.post(ctx, siteID, siteURL, "sync_email_config", req, &out); err != nil {
+		return EmailConfigResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("sync_email_config rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
+// SendTestEmail sends the signed `send_test_email` command to the site's agent,
+// asking it to dispatch a test message using its current email config.
+// sync_email_config must be called first so the agent has credentials.
+// siteID is bound into the JWT's aud claim.
+//
+// Phase 1: the agent does not yet implement this command. The CP dispatches it
+// anyway and surfaces the agent's "command not found" (404) response gracefully
+// — callers should treat an error here as ok=false + non-fatal detail.
+//
+// TODO(phase2-agent): agent must implement the send_test_email command handler.
+func (c *Client) SendTestEmail(ctx context.Context, siteID uuid.UUID, siteURL string, req SendTestEmailRequest) (SendTestEmailResult, error) {
+	var out SendTestEmailResult
+	if err := c.post(ctx, siteID, siteURL, "send_test_email", req, &out); err != nil {
+		return SendTestEmailResult{}, err
+	}
+	return out, nil
+}
+
 // Probe is a post-update site health probe over the SSRF-hardened client. It
 // fetches the given URL with a short timeout and reports the HTTP status and a
 // best-effort fatal-error signature found in the (bounded) response body.

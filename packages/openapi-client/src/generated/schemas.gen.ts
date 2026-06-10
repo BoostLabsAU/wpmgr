@@ -5627,6 +5627,855 @@ export const MediaCleanQuarantineListSchema = {
   },
 } as const;
 
+export const SiteEmailConfigSchema = {
+  type: "object",
+  description:
+    "Per-site (or org-wide default) email configuration. The provider secret is never returned — only `secret_set` indicates whether a credential is stored. When `site_id` is present, the row is a per-site override; when absent it is the org-wide default. A GET for a site that inherits the org default sets `site_id` to the queried site so the frontend can detect inheritance.\n",
+  required: [
+    "id",
+    "tenant_id",
+    "provider",
+    "from_address",
+    "from_name",
+    "force_from_email",
+    "force_from_name",
+    "return_path",
+    "secret_set",
+    "log_emails",
+    "store_body",
+    "retention_days",
+    "config",
+    "mappings",
+    "created_at",
+    "updated_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+      description: "Surrogate primary key for this config row.",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "Present for per-site rows; absent for the org-wide default.",
+    },
+    provider: {
+      type: "string",
+      description:
+        "Provider slug (smtp | ses | sendgrid | mailgun | postmark). Must match a slug in the provider catalog.\n",
+    },
+    from_address: {
+      type: "string",
+      description: "Sender envelope address (e.g. no-reply@example.com).",
+    },
+    from_name: {
+      type: "string",
+      description: "Sender display name shown in the From header.",
+    },
+    force_from_email: {
+      type: "boolean",
+      description:
+        "When true the agent overrides any plugin-supplied From address with `from_address`.\n",
+    },
+    force_from_name: {
+      type: "boolean",
+      description:
+        "When true the agent overrides any plugin-supplied From name with `from_name`.\n",
+    },
+    return_path: {
+      type: "boolean",
+      description: "Set the Return-Path / Bounce-To header to `from_address`.",
+    },
+    secret_set: {
+      type: "boolean",
+      description:
+        "True when an encrypted provider secret is stored for this row.",
+    },
+    default_connection: {
+      type: "string",
+      nullable: true,
+      description:
+        "Slug of the connection to use for regular mail (for providers that support multiple connections, e.g. SMTP-Multi — Phase 2+).\n",
+    },
+    fallback_connection: {
+      type: "string",
+      nullable: true,
+      description: "Slug of the fallback connection (Phase 2+).",
+    },
+    log_emails: {
+      type: "boolean",
+      description: "Whether outgoing emails are recorded in site_email_log.",
+    },
+    store_body: {
+      type: "boolean",
+      description: "When log_emails is true, also persist the full email body.",
+    },
+    retention_days: {
+      type: "integer",
+      description: "Number of days email log rows are retained (1-365).",
+    },
+    config: {
+      type: "object",
+      additionalProperties: true,
+      description: "Provider-specific configuration fields (non-secret).",
+    },
+    mappings: {
+      type: "object",
+      additionalProperties: true,
+      description:
+        "Provider-specific field mappings (e.g. WP-Mail -> provider header mappings -- Phase 2+).\n",
+    },
+    webhook_url: {
+      type: "string",
+      nullable: true,
+      description:
+        "The full inbound webhook URL for this config row, e.g. https://manage.wpmgr.app/webhooks/email/{provider}/{token}. Shows a placeholder token segment when a token is stored but not freshly rotated. Absent when no token has been generated yet.\n",
+    },
+    webhook_signing_key_set: {
+      type: "boolean",
+      description:
+        "True when an HMAC signing key is stored for this row. The key itself is never returned.\n",
+    },
+    ses_topic_arns: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description:
+        "SES only. SNS TopicArn allowlist -- only events delivered from these topics are accepted. Empty array means no filter is applied.\n",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PutEmailWebhookConfigRequestSchema = {
+  type: "object",
+  description:
+    "Request body for PUT /email/org-config/webhook-config and PUT /sites/{siteId}/email/webhook-config. All fields are optional. Omit webhook_signing_key to preserve the stored key (nil-sentinel). Send null to clear it. rotate_token: true generates a new route token and returns webhook_route_token in the response (shown once).\n",
+  properties: {
+    rotate_token: {
+      type: "boolean",
+      description:
+        "When true, a new route token is generated (invalidating the old URL) and returned once in webhook_route_token.\n",
+    },
+    webhook_signing_key: {
+      type: "string",
+      nullable: true,
+      description:
+        "HMAC signing key for verifying provider webhook payloads. Write-only. Omit to preserve the existing key. Send null to clear.\n",
+    },
+    ses_topic_arns: {
+      type: "array",
+      nullable: true,
+      items: {
+        type: "string",
+      },
+      description:
+        "SES only. Replace the SNS TopicArn allowlist. null preserves the existing list. Empty array clears the list (no filter).\n",
+    },
+  },
+} as const;
+
+export const EmailWebhookConfigResponseSchema = {
+  type: "object",
+  description:
+    "Response for PUT webhook-config. Always returns the updated masked config fields. When rotate_token was true, also includes webhook_route_token (plain token, shown once).\n",
+  required: ["webhook_url", "webhook_signing_key_set", "ses_topic_arns"],
+  properties: {
+    webhook_url: {
+      type: "string",
+      description:
+        "The full inbound webhook URL including the (possibly new) token. Present whenever a token exists after the operation.\n",
+    },
+    webhook_signing_key_set: {
+      type: "boolean",
+      description: "True when an HMAC signing key is stored.",
+    },
+    ses_topic_arns: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description: "Current SNS TopicArn allowlist (may be empty).",
+    },
+    webhook_route_token: {
+      type: "string",
+      nullable: true,
+      description:
+        "Plain route token, returned once when rotate_token was true. Store it immediately -- it will not be shown again.\n",
+    },
+  },
+} as const;
+
+export const PutEmailConfigRequestSchema = {
+  type: "object",
+  description:
+    "Request body for PUT /email/org-config and PUT /sites/{siteId}/email/config. All fields are optional — omitted fields are unchanged (PATCH semantics within a PUT envelope). Omitting `secret` preserves the existing stored credential (nil-sentinel pattern).\n",
+  properties: {
+    provider: {
+      type: "string",
+      description:
+        "Provider slug (smtp | ses | sendgrid | mailgun | postmark).",
+    },
+    from_address: {
+      type: "string",
+      description: "Sender envelope address.",
+    },
+    from_name: {
+      type: "string",
+      description: "Sender display name.",
+    },
+    force_from_email: {
+      type: "boolean",
+    },
+    force_from_name: {
+      type: "boolean",
+    },
+    return_path: {
+      type: "boolean",
+    },
+    secret: {
+      type: "string",
+      nullable: true,
+      description:
+        "Provider credential (API key, SMTP password, etc.). Omit to preserve the existing stored secret. Provide an empty string to clear the stored secret.\n",
+    },
+    default_connection: {
+      type: "string",
+      nullable: true,
+    },
+    fallback_connection: {
+      type: "string",
+      nullable: true,
+    },
+    log_emails: {
+      type: "boolean",
+    },
+    store_body: {
+      type: "boolean",
+    },
+    retention_days: {
+      type: "integer",
+      description: "Days to retain email log rows (1-365).",
+    },
+    config: {
+      type: "object",
+      additionalProperties: true,
+      description: "Provider-specific non-secret fields.",
+    },
+    mappings: {
+      type: "object",
+      additionalProperties: true,
+    },
+  },
+} as const;
+
+export const EmailTestRequestSchema = {
+  type: "object",
+  description: "Request body for POST /sites/{siteId}/email/test.",
+  required: ["to"],
+  properties: {
+    to: {
+      type: "string",
+      description: "Recipient address for the test email.",
+    },
+    subject: {
+      type: "string",
+      description:
+        'Subject line. Defaults to "WPMgr test email" when omitted.\n',
+    },
+    body: {
+      type: "string",
+      description:
+        "Plain-text body. Defaults to a standard test message when omitted.\n",
+    },
+  },
+} as const;
+
+export const EmailTestResultSchema = {
+  type: "object",
+  description:
+    "Result of a test-send dispatch. `ok` may be false when the agent returns an error or when the agent does not yet implement the command (Phase 1 expected behaviour — see endpoint description).\n",
+  required: ["ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+      description: "True when the agent confirmed the email was dispatched.",
+    },
+    detail: {
+      type: "string",
+      nullable: true,
+      description:
+        "Human-readable detail or error message from the agent. Present when ok is false.\n",
+    },
+    message_id: {
+      type: "string",
+      nullable: true,
+      description:
+        "Provider-assigned message-id returned by the agent (Phase 2+).",
+    },
+  },
+} as const;
+
+export const EmailProviderCatalogSchema = {
+  type: "object",
+  description:
+    "Static catalog of supported email providers and their field schemas.",
+  required: ["providers"],
+  properties: {
+    providers: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailProviderSpec",
+      },
+    },
+  },
+} as const;
+
+export const EmailProviderSpecSchema = {
+  type: "object",
+  description: "Descriptor for a single email provider.",
+  required: ["slug", "label", "fields"],
+  properties: {
+    slug: {
+      type: "string",
+      description:
+        "Machine-readable provider identifier (e.g. smtp, ses, sendgrid).",
+    },
+    label: {
+      type: "string",
+      description: "Human-readable provider name.",
+    },
+    docs_url: {
+      type: "string",
+      nullable: true,
+      description: "URL to provider-specific setup documentation.",
+    },
+    fields: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailProviderField",
+      },
+    },
+  },
+} as const;
+
+export const EmailProviderFieldSchema = {
+  type: "object",
+  description: "Schema descriptor for one provider configuration field.",
+  required: ["key", "label", "type", "is_secret", "is_required"],
+  properties: {
+    key: {
+      type: "string",
+      description:
+        "Field key used in the `config` map of PutEmailConfigRequest.",
+    },
+    label: {
+      type: "string",
+      description: "Human-readable field label.",
+    },
+    type: {
+      type: "string",
+      description:
+        "Input type hint: text | password | select | boolean | number.\n",
+    },
+    is_secret: {
+      type: "boolean",
+      description:
+        "When true the field value is a credential that must be sent via the top-level `secret` field, not inside `config`.\n",
+    },
+    is_required: {
+      type: "boolean",
+    },
+    options: {
+      type: "array",
+      nullable: true,
+      description: "Valid option values for select fields.",
+      items: {
+        type: "string",
+      },
+    },
+    default: {
+      type: "string",
+      nullable: true,
+      description: "Default value hint for the UI.",
+    },
+    help: {
+      type: "string",
+      nullable: true,
+      description: "Short helper text shown below the field in the UI.",
+    },
+  },
+} as const;
+
+export const SiteEmailLogEntrySchema = {
+  type: "object",
+  description:
+    "One outgoing email log entry. In list responses `body` is always omitted. In the detail response (`GET /email/log/{logId}`) `body` is present only when `body_stored` is true and a body was captured.\n",
+  required: [
+    "id",
+    "tenant_id",
+    "site_id",
+    "to_addresses",
+    "from_address",
+    "subject",
+    "provider",
+    "status",
+    "response",
+    "error",
+    "retries",
+    "resent_count",
+    "body_stored",
+    "created_at",
+    "updated_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    agent_seq: {
+      type: "integer",
+      format: "int64",
+      nullable: true,
+      description: "Agent-local sequence number (cursor for the agent push).",
+    },
+    message_id: {
+      type: "string",
+      nullable: true,
+      description: "Provider-assigned Message-ID header value.",
+    },
+    to_addresses: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      description: "Recipient addresses.",
+    },
+    from_address: {
+      type: "string",
+    },
+    subject: {
+      type: "string",
+    },
+    provider: {
+      type: "string",
+      description:
+        "Provider slug used for this send (smtp | ses | sendgrid | mailgun | postmark).",
+    },
+    status: {
+      type: "string",
+      description:
+        "Delivery status (sent | failed | pending | bounced | complained).",
+    },
+    response: {
+      type: "object",
+      additionalProperties: true,
+      description: "Raw provider API response or SMTP response detail.",
+    },
+    error: {
+      type: "string",
+      description:
+        "Error message when status is failed. Empty string when no error.",
+    },
+    retries: {
+      type: "integer",
+      description: "Number of delivery retries attempted.",
+    },
+    resent_count: {
+      type: "integer",
+      description: "Number of times this message was manually resent.",
+    },
+    body_stored: {
+      type: "boolean",
+      description: "Whether the email body was captured at send time.",
+    },
+    body: {
+      type: "string",
+      nullable: true,
+      description:
+        "Full email body. Present only in the detail response and only when body_stored is true. Never returned in list or export responses.\n",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      description: "Timestamp the email was sent (from the agent local clock).",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const EmailLogListSchema = {
+  type: "object",
+  description: "A page of email log entries.",
+  required: ["entries", "next_cursor"],
+  properties: {
+    entries: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/SiteEmailLogEntry",
+      },
+    },
+    next_cursor: {
+      type: "string",
+      description:
+        "Opaque keyset cursor for the next page. Empty string when this is the last page.\n",
+    },
+  },
+} as const;
+
+export const EmailLogDetailSchema = {
+  type: "object",
+  description: "Single email log entry with prev/next navigation IDs.",
+  required: ["entry"],
+  properties: {
+    entry: {
+      $ref: "#/components/schemas/SiteEmailLogEntry",
+    },
+    prev_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "ID of the next-older entry (for the Prev button). Null when at the oldest.",
+    },
+    next_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "ID of the next-newer entry (for the Next button). Null when at the newest.",
+    },
+  },
+} as const;
+
+export const EmailStatsByDaySchema = {
+  type: "object",
+  description: "One day's aggregate email stats.",
+  required: ["day", "total", "sent_count", "failed_count"],
+  properties: {
+    day: {
+      type: "string",
+      description: "Calendar day in YYYY-MM-DD format (UTC).",
+    },
+    total: {
+      type: "integer",
+      format: "int64",
+    },
+    sent_count: {
+      type: "integer",
+      format: "int64",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+    },
+  },
+} as const;
+
+export const EmailStatsByProviderSchema = {
+  type: "object",
+  description: "One provider's aggregate email stats.",
+  required: ["provider", "total", "sent_count", "failed_count"],
+  properties: {
+    provider: {
+      type: "string",
+    },
+    total: {
+      type: "integer",
+      format: "int64",
+    },
+    sent_count: {
+      type: "integer",
+      format: "int64",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+    },
+  },
+} as const;
+
+export const EmailStatsSchema = {
+  type: "object",
+  description:
+    "Email statistics summary for a site or the whole fleet. `site_count` is only populated for fleet stats.\n",
+  required: [
+    "total",
+    "sent_count",
+    "failed_count",
+    "provider_count",
+    "by_day",
+    "by_provider",
+  ],
+  properties: {
+    total: {
+      type: "integer",
+      format: "int64",
+    },
+    sent_count: {
+      type: "integer",
+      format: "int64",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+    },
+    provider_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of distinct providers used in the range.",
+    },
+    site_count: {
+      type: "integer",
+      format: "int64",
+      nullable: true,
+      description: "Number of distinct sites in the range (fleet stats only).",
+    },
+    by_day: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailStatsByDay",
+      },
+    },
+    by_provider: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailStatsByProvider",
+      },
+    },
+  },
+} as const;
+
+export const EmailSuppressionEntrySchema = {
+  type: "object",
+  description:
+    "A single suppression entry. `email` is the plaintext address (present\nwhen `store_plaintext=true` at create time). `email_hash` is always\npresent (SHA-256 of the lower-cased address, hex-encoded) for\nprivacy-preserving checks without storing the full address.\n",
+  required: [
+    "id",
+    "tenant_id",
+    "email_hash",
+    "reason",
+    "provider",
+    "created_at",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    tenant_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+      nullable: true,
+      description:
+        "Null for fleet-wide entries (applies to all sites in tenant).",
+    },
+    email_hash: {
+      type: "string",
+      description: "SHA-256 of the lower-cased email address (hex).",
+    },
+    email: {
+      type: "string",
+      format: "email",
+      nullable: true,
+      description:
+        "Plaintext email address (null when not stored at create time).",
+    },
+    reason: {
+      type: "string",
+      description: "hard_bounce | complaint | unsubscribe | manual",
+    },
+    provider: {
+      type: "string",
+      description: "ses | sendgrid | mailgun | postmark | manual",
+    },
+    event_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+      description:
+        "When the provider event occurred (null for manual entries).",
+    },
+    source_message_id: {
+      type: "string",
+      nullable: true,
+      description:
+        "Provider message ID that triggered this suppression (if known).",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const EmailSuppressionPageSchema = {
+  type: "object",
+  required: ["entries", "has_more"],
+  properties: {
+    entries: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/EmailSuppressionEntry",
+      },
+    },
+    next_cursor: {
+      type: "string",
+      nullable: true,
+    },
+    has_more: {
+      type: "boolean",
+    },
+  },
+} as const;
+
+export const AddSuppressionRequestSchema = {
+  type: "object",
+  required: ["email"],
+  properties: {
+    email: {
+      type: "string",
+      format: "email",
+      description: "Email address to suppress.",
+    },
+    reason: {
+      type: "string",
+      default: "manual",
+      description:
+        "Must be `manual` or `unsubscribe`. Hard_bounce and complaint entries\nare created automatically via provider webhooks.\n",
+    },
+  },
+} as const;
+
+export const ResendEmailResultSchema = {
+  type: "object",
+  required: ["ok"],
+  description:
+    "Result of a resend_email agent command. `ok=true` means the agent\nconfirmed the email was re-dispatched. `ok=false` means the agent was\nunavailable or returned an error — check `detail` for the reason.\nHTTP 200 is returned in both cases (matches test-send pattern).\n",
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+      nullable: true,
+      description: "Agent response message or error detail.",
+    },
+    message_id: {
+      type: "string",
+      nullable: true,
+      description:
+        "Provider message ID assigned to the resent email (if agent returned it).",
+    },
+  },
+} as const;
+
+export const BulkResendRequestSchema = {
+  type: "object",
+  required: ["log_ids"],
+  properties: {
+    log_ids: {
+      type: "array",
+      maxItems: 100,
+      items: {
+        type: "string",
+        format: "uuid",
+      },
+      description: "List of log entry IDs to resend (max 100).",
+    },
+  },
+} as const;
+
+export const BulkResendItemResultSchema = {
+  type: "object",
+  required: ["log_id", "ok"],
+  properties: {
+    log_id: {
+      type: "string",
+      format: "uuid",
+    },
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+      nullable: true,
+    },
+  },
+} as const;
+
+export const BulkResendResponseSchema = {
+  type: "object",
+  required: ["results"],
+  properties: {
+    results: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/BulkResendItemResult",
+      },
+    },
+  },
+} as const;
+
+export const BulkDeleteLogsRequestSchema = {
+  type: "object",
+  required: ["log_ids"],
+  properties: {
+    log_ids: {
+      type: "array",
+      maxItems: 500,
+      items: {
+        type: "string",
+        format: "uuid",
+      },
+      description: "List of log entry IDs to delete (max 500).",
+    },
+  },
+} as const;
+
+export const BulkDeleteLogsResponseSchema = {
+  type: "object",
+  required: ["deleted"],
+  properties: {
+    deleted: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of rows actually deleted (may be less than requested if some IDs did not exist).",
+    },
+  },
+} as const;
+
 export const PerfConfigWritableSchema = {
   type: "object",
   description:

@@ -42,7 +42,7 @@ class Schema
      * (add a column, add an index, etc). The migration runner reads the
      * stored option and compares it to this value; mismatch => run dbDelta.
      */
-    public const CURRENT_VERSION = '9';
+    public const CURRENT_VERSION = '10';
 
     /** Name of the M5.6 phpbu-runner dedup table (unprefixed). */
     public const BACKUP_RUNS_TABLE = 'wpmgr_backup_runs';
@@ -75,6 +75,20 @@ class Schema
      * wp-option queue that the cache warmer previously used.
      */
     public const PRELOAD_QUEUE_TABLE = 'wpmgr_preload_queue';
+
+    /**
+     * Per-site email send-event log table (unprefixed).
+     *
+     * Local buffer for every wp_mail() attempt routed through WPMgr's provider
+     * pipeline. Body is stored only when store_body=true (default false).
+     * Designed for a keyset-cursor CP ingest (Phase 3): rows are ordered by
+     * (created_at DESC, id DESC) and the composite (created_at, id) pair serves
+     * as the cursor so the CP can page through all rows without re-fetching.
+     *
+     * Auto-increment `id` is the PK (cursor-friendly); `created_at` is UTC
+     * DATETIME (matches every other agent table).
+     */
+    public const EMAIL_LOG_TABLE = 'wpmgr_email_log';
 
     /** Option key storing the last-installed schema version. */
     public const OPTION_DB_VERSION = 'wpmgr_agent_db_version';
@@ -155,6 +169,7 @@ class Schema
         $activityLogTable  = $prefix . self::ACTIVITY_LOG_TABLE;
         $loginEventsTable  = $prefix . self::LOGIN_EVENTS_TABLE;
         $preloadQueueTable = $prefix . self::PRELOAD_QUEUE_TABLE;
+        $emailLogTable     = $prefix . self::EMAIL_LOG_TABLE;
 
         return [
             // M2: Connector anti-replay table (short window, per-token jti).
@@ -378,6 +393,37 @@ class Schema
                 UNIQUE KEY uniq_group_task (group_name, task_hash),
                 KEY idx_runner (group_name, callback, status, priority, created_at, id),
                 KEY idx_lock (status, locked_at)
+            ) {$charset};",
+
+            // Email (Phase 2) — per-site outgoing-mail send-event buffer.
+            // `id` AUTO_INCREMENT is the primary cursor for Phase-3 CP ingest
+            // (keyset: WHERE (created_at, id) > (cursor_created_at, cursor_id)).
+            // `status` is an enum-like VARCHAR: 'sent' | 'failed'.
+            // `body` is NULL unless store_body=true (default false, GDPR-friendly).
+            // `retries` counts fallback attempts (0 = first attempt only).
+            // `resent_count` is incremented by the Phase-3 resend command.
+            // Indexes:
+            //   PRIMARY (id)         — keyset cursor.
+            //   idx_created (created_at DESC, id DESC) — time-range queries.
+            //   idx_status (status, created_at DESC)   — failures-only view.
+            self::EMAIL_LOG_TABLE => "CREATE TABLE {$emailLogTable} (
+                id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+                message_id VARCHAR(255) NOT NULL DEFAULT '',
+                mail_to VARCHAR(500) NOT NULL DEFAULT '',
+                mail_from VARCHAR(255) NOT NULL DEFAULT '',
+                subject VARCHAR(500) NOT NULL DEFAULT '',
+                provider VARCHAR(32) NOT NULL DEFAULT '',
+                status VARCHAR(16) NOT NULL DEFAULT 'sent',
+                response TEXT NULL,
+                error TEXT NULL,
+                retries TINYINT UNSIGNED NOT NULL DEFAULT 0,
+                resent_count SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+                body_stored TINYINT(1) NOT NULL DEFAULT 0,
+                body LONGTEXT NULL,
+                created_at DATETIME NOT NULL,
+                PRIMARY KEY  (id),
+                KEY idx_created (created_at, id),
+                KEY idx_status (status, created_at)
             ) {$charset};",
         ];
     }
