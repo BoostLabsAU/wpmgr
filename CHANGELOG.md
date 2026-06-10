@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-06-11
+
+### Fixed
+
+- **Client rows were not clickable.** The Clients page listed clients with only Edit and Delete actions and no way to open a client's detail page (sites + reports). The client name is now a link, and the Client badge on the sites table also links to the client.
+
 ## [0.38.0] - 2026-06-11
 
 ### Added

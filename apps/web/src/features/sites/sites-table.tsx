@@ -282,6 +282,7 @@ function buildColumns(
       size: COL_CLIENT_PX,
       cell: ({ row }) => {
         const name = row.original.site.client_name;
+        const clientId = row.original.site.client_id;
         if (!name) {
           return (
             <span
@@ -292,14 +293,27 @@ function buildColumns(
             </span>
           );
         }
-        return (
-          <div className="flex min-w-0 items-center gap-1.5">
+        const inner = (
+          <>
             <span
               aria-hidden="true"
               className="inline-block size-2 shrink-0 rounded-full border border-[var(--color-border)] bg-[var(--color-muted)]"
             />
             <span className="truncate text-sm">{name}</span>
-          </div>
+          </>
+        );
+        if (!clientId) {
+          return <div className="flex min-w-0 items-center gap-1.5">{inner}</div>;
+        }
+        return (
+          <Link
+            to="/clients/$clientId"
+            params={{ clientId }}
+            className="flex min-w-0 items-center gap-1.5 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {inner}
+          </Link>
         );
       },
     },
