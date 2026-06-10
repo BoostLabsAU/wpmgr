@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.35.2] - 2026-06-10
+
+### Fixed
+
+- **Saved email config was never pushed to the site agent**, so sending a test email failed with "no email config — run sync_email_config first" and real outgoing mail would not route through the configured provider. Saving an email config now dispatches the signed `sync_email_config` command to the site so the agent receives the provider settings and credential immediately. The push is best-effort: if the agent is briefly offline the save still succeeds and the config syncs on the next save, test, or manual sync. Sending a test email now also re-syncs the config first, so a fresh save is always reflected.
+
+### Added
+
+- **"Sync to site" button** on a site's Email tab (Provider section) that pushes the stored email config to the site agent on demand, for re-syncing after the agent was offline at save time or after rotating a credential. New endpoint `POST /api/v1/sites/{siteId}/email/sync`.
+
 ## [0.35.1] - 2026-06-10
 
 ### Fixed

@@ -165,6 +165,7 @@ const (
 	SilenceSitePHPErrorOperation            OperationName = "SilenceSitePHPError"
 	StreamSiteEventsOperation               OperationName = "StreamSiteEvents"
 	SyncMediaOperation                      OperationName = "SyncMedia"
+	SyncSiteEmailConfigOperation            OperationName = "SyncSiteEmailConfig"
 	TestSiteDestinationOperation            OperationName = "TestSiteDestination"
 	TriggerDbScanOperation                  OperationName = "TriggerDbScan"
 	UnblockSiteIPOperation                  OperationName = "UnblockSiteIP"

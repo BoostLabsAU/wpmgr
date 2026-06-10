@@ -4601,6 +4601,52 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/sites/{siteId}/email/sync:
+    post:
+      operationId: syncSiteEmailConfig
+      summary: Push the stored email config to the site agent
+      description: |
+        Dispatches the signed `sync_email_config` command so the agent has the
+        current provider config and decrypted secret before the next send.
+
+        Use this when the agent was offline at save time (the implicit sync on
+        PUT /email/config was skipped), after rotating a secret, or when the
+        operator explicitly wants to confirm the agent has the latest config.
+
+        Unlike `sendTestEmail` there is no request body — the stored config is
+        read from the CP and pushed as-is. The response is always 200; `ok`
+        indicates whether the agent acknowledged the push.
+
+        Requires `site.email.manage` permission (operator+) and site access.
+      tags: [email]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Sync result (ok may be false when the agent returns an error or is offline)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmailTestResult"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          description: Site not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   # m59 Phase 3 — Email log viewer + stats
   # ---------------------------------------------------------------------------
 

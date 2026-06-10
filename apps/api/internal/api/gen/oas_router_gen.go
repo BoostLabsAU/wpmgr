@@ -113,7 +113,7 @@ var (
 	rn61AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
-	rn200AllowedHeaders = map[string]string{
+	rn201AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
 	rn76AllowedHeaders = map[string]string{
@@ -191,7 +191,7 @@ var (
 	rn131AllowedHeaders = map[string]string{
 		"PUT": "Content-Type",
 	}
-	rn202AllowedHeaders = map[string]string{
+	rn203AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
 	rn62AllowedHeaders = map[string]string{
@@ -221,7 +221,7 @@ var (
 	rn180AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
-	rn205AllowedHeaders = map[string]string{
+	rn206AllowedHeaders = map[string]string{
 		"POST": "Content-Type",
 	}
 	rn85AllowedHeaders = map[string]string{
@@ -2161,7 +2161,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 														default:
 															s.notAllowed(w, r, notAllowedParams{
 																allowedMethods: "POST",
-																allowedHeaders: rn200AllowedHeaders,
+																allowedHeaders: rn201AllowedHeaders,
 																acceptPost:     "application/json",
 																acceptPatch:    "",
 															})
@@ -2627,6 +2627,33 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 															return
 														}
 
+													}
+
+												case 'y': // Prefix: "ync"
+
+													if l := len("ync"); len(elem) >= l && elem[0:l] == "ync" {
+														elem = elem[l:]
+													} else {
+														break
+													}
+
+													if len(elem) == 0 {
+														// Leaf node.
+														switch r.Method {
+														case "POST":
+															s.handleSyncSiteEmailConfigRequest([1]string{
+																args[0],
+															}, elemIsEscaped, w, r)
+														default:
+															s.notAllowed(w, r, notAllowedParams{
+																allowedMethods: "POST",
+																allowedHeaders: nil,
+																acceptPost:     "",
+																acceptPatch:    "",
+															})
+														}
+
+														return
 													}
 
 												}
@@ -4142,7 +4169,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 													default:
 														s.notAllowed(w, r, notAllowedParams{
 															allowedMethods: "POST",
-															allowedHeaders: rn202AllowedHeaders,
+															allowedHeaders: rn203AllowedHeaders,
 															acceptPost:     "application/json",
 															acceptPatch:    "",
 														})
@@ -4844,7 +4871,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 								default:
 									s.notAllowed(w, r, notAllowedParams{
 										allowedMethods: "POST",
-										allowedHeaders: rn205AllowedHeaders,
+										allowedHeaders: rn206AllowedHeaders,
 										acceptPost:     "application/json",
 										acceptPatch:    "",
 									})
@@ -7406,6 +7433,31 @@ func (s *Server) FindPath(method string, u *url.URL) (r Route, _ bool) {
 															}
 														}
 
+													}
+
+												case 'y': // Prefix: "ync"
+
+													if l := len("ync"); len(elem) >= l && elem[0:l] == "ync" {
+														elem = elem[l:]
+													} else {
+														break
+													}
+
+													if len(elem) == 0 {
+														// Leaf node.
+														switch method {
+														case "POST":
+															r.name = SyncSiteEmailConfigOperation
+															r.summary = "Push the stored email config to the site agent"
+															r.operationID = "syncSiteEmailConfig"
+															r.operationGroup = ""
+															r.pathPattern = "/api/v1/sites/{siteId}/email/sync"
+															r.args = args
+															r.count = 1
+															return r, true
+														default:
+															return
+														}
 													}
 
 												}

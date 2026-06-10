@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
@@ -476,6 +477,241 @@ func TestService_RLSTenantIsolation(t *testing.T) {
 	_, err := svc.GetConfig(context.Background(), tenantB, siteID)
 	if err == nil {
 		t.Fatal("expected error when tenant B reads tenant A's config")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// fakeAgentClient — captures SyncEmailConfig / SendTestEmail calls
+// ---------------------------------------------------------------------------
+
+type fakeAgentClient struct {
+	syncCalled   int
+	syncLastReq  agentcmd.EmailConfigRequest
+	syncErr      error
+
+	sendTestCalled int
+	sendTestErr    error
+}
+
+func (f *fakeAgentClient) SyncEmailConfig(_ context.Context, _ uuid.UUID, _ string, req agentcmd.EmailConfigRequest) (agentcmd.EmailConfigResult, error) {
+	f.syncCalled++
+	f.syncLastReq = req
+	return agentcmd.EmailConfigResult{OK: true}, f.syncErr
+}
+
+func (f *fakeAgentClient) SendTestEmail(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.SendTestEmailRequest) (agentcmd.SendTestEmailResult, error) {
+	f.sendTestCalled++
+	if f.sendTestErr != nil {
+		return agentcmd.SendTestEmailResult{}, f.sendTestErr
+	}
+	return agentcmd.SendTestEmailResult{OK: true, Detail: "sent"}, nil
+}
+
+func (f *fakeAgentClient) ResendEmail(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.ResendEmailRequest) (agentcmd.ResendEmailResult, error) {
+	return agentcmd.ResendEmailResult{OK: true}, nil
+}
+
+// fakeSiteLookup always resolves to "https://example.com".
+type fakeSiteLookup struct {
+	urlErr error
+}
+
+func (f *fakeSiteLookup) GetSiteURL(_ context.Context, _, _ uuid.UUID) (string, error) {
+	if f.urlErr != nil {
+		return "", f.urlErr
+	}
+	return "https://example.com", nil
+}
+
+// ---------------------------------------------------------------------------
+// UpsertSiteConfig agent-sync tests
+// ---------------------------------------------------------------------------
+
+func TestService_UpsertSiteConfig_DispatchesSyncEmailConfig(t *testing.T) {
+	tenantID := uuid.New()
+	siteID := uuid.New()
+	secret := "plaintext_secret"
+
+	repo := newFakeRepo()
+	enc := &fakeEncryptor{}
+	agent := &fakeAgentClient{}
+	look := &fakeSiteLookup{}
+
+	svc := NewService(&Repo{}, enc, nil)
+	svc.repo = repo
+	svc.SetAgentClient(agent, look)
+
+	sitePtr := &siteID
+	_, err := svc.UpsertSiteConfig(context.Background(), UpsertInput{
+		TenantID:      tenantID,
+		SiteID:        sitePtr,
+		Provider:      "smtp",
+		SecretRaw:     &secret,
+		LogEmails:     true,
+		RetentionDays: 14,
+		Config:        map[string]any{"host": "smtp.example.com"},
+		Mappings:      map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("UpsertSiteConfig: unexpected error: %v", err)
+	}
+	if agent.syncCalled != 1 {
+		t.Errorf("expected SyncEmailConfig to be called once, called %d times", agent.syncCalled)
+	}
+	if agent.syncLastReq.Provider != "smtp" {
+		t.Errorf("expected provider 'smtp' in sync req, got %q", agent.syncLastReq.Provider)
+	}
+	if agent.syncLastReq.Secret != secret {
+		t.Errorf("expected decrypted secret %q in sync req, got %q", secret, agent.syncLastReq.Secret)
+	}
+}
+
+func TestService_UpsertSiteConfig_AgentSyncFailureDoesNotFailSave(t *testing.T) {
+	tenantID := uuid.New()
+	siteID := uuid.New()
+
+	repo := newFakeRepo()
+	enc := &fakeEncryptor{}
+	agent := &fakeAgentClient{syncErr: errors.New("agent unreachable")}
+	look := &fakeSiteLookup{}
+
+	svc := NewService(&Repo{}, enc, nil)
+	svc.repo = repo
+	svc.SetAgentClient(agent, look)
+
+	sitePtr := &siteID
+	saved, err := svc.UpsertSiteConfig(context.Background(), UpsertInput{
+		TenantID:      tenantID,
+		SiteID:        sitePtr,
+		Provider:      "sendgrid",
+		LogEmails:     true,
+		RetentionDays: 14,
+		Config:        map[string]any{},
+		Mappings:      map[string]any{},
+	})
+	// The save must succeed even though the agent sync failed.
+	if err != nil {
+		t.Fatalf("UpsertSiteConfig must succeed even when agent is offline, got: %v", err)
+	}
+	if saved.Provider != "sendgrid" {
+		t.Errorf("expected saved config provider 'sendgrid', got %q", saved.Provider)
+	}
+	// The sync was attempted (called once).
+	if agent.syncCalled != 1 {
+		t.Errorf("expected SyncEmailConfig to be called once, called %d times", agent.syncCalled)
+	}
+}
+
+func TestService_UpsertSiteConfig_NoAgentNilGuard(t *testing.T) {
+	// When the agent client is not wired the save must still succeed without panic.
+	tenantID := uuid.New()
+	siteID := uuid.New()
+
+	svc := NewService(&Repo{}, &fakeEncryptor{}, nil)
+	svc.repo = newFakeRepo()
+	// No SetAgentClient call.
+
+	sitePtr := &siteID
+	saved, err := svc.UpsertSiteConfig(context.Background(), UpsertInput{
+		TenantID:      tenantID,
+		SiteID:        sitePtr,
+		Provider:      "mailgun",
+		LogEmails:     true,
+		RetentionDays: 14,
+		Config:        map[string]any{},
+		Mappings:      map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("UpsertSiteConfig without agent: unexpected error: %v", err)
+	}
+	if saved.Provider != "mailgun" {
+		t.Errorf("expected provider 'mailgun', got %q", saved.Provider)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// SendTest pre-sync test
+// ---------------------------------------------------------------------------
+
+func TestService_SendTest_CallsSyncBeforeSend(t *testing.T) {
+	tenantID := uuid.New()
+	siteID := uuid.New()
+
+	repo := newFakeRepo()
+	enc := &fakeEncryptor{}
+	agent := &fakeAgentClient{}
+	look := &fakeSiteLookup{}
+
+	// Pre-populate a config row so GetConfig resolves.
+	repo.site[siteKey(tenantID, siteID)] = Config{
+		ID:            uuid.New(),
+		TenantID:      tenantID,
+		SiteID:        &siteID,
+		Provider:      "smtp",
+		LogEmails:     true,
+		RetentionDays: 14,
+		Config:        map[string]any{},
+	}
+
+	svc := NewService(&Repo{}, enc, nil)
+	svc.repo = repo
+	svc.SetAgentClient(agent, look)
+
+	result, err := svc.SendTest(context.Background(), tenantID, siteID, TestSendInput{
+		To: "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("SendTest: unexpected error: %v", err)
+	}
+	if !result.OK {
+		t.Errorf("expected ok=true, got ok=false: %s", result.Detail)
+	}
+	if agent.syncCalled != 1 {
+		t.Errorf("expected SyncEmailConfig called once before SendTestEmail, called %d times", agent.syncCalled)
+	}
+	if agent.sendTestCalled != 1 {
+		t.Errorf("expected SendTestEmail called once, called %d times", agent.sendTestCalled)
+	}
+}
+
+func TestService_SendTest_SyncFailureReturnsClearError(t *testing.T) {
+	tenantID := uuid.New()
+	siteID := uuid.New()
+
+	repo := newFakeRepo()
+	enc := &fakeEncryptor{}
+	agent := &fakeAgentClient{syncErr: errors.New("timeout")}
+	look := &fakeSiteLookup{}
+
+	repo.site[siteKey(tenantID, siteID)] = Config{
+		ID:            uuid.New(),
+		TenantID:      tenantID,
+		SiteID:        &siteID,
+		Provider:      "ses",
+		LogEmails:     true,
+		RetentionDays: 14,
+		Config:        map[string]any{},
+	}
+
+	svc := NewService(&Repo{}, enc, nil)
+	svc.repo = repo
+	svc.SetAgentClient(agent, look)
+
+	result, err := svc.SendTest(context.Background(), tenantID, siteID, TestSendInput{
+		To: "test@example.com",
+	})
+	if err != nil {
+		t.Fatalf("SendTest sync failure must not return a domain error, got: %v", err)
+	}
+	if result.OK {
+		t.Error("expected ok=false when sync fails")
+	}
+	if result.Detail == "" {
+		t.Error("expected non-empty detail when sync fails")
+	}
+	// SendTestEmail must NOT be called when sync fails (agent has stale config).
+	if agent.sendTestCalled != 0 {
+		t.Errorf("SendTestEmail must not be called when sync fails, called %d times", agent.sendTestCalled)
 	}
 }
 

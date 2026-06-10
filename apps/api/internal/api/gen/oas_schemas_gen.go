@@ -5839,7 +5839,8 @@ func (s *EmailTestResult) SetMessageID(val OptNilString) {
 	s.MessageID = val
 }
 
-func (*EmailTestResult) sendTestEmailRes() {}
+func (*EmailTestResult) sendTestEmailRes()       {}
+func (*EmailTestResult) syncSiteEmailConfigRes() {}
 
 // Response for PUT webhook-config. Always returns the updated masked config fields. When
 // rotate_token was true, also includes webhook_route_token (plain token, shown once).
@@ -21929,6 +21930,18 @@ func (s *SyncMediaAccepted) SetJobID(val OptString) {
 func (s *SyncMediaAccepted) SetStartedAt(val OptDateTime) {
 	s.StartedAt = val
 }
+
+type SyncSiteEmailConfigForbidden Error
+
+func (*SyncSiteEmailConfigForbidden) syncSiteEmailConfigRes() {}
+
+type SyncSiteEmailConfigNotFound Error
+
+func (*SyncSiteEmailConfigNotFound) syncSiteEmailConfigRes() {}
+
+type SyncSiteEmailConfigUnauthorized Error
+
+func (*SyncSiteEmailConfigUnauthorized) syncSiteEmailConfigRes() {}
 
 // Ref: #/components/schemas/Tenant
 type Tenant struct {
