@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-06-11
+
+### Added
+
+- **Clients (Foundation): group managed sites under named client records.** Create, edit, and delete clients (name, company, contact email, phone, notes, brand color, logo URL) from a new Clients page in the sidebar. Assign one or many sites to a client with the bulk "Set client" action on the sites list, replacing a long-standing placeholder stub. Filter the fleet by client and see each site's client from a dedicated Client column in the sites table. Each client has a detail page listing its assigned sites, with a Reports tab placeholder for the coming white-label reports phase. Deleting a client unassigns its sites; no sites are ever deleted. Clients are tenant-isolated with row-level security; site-scoped collaborators cannot enumerate the client roster; a database-level composite constraint makes cross-tenant assignment impossible. Also fixes a mislabeling: the column previously headed "Client" was rendering each site's tags; tags now have their own column back.
+
 ## [0.36.0] - 2026-06-10
 
 ### Added
