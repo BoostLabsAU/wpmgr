@@ -62,12 +62,14 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Media;
 
+use WPMgr\Agent\Support\StoragePaths;
+
 /**
  * Manages the quarantine directory lifecycle.
  */
 final class MediaQuarantine
 {
-    /** Directory name under wp-content. */
+    /** Directory name under wp-content (legacy) / uploads (new). */
     public const QUARANTINE_DIR = 'wpmgr-quarantine';
 
     /** Sub-directory under QUARANTINE_DIR for quarantined image files. */
@@ -83,7 +85,7 @@ final class MediaQuarantine
     /** Manifest schema version. */
     private const MANIFEST_VERSION = 1;
 
-    /** Absolute path to the quarantine root (wp-content/wpmgr-quarantine). */
+    /** Absolute path to the quarantine root (uploads/wpmgr-quarantine; legacy: wp-content/wpmgr-quarantine). */
     private string $quarantineRoot;
 
     /** Absolute path to the media quarantine dir (wpmgr-quarantine/media). */
@@ -91,6 +93,13 @@ final class MediaQuarantine
 
     /** Absolute path to the manifests dir (wpmgr-quarantine/manifests). */
     private string $manifestsRoot;
+
+    /**
+     * Legacy quarantine root (wp-content/wpmgr-quarantine) kept for read-fallback
+     * so existing self-hosted installs are not orphaned after the directory is
+     * relocated under uploads/. Only set when it differs from quarantineRoot.
+     */
+    private string $legacyRoot = '';
 
     /** In-progress manifest data keyed by manifest_id. */
     private array $openManifests = [];
@@ -102,40 +111,61 @@ final class MediaQuarantine
     private bool $basePathResolved = false;
 
     /**
-     * @param string|null $contentDir Override for WP_CONTENT_DIR (testing only).
-     *                                Pass null (default) to use the runtime constant.
+     * @param string|null $contentDir Override for the quarantine base path (testing only).
+     *                                Pass null (default) to use the runtime wp_upload_dir() / WP_CONTENT_DIR.
      */
     public function __construct(?string $contentDir = null)
     {
         // Base-path resolution order:
         //   1. Explicit $contentDir passed by the caller (test override or known path).
-        //   2. WP_CONTENT_DIR constant, when defined and non-empty (standard runtime).
-        //   3. ABSPATH constant, when defined and non-empty, with '/wp-content' appended
-        //      — mirrors how WordPress itself derives the WP_CONTENT_DIR default and how
-        //      sibling classes (class-backup-source.php, class-keystore.php) degrade.
-        //   4. Unresolved — instance is marked unavailable; writes are blocked before
+        //   2. StoragePaths::dataBase('quarantine') — uploads-first; honors relocatable
+        //      upload_path + multisite per-site subdirs (wp.org Guideline compliance).
+        //   3. WP_CONTENT_DIR / wpmgr-quarantine — legacy fallback for CLI/headless
+        //      contexts where wp_upload_dir() is unavailable.
+        //   4. ABSPATH + '/wp-content/wpmgr-quarantine' — last-resort fallback.
+        //   5. Unresolved — instance is marked unavailable; writes are blocked before
         //      any mkdir call so nothing is ever created at the filesystem root.
-        if (is_string($contentDir) && $contentDir !== '') {
-            $base                   = rtrim($contentDir, '/\\');
-            $this->basePathResolved = true;
-        } elseif (defined('WP_CONTENT_DIR') && is_string(WP_CONTENT_DIR) && WP_CONTENT_DIR !== '') {
-            $base                   = rtrim(WP_CONTENT_DIR, '/\\');
-            $this->basePathResolved = true;
-        } elseif (defined('ABSPATH') && is_string(ABSPATH) && ABSPATH !== '') {
-            $base                   = rtrim(ABSPATH, '/\\') . '/wp-content';
-            $this->basePathResolved = true;
-        } else {
-            // No safe base available. Set the *Root properties to non-empty strings
-            // so that the readonly scandir callers (quarantinedAttachmentIds,
-            // listManifests, listManifestsDetailed) simply return empty arrays on a
-            // non-existent path — their existing @scandir()/is_dir() guards handle this.
-            // ensureQuarantineRoot() will throw before any mkdir when $basePathResolved
-            // is false, so these paths are never written to.
+        if ($contentDir === '') {
+            // Explicit empty string is the "unavailable" signal used by tests and by
+            // callers that already know no base could be resolved. Treat as unresolved
+            // immediately — do NOT fall through to StoragePaths/wp_upload_dir, which
+            // might return a real path and mask the guard.
             $base                   = '';
             $this->basePathResolved = false;
+        } elseif (is_string($contentDir)) {
+            // Non-empty explicit override: $contentDir is a wp-content surrogate; append
+            // QUARANTINE_DIR exactly as the old runtime path did with WP_CONTENT_DIR.
+            $base                   = rtrim($contentDir, '/\\') . '/' . self::QUARANTINE_DIR;
+            $this->basePathResolved = true;
+        } else {
+            // Runtime path: uploads-first (wp.org Guideline compliance).
+            $resolved = StoragePaths::dataBase('quarantine');
+            if ($resolved !== '') {
+                $base                   = $resolved;
+                $this->basePathResolved = true;
+
+                // Record the legacy wp-content location so reads can fall back to
+                // it — existing self-hosted installs keep working with no migration.
+                $legacy = StoragePaths::legacyBase('quarantine');
+                if ($legacy !== '' && $legacy !== $base) {
+                    $this->legacyRoot = $legacy;
+                }
+            } elseif (defined('ABSPATH') && is_string(ABSPATH) && ABSPATH !== '') {
+                $base                   = rtrim(ABSPATH, '/\\') . '/wp-content/wpmgr-quarantine';
+                $this->basePathResolved = true;
+            } else {
+                // No safe base available. Set the *Root properties to non-empty strings
+                // so that the readonly scandir callers (quarantinedAttachmentIds,
+                // listManifests, listManifestsDetailed) simply return empty arrays on a
+                // non-existent path — their existing @scandir()/is_dir() guards handle this.
+                // ensureQuarantineRoot() will throw before any mkdir when $basePathResolved
+                // is false, so these paths are never written to.
+                $base                   = '';
+                $this->basePathResolved = false;
+            }
         }
 
-        $this->quarantineRoot  = $base . '/' . self::QUARANTINE_DIR;
+        $this->quarantineRoot  = $base !== '' ? $base : '/__wpmgr-quarantine-unresolved__';
         $this->mediaRoot       = $this->quarantineRoot . '/' . self::MEDIA_SUBDIR;
         $this->manifestsRoot   = $this->quarantineRoot . '/' . self::MANIFESTS_SUBDIR;
     }
@@ -492,11 +522,12 @@ final class MediaQuarantine
      */
     public function quarantinedAttachmentIds(): array
     {
-        if (!is_dir($this->manifestsRoot)) {
+        $mRoot = $this->effectiveManifestsRoot();
+        if (!is_dir($mRoot)) {
             return [];
         }
 
-        $dirEntries = @scandir($this->manifestsRoot);
+        $dirEntries = @scandir($mRoot);
         if ($dirEntries === false) {
             return [];
         }
@@ -536,12 +567,13 @@ final class MediaQuarantine
      */
     public function listManifests(): array
     {
-        if (!is_dir($this->manifestsRoot)) {
+        $mRoot = $this->effectiveManifestsRoot();
+        if (!is_dir($mRoot)) {
             return [];
         }
 
         $manifests = [];
-        $entries   = @scandir($this->manifestsRoot);
+        $entries   = @scandir($mRoot);
         if ($entries === false) {
             return [];
         }
@@ -594,11 +626,12 @@ final class MediaQuarantine
      */
     public function listManifestsDetailed(): array
     {
-        if (!is_dir($this->manifestsRoot)) {
+        $mRoot = $this->effectiveManifestsRoot();
+        if (!is_dir($mRoot)) {
             return [];
         }
 
-        $dirEntries = @scandir($this->manifestsRoot);
+        $dirEntries = @scandir($mRoot);
         if ($dirEntries === false) {
             return [];
         }
@@ -684,10 +717,26 @@ final class MediaQuarantine
     {
         if (!$this->basePathResolved) {
             throw new \RuntimeException(
-                'WPMgr media quarantine unavailable: could not resolve a safe wp-content base ' .
-                '(WP_CONTENT_DIR undefined and ABSPATH unavailable). ' .
+                'WPMgr media quarantine unavailable: could not resolve a safe base path ' .
+                '(uploads dir unavailable, WP_CONTENT_DIR undefined, and ABSPATH unavailable). ' .
                 'Refusing to write at the filesystem root.'
             );
+        }
+
+        // One-time migration: if the legacy wp-content location has data and the
+        // new uploads-based location does not yet exist, atomically rename the
+        // legacy directory to the new location so existing quarantines are preserved.
+        if ($this->legacyRoot !== ''
+            && is_dir($this->legacyRoot)
+            && !is_dir($this->quarantineRoot)
+        ) {
+            // Ensure the parent directory under uploads exists before renaming.
+            $newParent = dirname($this->quarantineRoot);
+            if (!is_dir($newParent)) {
+                wp_mkdir_p($newParent);
+            }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic directory rename; WP_Filesystem::move() is non-atomic and would leave partial state on failure
+            @rename($this->legacyRoot, $this->quarantineRoot);
         }
 
         if (!is_dir($this->quarantineRoot)) {
@@ -715,6 +764,27 @@ final class MediaQuarantine
     }
 
     /**
+     * Return the manifests root to scan for read operations.
+     *
+     * Uses the primary (uploads-based) manifests root when it exists, otherwise
+     * falls back to the legacy wp-content location so self-hosted installs that
+     * have not yet been migrated continue to work without data loss.
+     */
+    private function effectiveManifestsRoot(): string
+    {
+        if (is_dir($this->manifestsRoot)) {
+            return $this->manifestsRoot;
+        }
+        if ($this->legacyRoot !== '') {
+            $legacyManifests = $this->legacyRoot . '/' . self::MANIFESTS_SUBDIR;
+            if (is_dir($legacyManifests)) {
+                return $legacyManifests;
+            }
+        }
+        return $this->manifestsRoot; // return primary even if absent; callers check is_dir()
+    }
+
+    /**
      * Load and decode a manifest JSON file. Returns null on failure.
      *
      * Manifests are read from manifests/<manifest_id>.json (outside media/).
@@ -729,29 +799,39 @@ final class MediaQuarantine
             return null;
         }
 
-        $path = $this->manifestsRoot . '/' . $manifestId . '.json';
-
-        // Containment: the manifest file must be inside the manifests root.
-        $real = realpath($path);
-        if ($real === false) {
-            return null;
-        }
-        $rootReal = realpath($this->manifestsRoot);
-        if ($rootReal === false || strpos($real, $rootReal . DIRECTORY_SEPARATOR) !== 0) {
-            return null;
+        // Try primary (uploads-based) manifests root, then fall back to legacy.
+        $manifestsRoots = [$this->manifestsRoot];
+        if ($this->legacyRoot !== '') {
+            $manifestsRoots[] = $this->legacyRoot . '/' . self::MANIFESTS_SUBDIR;
         }
 
-        $json = @file_get_contents($real);
-        if ($json === false || $json === '') {
-            return null;
+        foreach ($manifestsRoots as $mRoot) {
+            $path = $mRoot . '/' . $manifestId . '.json';
+
+            // Containment: the manifest file must be inside its manifests root.
+            $real = realpath($path);
+            if ($real === false) {
+                continue;
+            }
+            $rootReal = realpath($mRoot);
+            if ($rootReal === false || strpos($real, $rootReal . DIRECTORY_SEPARATOR) !== 0) {
+                continue;
+            }
+
+            $json = @file_get_contents($real);
+            if ($json === false || $json === '') {
+                continue;
+            }
+
+            $data = json_decode($json, true);
+            if (!is_array($data)) {
+                continue;
+            }
+
+            return $data;
         }
 
-        $data = json_decode($json, true);
-        if (!is_array($data)) {
-            return null;
-        }
-
-        return $data;
+        return null;
     }
 
     /**

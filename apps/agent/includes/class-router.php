@@ -53,25 +53,29 @@ final class Router
      */
     public function registerRoutes(): void
     {
-        // Read-only environment report.
+        // Read-only environment report. Uses authorizeCommand('info') so the
+        // token is bound to both this site (aud) and this endpoint (cmd='info'),
+        // matching the same binding that POST /command/info already enforces.
         register_rest_route(
             self::NAMESPACE,
             '/info',
             [
                 'methods'             => 'GET',
                 'callback'            => [$this, 'handleInfo'],
-                'permission_callback' => [$this, 'authorize'],
+                'permission_callback' => fn ( \WP_REST_Request $r ) => $this->authorizeCommand( $r, 'info' ),
             ]
         );
 
-        // Action commands (skeleton stubs) dispatched by name.
+        // Action commands dispatched by name. The {command} segment names the
+        // action; it is threaded into verifyCommand() so the token is bound to
+        // both the site (aud) and this specific command (cmd).
         register_rest_route(
             self::NAMESPACE,
             '/command/(?P<command>[a-z0-9_-]+)',
             [
                 'methods'             => 'POST',
                 'callback'            => [$this, 'handleCommand'],
-                'permission_callback' => [$this, 'authorize'],
+                'permission_callback' => fn ( \WP_REST_Request $r ) => $this->authorizeCommand( $r, (string) ( $r->get_param( 'command' ) ?? '' ) ),
                 'args'                => [
                     'command' => [
                         'required'          => true,
@@ -83,31 +87,36 @@ final class Router
     }
 
     /**
-     * Permission callback: verify the signed bearer token, then enforce
-     * WordPress capability as defense-in-depth.
+     * Permission callback: verify the signed bearer token bound to a specific
+     * command, then enforce WordPress capability as defense-in-depth.
+     *
+     * Every route must supply a non-empty $command so the token's `aud` (site)
+     * and `cmd` (endpoint) claims are both checked. There is no unbound path —
+     * the old verify()-only branch that allowed a token minted for any command
+     * to reach /info has been removed (WP REST authorization best practice:
+     * authenticate AND bind to the specific action).
      *
      * @param \WP_REST_Request<array<string,mixed>> $request Incoming request.
+     * @param string                                $command Expected command name
+     *                                                       (e.g. 'info', or the
+     *                                                       {command} route param).
      * @return bool|\WP_Error True when authorized, WP_Error otherwise.
      */
-    public function authorize(\WP_REST_Request $request)
+    public function authorizeCommand(\WP_REST_Request $request, string $command)
     {
         $token = $this->bearerToken($request);
         if ($token === null) {
             return $this->forbidden('missing_token');
         }
 
-        // For the command route the {command} segment names the action being
-        // invoked; thread it into verification so the token's `cmd` claim is
-        // bound to THIS command and its `aud` claim is bound to THIS site.
-        $command = $request->get_param('command');
-        $command = is_string($command) ? $command : '';
+        if ($command === '') {
+            return $this->forbidden('missing_command');
+        }
 
         try {
-            if ($command !== '') {
-                $claims = $this->connector->verifyCommand($token, $command);
-            } else {
-                $claims = $this->connector->verify($token);
-            }
+            // verifyCommand checks: Ed25519 signature, exp ≤ 60 s, jti anti-replay,
+            // aud (this site's enrollment URL), AND cmd (this command name).
+            $claims = $this->connector->verifyCommand($token, $command);
         } catch (\Throwable $e) {
             // Log the EXACT reason to debug.log (admin-visible, not secret-bearing —
             // verifyCommand exceptions only contain category messages like "aud

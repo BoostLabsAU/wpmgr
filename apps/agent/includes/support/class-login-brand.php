@@ -160,10 +160,11 @@ final class LoginBrand
             return;
         }
 
-        // --- logo_head: custom logo via inline <style> -----------------------
+        // --- login-logo CSS: enqueued via login_enqueue_scripts (fires before
+        //     login_head, while the enqueue queue is still active on the login page).
         if ($config['logo_url'] !== '') {
-            add_action('login_head', function () use ($config): void {
-                $this->renderLogoStyle($config['logo_url']);
+            add_action('login_enqueue_scripts', function () use ($config): void {
+                $this->enqueueLogoStyle($config['logo_url']);
             });
         }
 
@@ -183,37 +184,48 @@ final class LoginBrand
     }
 
     /**
-     * Emit the login-logo <style> block. Called inside the login_head action.
+     * Enqueue the login-logo CSS via the canonical WP API. Called on the
+     * login_enqueue_scripts action (fires before login_head, while the WP
+     * enqueue queue is still active on the login page).
      *
-     * Validates the URL (http/https only, esc_url_raw + parse_url scheme check)
-     * before writing anything. If the URL is invalid, outputs nothing — the WP
-     * default logo is preserved.
+     * Registers a virtual (src=false) handle so wp_add_inline_style() has an
+     * anchor, then attaches the logo rule as an inline style — the recommended
+     * pattern from developer.wordpress.org/reference/hooks/login_enqueue_scripts/.
+     *
+     * Validates the URL (http/https only) before enqueueing. If the URL is
+     * invalid, outputs nothing — the WP default logo is preserved.
      *
      * @param string $logoUrl Raw logo_url from the stored config.
      * @return void
      */
-    private function renderLogoStyle(string $logoUrl): void
+    private function enqueueLogoStyle(string $logoUrl): void
     {
         try {
             if (!$this->isValidHttpUrl($logoUrl)) {
                 return;
             }
 
-            // Double-escape: esc_url() for the context of a CSS url() value.
-            // esc_url() encodes quotes, parentheses, and dangerous characters.
-            if (!function_exists('esc_url')) {
+            if (!function_exists('esc_url')
+                || !function_exists('wp_register_style')
+                || !function_exists('wp_enqueue_style')
+                || !function_exists('wp_add_inline_style')
+            ) {
                 return;
             }
+
             $safeUrl = esc_url($logoUrl);
             if ($safeUrl === '') {
                 return;
             }
 
-            // Output a minimal <style> block. We do NOT use wp_add_inline_style
-            // here because the login page loads styles differently depending on
-            // the WP version and the login_head hook fires after wp_enqueue is
-            // no longer reliable. A direct <style> echo is safe for login_head.
-            echo '<style>.login h1 a { background-image: url(\'' . esc_url($safeUrl) . '\'); background-size: contain; width: auto; }</style>' . "\n";
+            // Register a virtual handle (src=false) so wp_add_inline_style()
+            // has an anchor. wp_enqueue_style() queues it for output in <head>.
+            wp_register_style('wpmgr-login-brand', false ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- virtual handle; src=false, no external resource
+            wp_enqueue_style('wpmgr-login-brand');
+            wp_add_inline_style(
+                'wpmgr-login-brand',
+                ".login h1 a { background-image: url('" . $safeUrl . "'); background-size: contain; width: auto; }"
+            );
         } catch (\Throwable $e) {
             // Never fatal the login page.
         }

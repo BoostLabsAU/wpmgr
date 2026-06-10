@@ -517,6 +517,7 @@ final class RucssClient
      */
     private function applyUsedCss(string $html, string $usedCss): string
     {
+        // phpcs:ignore WordPress.WP.EnqueuedResources.NonEnqueuedStylesheet -- injected into the cache-write output buffer after wp_head has run; WP's enqueue API is inapplicable in this OB callback (see class-rum-injector.php for the canonical note)
         $styleTag = '<style id="wpmgr-used-css">' . $usedCss . '</style>';
         if (stripos($html, '</head>') !== false) {
             $html = (string) preg_replace('/<\/head>/i', $styleTag . '</head>', $html, 1);

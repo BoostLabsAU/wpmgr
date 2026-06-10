@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.9] - 2026-06-10
+
+### Changed
+
+- WordPress.org plugin-directory compliance hardening for the agent (raised by the directory pre-review): request inputs including `$_SERVER` and `$_COOKIE` are sanitized; the media quarantine and database-snapshot data now write under the uploads directory, with a read fallback to the legacy `wp-content` location so existing installs keep working; the diagnostics info REST endpoint now binds its signed token to the site and endpoint (not just signature-valid); the login-screen branding CSS is enqueued instead of echoed; and the agent readme now documents every external service it can contact (control plane, object storage, ipify, Cloudflare, Google Fonts, Gravatar, and the optional third-party asset self-hosting) plus the public source of the bundled minified scripts. The streaming `mysqli` backup/restore connections and local file reads are kept and justified to the reviewer (the same pattern approved backup plugins use). No change to backup, cache, or optimization behavior.
+
 ## [0.33.8] - 2026-06-10
 
 ### Fixed

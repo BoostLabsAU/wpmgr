@@ -31,6 +31,95 @@ if (!defined('OBJECT')) {
 // what we need here. Keep these intentionally small and dumb.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Minimal WP global function stubs for tests that do NOT use Brain Monkey.
+//
+// Brain Monkey-based tests can override these via Functions\when() in setUp;
+// when they do not, the real stub below is called. Non-Brain-Monkey tests
+// (e.g. CacheWriterTest) rely on these directly.
+// ---------------------------------------------------------------------------
+
+if (!function_exists('wp_parse_url')) {
+    /**
+     * Thin wrapper around parse_url() — mirrors the real WP implementation.
+     *
+     * @param string   $url       The URL to parse.
+     * @param int      $component Optional PHP_URL_* constant (-1 for full array).
+     * @return mixed
+     */
+    function wp_parse_url(string $url, int $component = -1): mixed
+    {
+        return parse_url($url, $component);
+    }
+}
+
+if (!function_exists('wp_mkdir_p')) {
+    /**
+     * Recursively creates directories — mirrors the real WP implementation.
+     *
+     * @param string $target Directory path to create.
+     * @return bool True on success or if the directory already exists.
+     */
+    function wp_mkdir_p(string $target): bool
+    {
+        if (is_dir($target)) {
+            return true;
+        }
+        return mkdir($target, 0755, true);
+    }
+}
+
+if (!function_exists('wp_rand')) {
+    /**
+     * Returns a random integer — mirrors the real WP implementation.
+     *
+     * @param int $min Lower bound (inclusive).
+     * @param int $max Upper bound (inclusive).
+     * @return int
+     */
+    function wp_rand(int $min = 0, int $max = 0): int
+    {
+        if ($min === 0 && $max === 0) {
+            $max = PHP_INT_MAX;
+        }
+        return random_int($min, $max);
+    }
+}
+
+if (!function_exists('wp_unslash')) {
+    /**
+     * Removes slashes from a value — mirrors the real WP implementation
+     * (stripslashes_deep) closely enough for the tests.
+     *
+     * @param mixed $value Value to unslash.
+     * @return mixed
+     */
+    function wp_unslash(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            return array_map('wp_unslash', $value);
+        }
+        return is_string($value) ? stripslashes($value) : $value;
+    }
+}
+
+if (!function_exists('sanitize_text_field')) {
+    /**
+     * Sanitizes a string from user input — approximates the real WP
+     * implementation (strip tags, collapse whitespace, trim).
+     *
+     * @param string $str Value to sanitize.
+     * @return string
+     */
+    function sanitize_text_field(string $str): string
+    {
+        $filtered = strip_tags($str);
+        $filtered = preg_replace('/[\r\n\t ]+/', ' ', $filtered) ?? '';
+        return trim($filtered);
+    }
+}
+
+
 if (!class_exists('WP_Error')) {
     class WP_Error
     {
