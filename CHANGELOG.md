@@ -6,6 +6,28 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.33.8] - 2026-06-10
+
+### Fixed
+
+- Resolved 15 code-review findings (raised by automated review on earlier merged PRs, each re-verified against current code before fixing):
+  - Agent: WooCommerce cart-fragments now inject on themes whose body tag carries attributes (the shim previously matched only a bare body tag); the cart-fragments load replay fires on the window; the cache hit tally counts 304 and HEAD responses; cache stats are staged and deleted only after a confirmed upload (with recovery of an interrupted batch); the stats consumer counts events by file size instead of reading whole files; and the Unused Image Cleaner bounds its in-use list.
+  - Control plane: the cache hit-ratio history now returns the most recent data, daily-downsampled, instead of the oldest 366 hourly rows; a backup status no longer regresses after a failure is published; Media Cleaner thumbnail URLs are sanitized server-side; the OpenAPI auth documentation was refreshed and the missing auth paths documented; and a brittle deprecated-refcount test assertion was removed.
+  - Web: Media Cleaner guards agent-supplied thumbnail URLs to http and https only; the agent-plugin download opens in a separate tab so a failed cross-origin download cannot replace the dashboard and lose the pairing code.
+  - Build: the landing copy gate now runs as part of the landing build and uses a portable file path; the release Makefile validates the version as semver before stamping it into the plugin.
+
+## [0.33.7] - 2026-06-10
+
+### Fixed
+
+- Optimize tab: changing one setting no longer makes every toggle flicker. The saving spinner and disabled state are now scoped to the row being changed instead of being applied to all rows at once, and a fast double-toggle no longer momentarily reverts.
+
+## [0.33.6] - 2026-06-10
+
+### Changed
+
+- The site header "Open wp-admin" button now logs owners and admins straight into wp-admin in a new tab (one-click auto-login using a signed, single-use token) instead of landing on the WordPress login form. Non-admin viewers keep a plain wp-admin link.
+
 ## [0.33.5] - 2026-06-09
 
 ### Fixed
