@@ -110,11 +110,15 @@ paths:
   /auth/register:
     post:
       operationId: register
-      summary: Register (first-run bootstrap or invited)
+      summary: Register (first-run bootstrap or self-serve)
       description: |
-        On first run (zero users) this creates the first user, a tenant, and an
-        owner membership. Once any user exists, open registration is closed and
-        this returns 403; new users are added via the authenticated invite flow.
+        On first run (zero users in the database) this bootstraps the instance:
+        creates the first user verified and active, creates their tenant, and
+        establishes an immediate session (201 + Me). After the first user exists,
+        registration is open self-serve: the account is created in a pending
+        state, a verification email is sent, and the response is 200
+        {ok: true, pending: true}. The user must verify their email via
+        POST /auth/verify-email before they can log in.
       tags: [auth]
       requestBody:
         required: true
@@ -124,17 +128,23 @@ paths:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
         "201":
-          description: User registered and session established
+          description: First-run bootstrap — user registered, session established
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/Me"
-        "403":
-          description: Open registration is closed
+        "200":
+          description: Self-serve signup accepted; verification email sent
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
+                type: object
+                required: [ok, pending]
+                properties:
+                  ok:
+                    type: boolean
+                  pending:
+                    type: boolean
         "409":
           description: Email already exists
           content:
@@ -147,6 +157,145 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /auth/password/forgot:
+    post:
+      operationId: forgotPassword
+      summary: Request a password-reset email
+      description: |
+        Always returns 200 {ok: true} whether or not the email maps to an
+        account (enumeration-safe). A reset-link email is sent when the account
+        exists and is active.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Request accepted (enumeration-safe)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+  /auth/password/reset:
+    post:
+      operationId: resetPassword
+      summary: Consume a password-reset token and set a new password
+      description: |
+        Validates the one-time reset token and replaces the user's password.
+        Does not establish a session; the user must log in separately. Returns
+        410 when the token is expired, already used, or not found.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, password]
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Password updated
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+        "410":
+          description: Token expired, already used, or not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          description: Validation failed (e.g. password too weak)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/verify-email:
+    post:
+      operationId: verifyEmail
+      summary: Verify a self-serve signup email and establish a session
+      description: |
+        Consumes the one-time verification token sent during self-serve
+        registration, activates the account, and establishes a session so the
+        user lands logged in. Returns 410 when the token is expired or already
+        consumed.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token]
+              properties:
+                token:
+                  type: string
+      responses:
+        "200":
+          description: Email verified; session established
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Me"
+        "410":
+          description: Token expired or already consumed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /auth/verification/resend:
+    post:
+      operationId: resendVerification
+      summary: Re-send the email verification link
+      description: |
+        Always returns 200 {ok: true} whether or not the email maps to a
+        pending account (enumeration-safe). A new verification email is sent
+        when the account exists and is still pending verification.
+      tags: [auth]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+      responses:
+        "200":
+          description: Request accepted (enumeration-safe)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
   /auth/login:
     post:
       operationId: login

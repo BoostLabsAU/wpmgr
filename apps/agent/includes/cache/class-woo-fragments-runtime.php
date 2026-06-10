@@ -81,9 +81,10 @@ final class WooFragmentsRuntime
 
         $tag = '<script ' . self::MARKER_ATTR . '>' . $shim . '</script>';
 
-        // Inject just before the closing </body> tag. If none is found, append.
-        if (stripos($html, '</body>') !== false) {
-            return (string) preg_replace('/<\/body>(?![\s\S]*<\/body>)/i', $tag . '</body>', $html, 1);
+        // Inject just before the closing </body> tag (whitespace-tolerant: accepts
+        // </body>, </body >, </ body>, < /body>, etc.). If none is found, append.
+        if (preg_match('/<\s*\/\s*body\s*>/i', $html)) {
+            return (string) preg_replace('/<\s*\/\s*body\s*>(?![\s\S]*<\s*\/\s*body\s*>)/i', $tag . '$0', $html, 1);
         }
         return $html . $tag;
     }

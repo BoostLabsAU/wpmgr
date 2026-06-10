@@ -42,11 +42,17 @@ func (q *Queries) ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) er
 }
 
 const getCacheHitRatioHistory = `-- name: GetCacheHitRatioHistory :many
-SELECT id, site_id, tenant_id, hit_count, miss_count, ratio_pct, sampled_at, created_at FROM site_cache_hit_ratio_history
+SELECT
+    date_trunc('day', sampled_at)::timestamptz                 AS sampled_at,
+    avg(ratio_pct)::numeric                                     AS ratio_pct,
+    sum(hit_count)::bigint                                      AS hit_count,
+    sum(miss_count)::bigint                                     AS miss_count
+FROM site_cache_hit_ratio_history
 WHERE site_id   = $1
   AND tenant_id = $2
   AND sampled_at >= $3
-ORDER BY sampled_at ASC
+GROUP BY date_trunc('day', sampled_at)
+ORDER BY date_trunc('day', sampled_at) DESC
 LIMIT 366
 `
 
@@ -56,26 +62,32 @@ type GetCacheHitRatioHistoryParams struct {
 	Since    time.Time `json:"since"`
 }
 
-// Returns up to 366 hit-ratio data points for a site since @since, ordered
-// oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
-func (q *Queries) GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]SiteCacheHitRatioHistory, error) {
+type GetCacheHitRatioHistoryRow struct {
+	SampledAt time.Time      `json:"sampled_at"`
+	RatioPct  pgtype.Numeric `json:"ratio_pct"`
+	HitCount  int64          `json:"hit_count"`
+	MissCount int64          `json:"miss_count"`
+}
+
+// Returns up to 366 daily-aggregated hit-ratio data points for a site since
+// @since, ordered oldest-first. Each point is one calendar day (UTC) of data:
+// avg(ratio_pct), sum(hit_count), sum(miss_count). Daily downsampling ensures a
+// 365-day window fits within 366 points regardless of hourly sampling density.
+// Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+func (q *Queries) GetCacheHitRatioHistory(ctx context.Context, arg GetCacheHitRatioHistoryParams) ([]GetCacheHitRatioHistoryRow, error) {
 	rows, err := q.db.Query(ctx, getCacheHitRatioHistory, arg.SiteID, arg.TenantID, arg.Since)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []SiteCacheHitRatioHistory
+	var items []GetCacheHitRatioHistoryRow
 	for rows.Next() {
-		var i SiteCacheHitRatioHistory
+		var i GetCacheHitRatioHistoryRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.SiteID,
-			&i.TenantID,
+			&i.SampledAt,
+			&i.RatioPct,
 			&i.HitCount,
 			&i.MissCount,
-			&i.RatioPct,
-			&i.SampledAt,
-			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

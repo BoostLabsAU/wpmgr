@@ -172,6 +172,13 @@ final class MediaCleanCommand implements CommandInterface
     private const SCAN_MAX    = 500;
     /** Default scan page size. */
     private const SCAN_DEFAULT = 100;
+    /**
+     * Maximum referenced entries collected during a scan.
+     * Mirrors SCAN_MAX to bound the referenced list the same way the unused
+     * list is bounded, preventing a large media library from blowing up the
+     * response payload and PHP memory.
+     */
+    private const REFERENCED_MAX = 500;
     /** Maximum attachment IDs per isolate call. */
     private const ISOLATE_MAX = 200;
     /** Maximum quarantine IDs per restore/delete call. */
@@ -288,12 +295,13 @@ final class MediaCleanCommand implements CommandInterface
         // Attachments classified as referenced are collected into $allReferenced[]
         // in parallel; they are "referenced among those visited" (honest when the walk
         // is capped by SCAN_MAX).
-        $allUnused        = [];
-        $allReferenced    = []; // referenced entries to include in scan result
-        $totalAttachments = 0;  // diagnostic: total attachment rows walked (excludes quarantined)
-        $scanCap          = self::SCAN_MAX + 1; // collect one extra to detect truncation
-        $walkOffset       = 0;
-        $walkBatch        = 200; // rows per DB round-trip
+        $allUnused           = [];
+        $allReferenced       = []; // referenced entries to include in scan result
+        $referencedTruncated = false; // true when referenced list hit REFERENCED_MAX
+        $totalAttachments    = 0;  // diagnostic: total attachment rows walked (excludes quarantined)
+        $scanCap             = self::SCAN_MAX + 1; // collect one extra to detect truncation
+        $walkOffset          = 0;
+        $walkBatch           = 200; // rows per DB round-trip
 
         while (count($allUnused) < $scanCap) {
             // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- batched attachment scan on core posts table; caching the full result set would OOM on large media libraries
@@ -339,19 +347,26 @@ final class MediaCleanCommand implements CommandInterface
                 // isReferenced() also populates the per-attachment usage index
                 // consumed below by getReferencedUsages().
                 if ($idx->isReferenced($id, $relPath, $meta)) {
-                    // Build the referenced entry (same shape as a candidate, plus usages).
-                    $refThumb  = null;
-                    $refImgSrc = wp_get_attachment_image_src($id, 'thumbnail');
-                    if (is_array($refImgSrc) && isset($refImgSrc[0])) {
-                        $refThumb = (string)$refImgSrc[0];
+                    // Collect the referenced entry only up to REFERENCED_MAX to
+                    // prevent an unbounded payload on libraries where most media
+                    // is in-use. The cap mirrors how SCAN_MAX bounds unused candidates.
+                    if (count($allReferenced) < self::REFERENCED_MAX) {
+                        // Build the referenced entry (same shape as a candidate, plus usages).
+                        $refThumb  = null;
+                        $refImgSrc = wp_get_attachment_image_src($id, 'thumbnail');
+                        if (is_array($refImgSrc) && isset($refImgSrc[0])) {
+                            $refThumb = (string)$refImgSrc[0];
+                        }
+                        $allReferenced[$id] = [
+                            'id'    => $id,
+                            'title' => $title !== '' ? $title : basename($relPath),
+                            'url'   => $guid,
+                            'thumb' => $refThumb,
+                            // usages are filled after the walk from getReferencedUsages()
+                        ];
+                    } else {
+                        $referencedTruncated = true;
                     }
-                    $allReferenced[$id] = [
-                        'id'    => $id,
-                        'title' => $title !== '' ? $title : basename($relPath),
-                        'url'   => $guid,
-                        'thumb' => $refThumb,
-                        // usages are filled after the walk from getReferencedUsages()
-                    ];
                     continue;
                 }
 
@@ -418,21 +433,29 @@ final class MediaCleanCommand implements CommandInterface
         // Log diagnostic summary to WP error_log for live investigation.
         // phpcs:disable WordPress.PHP.DevelopmentFunctions.error_log_error_log
         error_log(sprintf(
-            '[wpmgr] media-clean scan: total_attachments=%d referenced=%d unused=%d quarantined=%d truncated=%s',
+            '[wpmgr] media-clean scan: total_attachments=%d referenced=%d unused=%d quarantined=%d truncated=%s referenced_truncated=%s',
             $totalAttachments,
             $referencedCount,
             $unusedCount,
             $quarantinedCount,
-            $truncated ? 'true' : 'false'
+            $truncated ? 'true' : 'false',
+            $referencedTruncated ? 'true' : 'false'
         ));
-        if (!empty($referencedEntries)) {
+        // Per-entry referenced logging: only when WP_DEBUG is on, and capped at
+        // 20 entries to avoid flooding the log on large media libraries.
+        if (!empty($referencedEntries) && defined('WP_DEBUG') && WP_DEBUG) {
+            $logLimit = 0;
             foreach ($referencedEntries as $refEntry) {
+                if ($logLimit >= 20) {
+                    break;
+                }
                 $surfaces = array_unique(array_column($refEntry['usages'], 'surface'));
                 error_log(sprintf(
                     '[wpmgr] media-clean referenced id=%d surfaces=%s',
                     $refEntry['id'],
                     implode(',', $surfaces)
                 ));
+                $logLimit++;
             }
         }
         // phpcs:enable
@@ -446,11 +469,14 @@ final class MediaCleanCommand implements CommandInterface
             'candidates'       => $candidates,
             'truncated'        => $truncated,
             // Diagnostic fields (always present; allows live re-scan diagnosis).
-            'total_attachments'  => $totalAttachments,
-            'referenced_count'   => $referencedCount,
-            'unused_count'       => $unusedCount,
-            'quarantined_count'  => $quarantinedCount,
-            'referenced'         => $referencedEntries,
+            'total_attachments'      => $totalAttachments,
+            'referenced_count'       => $referencedCount,
+            'unused_count'           => $unusedCount,
+            'quarantined_count'      => $quarantinedCount,
+            'referenced'             => $referencedEntries,
+            // true when the referenced list was capped at REFERENCED_MAX; the web
+            // panel may surface this as "showing first N in-use attachments".
+            'referenced_truncated'   => $referencedTruncated,
         ];
     }
 

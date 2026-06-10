@@ -724,9 +724,12 @@ func (r *Repo) InsertCacheHitRatioHistoryTx(ctx context.Context, tenantID, siteI
 	})
 }
 
-// GetCacheHitRatioHistory returns hit-ratio trend data points for a site from
-// `since` onwards (up to 366 points), ordered oldest-first. Operator read path
-// (InTenantTx).
+// GetCacheHitRatioHistory returns daily-aggregated hit-ratio trend data points
+// for a site from `since` onwards (up to 366 points), ordered oldest-first. The
+// SQL query aggregates hourly rows into one point per UTC calendar day, orders
+// DESC to retrieve the most recent days first, and this mapper reverses the
+// slice back to ASC so callers always receive chronological order. Operator read
+// path (InTenantTx).
 func (r *Repo) GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]CacheHitRatioPoint, error) {
 	var out []CacheHitRatioPoint
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
@@ -738,6 +741,8 @@ func (r *Repo) GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uui
 		if qerr != nil {
 			return qerr
 		}
+		// Rows arrive newest-first (ORDER BY … DESC). Collect and then reverse so
+		// the output slice is ordered oldest-first for the chart consumer.
 		out = make([]CacheHitRatioPoint, 0, len(rows))
 		for _, row := range rows {
 			rp := 0.0
@@ -746,15 +751,15 @@ func (r *Repo) GetCacheHitRatioHistory(ctx context.Context, tenantID, siteID uui
 				rp = f.Float64
 			}
 			out = append(out, CacheHitRatioPoint{
-				ID:        row.ID,
-				SiteID:    row.SiteID,
-				TenantID:  row.TenantID,
 				HitCount:  row.HitCount,
 				MissCount: row.MissCount,
 				RatioPct:  rp,
 				SampledAt: row.SampledAt,
-				CreatedAt: row.CreatedAt,
 			})
+		}
+		// Reverse DESC→ASC so the caller always receives chronological order.
+		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
+			out[i], out[j] = out[j], out[i]
 		}
 		return nil
 	})

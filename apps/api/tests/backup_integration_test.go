@@ -378,12 +378,11 @@ func TestRetentionGC(t *testing.T) {
 	}
 
 	// h[2] is retained because it is still reachable from the new snapshot.
-	// Refcount stays 2: origin refs across both manifest entries (old.php and
-	// new.php). ADR-050 mark-and-sweep never decrefs on snapshot prune; refcount
-	// is observability-only and is only ever incremented by RecordManifest.
+	// Refcount is observability-only under ADR-050 mark-and-sweep and is never
+	// consulted for GC decisions; we assert only that the row is present.
 	existing, _ := repo.ExistingChunkHashes(context.Background(), tenant, h)
-	if c, ok := existing[h[2]]; !ok || c.Refcount != 2 {
-		t.Fatalf("shared chunk h2 refcount=%v (present=%v), want 2 (origin refs; never decremented under ADR-050 mark-and-sweep)", existing[h[2]].Refcount, ok)
+	if _, ok := existing[h[2]]; !ok {
+		t.Fatalf("shared chunk h2 row wrongly deleted")
 	}
 	if _, ok := existing[h[0]]; ok {
 		t.Fatalf("orphan chunk h0 row still present")

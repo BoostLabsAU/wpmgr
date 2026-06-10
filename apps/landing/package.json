@@ -7,7 +7,8 @@
   "scripts": {
     "dev": "vite",
     "docs:sync": "node scripts/sync-openapi.mjs",
-    "build": "node scripts/sync-openapi.mjs && tsc --noEmit && vite build",
+    "check-copy": "node scripts/check-copy.mjs",
+    "build": "node scripts/check-copy.mjs && node scripts/sync-openapi.mjs && tsc --noEmit && vite build",
     "preview": "vite preview --port 4173",
     "typecheck": "tsc --noEmit",
     "impeccable": "impeccable detect src/"

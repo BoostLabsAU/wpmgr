@@ -122,9 +122,18 @@ agent-zip: agent-vendor ## Package the WordPress agent plugin as a zip (with ifs
 	# source baseline unchanged, making this step a no-op.
 	@if [ -n "$(VERSION)" ]; then \
 		_v=$$(echo "$(VERSION)" | sed 's/^v//'); \
+		case "$$_v" in \
+			[0-9]*.[0-9]*.[0-9]*) \
+				case "$$_v" in \
+					*[!0-9A-Za-z.+\-]*) \
+						echo "agent-zip: refusing unsafe VERSION '$(VERSION)' — only digits, letters, dots, hyphens, and plus signs are allowed" >&2; exit 1 ;; \
+				esac ;; \
+			*) echo "agent-zip: refusing VERSION '$(VERSION)' — must be MAJOR.MINOR.PATCH (with optional leading v)" >&2; exit 1 ;; \
+		esac; \
+		_v_esc=$$(printf '%s' "$$_v" | sed -e 's/[\/&|]/\\&/g'); \
 		echo "agent-zip: stamping staged copy with version $$_v"; \
-		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v/" release/wpmgr-agent/wpmgr-agent.php; \
-		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v\2/" release/wpmgr-agent/wpmgr-agent.php; \
+		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v_esc/" release/wpmgr-agent/wpmgr-agent.php; \
+		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v_esc\2/" release/wpmgr-agent/wpmgr-agent.php; \
 		rm -f release/wpmgr-agent/wpmgr-agent.php.bak; \
 	fi
 	cd release && zip -r wpmgr-agent.zip wpmgr-agent
@@ -159,9 +168,18 @@ agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fl
 	# Two lines: the plugin header "Version:" and the WPMGR_AGENT_VERSION constant.
 	@if [ -n "$(VERSION)" ]; then \
 		_v=$$(echo "$(VERSION)" | sed 's/^v//'); \
+		case "$$_v" in \
+			[0-9]*.[0-9]*.[0-9]*) \
+				case "$$_v" in \
+					*[!0-9A-Za-z.+\-]*) \
+						echo "agent-zip-wporg: refusing unsafe VERSION '$(VERSION)' — only digits, letters, dots, hyphens, and plus signs are allowed" >&2; exit 1 ;; \
+				esac ;; \
+			*) echo "agent-zip-wporg: refusing VERSION '$(VERSION)' — must be MAJOR.MINOR.PATCH (with optional leading v)" >&2; exit 1 ;; \
+		esac; \
+		_v_esc=$$(printf '%s' "$$_v" | sed -e 's/[\/&|]/\\&/g'); \
 		echo "agent-zip-wporg: stamping staged copy with version $$_v"; \
-		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
-		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v\2/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
+		sed -i.bak -E "s/^( \* Version:[ \t]+)[0-9]+\.[0-9]+\.[0-9].*/\1$$_v_esc/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
+		sed -i.bak -E "s/^(define\('WPMGR_AGENT_VERSION', *')[^']+(')/\1$$_v_esc\2/" release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php; \
 		rm -f release/fleet-agent-for-wpmgr/fleet-agent-for-wpmgr.php.bak; \
 	fi
 	# Stamp readme.txt Stable tag to match the plugin header Version. Mirrors the

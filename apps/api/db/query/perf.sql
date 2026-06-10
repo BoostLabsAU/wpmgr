@@ -563,13 +563,22 @@ ON CONFLICT DO NOTHING
 RETURNING *;
 
 -- name: GetCacheHitRatioHistory :many
--- Returns up to 366 hit-ratio data points for a site since @since, ordered
--- oldest-first. Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
-SELECT * FROM site_cache_hit_ratio_history
+-- Returns up to 366 daily-aggregated hit-ratio data points for a site since
+-- @since, ordered oldest-first. Each point is one calendar day (UTC) of data:
+-- avg(ratio_pct), sum(hit_count), sum(miss_count). Daily downsampling ensures a
+-- 365-day window fits within 366 points regardless of hourly sampling density.
+-- Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+SELECT
+    date_trunc('day', sampled_at)::timestamptz                 AS sampled_at,
+    avg(ratio_pct)::numeric                                     AS ratio_pct,
+    sum(hit_count)::bigint                                      AS hit_count,
+    sum(miss_count)::bigint                                     AS miss_count
+FROM site_cache_hit_ratio_history
 WHERE site_id   = @site_id
   AND tenant_id = @tenant_id
   AND sampled_at >= @since
-ORDER BY sampled_at ASC
+GROUP BY date_trunc('day', sampled_at)
+ORDER BY date_trunc('day', sampled_at) DESC
 LIMIT 366;
 
 -- name: PruneCacheHitRatioHistory :execrows

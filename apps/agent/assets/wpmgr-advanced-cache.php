@@ -225,6 +225,18 @@ if (!is_file($wpmgr_file)) {
 
 // --- Serve the cache hit ------------------------------------------------------
 
+// HIT — append one line to the hour-bucket hit file BEFORE any early exits
+// (304 Not Modified, HEAD). This counts every request served by the drop-in —
+// full body, 304-revalidation, and HEAD — as a hit, matching the intended metric
+// "served by the drop-in without booting WordPress".
+// One file_put_contents: no DB, no WP calls, no flock.
+// The mkdir guard runs only when the bucket file is new (first hit of the hour).
+$wpmgr_hit_file = $wpmgr_metrics_dir . '/hit-' . $wpmgr_tally_hour;
+if (!@file_exists($wpmgr_hit_file)) {
+    @mkdir($wpmgr_metrics_dir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir,WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite -- advanced-cache drop-in runs pre-WP; wp_mkdir_p unavailable; writes to wp-content/cache/wpmgr, a persistent location outside the plugin folder
+}
+@file_put_contents($wpmgr_hit_file, "\n", FILE_APPEND); // phpcs:ignore PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/cache, a persistent install target outside the plugin folder
+
 if (function_exists('ini_set')) {
     @ini_set('zlib.output_compression', '0'); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- required runtime ini tweak; @-guarded
 }
@@ -260,15 +272,6 @@ if (!headers_sent()) {
 if ($wpmgr_method === 'HEAD') {
     exit();
 }
-
-// HIT — append one line to the hour-bucket hit file before streaming.
-// One file_put_contents: no DB, no WP calls, no flock.
-// The mkdir guard runs only when the bucket file is new (first hit of the hour).
-$wpmgr_hit_file = $wpmgr_metrics_dir . '/hit-' . $wpmgr_tally_hour;
-if (!@file_exists($wpmgr_hit_file)) {
-    @mkdir($wpmgr_metrics_dir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir,WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite -- advanced-cache drop-in runs pre-WP; wp_mkdir_p unavailable; writes to wp-content/cache/wpmgr, a persistent location outside the plugin folder
-}
-@file_put_contents($wpmgr_hit_file, "\n", FILE_APPEND); // phpcs:ignore PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/cache, a persistent install target outside the plugin folder
 
 readfile($wpmgr_file); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- advanced-cache drop-in streams the cached body before WordPress is loaded; readfile is the canonical low-memory emit
 exit();

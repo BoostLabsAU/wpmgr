@@ -37,6 +37,13 @@ final class CacheTallyTest extends TestCase
         parent::set_up();
         Monkey\setUp();
 
+        // Stub wp_delete_file() so TallyConsumer::consume() can delete staging
+        // files in unit tests where the full WP environment is not loaded.
+        // The real unlink is performed by rrmdir() in tear_down().
+        Functions\when('wp_delete_file')->alias(function (string $path): void {
+            @unlink($path);
+        });
+
         $this->cacheRoot  = sys_get_temp_dir() . '/wpmgr-tally-' . uniqid('', true) . '/cache/wpmgr';
         $this->metricsDir = $this->cacheRoot . '/' . TallyConsumer::METRICS_SUBDIR;
         @mkdir($this->metricsDir, 0755, true);

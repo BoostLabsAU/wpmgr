@@ -1774,20 +1774,28 @@ func (s *Service) RecordProgress(ctx context.Context, tenantID, snapshotID uuid.
 	if phase == "failed" && snap.Status != StatusFailed && snap.Status != StatusCompleted {
 		reason := agentFailReason(phaseDetail)
 		if reason != "" {
-			// Best-effort: if FailSnapshot errors (e.g. a race lost to the
-			// watchdog), log and continue — the progress JSON is already stored.
-			if _, ferr := s.FailSnapshot(ctx, tenantID, snapshotID, reason); ferr != nil {
+			// FailSnapshot persists the terminal state AND publishes its own
+			// terminal SSE event. On success, return early so the trailing
+			// s.publish below does not emit a second event with the stale
+			// pre-failure status (which would regress the SSE stream from
+			// "failed" back to "running"/"pending").
+			if failedSnap, ferr := s.FailSnapshot(ctx, tenantID, snapshotID, reason); ferr != nil {
 				slog.Warn("RecordProgress: agent-reported failure could not be persisted",
 					slog.String("snapshot_id", snapshotID.String()),
 					slog.String("tenant_id", tenantID.String()),
 					slog.Any("error", ferr))
+			} else {
+				_ = failedSnap
+				return raw, nil
 			}
 		}
 	}
 
 	// Fan out the validated progress to live SSE subscribers. The Status mirrors
 	// the snapshot's status as returned by UpdateSnapshotProgress (the
-	// FailSnapshot call above, if it ran, publishes its own terminal SSE event).
+	// FailSnapshot path above short-circuits before this point when it succeeds,
+	// so this publish only fires for non-failure phases or when FailSnapshot
+	// itself errored).
 	s.publish(BackupEvent{
 		SnapshotID:  snapshotID,
 		Phase:       phase,
