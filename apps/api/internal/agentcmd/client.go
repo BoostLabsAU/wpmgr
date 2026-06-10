@@ -230,6 +230,28 @@ func (c *Client) Diagnostics(ctx context.Context, siteID uuid.UUID, siteURL stri
 	return c.postRaw(ctx, siteID, siteURL, "diagnostics", struct{}{})
 }
 
+// Metadata sends the signed `metadata` command to the site's agent and returns
+// the RAW JSON body (the same shape the agent pushes via POST /agent/v1/metadata
+// on its own schedule). siteID is bound into the JWT's aud claim. Unlike the
+// typed commands, the response is NOT decoded into a struct here — the raw bytes
+// are fed into the site.Service metadata ingester (ApplyAgentMetadata → site
+// inventory update + last_seen_at bump + optional connected-state recovery).
+//
+// The agent's metadata command is SYNCHRONOUS: it collects the full plugin/theme
+// inventory and returns it in the 200 body. This is used by the Re-check
+// connection endpoint (M58) to force an immediate liveness check from the CP.
+func (c *Client) Metadata(ctx context.Context, siteID uuid.UUID, siteURL string, _ MetadataRequest) ([]byte, error) {
+	return c.postRaw(ctx, siteID, siteURL, "metadata", struct{}{})
+}
+
+// MetadataRaw satisfies site.AgentRechecker: sends the signed `metadata`
+// command and returns the raw JSON response body. This thin wrapper exists so
+// *Client satisfies the site package's AgentRechecker interface without
+// the site package needing to know agentcmd internals.
+func (c *Client) MetadataRaw(ctx context.Context, siteID uuid.UUID, siteURL string) ([]byte, error) {
+	return c.Metadata(ctx, siteID, siteURL, MetadataRequest{})
+}
+
 // MediaOptimize sends the signed `media_optimize` command to the site's agent
 // (ADR-043). siteID is bound into the JWT's aud claim. The agent presigned-PUTs
 // each job's source variants and calls back to the CP's encode-ready endpoint;

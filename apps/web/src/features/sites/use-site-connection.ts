@@ -255,3 +255,82 @@ export function useRestoreSite(): UseMutationResult<
     },
   });
 }
+
+/**
+ * The shape returned by POST /api/v1/sites/:id/recheck on a 200 OK.
+ * The backend refreshes liveness from the agent and echoes back the
+ * updated connection snapshot.
+ */
+export interface RecheckResult {
+  connection_state: string;
+  last_seen_at?: string | null;
+}
+
+/**
+ * Named error for the "agent didn't respond" 502 path. Distinct from a
+ * generic network error so callers can show a calm, non-alarming message
+ * instead of a generic failure toast.
+ */
+export class AgentUnreachableError extends Error {
+  readonly code = "agent_unreachable" as const;
+  constructor() {
+    super("Agent didn't respond — it may just be quiet; the monitor will keep checking.");
+    this.name = "AgentUnreachableError";
+  }
+}
+
+/**
+ * Force an immediate liveness refresh for a connected/degraded site.
+ *
+ * POST /api/v1/sites/:id/recheck
+ *   200 → { connection_state, last_seen_at, ... } — agent answered; the CP
+ *         also pushes a `site.state_changed` SSE frame which will patch the
+ *         badge via the shared tenant bus. We ALSO invalidate the detail +
+ *         list keys here so a focused detail page updates even if the SSE
+ *         stream is momentarily reconnecting.
+ *   502 { code: "agent_unreachable" } — the agent didn't respond within the
+ *         probe window. This is NOT a fatal error: heartbeat-late sites on
+ *         low-traffic servers are common. We surface a calm informational
+ *         toast and leave the badge unchanged (we do NOT flip it to
+ *         disconnected — that is the CP's responsibility after its own
+ *         threshold elapses).
+ *
+ * Any other non-2xx (network error, 5xx) is re-thrown so Query surfaces it
+ * in the normal mutation-error channel.
+ */
+export function useRecheckConnection(): UseMutationResult<
+  RecheckResult,
+  Error,
+  { siteId: string }
+> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async ({ siteId }) => {
+      const { data, error, response } = await client.post<{
+        200: RecheckResult;
+      }>({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/recheck`,
+      });
+      // 502 with agent_unreachable is an expected operational path, NOT a
+      // crash. Surface it as a typed error so the onError handler can
+      // distinguish it from a genuine transport failure.
+      if (response?.status === 502 && isApiErrorShape(error) && error.code === "agent_unreachable") {
+        throw new AgentUnreachableError();
+      }
+      if (error) throw toError(error, "Could not reach the agent");
+      if (!data) throw new Error("Empty response from recheck");
+      return data;
+    },
+    onSuccess: (_data, { siteId }) => {
+      // Reconcile both the detail and the list so the badge updates on
+      // whichever surface the operator is looking at. The SSE `site.state_changed`
+      // frame will also patch the cache, but the invalidation closes the gap
+      // when the stream is in its reconnect window.
+      void queryClient.invalidateQueries({ queryKey: sitesKeys.detail(siteId) });
+      void queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
+    },
+    // onError is intentionally left to the call site: the AgentUnreachableError
+    // needs a non-destructive toast while a genuine error gets the standard
+    // destructive treatment. See use in $siteId.tsx and sites-table.tsx.
+  });
+}

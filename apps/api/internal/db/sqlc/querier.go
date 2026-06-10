@@ -382,6 +382,11 @@ type Querier interface {
 	IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (Invitation, error)
 	// Enroll path (app.enroll GUC): record a failed validation attempt.
 	IncrementPairingCodeAttempts(ctx context.Context, id uuid.UUID) (int64, error)
+	// Increments the consecutive-miss counter for a connected site (cross-tenant,
+	// app.agent GUC). The sweeper calls this on each overdue evaluation pass
+	// instead of immediately degrading. Returns the updated missed_heartbeats
+	// value so the caller can decide whether the threshold has been reached.
+	IncrementSiteMissedHeartbeats(ctx context.Context, arg IncrementSiteMissedHeartbeatsParams) (int32, error)
 	// Agent-auth path (app.agent GUC). The unique (site_id, nonce) index makes a
 	// replayed nonce a no-op via ON CONFLICT, returning 0 rows affected.
 	InsertAgentNonce(ctx context.Context, arg InsertAgentNonceParams) (int64, error)
@@ -644,6 +649,11 @@ type Querier interface {
 	// Replays events after a client cursor (?since / Last-Event-ID). ULIDs sort
 	// lexicographically, so event_id > $2 is monotonic-after.
 	ReplaySiteEvents(ctx context.Context, arg ReplaySiteEventsParams) ([]SiteEvent, error)
+	// Resets the consecutive-miss counter to 0 (cross-tenant, app.agent GUC).
+	// Called by the heartbeat recovery path (RecordHeartbeat) in addition to the
+	// existing TouchSiteHeartbeat reset, so the counter is cleared regardless of
+	// which code path handles the recovery.
+	ResetSiteMissedHeartbeats(ctx context.Context, arg ResetSiteMissedHeartbeatsParams) error
 	// archived → disconnected (operator un-archive). Clears archived_at.
 	RestoreSite(ctx context.Context, arg RestoreSiteParams) (Site, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (int64, error)
@@ -692,9 +702,10 @@ type Querier interface {
 	// the service can decide whether a recovery transition is needed and whether
 	// to hand the agent a pending instruction.
 	// ---------------------------------------------------------------------------
-	// Bumps last_seen_at and returns the post-update row. Does NOT change
-	// connection_state (a recovery from degraded/disconnected is a separate,
-	// audited transition the service performs explicitly).
+	// Bumps last_seen_at, resets the consecutive-miss counter (M58 hysteresis),
+	// and returns the post-update row. Does NOT change connection_state (a
+	// recovery from degraded/disconnected is a separate, audited transition the
+	// service performs explicitly).
 	TouchSiteHeartbeat(ctx context.Context, arg TouchSiteHeartbeatParams) (Site, error)
 	TouchSiteSeen(ctx context.Context, arg TouchSiteSeenParams) (Site, error)
 	TouchUserLogin(ctx context.Context, id uuid.UUID) error

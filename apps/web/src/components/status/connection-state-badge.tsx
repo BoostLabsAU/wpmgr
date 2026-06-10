@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useMemo, useEffect, useState } from "react";
 
 import { useNow } from "@/lib/use-now";
 import { cn, relativeTime } from "@/lib/utils";
@@ -61,6 +61,78 @@ function tickFor(state: ConnectionState): number {
   return state === "connected" || state === "degraded" ? 1000 : 30000;
 }
 
+/**
+ * Calm-down debounce: suppress a connected→degraded flip until it has
+ * persisted for `DEGRADED_DEBOUNCE_MS`.
+ *
+ * Low-traffic sites often miss one heartbeat window (60s) and flip
+ * connected→degraded for a few seconds before the next heartbeat arrives
+ * and flips them back. Without this, the badge flaps noticeably in operator
+ * dashboards. The debounce is purely presentational:
+ *   - It does NOT affect the underlying `connection_state` value in the cache.
+ *   - It does NOT suppress a genuinely sustained degraded state (after
+ *     `DEGRADED_DEBOUNCE_MS` the badge shows "Degraded" correctly).
+ *   - Any state other than connected→degraded passes through immediately
+ *     (e.g., connected→disconnected, connected→revoked are always shown at
+ *     once because they are high-signal events operators must not miss).
+ *
+ * 10 s is long enough to absorb a single missed heartbeat (CP threshold is
+ * ~60–90 s) while still being short enough to show genuine degradation well
+ * before the CP promotes the site to "disconnected".
+ */
+const DEGRADED_DEBOUNCE_MS = 10_000;
+
+/**
+ * Returns the display-state to render. When the incoming `state` flips from
+ * "connected" to "degraded", we keep showing "connected" for
+ * `DEGRADED_DEBOUNCE_MS` before switching. All other transitions are instant.
+ *
+ * Implementation: we use the functional-updater form of `setDisplayed` so we
+ * can read the *current* displayed value inside the effect without adding it
+ * to the dependency array (which would loop). The timer callback is the only
+ * place that calls setDisplayed, satisfying the react-hooks ESLint rules.
+ */
+function useDebouncedState(state: ConnectionState): ConnectionState {
+  // `displayed` is the state we are currently rendering to the operator.
+  const [displayed, setDisplayed] = useState<ConnectionState>(state);
+
+  useEffect(() => {
+    // Use the functional updater to read current displayed without a dep.
+    // This schedules the update; the callback runs after render so it is NOT
+    // a synchronous setState-in-effect call.
+    const id = window.setTimeout(() => {
+      setDisplayed((prev) => {
+        // Only debounce the specific connected→degraded transition.
+        // The timer for the debounce case fires after DEGRADED_DEBOUNCE_MS;
+        // for other transitions the timeout is 0 (next microtask).
+        if (prev === "connected" && state === "degraded") {
+          // Still in the debounce window — don't flip yet. The deferred timer
+          // below handles the actual flip after the hold window.
+          return prev;
+        }
+        return state;
+      });
+    }, 0);
+
+    // For the connected→degraded transition, ALSO schedule the real flip after
+    // the hold window so the badge does eventually show "Degraded" if the state
+    // has truly persisted.
+    if (state === "degraded") {
+      const debounceId = window.setTimeout(() => {
+        setDisplayed(state);
+      }, DEGRADED_DEBOUNCE_MS);
+      return () => {
+        clearTimeout(id);
+        clearTimeout(debounceId);
+      };
+    }
+
+    return () => clearTimeout(id);
+  }, [state]);
+
+  return displayed;
+}
+
 export function ConnectionStateBadge({
   state,
   lastSeenAt,
@@ -68,12 +140,15 @@ export function ConnectionStateBadge({
   pulseOnChange = true,
   className,
 }: ConnectionStateBadgeProps) {
-  const now = useNow(tickFor(state));
-  const shape = SHAPE[state];
+  // Apply the connected→degraded calm-down debounce (see `useDebouncedState`
+  // above). All other transitions are unaffected and update immediately.
+  const displayState = useDebouncedState(state);
+  const now = useNow(tickFor(displayState));
+  const shape = SHAPE[displayState];
 
   const tail = useMemo(
-    () => computeTail(state, now, lastSeenAt, expiresAt),
-    [state, now, lastSeenAt, expiresAt],
+    () => computeTail(displayState, now, lastSeenAt, expiresAt),
+    [displayState, now, lastSeenAt, expiresAt],
   );
 
   const a11yLabel = tail.text

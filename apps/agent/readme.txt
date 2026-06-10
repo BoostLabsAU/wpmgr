@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.33.9
+Stable tag: 0.34.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -158,6 +158,10 @@ This plugin ships two minified JavaScript files. Their human-readable source and
 4. Performance settings -- page cache, Remove Unused CSS, self-hosted fonts, and image optimization controls.
 
 == Changelog ==
+
+= 0.34.0 =
+* One-click wp-admin login is more reliable and now lands past common two-factor prompts. Clicking "Login to wp-admin" while already signed in no longer errors; the login token still expires, is single-use, and is bound to the site and your role.
+* Site connection status is steadier: the connection indicator no longer briefly flips to "degraded" on healthy low-traffic sites, and a "Re-check connection" action forces an immediate refresh from the dashboard.
 
 = 0.33.9 =
 * Hardening for WordPress.org guidelines: request inputs (including server and cookie values) are sanitized; the media quarantine and database-snapshot data now write under the uploads directory (with a read fallback to the legacy location so existing installs keep working); the diagnostics info REST endpoint binds its signed token to this site and endpoint; the login-screen branding style is enqueued; and the readme now documents every external service and the public source of the bundled scripts. No change to backups, cache, or other behavior.

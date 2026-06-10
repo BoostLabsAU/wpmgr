@@ -240,6 +240,20 @@ func (d metadataDTO) toMetadata() Metadata {
 	return m
 }
 
+// DecodeMetadataBytes decodes raw agent-metadata JSON bytes into a Metadata
+// value using the same tolerant metadataDTO decoder the normal POST /agent/v1/metadata
+// path uses. Exported so the CP-side recheck endpoint (site package) can decode
+// a synchronous metadata response without importing unexported DTO types.
+// Returns an error only on a complete JSON parse failure; a partial or
+// best-effort decode is preferred over an error (mirrors the HTTP handler).
+func DecodeMetadataBytes(b []byte) (Metadata, error) {
+	var dto metadataDTO
+	if err := json.NewDecoder(bytes.NewReader(b)).Decode(&dto); err != nil {
+		return Metadata{}, err
+	}
+	return dto.toMetadata(), nil
+}
+
 func int64PtrOrZero(p *int64) int64 {
 	if p == nil {
 		return 0

@@ -428,6 +428,7 @@ type Site struct {
 	DisconnectedAt        pgtype.Timestamptz `json:"disconnected_at"`
 	DisconnectedReason    *string            `json:"disconnected_reason"`
 	ArchivedAt            pgtype.Timestamptz `json:"archived_at"`
+	MissedHeartbeats      int32              `json:"missed_heartbeats"`
 	CreatedAt             time.Time          `json:"created_at"`
 	UpdatedAt             time.Time          `json:"updated_at"`
 }

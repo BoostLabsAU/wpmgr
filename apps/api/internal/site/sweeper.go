@@ -8,13 +8,26 @@ import (
 	"github.com/riverqueue/river"
 )
 
-// ADR-039 timeout thresholds. The agent heartbeats every 60s; the sweeper uses
-// generous 3×/6× margins so a traffic-gated wp-cron site does not flap.
+// Default timeout thresholds (M58 raised defaults).
+// DegradeAfter was 180s; raised to 300s (5 × the 60s heartbeat cadence).
+// DisconnectAfter was 360s; raised to 900s (15 × 60s).
+// These are the defaults when no env override is set; SetThresholds overrides
+// them at boot from config.
 const (
-	// degradeAfter — connected→degraded when last_seen_at is older than this.
-	degradeAfter = 180 * time.Second
-	// disconnectAfter — degraded→disconnected when last_seen_at is older than this.
-	disconnectAfter = 360 * time.Second
+	// degradeAfterDefault — connected→degraded candidate when last_seen_at is
+	// older than this. The sweeper requires DegradeMissThreshold consecutive
+	// overdue evaluations before actually calling MarkDegraded (M58 hysteresis).
+	degradeAfterDefault = 300 * time.Second
+	// disconnectAfterDefault — degraded→disconnected when last_seen_at is older
+	// than this. Remains a single-evaluation hard threshold (no hysteresis).
+	disconnectAfterDefault = 900 * time.Second
+	// degradeAfter / disconnectAfter are the package-level constants kept for
+	// backward-compat with existing tests that reference them by name.
+	degradeAfter    = degradeAfterDefault
+	disconnectAfter = disconnectAfterDefault
+	// degreesMissThresholdDefault is the consecutive overdue count required to
+	// trigger the connected→degraded transition (M58 hysteresis).
+	degreesMissThresholdDefault = 3
 )
 
 // SweeperTransitioner is the subset of the ConnectionService the timeout sweeper
@@ -25,37 +38,57 @@ type SweeperTransitioner interface {
 	MarkDisconnectedTenant(ctx context.Context, tenantID, siteID uuid.UUID, reason string) error
 }
 
+// MissIncrementer atomically increments a site's consecutive-miss counter and
+// returns the new value. Satisfied by *pgRepo via IncrementMissedHeartbeats.
+type MissIncrementer interface {
+	IncrementMissedHeartbeats(ctx context.Context, tenantID, siteID uuid.UUID) (int32, error)
+}
+
 // EventPruner deletes site_events older than a cutoff (the ADR-038 ring-buffer
 // prune). Satisfied by events.Publisher.
 type EventPruner interface {
 	PruneOlderThan(ctx context.Context, cutoff time.Time) (int64, error)
 }
 
-// Sweeper performs the periodic connection-timeout sweep (ADR-039) and the
-// periodic site_events prune (ADR-038). Pure logic over the repo + service so
-// it is unit/integration-testable directly without River.
+// Sweeper performs the periodic connection-timeout sweep (ADR-039 + M58
+// hysteresis) and the periodic site_events prune (ADR-038). Pure logic over
+// the repo + service so it is unit/integration-testable directly without River.
 type Sweeper struct {
-	repo            Repo
-	svc             SweeperTransitioner
-	pruner          EventPruner
-	degradeAfter    time.Duration
-	disconnectAfter time.Duration
-	eventRetention  time.Duration
+	repo                 Repo
+	svc                  SweeperTransitioner
+	pruner               EventPruner
+	missInc              MissIncrementer
+	degradeAfter         time.Duration
+	disconnectAfter      time.Duration
+	eventRetention       time.Duration
+	degreesMissThreshold int
 }
 
 // NewSweeper builds a Sweeper. pruner may be nil (the events prune is skipped).
+// missInc may be nil (the miss counter is not incremented — hysteresis
+// degrades to the old immediate-degrade behaviour; useful in tests that do not
+// need hysteresis).
 func NewSweeper(repo Repo, svc SweeperTransitioner, pruner EventPruner) *Sweeper {
 	return &Sweeper{
-		repo:            repo,
-		svc:             svc,
-		pruner:          pruner,
-		degradeAfter:    degradeAfter,
-		disconnectAfter: disconnectAfter,
-		eventRetention:  5 * time.Minute,
+		repo:                 repo,
+		svc:                  svc,
+		pruner:               pruner,
+		degradeAfter:         degradeAfterDefault,
+		disconnectAfter:      disconnectAfterDefault,
+		eventRetention:       5 * time.Minute,
+		degreesMissThreshold: degreesMissThresholdDefault,
 	}
 }
 
-// SetThresholds overrides the timeout/retention windows (tests).
+// SetMissIncrementer wires the consecutive-miss counter incrementer (M58). Call
+// once at boot. When nil the sweeper falls back to the old immediate-degrade
+// behaviour (no hysteresis), which is acceptable only in tests.
+func (w *Sweeper) SetMissIncrementer(inc MissIncrementer) {
+	w.missInc = inc
+}
+
+// SetThresholds overrides the timeout/retention windows and the miss threshold.
+// Call once at boot from config; also used in tests.
 func (w *Sweeper) SetThresholds(degrade, disconnect, retention time.Duration) {
 	if degrade > 0 {
 		w.degradeAfter = degrade
@@ -68,13 +101,24 @@ func (w *Sweeper) SetThresholds(degrade, disconnect, retention time.Duration) {
 	}
 }
 
+// SetDegradeMissThreshold overrides the consecutive-miss count before the
+// sweeper degrades a site. Call once at boot from config. Zero or negative
+// values are ignored.
+func (w *Sweeper) SetDegradeMissThreshold(n int) {
+	if n > 0 {
+		w.degreesMissThreshold = n
+	}
+}
+
 // Sweep runs one timeout pass relative to now: it disconnects degraded sites
-// past the disconnect cutoff, then degrades connected sites past the degrade
-// cutoff. It returns (degraded, disconnected) counts. Disconnect is processed
-// BEFORE degrade so a site that crosses both thresholds in one pass walks
+// past the disconnect cutoff (hard threshold), then evaluates connected sites
+// past the degrade cutoff with the M58 consecutive-miss hysteresis (increment
+// counter; degrade only when the counter reaches the configured threshold).
+// Returns (degraded, disconnected) counts. Disconnect is processed BEFORE
+// degrade so a site that crosses both thresholds in one pass walks
 // connected→degraded→disconnected over two passes (never skipping a state).
 func (w *Sweeper) Sweep(ctx context.Context, now time.Time) (degraded, disconnected int, err error) {
-	// 1. degraded → disconnected (past 360s).
+	// 1. degraded → disconnected (hard time threshold, single evaluation).
 	disCutoff := now.Add(-w.disconnectAfter)
 	toDisconnect, err := w.repo.ListToDisconnect(ctx, disCutoff)
 	if err != nil {
@@ -87,17 +131,32 @@ func (w *Sweeper) Sweep(ctx context.Context, now time.Time) (degraded, disconnec
 		disconnected++
 	}
 
-	// 2. connected → degraded (past 180s).
+	// 2. connected → degraded (M58 hysteresis: N consecutive overdue evals).
 	degCutoff := now.Add(-w.degradeAfter)
 	toDegrade, err := w.repo.ListToDegrade(ctx, degCutoff)
 	if err != nil {
 		return degraded, disconnected, err
 	}
 	for _, ref := range toDegrade {
-		if derr := w.svc.MarkDegradedTenant(ctx, ref.TenantID, ref.ID); derr != nil {
-			return degraded, disconnected, derr
+		if w.missInc == nil {
+			// No incrementer wired — fall back to immediate degrade (tests or
+			// bootstrapping scenario without the DB column).
+			if derr := w.svc.MarkDegradedTenant(ctx, ref.TenantID, ref.ID); derr != nil {
+				return degraded, disconnected, derr
+			}
+			degraded++
+			continue
 		}
-		degraded++
+		newCount, ierr := w.missInc.IncrementMissedHeartbeats(ctx, ref.TenantID, ref.ID)
+		if ierr != nil {
+			return degraded, disconnected, ierr
+		}
+		if int(newCount) >= w.degreesMissThreshold {
+			if derr := w.svc.MarkDegradedTenant(ctx, ref.TenantID, ref.ID); derr != nil {
+				return degraded, disconnected, derr
+			}
+			degraded++
+		}
 	}
 	return degraded, disconnected, nil
 }

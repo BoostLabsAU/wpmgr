@@ -161,14 +161,37 @@ LIMIT 1;
 -- ---------------------------------------------------------------------------
 
 -- name: TouchSiteHeartbeat :one
--- Bumps last_seen_at and returns the post-update row. Does NOT change
--- connection_state (a recovery from degraded/disconnected is a separate,
--- audited transition the service performs explicitly).
+-- Bumps last_seen_at, resets the consecutive-miss counter (M58 hysteresis),
+-- and returns the post-update row. Does NOT change connection_state (a
+-- recovery from degraded/disconnected is a separate, audited transition the
+-- service performs explicitly).
 UPDATE sites
-SET last_seen_at = now(),
-    updated_at   = now()
+SET last_seen_at      = now(),
+    missed_heartbeats = 0,
+    updated_at        = now()
 WHERE id = $1 AND tenant_id = $2
 RETURNING *;
+
+-- name: IncrementSiteMissedHeartbeats :one
+-- Increments the consecutive-miss counter for a connected site (cross-tenant,
+-- app.agent GUC). The sweeper calls this on each overdue evaluation pass
+-- instead of immediately degrading. Returns the updated missed_heartbeats
+-- value so the caller can decide whether the threshold has been reached.
+UPDATE sites
+SET missed_heartbeats = missed_heartbeats + 1,
+    updated_at        = now()
+WHERE id = @id AND tenant_id = @tenant_id
+RETURNING missed_heartbeats;
+
+-- name: ResetSiteMissedHeartbeats :exec
+-- Resets the consecutive-miss counter to 0 (cross-tenant, app.agent GUC).
+-- Called by the heartbeat recovery path (RecordHeartbeat) in addition to the
+-- existing TouchSiteHeartbeat reset, so the counter is cleared regardless of
+-- which code path handles the recovery.
+UPDATE sites
+SET missed_heartbeats = 0,
+    updated_at        = now()
+WHERE id = @id AND tenant_id = @tenant_id;
 
 -- ---------------------------------------------------------------------------
 -- Timeout-sweeper selects (cross-tenant, app.agent GUC). Both scan the partial

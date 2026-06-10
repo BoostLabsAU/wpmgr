@@ -713,7 +713,19 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	siteSvc.SetConnectionService(connSvc)
 	agentH.SetLifecycleSink(site.NewAgentLifecycleAdapter(connSvc))
 	// Timeout sweeper (every 15s) + site_events prune (every minute).
+	// M58: wire env-configurable thresholds (WPMGR_CONN_DEGRADE_AFTER,
+	// WPMGR_CONN_DISCONNECT_AFTER, WPMGR_CONN_DEGRADE_MISS_THRESHOLD) and the
+	// consecutive-miss counter incrementer so the sweeper uses hysteresis.
 	siteSweeper := site.NewSweeper(siteRepo, connSvc.(site.SweeperTransitioner), siteEventsPub)
+	if missInc, ok := siteRepo.(site.MissIncrementer); ok {
+		siteSweeper.SetMissIncrementer(missInc)
+	}
+	if cfg.Conn.DegradeAfter > 0 || cfg.Conn.DisconnectAfter > 0 {
+		siteSweeper.SetThresholds(cfg.Conn.DegradeAfter, cfg.Conn.DisconnectAfter, 0)
+	}
+	if cfg.Conn.DegradeMissThreshold > 0 {
+		siteSweeper.SetDegradeMissThreshold(cfg.Conn.DegradeMissThreshold)
+	}
 	siteSweepWorker := site.NewSweepWorker(siteSweeper)
 	siteEventPruneWorker := site.NewEventPruneWorker(siteSweeper)
 	// SSE endpoint + the dedicated LISTEN listener.
@@ -965,6 +977,19 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	siteH.SetRefreshEnqueuer(newSiteRefreshAdapter(updateEnqueuer), cfg.Agent.StaleAfter)
 	// M21: enable the site-first create + revoke/archive/restore/re-enroll routes.
 	siteH.SetConnectionService(connSvc)
+	// M58: wire the re-check client when the commander satisfies AgentRechecker
+	// (i.e. the CP signing key is configured). commander is *agentcmd.Client when
+	// both the SSRF client and the signing key are available.
+	if recheckCmd, ok := commander.(site.AgentRechecker); ok {
+		siteH.SetRechecker(recheckCmd)
+	}
+	// M58 rate-limit: per-(tenant,site) in-memory limiter for the Re-check
+	// connection endpoint. Wired unconditionally (not gated on the signing key)
+	// so the limit applies even in edge-case configurations where the limiter
+	// starts before the rechecker is available. The limiter is safe to wire with
+	// a nil rechecker — the handler checks rechecker nil before the limit fires.
+	recheckLimiter := autologin.NewMemoryLimiter()
+	siteH.SetRecheckLimiter(recheckLimiter)
 	if backupSvc != nil {
 		backupSvc.SetEnqueuer(backup.NewRiverEnqueuer(riverClient))
 	}
