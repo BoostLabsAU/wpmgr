@@ -175,14 +175,21 @@ export function usePutOrgEmailConfig(): UseMutationResult<
  */
 export function useEmailConfig(
   siteId: string,
-): UseQueryResult<SiteEmailConfig, Error> {
+): UseQueryResult<SiteEmailConfig | null, Error> {
   return useQuery({
     queryKey: emailKeys.siteConfig(siteId),
     queryFn: async () => {
-      const { data, error } = await getSiteEmailConfig({
+      const { data, error, response } = await getSiteEmailConfig({
         path: { siteId },
       });
-      if (error) throw toError(error);
+      if (error) {
+        // A site with no per-site config row AND no org-wide default returns
+        // 404 (email_config_not_found). That is the "not configured yet"
+        // state, not a failure — surface it as a null config so the panels
+        // render their setup forms with empty defaults instead of an error.
+        if (response?.status === 404) return null;
+        throw toError(error);
+      }
       return data;
     },
     staleTime: 60_000,

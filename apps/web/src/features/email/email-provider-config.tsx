@@ -415,6 +415,14 @@ export function EmailProviderConfig({ siteId }: EmailProviderConfigProps) {
 
   return (
     <div className="space-y-6">
+      {/* First-run hint: no per-site row and no org default yet. */}
+      {!serverConfig ? (
+        <div className="rounded-[var(--radius)] border border-[var(--color-border)] bg-[var(--color-muted)]/40 px-4 py-3 text-sm text-[var(--color-muted-foreground)]">
+          Email is not configured for this site yet. Choose a provider below and
+          save to start routing this site&rsquo;s mail through it.
+        </div>
+      ) : null}
+
       {/* Provider selection */}
       <Card>
         <CardHeader>
