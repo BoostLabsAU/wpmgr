@@ -59,6 +59,19 @@ use WPMgr\Agent\Commands\CachePreloadQueueStatusCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueRetryFailedCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueClearCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueTestRestCommand;
+use WPMgr\Agent\Commands\ResendEmailCommand;
+use WPMgr\Agent\Commands\SendTestEmailCommand;
+use WPMgr\Agent\Commands\SyncEmailConfigCommand;
+use WPMgr\Agent\Email\EmailLogger;
+use WPMgr\Agent\Email\EmailLogReporter;
+use WPMgr\Agent\Email\Handlers\MailgunHandler;
+use WPMgr\Agent\Email\Handlers\PostmarkHandler;
+use WPMgr\Agent\Email\Handlers\SendgridHandler;
+use WPMgr\Agent\Email\Handlers\SesHandler;
+use WPMgr\Agent\Email\Handlers\SmtpHandler;
+use WPMgr\Agent\Email\MailRouter;
+use WPMgr\Agent\Email\ProviderRouter;
+use WPMgr\Agent\Email\SuppressionCache;
 use WPMgr\Agent\Optimizer\Bloat;
 use WPMgr\Agent\Optimizer\DbCleanup;
 use WPMgr\Agent\Diagnostics\SizeProbe;
@@ -192,6 +205,37 @@ final class Plugin
     private AdminBarPurge $adminBarPurge;
 
     /**
+     * Per-site outgoing-mail router. Owns the `pre_wp_mail` hook, resolves
+     * the correct provider handler, applies force-from and Return-Path, stamps
+     * the X-WPMgr-Site correlation header, and writes every send to the local
+     * email log when log_emails is enabled. Constructed BEFORE commands() so the
+     * send_test_email command can hold a reference to the ProviderRouter.
+     */
+    private MailRouter $mailRouter;
+
+    /**
+     * Provider-level send dispatcher. Instantiated with all five v1 handlers
+     * (smtp/ses/sendgrid/mailgun/postmark) and shared by MailRouter +
+     * SendTestEmailCommand.
+     */
+    private ProviderRouter $providerRouter;
+
+    /**
+     * Phase 3b — email-log CP push reporter. Pages unpushed rows above the
+     * stored cursor and POSTs them to /agent/v1/email/log every 5 min
+     * (HOOK_PUSH) and opportunistically after a send via pushEmailLog().
+     */
+    private EmailLogReporter $emailLogReporter;
+
+    /**
+     * Phase 4b — local suppression cache. Pulls deltas from the CP every
+     * 15 min (HOOK_PULL) and provides a pre-send is_suppressed() check to
+     * ProviderRouter. Keeps suppressed address hashes in a wp-option; no
+     * plaintext email addresses are stored locally.
+     */
+    private SuppressionCache $suppressionCache;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -264,6 +308,22 @@ final class Plugin
         // / nginx helper); inert until a cache_enable command flips it on.
         $this->cacheManager     = new CacheManager();
         $this->adminBarPurge    = new AdminBarPurge($this->cacheManager, $this->settings);
+
+        // Email (Phase 2) — per-site outgoing-mail pipeline. Must exist BEFORE
+        // commands() so SendTestEmailCommand can hold a ProviderRouter reference.
+        // The ProviderRouter is inert until sync_email_config pushes a provider
+        // config; MailRouter's pre_wp_mail filter returns null (leaves WP default
+        // mail path untouched) when no email config is stored.
+        $emailLogger              = new EmailLogger();
+        $this->suppressionCache   = new SuppressionCache($this->settings, $this->signer);
+        $this->providerRouter     = new ProviderRouter($this->keystore, $emailLogger, $this->suppressionCache);
+        $this->providerRouter->register(new SmtpHandler());
+        $this->providerRouter->register(new SesHandler());
+        $this->providerRouter->register(new SendgridHandler());
+        $this->providerRouter->register(new MailgunHandler());
+        $this->providerRouter->register(new PostmarkHandler());
+        $this->mailRouter        = new MailRouter($this->providerRouter, $this->settings);
+        $this->emailLogReporter  = new EmailLogReporter($this->settings, $this->signer);
 
         $this->router           = new Router($this->connector, $this->commands());
         $this->admin            = new Admin($this->settings, $this->enrollment, $this->keystore, $this->lifecycle, $this->updateChecker);
@@ -528,6 +588,24 @@ final class Plugin
             $this->updateChecker->install();
         }
 
+        // Email (Phase 2) — register the pre_wp_mail interception hook.
+        // The filter is non-destructive: when no email config is stored it
+        // returns null immediately, leaving the default WP mail path untouched.
+        $this->mailRouter->register_hooks();
+
+        // Email log retention pruner — runs daily via wp-cron.
+        add_action(EmailLogger::HOOK_PRUNE, [$this, 'pruneEmailLog']);
+
+        // Phase 3b — email-log CP push: runs every 5 min (HOOK_PUSH) AND as a
+        // heartbeat backstop (priority 40, after perf report at 35) so rows
+        // drain even if the dedicated cron event was lost. Fire-and-forget.
+        add_action(EmailLogReporter::HOOK_PUSH, [$this, 'pushEmailLog']);
+        add_action(Scheduler::HOOK_HEARTBEAT, [$this, 'pushEmailLog'], 40);
+
+        // Phase 4b — suppression-cache pull: runs every 15 min (HOOK_PULL) so
+        // the local hash store stays current without a per-send CP dependency.
+        add_action(SuppressionCache::HOOK_PULL, [$this, 'pullSuppressionCache']);
+
         // Admin-bar cache purge controls — register on EVERY request, not just
         // admin ones, so the "Purge this page" node can appear on the front-end
         // admin bar (where is_admin() is false). Every bound hook self-gates:
@@ -605,6 +683,15 @@ final class Plugin
         ) {
             wp_schedule_event($now + 60, 'hourly', ReplayCache::HOOK_PRUNE);
         }
+
+        // Daily email-log retention pruner.
+        EmailLogger::schedule_prune($now);
+
+        // Phase 3b — email-log CP push: 5-minute recurring event.
+        EmailLogReporter::schedule_push($now);
+
+        // Phase 4b — suppression-cache pull: 15-minute recurring event.
+        SuppressionCache::schedule_pull($now);
 
         // v0.9.13 — push diagnostics within ~30s of activation rather than
         // waiting out the jittered daily cron's 0..4h first-fire offset
@@ -728,6 +815,9 @@ final class Plugin
 
         if (function_exists('wp_clear_scheduled_hook')) {
             wp_clear_scheduled_hook(ReplayCache::HOOK_PRUNE);
+            wp_clear_scheduled_hook(EmailLogger::HOOK_PRUNE);
+            wp_clear_scheduled_hook(EmailLogReporter::HOOK_PUSH);
+            wp_clear_scheduled_hook(SuppressionCache::HOOK_PULL);
         }
 
         // Phase 3 — page-cache teardown. Cleanly reverse every server-side
@@ -928,6 +1018,15 @@ final class Plugin
         ) {
             wp_schedule_event($now + 60, 'hourly', ReplayCache::HOOK_PRUNE);
         }
+
+        // Email log retention pruner — re-arm when missing.
+        EmailLogger::schedule_prune($now);
+
+        // Phase 3b — email-log CP push — re-arm when missing.
+        EmailLogReporter::schedule_push($now);
+
+        // Phase 4b — suppression-cache pull — re-arm when missing.
+        SuppressionCache::schedule_pull($now);
     }
 
     /**
@@ -1085,6 +1184,17 @@ final class Plugin
             new CachePreloadQueueRetryFailedCommand($this->cacheManager),
             new CachePreloadQueueClearCommand($this->cacheManager),
             new CachePreloadQueueTestRestCommand($this->cacheManager),
+            // Email (Phase 2) — per-site outgoing-mail configuration + test.
+            // sync_email_config: receives the full provider config (including the
+            //   DECRYPTED secret) from the CP and stores it in the agent keystore.
+            // send_test_email:   sends a test message via the current provider
+            //   config with the fallback DISABLED so real provider errors surface.
+            new SyncEmailConfigCommand($this->keystore),
+            new SendTestEmailCommand($this->providerRouter),
+            // Phase 4b — re-sends a buffered email by its local agent_seq when
+            // the body was stored (body_stored=1). Returns body_not_stored when
+            // the body was not captured so the CP/UI can surface a clear reason.
+            new ResendEmailCommand($this->providerRouter),
         ];
     }
 
@@ -1167,6 +1277,47 @@ final class Plugin
             @set_time_limit(0); // phpcs:ignore Squiz.PHP.DiscouragedFunctions.Discouraged -- long-running backup/restore loop must not hit max_execution_time; @-guarded
         }
         (new SizeProbe())->compute();
+    }
+
+    /**
+     * Cron handler bound to EmailLogger::HOOK_PRUNE (daily): delete email-log
+     * rows older than the configured retention period and enforce the row cap.
+     * Reads retention_days from the current EmailConfig. A real public method
+     * (not a closure) keeps the hook table serialization-safe.
+     *
+     * @return void
+     */
+    public function pruneEmailLog(): void
+    {
+        $cfg  = \WPMgr\Agent\Email\EmailConfig::load();
+        $days = $cfg->retention_days > 0 ? $cfg->retention_days : 14;
+        (new EmailLogger())->prune($days);
+    }
+
+    /**
+     * Phase 3b — cron handler bound to EmailLogReporter::HOOK_PUSH (5-min)
+     * AND heartbeat backstop (priority 40). Pages unpushed email-log rows above
+     * the stored cursor and POSTs them to /agent/v1/email/log. Fire-and-forget.
+     * A real public method (not a closure) keeps the hook table serialization-safe.
+     *
+     * @return void
+     */
+    public function pushEmailLog(): void
+    {
+        $this->emailLogReporter->push();
+    }
+
+    /**
+     * Phase 4b — cron handler bound to SuppressionCache::HOOK_PULL (15-min).
+     * Pulls suppression-list deltas from the CP and updates the local hash store.
+     * Fire-and-forget: never throws. A real public method (not a closure) so the
+     * WP hook table never holds a Closure.
+     *
+     * @return void
+     */
+    public function pullSuppressionCache(): void
+    {
+        $this->suppressionCache->pull();
     }
 
     /**

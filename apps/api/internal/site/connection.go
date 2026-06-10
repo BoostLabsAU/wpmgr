@@ -207,6 +207,29 @@ const (
 	// rum.rollup_updated — throttled emit (at most once per 30s per site) after
 	//                      the rollup worker folds raw events into hourly buckets.
 	EventRumRollupUpdated = "rum.rollup_updated"
+
+	// Email events (m59 Phase 4 SSE). Published on the shared tenant SSE bus
+	// and filtered by site_id. The frontend useEmailEvents hook must include
+	// these strings in the event type filter to receive them.
+	//
+	// email.log_ingested      — emitted from the agent log-ingest handler after a
+	//                           batch of email log entries lands; throttled to at
+	//                           most once per LogIngestedThrottle per site.
+	//                           Payload: {"site_id": "<uuid>", "count": <int>}
+	//
+	// email.suppression_updated — emitted when a webhook writes a suppression row
+	//                             OR when an operator manually adds/deletes a
+	//                             suppression. Payload:
+	//                             {"site_id": "<uuid|null>", "email": "<masked>",
+	//                              "reason": "<hard_bounce|complaint|unsubscribe|manual>"}
+	//
+	// email.bounce            — emitted when a webhook flips a site_email_log row
+	//                           to bounced or complained. Payload:
+	//                           {"site_id": "<uuid>", "message_id": "<string>",
+	//                            "status": "<bounced|complained>"}
+	EventEmailLogIngested        = "email.log_ingested"
+	EventEmailSuppressionUpdated = "email.suppression_updated"
+	EventEmailBounce             = "email.bounce"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

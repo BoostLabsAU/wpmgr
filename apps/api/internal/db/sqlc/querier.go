@@ -149,6 +149,16 @@ type Querier interface {
 	// row (predicates still hold) or returns 0 rows (the agent already enrolled).
 	// rowsAffected==0 must be treated as not_cancellable by the service layer.
 	DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error)
+	// Bulk delete of log entries by id list. Must be tenant+site scoped (InTenantTx).
+	// The ids array is the caller-supplied list; RLS provides the second line of defence.
+	DeleteEmailLogsBulk(ctx context.Context, arg DeleteEmailLogsBulkParams) (int64, error)
+	// Retention pruner: deletes rows older than the supplied cutoff timestamp.
+	// Batched via LIMIT so a single invocation does not lock the table for too long.
+	// The worker calls this in a loop until 0 rows are deleted.
+	// Cross-tenant (InAgentTx): the agent policy allows full-table access.
+	DeleteEmailLogsOlderThan(ctx context.Context, arg DeleteEmailLogsOlderThanParams) (int64, error)
+	// Operator delete (un-suppress). Must be tenant-scoped (InTenantTx).
+	DeleteEmailSuppression(ctx context.Context, arg DeleteEmailSuppressionParams) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) (int64, error)
 	// Prunes daily rollup rows older than @since_day across ALL tenants.
 	DeleteOldRumDailyRollups(ctx context.Context, sinceDay pgtype.Date) (int64, error)
@@ -268,6 +278,29 @@ type Querier interface {
 	// site is due for cleanup (next_db_clean_at IS NULL means first-run-ever and
 	// is treated as immediately due). Runs under app.agent (cross-tenant sweep).
 	GetDueDBCleanSites(ctx context.Context, rowLimit int32) ([]GetDueDBCleanSitesRow, error)
+	// m61: resolve a config row by its webhook_route_token_hash for the public
+	// webhook dispatcher.  Runs under InAgentTx (webhook path, no tenant GUC).
+	// Returns the full row so the handler can load and decrypt the per-row signing
+	// key and verify the provider signature with the right key.
+	GetEmailConfigByRouteTokenHash(ctx context.Context, tokenHash []byte) (SiteEmailConfig, error)
+	// Fetch a single email log entry by id (operator detail view, includes body).
+	GetEmailLog(ctx context.Context, arg GetEmailLogParams) (SiteEmailLog, error)
+	// Fetch only the body_stored flag + id for a resend gate check.
+	GetEmailLogBodyStored(ctx context.Context, arg GetEmailLogBodyStoredParams) (GetEmailLogBodyStoredRow, error)
+	// Returns the id of the next-newer row for the Next button in detail navigation.
+	GetEmailLogNext(ctx context.Context, arg GetEmailLogNextParams) (uuid.UUID, error)
+	// Returns the id of the next-older row for the Prev button in detail navigation.
+	GetEmailLogPrev(ctx context.Context, arg GetEmailLogPrevParams) (uuid.UUID, error)
+	// Per-site summary: total sent/failed counts over [range_from, range_to].
+	// Repo always provides explicit bounds; use epoch-start + far-future as the
+	// open-ended defaults so no NULL handling is needed in SQL.
+	GetEmailStats(ctx context.Context, arg GetEmailStatsParams) (GetEmailStatsRow, error)
+	// Per-site daily time-series for the stats dashboard.
+	GetEmailStatsByDay(ctx context.Context, arg GetEmailStatsByDayParams) ([]GetEmailStatsByDayRow, error)
+	// Per-site provider breakdown for the stats dashboard.
+	GetEmailStatsByProvider(ctx context.Context, arg GetEmailStatsByProviderParams) ([]GetEmailStatsByProviderRow, error)
+	// Fetch a single suppression entry by id (operator detail).
+	GetEmailSuppression(ctx context.Context, arg GetEmailSuppressionParams) (EmailSuppression, error)
 	// ---------------------------------------------------------------------------
 	// P3.7 — Fleet / Portfolio DB Health aggregate (tenant-level, no site_id param)
 	// ---------------------------------------------------------------------------
@@ -278,6 +311,10 @@ type Querier interface {
 	// applied by the caller; this returns ALL scanned sites so the service can
 	// compute tenant-level aggregates and then slice the top-N list.
 	GetFleetDbHealth(ctx context.Context, arg GetFleetDbHealthParams) ([]GetFleetDbHealthRow, error)
+	// Tenant-wide summary (fleet dashboard).
+	GetFleetEmailStats(ctx context.Context, arg GetFleetEmailStatsParams) (GetFleetEmailStatsRow, error)
+	// Fleet daily time-series (tenant-wide).
+	GetFleetEmailStatsByDay(ctx context.Context, arg GetFleetEmailStatsByDayParams) ([]GetFleetEmailStatsByDayRow, error)
 	// By-id load for the per-site invitation management routes (revoke/regenerate).
 	// Tenant isolation is enforced by RLS; the handler additionally verifies
 	// site_id + scope against the path before mutating.
@@ -286,6 +323,8 @@ type Querier interface {
 	GetInvitationByTokenHash(ctx context.Context, tokenHash string) (Invitation, error)
 	GetLastAuditHash(ctx context.Context, tenantID uuid.UUID) (string, error)
 	GetMembership(ctx context.Context, arg GetMembershipParams) (Membership, error)
+	// Returns the org-wide default config row (site_id IS NULL) for a tenant.
+	GetOrgEmailConfig(ctx context.Context, tenantID uuid.UUID) (SiteEmailConfig, error)
 	// Enroll path (app.enroll GUC): resolve a presented code by its hash before the
 	// tenant is known.
 	GetPairingCodeByHash(ctx context.Context, codeHash string) (PairingCode, error)
@@ -336,6 +375,18 @@ type Querier interface {
 	// archived site is visible and the caller can return a structured 409 with
 	// site_id + connection_state instead of hitting the unique-index violation.
 	GetSiteByURLForMint(ctx context.Context, arg GetSiteByURLForMintParams) (GetSiteByURLForMintRow, error)
+	// M59 — Per-site Email / SMTP Management queries (Phase 1: config CRUD).
+	//
+	// All operator reads/writes run under pool.InTenantTx (app.tenant_id GUC).
+	// The repo NEVER returns provider_secret_encrypted to callers — only a
+	// secret_set boolean is surfaced (mirrors perf repo CDN credentials pattern).
+	// updated_at is set via now() in the query (no trigger).
+	// ---------------------------------------------------------------------------
+	// site_email_config
+	// ---------------------------------------------------------------------------
+	// Returns the per-site config row. Caller resolves org-wide inheritance in the
+	// service layer (call GetOrgEmailConfig when this returns pgx.ErrNoRows).
+	GetSiteEmailConfig(ctx context.Context, arg GetSiteEmailConfigParams) (SiteEmailConfig, error)
 	// Loads one event under the tenant scope (the LISTEN listener uses this after a
 	// NOTIFY to fetch the body it must fan out).
 	GetSiteEvent(ctx context.Context, arg GetSiteEventParams) (SiteEvent, error)
@@ -378,6 +429,8 @@ type Querier interface {
 	// Lightweight per-request lookup for the session reject-stale check.
 	GetUserPasswordChangedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error)
 	IncrEmailAttempts(ctx context.Context, id uuid.UUID) error
+	// Increment resent_count on a specific log entry. Runs under InTenantTx.
+	IncrEmailLogResentCount(ctx context.Context, arg IncrEmailLogResentCountParams) error
 	IncrementChunkRefcount(ctx context.Context, arg IncrementChunkRefcountParams) (BackupChunk, error)
 	IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (Invitation, error)
 	// Enroll path (app.enroll GUC): record a failed validation attempt.
@@ -387,6 +440,14 @@ type Querier interface {
 	// instead of immediately degrading. Returns the updated missed_heartbeats
 	// value so the caller can decide whether the threshold has been reached.
 	IncrementSiteMissedHeartbeats(ctx context.Context, arg IncrementSiteMissedHeartbeatsParams) (int32, error)
+	// ---------------------------------------------------------------------------
+	// site_email_log  (Phase 3 — ingest + viewer)
+	// ---------------------------------------------------------------------------
+	// Idempotent upsert of one agent-pushed log entry keyed on
+	// (tenant_id, site_id, agent_seq). Status/response/error/resent_count may
+	// change on re-push (e.g. an asynchronous provider callback updates the
+	// status after initial delivery). Body is only stored when body_stored=true.
+	IngestEmailLogEntry(ctx context.Context, arg IngestEmailLogEntryParams) (SiteEmailLog, error)
 	// Agent-auth path (app.agent GUC). The unique (site_id, nonce) index makes a
 	// replayed nonce a no-op via ON CONFLICT, returning 0 rows affected.
 	InsertAgentNonce(ctx context.Context, arg InsertAgentNonceParams) (int64, error)
@@ -449,9 +510,21 @@ type Querier interface {
 	// prune). The app mints the ULID event_id; NOTIFY carries only the id.
 	// ---------------------------------------------------------------------------
 	InsertSiteEvent(ctx context.Context, arg InsertSiteEventParams) (SiteEvent, error)
+	// ---------------------------------------------------------------------------
+	// email_webhook_events  (Phase 4a — dedup / audit)
+	// ---------------------------------------------------------------------------
+	// Inserts a dedup sentinel for a provider event. Returns (row, inserted).
+	// ON CONFLICT DO NOTHING: if 0 rows are affected the event is a duplicate and
+	// must be dropped. Runs under InAgentTx (webhook path).
+	// m61: stores email_hash (SHA-256) instead of plaintext email (SHOULD-FIX #2).
+	InsertWebhookEventDedup(ctx context.Context, arg InsertWebhookEventDedupParams) (EmailWebhookEvent, error)
 	InvalidateUserEmailVerificationTokens(ctx context.Context, userID uuid.UUID) error
 	// Burn all outstanding reset tokens for a user (after a successful reset/change).
 	InvalidateUserPasswordResetTokens(ctx context.Context, userID uuid.UUID) error
+	// Returns true when the given email_hash is suppressed for this tenant at either
+	// the fleet level (site_id IS NULL) or the specific site.
+	// Runs under InAgentTx (pre-send check from the delta-fetch query) or InTenantTx.
+	IsSuppressed(ctx context.Context, arg IsSuppressedParams) (bool, error)
 	LinkUserOIDC(ctx context.Context, arg LinkUserOIDCParams) (User, error)
 	ListAPIKeys(ctx context.Context, arg ListAPIKeysParams) ([]ApiKey, error)
 	// Cross-tenant enumeration for the evaluator (app.agent GUC). Only enabled
@@ -478,6 +551,17 @@ type Querier interface {
 	// Cross-tenant enumeration of enabled schedules whose next_run_at has passed,
 	// for the periodic scheduler. Runs under the app.agent GUC (scheduler policy).
 	ListDueBackupSchedules(ctx context.Context, arg ListDueBackupSchedulesParams) ([]BackupSchedule, error)
+	// Keyset-paginated list of suppression entries for a site.
+	// Pass site_id = uuid.Nil to list fleet-wide entries only (site_id IS NULL).
+	// Pass a real site_id to list that site's entries (plus fleet-wide entries).
+	// @include_fleet when true also returns fleet-wide (site_id IS NULL) rows.
+	// Ordered created_at DESC, id DESC (composite keyset; see wpmgr-keyset-cursor-composite).
+	ListEmailSuppression(ctx context.Context, arg ListEmailSuppressionParams) ([]EmailSuppression, error)
+	// Agent suppression-fetch: returns entries created after @since_id for
+	// the given tenant + site (including fleet-wide site_id IS NULL rows).
+	// Keyset cursor on (created_at, id) ASC (agent polls for new entries since last fetch).
+	// @since_ts / @since_id: last seen row; pass epoch-start + uuid-zero for the first fetch.
+	ListEmailSuppressionDeltas(ctx context.Context, arg ListEmailSuppressionDeltasParams) ([]EmailSuppression, error)
 	// ---------------------------------------------------------------------------
 	// Health-check job (runs in each enrolled site's tenant scope).
 	// ---------------------------------------------------------------------------
@@ -492,6 +576,15 @@ type Querier interface {
 	// single tenant scope. The GC job decrements chunk refcounts for each then
 	// deletes the snapshot (manifest entries cascade).
 	ListExpiredBackupSnapshots(ctx context.Context, arg ListExpiredBackupSnapshotsParams) ([]BackupSnapshot, error)
+	// Cross-site keyset-paginated list for a tenant (fleet/agency dashboard).
+	// Same composite cursor as ListSiteEmailLog. Body excluded from list.
+	// Repo passes sentinel epoch-start/@range_from and far-future/@range_to when no
+	// date filter is requested.
+	ListFleetEmailLog(ctx context.Context, arg ListFleetEmailLogParams) ([]ListFleetEmailLogRow, error)
+	// Fleet-scope list (no site filter). Returns all suppression entries for the
+	// tenant including both fleet-wide and per-site entries.
+	// Ordered created_at DESC, id DESC.
+	ListFleetEmailSuppression(ctx context.Context, arg ListFleetEmailSuppressionParams) ([]EmailSuppression, error)
 	// Dashboard list: ordered by updated_at DESC, id DESC (standing `, id` tiebreaker
 	// convention; batch inserts share updated_at so id breaks ties deterministically).
 	// Runs under InTenantTx (operator path).
@@ -540,6 +633,19 @@ type Querier interface {
 	// Self-read: returns the caller's own non-expired shares across all tenants.
 	// Must be run under a tx that sets app.user_id (site_shares_self_read policy).
 	ListSharesForUser(ctx context.Context, userID uuid.UUID) ([]SiteShare, error)
+	// Lists all per-site config rows for a tenant (dashboard overview).
+	// Excludes the org-wide default row (site_id IS NULL).
+	ListSiteEmailConfigs(ctx context.Context, arg ListSiteEmailConfigsParams) ([]SiteEmailConfig, error)
+	// Keyset-paginated list for a single site. Ordered created_at DESC, id DESC.
+	// Composite (created_at, id) cursor predicate avoids skipping co-timestamped
+	// rows (batch inserts share created_at — see wpmgr-keyset-cursor-composite).
+	// Body is intentionally excluded from the list — callers use GetEmailLog for detail.
+	// @cursor_ts and @cursor_id are the last row's created_at/id; pass far-future
+	// values (e.g. now()+100yr, max-uuid) to get the first page.
+	// Repo passes sentinel epoch-start/@range_from and far-future/@range_to when no
+	// date filter is requested; @filter_status '' skips the status filter;
+	// @search_q '' skips the text search.
+	ListSiteEmailLog(ctx context.Context, arg ListSiteEmailLogParams) ([]ListSiteEmailLogRow, error)
 	// Defaults to hiding archived sites (ADR-041). When sqlc.narg('state') is set
 	// the list is filtered to exactly that connection_state (e.g. 'archived' for
 	// the archived chip); when it is NULL every non-archived site is returned.
@@ -596,6 +702,16 @@ type Querier interface {
 	// GREATEST so a later agent push cannot wipe or regress this.
 	MarkCachePurged(ctx context.Context, arg MarkCachePurgedParams) error
 	MarkEmailFailed(ctx context.Context, arg MarkEmailFailedParams) error
+	// ---------------------------------------------------------------------------
+	// site_email_log  Phase 4a additions
+	// ---------------------------------------------------------------------------
+	// Update a log entry's status to 'bounced' or 'complained' when a webhook
+	// event arrives. Matched by message_id + tenant_id + site_id.
+	// m61 SHOULD-FIX #3: site_id added so a colliding message_id from a different
+	// site in the same tenant cannot flip another site's row.
+	// Runs under InAgentTx; tenant_id provided for defense-in-depth in addition to
+	// RLS; site_id added to narrow the update scope.
+	MarkEmailLogBounced(ctx context.Context, arg MarkEmailLogBouncedParams) error
 	MarkEmailSent(ctx context.Context, id uuid.UUID) error
 	MarkInvitationAccepted(ctx context.Context, arg MarkInvitationAcceptedParams) (Invitation, error)
 	// ---------------------------------------------------------------------------
@@ -641,6 +757,9 @@ type Querier interface {
 	// Ring-buffer prune: drop events older than the replay window (cross-tenant,
 	// app.agent GUC). Bounds table growth.
 	PruneSiteEvents(ctx context.Context, createdAt time.Time) (int64, error)
+	// Prune dedup rows older than the given cutoff (run by the GC worker).
+	// Cross-tenant / InAgentTx.
+	PruneWebhookEventDedup(ctx context.Context, cutoffTs time.Time) (int64, error)
 	// Rotate the token of a still-pending invitation: overwrite token_hash (kills
 	// the old link), reset expiry + attempts, and clear any prior soft-revoke.
 	// Only an un-accepted row is touched (RETURNING -> ErrNoRows if already
@@ -673,6 +792,11 @@ type Querier interface {
 	// Writes a new beacon_key_hash, rotating the previous one into beacon_key_hash_prev
 	// for the grace window. Operator write path (InTenantTx).
 	SetBeaconKeyHash(ctx context.Context, arg SetBeaconKeyHashParams) error
+	// m61: write/rotate webhook security columns on a config row.
+	// Use set_signing_key flag (nil-sentinel) to preserve the existing encrypted key
+	// when rotating only the token or ARNs.
+	// Runs under InTenantTx (operator PUT path).
+	SetEmailConfigWebhookFields(ctx context.Context, arg SetEmailConfigWebhookFieldsParams) (SiteEmailConfig, error)
 	// Links the pending snapshot_id to a run and advances its status to 'queued'.
 	SetScheduleRunSnapshot(ctx context.Context, arg SetScheduleRunSnapshotParams) (BackupScheduleRun, error)
 	// Advances a run to a terminal or intermediate status by its primary key.
@@ -766,6 +890,20 @@ type Querier interface {
 	//   omit these fields; the caller passes '[]' for backward compat.
 	UpsertDBScanResult(ctx context.Context, arg UpsertDBScanResultParams) (SiteDbScanResult, error)
 	// ---------------------------------------------------------------------------
+	// email_suppression  (Phase 4a — webhooks + suppression list)
+	// ---------------------------------------------------------------------------
+	// Insert-or-ignore for one email suppression entry keyed on
+	// (tenant_id, COALESCE(site_id,'00000000-0000-0000-0000-000000000000'), email_hash).
+	// The two partial unique indexes enforce the uniqueness separately for per-site
+	// and fleet-wide (site_id IS NULL) rows. ON CONFLICT DO UPDATE refreshes the
+	// mutable fields so a duplicate bounce from a different provider still records
+	// the most recent provider + event_at.
+	// Runs under InAgentTx (webhook path) or InTenantTx (operator manual-add).
+	UpsertEmailSuppression(ctx context.Context, arg UpsertEmailSuppressionParams) (EmailSuppression, error)
+	// Fleet-wide (site_id IS NULL) variant — separate query because the conflict
+	// target differs (the fleet-wide partial index has no site_id column).
+	UpsertEmailSuppressionFleet(ctx context.Context, arg UpsertEmailSuppressionFleetParams) (EmailSuppression, error)
+	// ---------------------------------------------------------------------------
 	// font_results (m55 — per-site dashboard catalog)
 	// ---------------------------------------------------------------------------
 	// Agent -> CP results push. Inserts or updates the per-(site,source_hash)
@@ -773,6 +911,8 @@ type Querier interface {
 	// Runs under app.agent (InAgentTx). tenant_id + site_id ALWAYS come from the
 	// VERIFIED agent identity, never from the body.
 	UpsertFontResult(ctx context.Context, arg UpsertFontResultParams) (FontResult, error)
+	// Upsert the org-wide default row (site_id IS NULL).
+	UpsertOrgEmailConfig(ctx context.Context, arg UpsertOrgEmailConfigParams) (SiteEmailConfig, error)
 	// Tenant-create helper: insert an owner membership for the creator; on conflict
 	// (e.g. migration replay or second create attempt) update role to 'owner'.
 	UpsertOwnerMembership(ctx context.Context, arg UpsertOwnerMembershipParams) (Membership, error)
@@ -812,6 +952,15 @@ type Querier interface {
 	// Cross-tenant upsert of a site's alert state (app.agent GUC). The probe worker
 	// writes the new transition memory after each probe.
 	UpsertSiteAlertState(ctx context.Context, arg UpsertSiteAlertStateParams) (SiteAlertState, error)
+	// Insert-or-update a per-site config row. provider_secret_encrypted uses a
+	// nil-sentinel: when @set_secret is false the existing ciphertext is preserved,
+	// so editing non-secret fields without re-entering the password keeps the stored
+	// secret intact (mirrors smtp_settings.sql UpsertSMTPSettings pattern exactly).
+	UpsertSiteEmailConfig(ctx context.Context, arg UpsertSiteEmailConfigParams) (SiteEmailConfig, error)
+	// Upsert variant that matches on (tenant_id, site_id) instead of PK — used for
+	// the standard per-site PUT where no id is known by the caller.
+	// For the org-wide default (site_id IS NULL) use UpsertOrgEmailConfig instead.
+	UpsertSiteEmailConfigByTenantSite(ctx context.Context, arg UpsertSiteEmailConfigByTenantSiteParams) (SiteEmailConfig, error)
 }
 
 var _ Querier = (*Queries)(nil)

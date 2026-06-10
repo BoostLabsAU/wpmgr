@@ -139,7 +139,7 @@ export function useRegister(): UseMutationResult<RegisterResult, Error, Register
       }
 
       // First-account path: backend returns the Me object + sets a session cookie.
-      return { me: data, pending: false };
+      return { me: data as unknown as Me, pending: false };
     },
     onSuccess: (result) => {
       if (result.me) {

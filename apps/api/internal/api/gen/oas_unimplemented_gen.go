@@ -34,6 +34,31 @@ func (UnimplementedHandler) ActivateOrg(ctx context.Context, params ActivateOrgP
 	return r, ht.ErrNotImplemented
 }
 
+// AddFleetEmailSuppression implements addFleetEmailSuppression operation.
+//
+// Adds a suppression entry with `site_id=null`, applying to all sites
+// in the tenant. Useful for globally suppressing an address that generates
+// bounces across multiple sites. `reason` must be `manual` or `unsubscribe`.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/email/suppression
+func (UnimplementedHandler) AddFleetEmailSuppression(ctx context.Context, req *AddSuppressionRequest) (r AddFleetEmailSuppressionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// AddSiteEmailSuppression implements addSiteEmailSuppression operation.
+//
+// Manually suppresses an email address for this site. `reason` must be
+// `manual` or `unsubscribe` — hard_bounce and complaint entries are
+// created automatically via provider webhooks and cannot be added manually
+// (to prevent accidental data loss for transient bounces).
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/suppression
+func (UnimplementedHandler) AddSiteEmailSuppression(ctx context.Context, req *AddSuppressionRequest, params AddSiteEmailSuppressionParams) (r AddSiteEmailSuppressionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // AgentAutologinConsume implements agentAutologinConsume operation.
 //
 // Called by the WordPress agent after it has verified the operator's
@@ -264,6 +289,18 @@ func (UnimplementedHandler) BulkConfigCache(ctx context.Context, req *BulkConfig
 	return r, ht.ErrNotImplemented
 }
 
+// BulkDeleteEmailLog implements bulkDeleteEmailLog operation.
+//
+// Deletes a list of email log entries by id. RLS ensures only entries
+// belonging to the operator's tenant are deleted regardless of the id list.
+// Maximum 500 ids per request.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/bulk-delete
+func (UnimplementedHandler) BulkDeleteEmailLog(ctx context.Context, req *BulkDeleteLogsRequest, params BulkDeleteEmailLogParams) (r BulkDeleteEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // BulkPurgeCache implements bulkPurgeCache operation.
 //
 // Purges the whole cache for each site in `site_ids`. Each site id is
@@ -274,6 +311,18 @@ func (UnimplementedHandler) BulkConfigCache(ctx context.Context, req *BulkConfig
 //
 // POST /api/v1/cache/bulk-purge
 func (UnimplementedHandler) BulkPurgeCache(ctx context.Context, req *BulkPurgeRequest) (r *BulkResultList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// BulkResendEmailLog implements bulkResendEmailLog operation.
+//
+// Dispatches `resend_email` for multiple log entries. Each entry is
+// processed independently. Entries without body_stored are skipped with
+// `ok=false` in the per-entry result array (no overall 4xx).
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/bulk-resend
+func (UnimplementedHandler) BulkResendEmailLog(ctx context.Context, req *BulkResendRequest, params BulkResendEmailLogParams) (r BulkResendEmailLogRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -543,6 +592,17 @@ func (UnimplementedHandler) DeleteDbSnapshot(ctx context.Context, params DeleteD
 	return r, ht.ErrNotImplemented
 }
 
+// DeleteFleetEmailSuppression implements deleteFleetEmailSuppression operation.
+//
+// Removes a fleet-wide suppression entry (site_id IS NULL). If the entry
+// belongs to a specific site, use the per-site delete route instead.
+// Requires `site.email.manage` permission.
+//
+// DELETE /api/v1/email/suppression/{suppressionId}
+func (UnimplementedHandler) DeleteFleetEmailSuppression(ctx context.Context, params DeleteFleetEmailSuppressionParams) (r DeleteFleetEmailSuppressionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DeleteIsolatedMedia implements deleteIsolatedMedia operation.
 //
 // Permanently removes quarantined attachment files from disk and deletes
@@ -594,6 +654,18 @@ func (UnimplementedHandler) DeleteSiteDestination(ctx context.Context, params De
 	return r, ht.ErrNotImplemented
 }
 
+// DeleteSiteEmailSuppression implements deleteSiteEmailSuppression operation.
+//
+// Removes a suppression entry by id. The operator is responsible for
+// ensuring the removal is appropriate (e.g. the email address has
+// unsubscribed from a suppression request rather than a hard bounce).
+// Requires `site.email.manage` permission.
+//
+// DELETE /api/v1/sites/{siteId}/email/suppression/{suppressionId}
+func (UnimplementedHandler) DeleteSiteEmailSuppression(ctx context.Context, params DeleteSiteEmailSuppressionParams) (r DeleteSiteEmailSuppressionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DeleteSiteShare implements deleteSiteShare operation.
 //
 // Revoke a collaborator's site access (admin+; org-scope only).
@@ -635,6 +707,29 @@ func (UnimplementedHandler) EnableCache(ctx context.Context, params EnableCacheP
 //
 // POST /enroll
 func (UnimplementedHandler) Enroll(ctx context.Context, req *EnrollRequest) (r EnrollRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ExportSiteEmailLog implements exportSiteEmailLog operation.
+//
+// Streams up to 10,000 filtered log entries as CSV (default) or JSON.
+// Body content is excluded from the export regardless of `body_stored`
+// (privacy-by-default). Pass `format=json` for JSON output.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log/export
+func (UnimplementedHandler) ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (r ExportSiteEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ForgotPassword implements forgotPassword operation.
+//
+// Always returns 200 {ok: true} whether or not the email maps to an
+// account (enumeration-safe). A reset-link email is sent when the account
+// exists and is active.
+//
+// POST /auth/password/forgot
+func (UnimplementedHandler) ForgotPassword(ctx context.Context, req *ForgotPasswordReq) (r *ForgotPasswordOK, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -742,6 +837,17 @@ func (UnimplementedHandler) GetDbScanResult(ctx context.Context, params GetDbSca
 	return r, ht.ErrNotImplemented
 }
 
+// GetFleetEmailStats implements getFleetEmailStats operation.
+//
+// Returns tenant-wide summary counts and a per-day time-series for the
+// given date range. Org-scope only.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/stats
+func (UnimplementedHandler) GetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (r GetFleetEmailStatsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetHealthz implements getHealthz operation.
 //
 // Liveness probe.
@@ -766,6 +872,18 @@ func (UnimplementedHandler) GetMe(ctx context.Context) (r GetMeRes, _ error) {
 //
 // GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 func (UnimplementedHandler) GetMediaJob(ctx context.Context, params GetMediaJobParams) (r *MediaJobDetail, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetOrgEmailConfig implements getOrgEmailConfig operation.
+//
+// Returns the org-wide default email configuration. Sites with no per-site
+// config inherit this row. Includes `secret_set: bool` — the actual
+// provider secret is never returned.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// GET /api/v1/email/org-config
+func (UnimplementedHandler) GetOrgEmailConfig(ctx context.Context) (r GetOrgEmailConfigRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -870,6 +988,43 @@ func (UnimplementedHandler) GetSiteDestination(ctx context.Context, params GetSi
 //
 // GET /api/v1/sites/{siteId}/diagnostics
 func (UnimplementedHandler) GetSiteDiagnostics(ctx context.Context, params GetSiteDiagnosticsParams) (r GetSiteDiagnosticsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetSiteEmailConfig implements getSiteEmailConfig operation.
+//
+// Returns the email config for a site. If no per-site row exists the
+// org-wide default is returned (with `site_id` set to the queried site so
+// the frontend knows the row was inherited). Includes `secret_set: bool`;
+// the actual provider secret is never returned.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// GET /api/v1/sites/{siteId}/email/config
+func (UnimplementedHandler) GetSiteEmailConfig(ctx context.Context, params GetSiteEmailConfigParams) (r GetSiteEmailConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetSiteEmailLogEntry implements getSiteEmailLogEntry operation.
+//
+// Returns a single email log entry. When `body_stored` is true and a
+// body was captured at send time, it is included in this response.
+// Also returns `prev_id` and `next_id` for in-detail navigation.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log/{logId}
+func (UnimplementedHandler) GetSiteEmailLogEntry(ctx context.Context, params GetSiteEmailLogEntryParams) (r GetSiteEmailLogEntryRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetSiteEmailStats implements getSiteEmailStats operation.
+//
+// Returns summary counts (total, sent, failed, provider count),
+// a per-day time-series, and a per-provider breakdown for the given
+// date range. Date range defaults to the last 30 days when omitted.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/stats
+func (UnimplementedHandler) GetSiteEmailStats(ctx context.Context, params GetSiteEmailStatsParams) (r GetSiteEmailStatsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1011,6 +1166,47 @@ func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsP
 //
 // GET /api/v1/sites/{siteId}/perf/db/snapshots
 func (UnimplementedHandler) ListDbSnapshots(ctx context.Context, params ListDbSnapshotsParams) (r *DbSnapshotList, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListEmailProviders implements listEmailProviders operation.
+//
+// Returns the static v1 provider catalog: Generic SMTP, Amazon SES,
+// SendGrid, Mailgun, and Postmark. Each entry includes the provider slug,
+// display label, and the field schema (non-secret and secret fields, types,
+// required flags, options).
+// Org-level route — requires RequireOrgScope (org members only, not
+// site-collaborators). Requires the `site.email.manage` permission.
+//
+// GET /api/v1/email/providers
+func (UnimplementedHandler) ListEmailProviders(ctx context.Context) (r ListEmailProvidersRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListFleetEmailLog implements listFleetEmailLog operation.
+//
+// Returns a keyset-paginated cross-site email log for the tenant.
+// Org-scope only (site-collaborators are blocked).
+// Body is never included in the list.
+// **Collaborator note**: collaborators who can read specific sites see
+// those sites' data through the per-site `/sites/{siteId}/email/log`
+// route. This fleet-level route is for full org members only.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/log
+func (UnimplementedHandler) ListFleetEmailLog(ctx context.Context, params ListFleetEmailLogParams) (r ListFleetEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListFleetEmailSuppression implements listFleetEmailSuppression operation.
+//
+// Returns all suppression entries across the tenant fleet. Org-scope only.
+// Entries with `site_id=null` are fleet-wide suppressions that apply to
+// every site in the tenant.
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/email/suppression
+func (UnimplementedHandler) ListFleetEmailSuppression(ctx context.Context, params ListFleetEmailSuppressionParams) (r ListFleetEmailSuppressionRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1166,6 +1362,35 @@ func (UnimplementedHandler) ListSiteActivity(ctx context.Context, params ListSit
 //
 // GET /api/v1/sites/{siteId}/destinations
 func (UnimplementedHandler) ListSiteDestinations(ctx context.Context, params ListSiteDestinationsParams) (r ListSiteDestinationsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListSiteEmailLog implements listSiteEmailLog operation.
+//
+// Returns a keyset-paginated list of outgoing email log entries for a
+// site, ordered by `created_at DESC, id DESC`. The composite cursor
+// predicate `(created_at, id)` ensures no rows are skipped when multiple
+// sends share the same timestamp (batch sends).
+// **Body privacy**: `body` is never returned in the list response,
+// regardless of `body_stored`. Use `GET /email/log/{logId}` to retrieve
+// the full detail including body.
+// Requires `site.email.manage` permission and site access.
+//
+// GET /api/v1/sites/{siteId}/email/log
+func (UnimplementedHandler) ListSiteEmailLog(ctx context.Context, params ListSiteEmailLogParams) (r ListSiteEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListSiteEmailSuppression implements listSiteEmailSuppression operation.
+//
+// Returns a keyset-paginated list of suppression entries for this site
+// (including fleet-wide entries). Each entry was created either by a
+// provider webhook (hard_bounce / complaint) or manually added by an
+// operator (manual / unsubscribe).
+// Requires `site.email.manage` permission.
+//
+// GET /api/v1/sites/{siteId}/email/suppression
+func (UnimplementedHandler) ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (r ListSiteEmailSuppressionRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1381,6 +1606,32 @@ func (UnimplementedHandler) PutBackupSettingsNotifications(ctx context.Context, 
 	return r, ht.ErrNotImplemented
 }
 
+// PutOrgEmailConfig implements putOrgEmailConfig operation.
+//
+// Creates or updates the org-wide default email configuration. This row is
+// inherited by any site that has no per-site override. Provide `secret` in
+// the body to store a new provider secret (age-encrypted at rest); omit
+// `secret` to preserve the existing stored credential.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// PUT /api/v1/email/org-config
+func (UnimplementedHandler) PutOrgEmailConfig(ctx context.Context, req *PutEmailConfigRequest) (r PutOrgEmailConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutOrgEmailWebhookConfig implements putOrgEmailWebhookConfig operation.
+//
+// Updates the inbound webhook route token and/or signing key for the
+// org-wide email config. When rotate_token is true a new route token is
+// generated (the old URL is immediately invalid) and the plain token is
+// returned once in webhook_route_token.
+// Org-level route. Requires `site.email.manage` permission (operator+).
+//
+// PUT /api/v1/email/org-config/webhook-config
+func (UnimplementedHandler) PutOrgEmailWebhookConfig(ctx context.Context, req *PutEmailWebhookConfigRequest) (r PutOrgEmailWebhookConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // PutPerfConfig implements putPerfConfig operation.
 //
 // Stores the new performance config and pushes it to the agent. If the
@@ -1392,6 +1643,31 @@ func (UnimplementedHandler) PutBackupSettingsNotifications(ctx context.Context, 
 //
 // PUT /api/v1/sites/{siteId}/perf/config
 func (UnimplementedHandler) PutPerfConfig(ctx context.Context, req *PerfConfig, params PutPerfConfigParams) (r PutPerfConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutSiteEmailConfig implements putSiteEmailConfig operation.
+//
+// Creates or updates the per-site email configuration. Provide `secret` in
+// the body to store a new provider secret (age-encrypted at rest); omit
+// `secret` to preserve the existing stored credential (nil-sentinel pattern).
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// PUT /api/v1/sites/{siteId}/email/config
+func (UnimplementedHandler) PutSiteEmailConfig(ctx context.Context, req *PutEmailConfigRequest, params PutSiteEmailConfigParams) (r PutSiteEmailConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PutSiteEmailWebhookConfig implements putSiteEmailWebhookConfig operation.
+//
+// Updates the inbound webhook route token and/or signing key for the
+// per-site email config. When rotate_token is true a new route token is
+// generated (the old URL is immediately invalid) and the plain token is
+// returned once in webhook_route_token.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// PUT /api/v1/sites/{siteId}/email/webhook-config
+func (UnimplementedHandler) PutSiteEmailWebhookConfig(ctx context.Context, req *PutEmailWebhookConfigRequest, params PutSiteEmailWebhookConfigParams) (r PutSiteEmailWebhookConfigRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1459,12 +1735,55 @@ func (UnimplementedHandler) RefreshSiteUpdates(ctx context.Context, params Refre
 
 // Register implements register operation.
 //
-// On first run (zero users) this creates the first user, a tenant, and an
-// owner membership. Once any user exists, open registration is closed and
-// this returns 403; new users are added via the authenticated invite flow.
+// On first run (zero users in the database) this bootstraps the instance:
+// creates the first user verified and active, creates their tenant, and
+// establishes an immediate session (201 + Me). After the first user exists,
+// registration is open self-serve: the account is created in a pending
+// state, a verification email is sent, and the response is 200
+// {ok: true, pending: true}. The user must verify their email via
+// POST /auth/verify-email before they can log in.
 //
 // POST /auth/register
 func (UnimplementedHandler) Register(ctx context.Context, req *RegisterRequest) (r RegisterRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ResendEmailLog implements resendEmailLog operation.
+//
+// Dispatches the `resend_email` agent command for the given log entry.
+// Only available when `body_stored=true` on the log entry — returns 409
+// otherwise. The resend is best-effort: if the agent is offline or returns
+// an error the response contains `ok=false` with the agent's detail message
+// but HTTP 200 is returned (matching the test-email pattern).
+// The `resent_count` counter is incremented before the agent dispatch so
+// operators can see how many resend attempts were made even if the agent
+// was unavailable.
+// Requires `site.email.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/email/log/{logId}/resend
+func (UnimplementedHandler) ResendEmailLog(ctx context.Context, params ResendEmailLogParams) (r ResendEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ResendVerification implements resendVerification operation.
+//
+// Always returns 200 {ok: true} whether or not the email maps to a
+// pending account (enumeration-safe). A new verification email is sent
+// when the account exists and is still pending verification.
+//
+// POST /auth/verification/resend
+func (UnimplementedHandler) ResendVerification(ctx context.Context, req *ResendVerificationReq) (r *ResendVerificationOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ResetPassword implements resetPassword operation.
+//
+// Validates the one-time reset token and replaces the user's password.
+// Does not establish a session; the user must log in separately. Returns
+// 410 when the token is expired, already used, or not found.
+//
+// POST /auth/password/reset
+func (UnimplementedHandler) ResetPassword(ctx context.Context, req *ResetPasswordReq) (r ResetPasswordRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1576,6 +1895,22 @@ func (UnimplementedHandler) ScanUnusedMedia(ctx context.Context, params ScanUnus
 	return r, ht.ErrNotImplemented
 }
 
+// SendTestEmail implements sendTestEmail operation.
+//
+// Dispatches the signed `send_test_email` command to the site's agent.
+// The agent uses its current email config (previously synced via
+// sync_email_config) to send the test message.
+// **Phase 1 note**: the agent does not yet implement this command (Phase 2
+// will add the PHP handler). Until then the response will be
+// `{ok: false, detail: "command not found"}`. This is expected and not an
+// error state — wire the UI and handle the graceful failure.
+// Requires `site.email.manage` permission (operator+) and site access.
+//
+// POST /api/v1/sites/{siteId}/email/test
+func (UnimplementedHandler) SendTestEmail(ctx context.Context, req *EmailTestRequest, params SendTestEmailParams) (r SendTestEmailRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // SetSiteTags implements setSiteTags operation.
 //
 // Replace the tag set on a site.
@@ -1682,6 +2017,18 @@ func (UnimplementedHandler) UpdateSiteDestination(ctx context.Context, req *Site
 //
 // GET /api/v1/audit/verify
 func (UnimplementedHandler) VerifyAudit(ctx context.Context) (r VerifyAuditRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// VerifyEmail implements verifyEmail operation.
+//
+// Consumes the one-time verification token sent during self-serve
+// registration, activates the account, and establishes a session so the
+// user lands logged in. Returns 410 when the token is expired or already
+// consumed.
+//
+// POST /auth/verify-email
+func (UnimplementedHandler) VerifyEmail(ctx context.Context, req *VerifyEmailReq) (r VerifyEmailRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

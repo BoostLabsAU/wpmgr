@@ -39,6 +39,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/dbclean"
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/email"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
 	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
@@ -603,6 +604,27 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	sendEmailWorker := mailer.NewSendEmailWorker(mailerSvc)
 	smtpSettingsSvc := settings.NewService(settings.NewRepo(pool), siteDestAgeID, mailerSvc, logger)
 	smtpSettingsH := settings.NewHandler(smtpSettingsSvc, auditRec)
+
+	// m59 — per-site email management. Shares the same age identity as the
+	// instance SMTP settings (siteDestAgeID). The agent command client is wired
+	// post-River-start when the commander supports the email command verbs.
+	// The SSE publisher (siteEventsPub) is wired below after it is constructed
+	// (line ~711) via SetPublisher — same deferred-wiring pattern as SetAgentClient.
+	emailRepo := email.NewRepo(pool)
+	emailSvc := email.NewService(emailRepo, siteDestAgeID, logger)
+	emailH := email.NewHandler(emailSvc, auditRec)
+	// m61: set the public base URL on the email handler so GET config responses
+	// can include the webhook_url field for the UI.
+	emailPublicBase := os.Getenv("WPMGR_PUBLIC_BASE_URL")
+	if emailPublicBase != "" {
+		emailH.SetPublicBase(emailPublicBase)
+	}
+	// Phase 3: agent log ingest handler + retention GC worker.
+	emailAgentH := email.NewAgentHandler(emailSvc)
+	emailLogGCWorker := email.NewEmailLogGCWorker(emailSvc, logger)
+	// m61: webhook handler — now safe to mount (cross-tenant forgery fixed).
+	// Uses the same svc and publicBase; no instance-wide signing keys.
+	emailWebhookH := email.NewWebhookHandler(emailSvc, emailPublicBase, logger)
 	if backupSvc != nil {
 		registry := blobstore.NewRegistry(nil, siteDestSvc) // defaultStore wired below
 		// Bind the legacy CP-global store as the registry's default. Built
@@ -699,6 +721,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// transitions. The Listener goroutine is started below (after the pool is up).
 	siteEventsHub := siteevents.NewHub()
 	siteEventsPub := siteevents.NewPublisher(pool, clock)
+	// m59 Phase 4 SSE: wire the email publisher now that siteEventsPub is
+	// available. Mirrors the SetAgentClient deferred-wiring pattern used for
+	// the agent command client below.
+	emailSvc.SetPublisher(siteEventsPub)
+	emailH.SetPublisher(siteEventsPub)
+	emailAgentH.SetPublisher(siteEventsPub)
 	// Revoke-token minter (Phase 6 finding B): reuse the agentcmd Ed25519 signer
 	// to sign the "revoke" instruction. Keep it a true nil interface when the CP
 	// has no signing key, so connService falls back to an unsigned instruction
@@ -960,6 +988,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// M56 — RUM GC + rollup workers (always wired).
 		rumGCWorker:     rumGCWorker,
 		rumRollupWorker: rumRollupWorker,
+		// m59 Phase 3 — email log retention GC (always wired).
+		emailLogGCWorker: emailLogGCWorker,
 	})
 	if err != nil {
 		return err
@@ -1018,6 +1048,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger)
 	mediaSvc.SetWaker(mediaWaker)
 	go mediaWaker.Run(ctx)
+
+	// m59 — wire the email agent command client now that River has started and
+	// the commander is available. The agentcmd.Client satisfies email.AgentEmailClient
+	// via the SyncEmailConfig and SendTestEmail methods added in email_contract.go.
+	if emailCmd, ok := commander.(email.AgentEmailClient); ok {
+		emailSvc.SetAgentClient(emailCmd, newPerfSiteAdapter(siteSvc))
+		logger.Info("email agent client wired")
+	} else {
+		logger.Warn("email agent client not wired: CP->agent commander unavailable (signing key empty?)")
+	}
 
 	// M38 — wire the db-clean schedule worker's enqueuer + cpBaseURL now that
 	// River has started. The schedule worker finds due sites and enqueues
@@ -1403,6 +1443,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		PerfH:             perfH,
 		PerfAgentH:        perfAgentH,
 		FontResultsAgentH: fontResultsAgentH,
+		// m59 — per-site email management + Phase 3 log ingest.
+		EmailH:           emailH,
+		EmailAgentH:      emailAgentH,
+		// m61 — webhook handler is now mounted (security hardened).
+		EmailWebhookH: emailWebhookH,
 		// m33 — superadmin instance-management area.
 		AdminH: adminH,
 		// M56 — RUM ingest endpoint (public, no auth).
@@ -1734,6 +1779,8 @@ type riverDeps struct {
 	// M56 — RUM retention-GC + rollup workers (always wired).
 	rumGCWorker     *rum.RumGCWorker
 	rumRollupWorker *rum.RumRollupWorker
+	// m59 Phase 3 — email log retention GC (always wired).
+	emailLogGCWorker *email.EmailLogGCWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2020,6 +2067,18 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 	// rollup tables. Jobs are enqueued by the ingest handler (one per site per hour).
 	if d.rumRollupWorker != nil {
 		river.AddWorker(workers, d.rumRollupWorker)
+	}
+
+	// m59 Phase 3 — email log retention GC: sweeps site_email_log rows older
+	// than the per-site retention_days (default 14) once per hour.
+	// RunOnStart: false — avoids a GC sweep on every deploy/restart.
+	if d.emailLogGCWorker != nil {
+		river.AddWorker(workers, d.emailLogGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(1*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return email.EmailLogGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

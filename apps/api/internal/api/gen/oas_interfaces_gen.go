@@ -9,6 +9,14 @@ type ActivateOrgRes interface {
 	activateOrgRes()
 }
 
+type AddFleetEmailSuppressionRes interface {
+	addFleetEmailSuppressionRes()
+}
+
+type AddSiteEmailSuppressionRes interface {
+	addSiteEmailSuppressionRes()
+}
+
 type AgentAutologinConsumeRes interface {
 	agentAutologinConsumeRes()
 }
@@ -73,6 +81,14 @@ type BulkConfigCacheRes interface {
 	bulkConfigCacheRes()
 }
 
+type BulkDeleteEmailLogRes interface {
+	bulkDeleteEmailLogRes()
+}
+
+type BulkResendEmailLogRes interface {
+	bulkResendEmailLogRes()
+}
+
 type CancelBackupRes interface {
 	cancelBackupRes()
 }
@@ -129,12 +145,20 @@ type DeleteBackupRes interface {
 	deleteBackupRes()
 }
 
+type DeleteFleetEmailSuppressionRes interface {
+	deleteFleetEmailSuppressionRes()
+}
+
 type DeleteMemberRes interface {
 	deleteMemberRes()
 }
 
 type DeleteSiteDestinationRes interface {
 	deleteSiteDestinationRes()
+}
+
+type DeleteSiteEmailSuppressionRes interface {
+	deleteSiteEmailSuppressionRes()
 }
 
 type DeleteSiteRes interface {
@@ -147,6 +171,10 @@ type DeleteSiteShareRes interface {
 
 type EnrollRes interface {
 	enrollRes()
+}
+
+type ExportSiteEmailLogRes interface {
+	exportSiteEmailLogRes()
 }
 
 type GetBackupEnvironmentRes interface {
@@ -173,8 +201,16 @@ type GetBackupSqlInspectionRes interface {
 	getBackupSqlInspectionRes()
 }
 
+type GetFleetEmailStatsRes interface {
+	getFleetEmailStatsRes()
+}
+
 type GetMeRes interface {
 	getMeRes()
+}
+
+type GetOrgEmailConfigRes interface {
+	getOrgEmailConfigRes()
 }
 
 type GetReadyzRes interface {
@@ -199,6 +235,18 @@ type GetSiteDestinationRes interface {
 
 type GetSiteDiagnosticsRes interface {
 	getSiteDiagnosticsRes()
+}
+
+type GetSiteEmailConfigRes interface {
+	getSiteEmailConfigRes()
+}
+
+type GetSiteEmailLogEntryRes interface {
+	getSiteEmailLogEntryRes()
+}
+
+type GetSiteEmailStatsRes interface {
+	getSiteEmailStatsRes()
 }
 
 type GetSiteErrorConfigRes interface {
@@ -233,6 +281,18 @@ type ListAuditRes interface {
 	listAuditRes()
 }
 
+type ListEmailProvidersRes interface {
+	listEmailProvidersRes()
+}
+
+type ListFleetEmailLogRes interface {
+	listFleetEmailLogRes()
+}
+
+type ListFleetEmailSuppressionRes interface {
+	listFleetEmailSuppressionRes()
+}
+
 type ListMembersRes interface {
 	listMembersRes()
 }
@@ -255,6 +315,14 @@ type ListSharedWithMeRes interface {
 
 type ListSiteDestinationsRes interface {
 	listSiteDestinationsRes()
+}
+
+type ListSiteEmailLogRes interface {
+	listSiteEmailLogRes()
+}
+
+type ListSiteEmailSuppressionRes interface {
+	listSiteEmailSuppressionRes()
 }
 
 type ListSiteSharesRes interface {
@@ -309,8 +377,24 @@ type PutBackupSettingsNotificationsRes interface {
 	putBackupSettingsNotificationsRes()
 }
 
+type PutOrgEmailConfigRes interface {
+	putOrgEmailConfigRes()
+}
+
+type PutOrgEmailWebhookConfigRes interface {
+	putOrgEmailWebhookConfigRes()
+}
+
 type PutPerfConfigRes interface {
 	putPerfConfigRes()
+}
+
+type PutSiteEmailConfigRes interface {
+	putSiteEmailConfigRes()
+}
+
+type PutSiteEmailWebhookConfigRes interface {
+	putSiteEmailWebhookConfigRes()
 }
 
 type PutSiteLoginBrandRes interface {
@@ -333,6 +417,14 @@ type RegisterRes interface {
 	registerRes()
 }
 
+type ResendEmailLogRes interface {
+	resendEmailLogRes()
+}
+
+type ResetPasswordRes interface {
+	resetPasswordRes()
+}
+
 type RestoreSiteRes interface {
 	restoreSiteRes()
 }
@@ -343,6 +435,10 @@ type RevokeApiKeyRes interface {
 
 type RevokeSiteRes interface {
 	revokeSiteRes()
+}
+
+type SendTestEmailRes interface {
+	sendTestEmailRes()
 }
 
 type SetSiteTagsRes interface {
@@ -371,4 +467,8 @@ type UpdateSiteDestinationRes interface {
 
 type VerifyAuditRes interface {
 	verifyAuditRes()
+}
+
+type VerifyEmailRes interface {
+	verifyEmailRes()
 }

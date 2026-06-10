@@ -1945,3 +1945,207 @@ CREATE POLICY rum_rollup_daily_rum_ingest ON rum_rollup_daily
         AND tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
         AND site_id   = nullif(current_setting('app.site_id',   true), '')::uuid
     );
+
+-- ---------------------------------------------------------------------------
+-- Per-site Email / SMTP Management  (m59)
+-- ---------------------------------------------------------------------------
+-- Three tables for the per-site outgoing email feature.
+-- RLS mirrors m36 exactly: ENABLE + FORCE + tenant_isolation + agent policies.
+-- updated_at is set by repo code (no trigger — project convention).
+
+-- site_email_config — one row per site (or per tenant with site_id NULL for the
+-- org-wide default). Surrogate PK + partial unique indexes enforce the constraint
+-- that each tenant has at most one org-wide default and at most one per-site row.
+CREATE TABLE IF NOT EXISTS site_email_config (
+    id                        uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id                 uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id                   uuid        REFERENCES sites (id) ON DELETE CASCADE,
+    provider                  text        NOT NULL DEFAULT 'smtp',
+    from_address              text        NOT NULL DEFAULT '',
+    from_name                 text        NOT NULL DEFAULT '',
+    force_from_email          boolean     NOT NULL DEFAULT false,
+    force_from_name           boolean     NOT NULL DEFAULT false,
+    return_path               boolean     NOT NULL DEFAULT false,
+    config                    jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    provider_secret_encrypted bytea,
+    oauth_refresh_encrypted   bytea,
+    oauth_access_encrypted    bytea,
+    oauth_expires_at          timestamptz,
+    mappings                  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    default_connection        text,
+    fallback_connection       text,
+    log_emails                boolean     NOT NULL DEFAULT true,
+    store_body                boolean     NOT NULL DEFAULT false,
+    retention_days            integer     NOT NULL DEFAULT 14,
+    -- m61: per-row webhook security fields.
+    -- webhook_route_token_hash is SHA-256(random 32-byte token); the token is
+    -- embedded in the webhook URL and never stored at rest.
+    webhook_route_token_hash  bytea,
+    -- webhook_signing_key_enc is the age-encrypted per-provider signing key
+    -- (SendGrid ECDSA pubkey / Mailgun HMAC key / Postmark secret).
+    webhook_signing_key_enc   bytea,
+    -- ses_topic_arns is the allowlist of SNS TopicArns for SES users.
+    ses_topic_arns            text[],
+    created_at                timestamptz NOT NULL DEFAULT now(),
+    updated_at                timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_email_config_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_email_config_per_site_idx
+    ON site_email_config (tenant_id, site_id)
+    WHERE site_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_email_config_org_default_idx
+    ON site_email_config (tenant_id)
+    WHERE site_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS site_email_config_tenant_idx
+    ON site_email_config (tenant_id);
+
+-- m61: unique index for constant-time route-token lookup.
+CREATE UNIQUE INDEX IF NOT EXISTS site_email_config_route_token_hash_idx
+    ON site_email_config (webhook_route_token_hash)
+    WHERE webhook_route_token_hash IS NOT NULL;
+
+ALTER TABLE site_email_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_email_config FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_email_config_tenant_isolation ON site_email_config
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_email_config_agent ON site_email_config
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_email_log — per-send audit trail; agent pushes rows, CP stores them.
+-- Queried in Phase 3 (ingest + viewer). Created now so RLS + indexes exist.
+CREATE TABLE IF NOT EXISTS site_email_log (
+    id            uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id     uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id       uuid        NOT NULL REFERENCES sites   (id) ON DELETE CASCADE,
+    agent_seq     bigint,
+    message_id    text,
+    to_addresses  text[]      NOT NULL DEFAULT '{}',
+    from_address  text        NOT NULL DEFAULT '',
+    subject       text        NOT NULL DEFAULT '',
+    provider      text        NOT NULL DEFAULT '',
+    status        text        NOT NULL DEFAULT 'pending',
+    response      jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    error         text        NOT NULL DEFAULT '',
+    retries       integer     NOT NULL DEFAULT 0,
+    resent_count  integer     NOT NULL DEFAULT 0,
+    body_stored   boolean     NOT NULL DEFAULT false,
+    body          text,
+    created_at    timestamptz NOT NULL DEFAULT now(),
+    updated_at    timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_email_log_pkey PRIMARY KEY (id)
+);
+
+CREATE INDEX IF NOT EXISTS site_email_log_site_time_idx
+    ON site_email_log (tenant_id, site_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS site_email_log_tenant_time_idx
+    ON site_email_log (tenant_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS site_email_log_failed_idx
+    ON site_email_log (tenant_id, created_at DESC)
+    WHERE status = 'failed';
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_email_log_seq_idx
+    ON site_email_log (tenant_id, site_id, agent_seq)
+    WHERE agent_seq IS NOT NULL;
+
+ALTER TABLE site_email_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_email_log FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_email_log_tenant_isolation ON site_email_log
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_email_log_agent ON site_email_log
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- email_suppression — org-wide and per-site bounce/complaint/unsubscribe list.
+-- Queried in Phase 4 (webhooks + pre-send check). Created now for RLS.
+CREATE TABLE IF NOT EXISTS email_suppression (
+    id                uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id         uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    site_id           uuid        REFERENCES sites (id) ON DELETE CASCADE,
+    email_hash        bytea       NOT NULL,
+    email             text,
+    reason            text        NOT NULL DEFAULT 'manual',
+    provider          text        NOT NULL DEFAULT '',
+    event_at          timestamptz,
+    source_message_id text,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT email_suppression_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS email_suppression_site_hash_idx
+    ON email_suppression (tenant_id, site_id, email_hash)
+    WHERE site_id IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS email_suppression_fleet_hash_idx
+    ON email_suppression (tenant_id, email_hash)
+    WHERE site_id IS NULL;
+
+CREATE INDEX IF NOT EXISTS email_suppression_tenant_idx
+    ON email_suppression (tenant_id);
+
+ALTER TABLE email_suppression ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_suppression FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY email_suppression_tenant_isolation ON email_suppression
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY email_suppression_agent ON email_suppression
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- email_webhook_events — dedup + audit table for provider webhook events (m60).
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS email_webhook_events (
+    id                uuid        NOT NULL DEFAULT gen_random_uuid(),
+    provider_event_id text        NOT NULL,
+    provider          text        NOT NULL,
+    tenant_id         uuid,
+    site_id           uuid,
+    -- m61: email stored as SHA-256 hash only (PII reduction; SHOULD-FIX #2).
+    -- The plaintext email column was dropped in m61.
+    email_hash        bytea,
+    event_type        text        NOT NULL DEFAULT '',
+    suppression_id    uuid,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT email_webhook_events_pkey PRIMARY KEY (id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS email_webhook_events_dedup_idx
+    ON email_webhook_events (provider, provider_event_id);
+
+CREATE INDEX IF NOT EXISTS email_webhook_events_created_idx
+    ON email_webhook_events (created_at);
+
+CREATE INDEX IF NOT EXISTS email_webhook_events_tenant_idx
+    ON email_webhook_events (tenant_id)
+    WHERE tenant_id IS NOT NULL;
+
+ALTER TABLE email_webhook_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_webhook_events FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY email_webhook_events_agent ON email_webhook_events
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+CREATE POLICY email_webhook_events_tenant_isolation ON email_webhook_events
+    USING (
+        tenant_id IS NULL
+        OR tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+    )
+    WITH CHECK (
+        tenant_id IS NULL
+        OR tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid
+    );

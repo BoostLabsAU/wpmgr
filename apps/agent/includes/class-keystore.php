@@ -29,10 +29,12 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent;
 
+use WPMgr\Agent\Email\EmailKeystoreInterface;
+
 /**
  * Encrypted keystore backed by wp-options + a file-based master key.
  */
-final class Keystore
+final class Keystore implements EmailKeystoreInterface
 {
     /** Option name holding the encrypted control-plane public key. */
     public const OPTION_CP_PUBLIC_KEY = 'wpmgr_agent_cp_public_key';
@@ -46,6 +48,14 @@ final class Keystore
      * NEVER leaves the keystore and is NEVER transmitted to the control plane.
      */
     public const OPTION_AGE_IDENTITY = 'wpmgr_agent_age_identity';
+
+    /**
+     * Option name holding the per-site email provider secret (SMTP password,
+     * API key, or AWS Secret Access Key), AES-256-GCM-encrypted at rest.
+     * The plaintext secret travels only in the signed JWT-protected
+     * sync_email_config body and is immediately encrypted upon receipt.
+     */
+    public const OPTION_EMAIL_SECRET = 'wpmgr_agent_email_secret';
 
     /**
      * Option pinning which master-key source this install uses, so decrypt
@@ -275,6 +285,42 @@ final class Keystore
         }
 
         return $this->decrypt($stored);
+    }
+
+    /**
+     * Persist the per-site email provider secret (SMTP password / API key /
+     * AWS secret access key), AES-256-GCM-encrypted under the master key.
+     * Passing an empty string removes any stored secret.
+     *
+     * @param string $secret Raw plaintext secret.
+     * @return void
+     */
+    public function storeEmailSecret(string $secret): void
+    {
+        if ($secret === '') {
+            delete_option(self::OPTION_EMAIL_SECRET);
+            return;
+        }
+        update_option(self::OPTION_EMAIL_SECRET, $this->encrypt($secret), false);
+    }
+
+    /**
+     * Retrieve and decrypt the per-site email provider secret.
+     * Returns an empty string when no secret has been stored.
+     *
+     * @return string Decrypted secret, or '' when absent.
+     */
+    public function get_email_secret(): string
+    {
+        $stored = get_option(self::OPTION_EMAIL_SECRET);
+        if (!is_string($stored) || $stored === '') {
+            return '';
+        }
+        try {
+            return $this->decrypt($stored);
+        } catch (\Throwable $e) {
+            return '';
+        }
     }
 
     /**

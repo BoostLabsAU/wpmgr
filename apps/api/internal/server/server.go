@@ -25,6 +25,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
+	"github.com/mosamlife/wpmgr/apps/api/internal/email"
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
@@ -147,7 +148,22 @@ type Deps struct {
 	// RumH serves the public POST /rum/ingest endpoint (M56 — Real User
 	// Monitoring). Mounted on the root engine (no session, no tenant gate);
 	// the beacon key is the sole access credential. nil ⇒ route not mounted.
-	RumH        *rum.Handler
+	RumH *rum.Handler
+	// EmailH serves the m59 per-site email management routes under
+	// /api/v1/sites/{siteId}/email/... and the org-level routes under
+	// /api/v1/email/... nil ⇒ routes not mounted.
+	EmailH *email.Handler
+	// EmailAgentH serves the Phase-3 agent email log ingest at
+	// POST /agent/v1/email/log. nil ⇒ route not mounted.
+	EmailAgentH *email.AgentHandler
+	// EmailWebhookH serves the Phase-4a public webhook endpoints at
+	// POST /webhooks/email/{provider}. nil ⇒ routes not mounted.
+	// These routes carry NO session or tenant gate — provider-signature
+	// verification IS the auth.
+	EmailWebhookH *email.WebhookHandler
+	// EmailAgentSuppressionH serves the Phase-4a agent suppression-fetch
+	// endpoint at GET /agent/v1/email/suppression. nil ⇒ route not mounted.
+	EmailAgentSuppressionH *email.AgentSuppressionHandler
 	ServiceName string
 	Version     string
 }
@@ -219,6 +235,14 @@ func New(deps Deps) *Server {
 		deps.RumH.RegisterPublic(engine)
 	}
 
+	// Phase-4a public email webhook endpoints: POST /webhooks/email/{provider}.
+	// No session, no tenant gate — provider HMAC/RSA/ECDSA signature is the auth.
+	// Mounted on the root engine so SNS SubscriptionConfirmation GETs also work
+	// without a session cookie. Must NOT use sessionAuthGroup (H2 note above).
+	if deps.EmailWebhookH != nil {
+		deps.EmailWebhookH.RegisterPublic(engine)
+	}
+
 	// Agent-authenticated endpoints: the agent authenticator verifies an Ed25519
 	// signed request and resolves the site/tenant from the verified key — this
 	// group does NOT use the session/API-key principal chain.
@@ -276,6 +300,15 @@ func New(deps Deps) *Server {
 		// M55 — Font results catalog push from the media-encoder/agent.
 		if deps.FontResultsAgentH != nil {
 			deps.FontResultsAgentH.Register(agentGroup)
+		}
+		// m59 Phase 3 — email log ingest from the agent.
+		if deps.EmailAgentH != nil {
+			deps.EmailAgentH.Register(agentGroup)
+		}
+		// m59 Phase 4a — agent suppression-fetch delta endpoint.
+		// GET /agent/v1/email/suppression?since=<cursor>
+		if deps.EmailAgentSuppressionH != nil {
+			deps.EmailAgentSuppressionH.Register(agentGroup)
 		}
 	}
 
@@ -370,6 +403,13 @@ func New(deps Deps) *Server {
 	// portfolio bulk cache routes.
 	if deps.PerfH != nil {
 		deps.PerfH.Register(v1)
+	}
+
+	// m59 — per-site email management (config + secrets + provider catalog +
+	// test-send). Per-site routes under /sites/{siteId}/email/...; org-level
+	// routes under /email/...
+	if deps.EmailH != nil {
+		deps.EmailH.Register(v1)
 	}
 
 	// m33 — superadmin instance-management area (auth-only, not tenant-gated).

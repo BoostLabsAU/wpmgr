@@ -28,6 +28,7 @@ import { Route as AuthedAuditRouteImport } from './routes/_authed/audit'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/admin'
 import { Route as AuthedUpdatesIndexRouteImport } from './routes/_authed/updates/index'
 import { Route as AuthedSitesIndexRouteImport } from './routes/_authed/sites/index'
+import { Route as AuthedEmailIndexRouteImport } from './routes/_authed/email/index'
 import { Route as AuthedBackupsIndexRouteImport } from './routes/_authed/backups/index'
 import { Route as AuthedUpdatesRunIdRouteImport } from './routes/_authed/updates/$runId'
 import { Route as AuthedSitesSiteIdRouteImport } from './routes/_authed/sites/$siteId'
@@ -50,6 +51,7 @@ import { Route as AuthedSitesSiteIdOptimizeRouteImport } from './routes/_authed/
 import { Route as AuthedSitesSiteIdMediaRouteImport } from './routes/_authed/sites/$siteId.media'
 import { Route as AuthedSitesSiteIdHealthRouteImport } from './routes/_authed/sites/$siteId.health'
 import { Route as AuthedSitesSiteIdErrorsRouteImport } from './routes/_authed/sites/$siteId.errors'
+import { Route as AuthedSitesSiteIdEmailRouteImport } from './routes/_authed/sites/$siteId.email'
 import { Route as AuthedSitesSiteIdCacheRouteImport } from './routes/_authed/sites/$siteId.cache'
 import { Route as AuthedSitesSiteIdBackupsRouteImport } from './routes/_authed/sites/$siteId.backups'
 import { Route as AuthedSitesSiteIdActivityRouteImport } from './routes/_authed/sites/$siteId.activity'
@@ -146,6 +148,11 @@ const AuthedUpdatesIndexRoute = AuthedUpdatesIndexRouteImport.update({
 const AuthedSitesIndexRoute = AuthedSitesIndexRouteImport.update({
   id: '/sites/',
   path: '/sites/',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedEmailIndexRoute = AuthedEmailIndexRouteImport.update({
+  id: '/email/',
+  path: '/email/',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedBackupsIndexRoute = AuthedBackupsIndexRouteImport.update({
@@ -264,6 +271,11 @@ const AuthedSitesSiteIdErrorsRoute = AuthedSitesSiteIdErrorsRouteImport.update({
   path: '/errors',
   getParentRoute: () => AuthedSitesSiteIdRoute,
 } as any)
+const AuthedSitesSiteIdEmailRoute = AuthedSitesSiteIdEmailRouteImport.update({
+  id: '/email',
+  path: '/email',
+  getParentRoute: () => AuthedSitesSiteIdRoute,
+} as any)
 const AuthedSitesSiteIdCacheRoute = AuthedSitesSiteIdCacheRouteImport.update({
   id: '/cache',
   path: '/cache',
@@ -312,11 +324,13 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/backups/': typeof AuthedBackupsIndexRoute
+  '/email/': typeof AuthedEmailIndexRoute
   '/sites/': typeof AuthedSitesIndexRoute
   '/updates/': typeof AuthedUpdatesIndexRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
   '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
+  '/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
@@ -356,11 +370,13 @@ export interface FileRoutesByTo {
   '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/backups': typeof AuthedBackupsIndexRoute
+  '/email': typeof AuthedEmailIndexRoute
   '/sites': typeof AuthedSitesIndexRoute
   '/updates': typeof AuthedUpdatesIndexRoute
   '/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
   '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
+  '/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
@@ -403,11 +419,13 @@ export interface FileRoutesById {
   '/_authed/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/_authed/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/_authed/backups/': typeof AuthedBackupsIndexRoute
+  '/_authed/email/': typeof AuthedEmailIndexRoute
   '/_authed/sites/': typeof AuthedSitesIndexRoute
   '/_authed/updates/': typeof AuthedUpdatesIndexRoute
   '/_authed/sites/$siteId/activity': typeof AuthedSitesSiteIdActivityRoute
   '/_authed/sites/$siteId/backups': typeof AuthedSitesSiteIdBackupsRoute
   '/_authed/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
+  '/_authed/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/_authed/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
   '/_authed/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/_authed/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
@@ -450,11 +468,13 @@ export interface FileRouteTypes {
     | '/sites/$siteId'
     | '/updates/$runId'
     | '/backups/'
+    | '/email/'
     | '/sites/'
     | '/updates/'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
     | '/sites/$siteId/cache'
+    | '/sites/$siteId/email'
     | '/sites/$siteId/errors'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
@@ -494,11 +514,13 @@ export interface FileRouteTypes {
     | '/settings/smtp'
     | '/updates/$runId'
     | '/backups'
+    | '/email'
     | '/sites'
     | '/updates'
     | '/sites/$siteId/activity'
     | '/sites/$siteId/backups'
     | '/sites/$siteId/cache'
+    | '/sites/$siteId/email'
     | '/sites/$siteId/errors'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
@@ -540,11 +562,13 @@ export interface FileRouteTypes {
     | '/_authed/sites/$siteId'
     | '/_authed/updates/$runId'
     | '/_authed/backups/'
+    | '/_authed/email/'
     | '/_authed/sites/'
     | '/_authed/updates/'
     | '/_authed/sites/$siteId/activity'
     | '/_authed/sites/$siteId/backups'
     | '/_authed/sites/$siteId/cache'
+    | '/_authed/sites/$siteId/email'
     | '/_authed/sites/$siteId/errors'
     | '/_authed/sites/$siteId/health'
     | '/_authed/sites/$siteId/media'
@@ -704,6 +728,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSitesIndexRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/email/': {
+      id: '/_authed/email/'
+      path: '/email'
+      fullPath: '/email/'
+      preLoaderRoute: typeof AuthedEmailIndexRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/backups/': {
       id: '/_authed/backups/'
       path: '/backups'
@@ -858,6 +889,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSitesSiteIdErrorsRouteImport
       parentRoute: typeof AuthedSitesSiteIdRoute
     }
+    '/_authed/sites/$siteId/email': {
+      id: '/_authed/sites/$siteId/email'
+      path: '/email'
+      fullPath: '/sites/$siteId/email'
+      preLoaderRoute: typeof AuthedSitesSiteIdEmailRouteImport
+      parentRoute: typeof AuthedSitesSiteIdRoute
+    }
     '/_authed/sites/$siteId/cache': {
       id: '/_authed/sites/$siteId/cache'
       path: '/cache'
@@ -886,6 +924,7 @@ interface AuthedSitesSiteIdRouteChildren {
   AuthedSitesSiteIdActivityRoute: typeof AuthedSitesSiteIdActivityRoute
   AuthedSitesSiteIdBackupsRoute: typeof AuthedSitesSiteIdBackupsRoute
   AuthedSitesSiteIdCacheRoute: typeof AuthedSitesSiteIdCacheRoute
+  AuthedSitesSiteIdEmailRoute: typeof AuthedSitesSiteIdEmailRoute
   AuthedSitesSiteIdErrorsRoute: typeof AuthedSitesSiteIdErrorsRoute
   AuthedSitesSiteIdHealthRoute: typeof AuthedSitesSiteIdHealthRoute
   AuthedSitesSiteIdMediaRoute: typeof AuthedSitesSiteIdMediaRoute
@@ -901,6 +940,7 @@ const AuthedSitesSiteIdRouteChildren: AuthedSitesSiteIdRouteChildren = {
   AuthedSitesSiteIdActivityRoute: AuthedSitesSiteIdActivityRoute,
   AuthedSitesSiteIdBackupsRoute: AuthedSitesSiteIdBackupsRoute,
   AuthedSitesSiteIdCacheRoute: AuthedSitesSiteIdCacheRoute,
+  AuthedSitesSiteIdEmailRoute: AuthedSitesSiteIdEmailRoute,
   AuthedSitesSiteIdErrorsRoute: AuthedSitesSiteIdErrorsRoute,
   AuthedSitesSiteIdHealthRoute: AuthedSitesSiteIdHealthRoute,
   AuthedSitesSiteIdMediaRoute: AuthedSitesSiteIdMediaRoute,
@@ -936,6 +976,7 @@ interface AuthedRouteChildren {
   AuthedSitesSiteIdRoute: typeof AuthedSitesSiteIdRouteWithChildren
   AuthedUpdatesRunIdRoute: typeof AuthedUpdatesRunIdRoute
   AuthedBackupsIndexRoute: typeof AuthedBackupsIndexRoute
+  AuthedEmailIndexRoute: typeof AuthedEmailIndexRoute
   AuthedSitesIndexRoute: typeof AuthedSitesIndexRoute
   AuthedUpdatesIndexRoute: typeof AuthedUpdatesIndexRoute
 }
@@ -961,6 +1002,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedSitesSiteIdRoute: AuthedSitesSiteIdRouteWithChildren,
   AuthedUpdatesRunIdRoute: AuthedUpdatesRunIdRoute,
   AuthedBackupsIndexRoute: AuthedBackupsIndexRoute,
+  AuthedEmailIndexRoute: AuthedEmailIndexRoute,
   AuthedSitesIndexRoute: AuthedSitesIndexRoute,
   AuthedUpdatesIndexRoute: AuthedUpdatesIndexRoute,
 }

@@ -24,6 +24,34 @@ func encodeAcceptInvitationRequest(
 	return nil
 }
 
+func encodeAddFleetEmailSuppressionRequest(
+	req *AddSuppressionRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeAddSiteEmailSuppressionRequest(
+	req *AddSuppressionRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeAgentAutologinConsumeRequest(
 	req *AutologinConsumeRequest,
 	r *http.Request,
@@ -252,8 +280,36 @@ func encodeBulkConfigCacheRequest(
 	return nil
 }
 
+func encodeBulkDeleteEmailLogRequest(
+	req *BulkDeleteLogsRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeBulkPurgeCacheRequest(
 	req *BulkPurgeRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeBulkResendEmailLogRequest(
+	req *BulkResendRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -520,6 +576,20 @@ func encodeEnrollRequest(
 	return nil
 }
 
+func encodeForgotPasswordRequest(
+	req *ForgotPasswordReq,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeInviteMemberRequest(
 	req *InviteRequest,
 	r *http.Request,
@@ -680,8 +750,64 @@ func encodePutBackupSettingsNotificationsRequest(
 	return nil
 }
 
+func encodePutOrgEmailConfigRequest(
+	req *PutEmailConfigRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePutOrgEmailWebhookConfigRequest(
+	req *PutEmailWebhookConfigRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodePutPerfConfigRequest(
 	req *PerfConfig,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePutSiteEmailConfigRequest(
+	req *PutEmailConfigRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePutSiteEmailWebhookConfigRequest(
+	req *PutEmailWebhookConfigRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -724,6 +850,34 @@ func encodePutSiteLoginProtectionRequest(
 
 func encodeRegisterRequest(
 	req *RegisterRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeResendVerificationRequest(
+	req *ResendVerificationReq,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeResetPasswordRequest(
+	req *ResetPasswordReq,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -806,6 +960,20 @@ func encodeRevokeSiteRequest(
 
 func encodeRunSearchReplaceRequest(
 	req *SearchReplaceRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeSendTestEmailRequest(
+	req *EmailTestRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -902,6 +1070,20 @@ func encodeUnblockSiteIPRequest(
 
 func encodeUpdateSiteDestinationRequest(
 	req *SiteDestinationUpdate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeVerifyEmailRequest(
+	req *VerifyEmailReq,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

@@ -4,7 +4,7 @@ Tags: backup, restore, performance, cache, security
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 8.1
-Stable tag: 0.34.2
+Stable tag: 0.35.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -158,6 +158,9 @@ This plugin ships two minified JavaScript files. Their human-readable source and
 4. Performance settings -- page cache, Remove Unused CSS, self-hosted fonts, and image optimization controls.
 
 == Changelog ==
+
+= 0.35.0 =
+* New: per-site email delivery and logging. Route this site's outgoing email through Amazon SES, SendGrid, Mailgun, Postmark, or any SMTP server, configured from the WPMgr dashboard. Every send is logged (with optional bounce and complaint suppression), and known-bad addresses are skipped automatically. Email sending is unchanged until you configure a provider.
 
 = 0.34.2 =
 * Fix a rare "502" when clicking "Log in to wp-admin" a second time while already signed in. The agent now detects the existing browser session reliably (independent of the REST nonce) and simply redirects instead of re-issuing the login, and any unexpected fatal during login is turned into a clean redirect rather than a server error.

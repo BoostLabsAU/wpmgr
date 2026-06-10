@@ -219,6 +219,19 @@ type EmailLog struct {
 	SentAt      pgtype.Timestamptz `json:"sent_at"`
 }
 
+type EmailSuppression struct {
+	ID              uuid.UUID          `json:"id"`
+	TenantID        uuid.UUID          `json:"tenant_id"`
+	SiteID          pgtype.UUID        `json:"site_id"`
+	EmailHash       []byte             `json:"email_hash"`
+	Email           *string            `json:"email"`
+	Reason          string             `json:"reason"`
+	Provider        string             `json:"provider"`
+	EventAt         pgtype.Timestamptz `json:"event_at"`
+	SourceMessageID *string            `json:"source_message_id"`
+	CreatedAt       time.Time          `json:"created_at"`
+}
+
 type EmailVerificationToken struct {
 	ID        uuid.UUID          `json:"id"`
 	UserID    uuid.UUID          `json:"user_id"`
@@ -226,6 +239,18 @@ type EmailVerificationToken struct {
 	ExpiresAt time.Time          `json:"expires_at"`
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 	CreatedAt time.Time          `json:"created_at"`
+}
+
+type EmailWebhookEvent struct {
+	ID              uuid.UUID   `json:"id"`
+	ProviderEventID string      `json:"provider_event_id"`
+	Provider        string      `json:"provider"`
+	TenantID        pgtype.UUID `json:"tenant_id"`
+	SiteID          pgtype.UUID `json:"site_id"`
+	EmailHash       []byte      `json:"email_hash"`
+	EventType       string      `json:"event_type"`
+	SuppressionID   pgtype.UUID `json:"suppression_id"`
+	CreatedAt       time.Time   `json:"created_at"`
 }
 
 type FontResult struct {
@@ -503,6 +528,55 @@ type SiteDbSizeHistory struct {
 	TableCount  int32     `json:"table_count"`
 	ScannedAt   time.Time `json:"scanned_at"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type SiteEmailConfig struct {
+	ID                      uuid.UUID          `json:"id"`
+	TenantID                uuid.UUID          `json:"tenant_id"`
+	SiteID                  pgtype.UUID        `json:"site_id"`
+	Provider                string             `json:"provider"`
+	FromAddress             string             `json:"from_address"`
+	FromName                string             `json:"from_name"`
+	ForceFromEmail          bool               `json:"force_from_email"`
+	ForceFromName           bool               `json:"force_from_name"`
+	ReturnPath              bool               `json:"return_path"`
+	Config                  []byte             `json:"config"`
+	ProviderSecretEncrypted []byte             `json:"provider_secret_encrypted"`
+	OauthRefreshEncrypted   []byte             `json:"oauth_refresh_encrypted"`
+	OauthAccessEncrypted    []byte             `json:"oauth_access_encrypted"`
+	OauthExpiresAt          pgtype.Timestamptz `json:"oauth_expires_at"`
+	Mappings                []byte             `json:"mappings"`
+	DefaultConnection       *string            `json:"default_connection"`
+	FallbackConnection      *string            `json:"fallback_connection"`
+	LogEmails               bool               `json:"log_emails"`
+	StoreBody               bool               `json:"store_body"`
+	RetentionDays           int32              `json:"retention_days"`
+	WebhookRouteTokenHash   []byte             `json:"webhook_route_token_hash"`
+	WebhookSigningKeyEnc    []byte             `json:"webhook_signing_key_enc"`
+	SesTopicArns            []string           `json:"ses_topic_arns"`
+	CreatedAt               time.Time          `json:"created_at"`
+	UpdatedAt               time.Time          `json:"updated_at"`
+}
+
+type SiteEmailLog struct {
+	ID          uuid.UUID `json:"id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	SiteID      uuid.UUID `json:"site_id"`
+	AgentSeq    *int64    `json:"agent_seq"`
+	MessageID   *string   `json:"message_id"`
+	ToAddresses []string  `json:"to_addresses"`
+	FromAddress string    `json:"from_address"`
+	Subject     string    `json:"subject"`
+	Provider    string    `json:"provider"`
+	Status      string    `json:"status"`
+	Response    []byte    `json:"response"`
+	Error       string    `json:"error"`
+	Retries     int32     `json:"retries"`
+	ResentCount int32     `json:"resent_count"`
+	BodyStored  bool      `json:"body_stored"`
+	Body        *string   `json:"body"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 type SiteEvent struct {

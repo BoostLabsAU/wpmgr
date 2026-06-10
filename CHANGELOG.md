@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.35.0] - 2026-06-10
+
+### Added
+
+- **Per-site email delivery (SMTP and providers):** configure any managed site's outgoing email from the WPMgr dashboard. Pick from Amazon SES, SendGrid, Mailgun, Postmark, or any generic SMTP server. Config is per-site or inherited from an org-wide default. Provider credentials are encrypted at rest with age(X25519) and never returned by the API (a `secret_set` flag is returned instead). Send a test email from the dashboard before saving.
+- **Central email log:** every outgoing email from every managed site is logged centrally with full detail: to, from, subject, headers, status, provider response, and retry count. The log is paginated with free-text and column-scoped search, status and date filters, row-level detail with previous/next navigation, single and bulk resend, and CSV/JSON export. Email bodies are not stored by default; opt-in per tenant. Log entries auto-prune after 14 days.
+- **Fleet-wide deliverability dashboard:** a cross-site view showing sent, failed, bounced, and complained counts across every managed site in one place. Per-site deliverability charts are also available on each site's Email tab. Live updates stream to the log and dashboard over SSE so a bounce flips an entry's status without a manual refresh.
+- **Bounce and complaint handling with suppression list:** connect a provider's webhook (Amazon SES SNS, SendGrid, Mailgun, Postmark) and WPMgr automatically suppresses hard-bounced and complained addresses fleet-wide. The suppression list is consulted before each send. Manual add and remove are supported. Suppression can be scoped per-site or shared org-wide.
+
 ## [0.34.3] - 2026-06-10
 
 ### Fixed

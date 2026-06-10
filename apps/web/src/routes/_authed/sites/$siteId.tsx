@@ -89,6 +89,7 @@ const TABS = [
   { to: "/sites/$siteId/errors", label: "Errors" },
   // #188 — site-level tools tab (search-replace, etc.).
   { to: "/sites/$siteId/tools", label: "Tools" },
+  { to: "/sites/$siteId/email", label: "Email" },
   { to: "/sites/$siteId/settings", label: "Settings" },
 ] as const;
 
