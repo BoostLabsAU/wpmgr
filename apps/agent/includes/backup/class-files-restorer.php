@@ -62,6 +62,9 @@ final class FilesRestorer
         // Defensive — the agent's own plugin tree should not be replaced by a
         // restore of a past wp-content.
         'wpmgr-agent.php',
+        // Object-cache credentials file: never restore from a backup archive;
+        // the live credential must remain intact across a restore.
+        'wpmgr-object-cache-config.php',
     ];
 
     /** Emit a progress event every N extracted entries. */

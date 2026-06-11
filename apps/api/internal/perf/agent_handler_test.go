@@ -91,7 +91,7 @@ func buildAgentEngine(t *testing.T, id agent.Identity, ingest *RucssIngestServic
 	t.Helper()
 	gin.SetMode(gin.TestMode)
 	svc := NewService(&fakeRepo{}, nil, nil, nil)
-	h := NewAgentHandler(svc, ingest)
+	h := NewAgentHandler(svc, ingest, nil)
 	eng := gin.New()
 	eng.POST("/agent/v1/rucss", withIdentity(id, h.rucssIngest))
 	return eng
@@ -304,7 +304,7 @@ func TestRucssIngestMissingMetaRejected(t *testing.T) {
 func TestRucssIngestNoIdentity401(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	svc := NewService(&fakeRepo{}, nil, nil, nil)
-	h := NewAgentHandler(svc, NewRucssIngestService(&fakeRucssRepo{}, newMemStore(), &fakeEnqueuer{}, domain.FixedClock{}, nil))
+	h := NewAgentHandler(svc, NewRucssIngestService(&fakeRucssRepo{}, newMemStore(), &fakeEnqueuer{}, domain.FixedClock{}, nil), nil)
 	eng := gin.New()
 	eng.POST("/agent/v1/rucss", h.rucssIngest) // NO identity injected
 

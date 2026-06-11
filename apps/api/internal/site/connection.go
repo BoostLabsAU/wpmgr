@@ -239,6 +239,38 @@ const (
 	// state (completed or failed). SiteID=uuid.Nil (NULL) → tenant-wide fan-out.
 	// Payload: {"report_id": string, "client_id": string, "status": string}
 	EventReportCompleted = "report.completed"
+
+	// Object Cache events (M68). Published on the shared tenant SSE bus and
+	// filtered by site_id. The frontend must add these strings to SITE_EVENT_TYPES
+	// in use-site-events.ts to receive them.
+	//
+	// objectcache.status_changed -- published IMMEDIATELY on any state transition
+	//   (connected->degraded, degraded->down, down->connected, etc.) detected
+	//   during heartbeat ingest. Transition events bypass the 10s debounce.
+	//   Payload: {"from_state": string, "to_state": string,
+	//             "latency_ms": int, "last_error_class": string}
+	//
+	// objectcache.stats_updated -- published at most once per heartbeat for
+	//   non-transition updates (latency/memory drift). Subject to the 10s badge-
+	//   debounce throttle on the web side.
+	//   Payload: {"state": string, "latency_ms": int,
+	//             "used_memory_bytes": int64, "hit_ratio_pct": float}
+	//
+	// objectcache.flushed -- published after a successful objectcache.flush
+	//   command completes. Payload: {"scope": string, "strategy": string,
+	//   "keys_deleted": int64, "actor_id": string}
+	//
+	// objectcache.config_applied -- published after a successful
+	//   objectcache.apply_config command. Payload: {"config_hash": string}
+	//
+	// objectcache.test_completed -- published after objectcache.test returns
+	//   from the agent. Payload: {"ok": bool, "config_hash": string,
+	//   "latency_ms": float, "eviction_policy": string}
+	EventObjectCacheStatusChanged  = "objectcache.status_changed"
+	EventObjectCacheStatsUpdated   = "objectcache.stats_updated"
+	EventObjectCacheFlushed        = "objectcache.flushed"
+	EventObjectCacheConfigApplied  = "objectcache.config_applied"
+	EventObjectCacheTestCompleted  = "objectcache.test_completed"
 )
 
 // ConnectionEvent is the envelope published to the tenant SSE channel. ID is an

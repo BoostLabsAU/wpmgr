@@ -8,6 +8,12 @@
  * process-global constants (WPMGR_AGENT_KEY_FILE, ABSPATH, WP salts) that can
  * only be defined once per process.
  *
+ * Design note: bootstrap.php defines ABSPATH before any test code runs. Tests
+ * in this class therefore operate on the fixed bootstrap ABSPATH rather than
+ * trying to redefine it. dirname(ABSPATH) is a controlled subdirectory of
+ * sys_get_temp_dir() created by bootstrap — not sys_get_temp_dir() itself —
+ * so its writability and contents can be managed per-test.
+ *
  * @package WPMgr\Agent\Tests
  */
 
@@ -70,6 +76,15 @@ final class KeystoreMasterKeyTest extends TestCase
         parent::tear_down();
     }
 
+    /**
+     * Resolve dirname(ABSPATH) — the first legacy-file and key-candidate path
+     * the keystore checks.
+     */
+    private function absParent(): string
+    {
+        return rtrim(dirname(rtrim((string) ABSPATH, '/\\')), '/\\');
+    }
+
     /** A set of realistic, high-entropy salt values (64 chars each). */
     private function defineRealSalts(): void
     {
@@ -83,6 +98,13 @@ final class KeystoreMasterKeyTest extends TestCase
 
     public function test_salt_derivation_is_stable_and_32_bytes(): void
     {
+        // Remove any legacy key file that might have been left by a prior run.
+        // The keystore checks for a legacy file at dirname(ABSPATH) before it
+        // attempts salt derivation, so a stale file would cause a false 'file'
+        // source result instead of the expected 'salts'.
+        $legacyPath = $this->absParent() . '/.wpmgr-agent-master.key';
+        @unlink($legacyPath);
+
         $this->defineRealSalts();
 
         $keystore = new Keystore();
@@ -101,18 +123,14 @@ final class KeystoreMasterKeyTest extends TestCase
 
     public function test_placeholder_salts_are_rejected_and_fall_through_to_file(): void
     {
-        // Placeholder salt poisons salt-derivation; ABSPATH parent is writable.
+        // Placeholder salt poisons salt-derivation; the key falls through to
+        // the first writable candidate (dirname(ABSPATH) created by bootstrap).
         define('AUTH_KEY', 'put your unique phrase here');
         define('SECURE_AUTH_KEY', str_repeat('z', 64));
         define('LOGGED_IN_KEY', str_repeat('y', 64));
 
-        $absParent = sys_get_temp_dir() . '/wpmgr-abs-' . bin2hex(random_bytes(6));
-        $abs       = $absParent . '/htdocs/';
-        mkdir($abs, 0700, true);
-        $this->cleanup[] = $abs;
-        $this->cleanup[] = $absParent . '/.wpmgr-agent-master.key';
-        $this->cleanup[] = $absParent;
-        define('ABSPATH', $abs);
+        // Register cleanup of the key file that will be written at dirname(ABSPATH).
+        $this->cleanup[] = $this->absParent() . '/.wpmgr-agent-master.key';
 
         $keystore = new Keystore();
         $envelope = $keystore->encrypt('payload');
@@ -133,13 +151,7 @@ final class KeystoreMasterKeyTest extends TestCase
         define('AUTH_KEY', 'short');
         define('NONCE_SALT', 'tiny');
 
-        $absParent = sys_get_temp_dir() . '/wpmgr-abs-' . bin2hex(random_bytes(6));
-        $abs       = $absParent . '/htdocs/';
-        mkdir($abs, 0700, true);
-        $this->cleanup[] = $abs;
-        $this->cleanup[] = $absParent . '/.wpmgr-agent-master.key';
-        $this->cleanup[] = $absParent;
-        define('ABSPATH', $abs);
+        $this->cleanup[] = $this->absParent() . '/.wpmgr-agent-master.key';
 
         $keystore = new Keystore();
         $envelope = $keystore->encrypt('p');
@@ -149,26 +161,30 @@ final class KeystoreMasterKeyTest extends TestCase
 
     public function test_file_fallback_picks_first_writable_and_hardens_webroot(): void
     {
-        // No salts. ABSPATH parent is NOT writable -> skip; WP_CONTENT_DIR is.
-        $root = sys_get_temp_dir() . '/wpmgr-root-' . bin2hex(random_bytes(6));
-        $abs  = $root . '/site/';
-        mkdir($abs, 0700, true);
-        // Make ABSPATH parent ($root/site's parent = $root) read-only so the
-        // first candidate (dirname(ABSPATH)) is not writable.
-        $absParent = $root;
-        chmod($absParent, 0500);
-        define('ABSPATH', $abs);
+        // No salts defined. dirname(ABSPATH) is the first key-file candidate.
+        // Make it unwritable so the keystore skips it and falls back to
+        // WP_CONTENT_DIR (the second candidate, in-webroot, hardened).
+        $absParent = $this->absParent();
 
-        $content = $root . '_content';
+        // Remove any legacy key file so the legacy-reuse path does not fire
+        // before the first-writable selection logic is exercised.
+        @unlink($absParent . '/.wpmgr-agent-master.key');
+
+        chmod($absParent, 0500);
+
+        // WP_CONTENT_DIR is not defined by bootstrap; define it to a fresh
+        // writable directory so the keystore picks it as the second candidate.
+        $content = sys_get_temp_dir() . '/wpmgr-content-' . bin2hex(random_bytes(6));
         mkdir($content, 0700, true);
         define('WP_CONTENT_DIR', $content);
 
         $this->cleanup[] = $content . '/wpmgr-agent';
         $this->cleanup[] = $content;
-        $this->cleanup[] = $abs;
-        // restore perms so cleanup can remove it.
+
+        // Restore dirname(ABSPATH) permissions when this child process exits so
+        // subsequent test-suite runs can create and clean up the directory.
         register_shutdown_function(static function () use ($absParent): void {
-            @chmod($absParent, 0700);
+            @chmod($absParent, 0755);
         });
 
         $keystore = new Keystore();
@@ -185,24 +201,20 @@ final class KeystoreMasterKeyTest extends TestCase
         $this->assertFileExists($dir . '/.htaccess');
         $this->assertStringContainsString('Require all denied', (string) file_get_contents($dir . '/.htaccess'));
 
-        @chmod($absParent, 0700);
+        // Restore permissions before tearDown so cleanup can remove the dir.
+        @chmod($absParent, 0755);
     }
 
     public function test_preexisting_legacy_key_file_is_reused(): void
     {
-        // No salts. A legacy key file already exists at dirname(ABSPATH).
-        $absParent = sys_get_temp_dir() . '/wpmgr-legacy-' . bin2hex(random_bytes(6));
-        $abs       = $absParent . '/htdocs/';
-        mkdir($abs, 0700, true);
-        define('ABSPATH', $abs);
-
-        $legacyPath = $absParent . '/.wpmgr-agent-master.key';
+        // No salts. Plant a legacy key file at the path legacyKeyFilePaths()
+        // checks: dirname(ABSPATH)/.wpmgr-agent-master.key. The keystore must
+        // detect it and pin source='file' pointing to that exact path.
+        $legacyPath = $this->absParent() . '/.wpmgr-agent-master.key';
         $knownKey   = random_bytes(32);
         file_put_contents($legacyPath, $knownKey);
 
         $this->cleanup[] = $legacyPath;
-        $this->cleanup[] = $abs;
-        $this->cleanup[] = $absParent;
 
         $keystore = new Keystore();
         $envelope = $keystore->encrypt('legacy-payload');

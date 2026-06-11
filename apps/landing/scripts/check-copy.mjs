@@ -57,12 +57,12 @@ for (const file of walk(ROOT)) {
 //
 // EXPECTED counts (bump when the IA changes):
 //   clusters  5   (Operate / Accelerate / Clean up / Serve clients / Protect)
-//   features  20  (total cards across all clusters)
+//   features  21  (total cards across all clusters)
 //   links     3   (Performance + RUM + Media deep-dive anchors)
 //   visuals   3   (cache-trend / rum-distribution / media-compare)
 // ---------------------------------------------------------------------------
 
-const EXPECTED = { clusters: 5, features: 20, links: 3, visuals: 3 };
+const EXPECTED = { clusters: 5, features: 21, links: 3, visuals: 3 };
 
 const VALID_VISUALS = ["cache-trend", "rum-distribution", "media-compare"];
 

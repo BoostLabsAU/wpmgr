@@ -2510,3 +2510,99 @@ CREATE POLICY client_members_agent ON client_members
 CREATE POLICY client_members_self_read ON client_members
     FOR SELECT
     USING (user_id = nullif(current_setting('app.user_id', true), '')::uuid);
+
+-- ---------------------------------------------------------------------------
+-- site_object_cache_config -- M68: per-site object cache connection config.
+-- One row per site (site_id PK). Password stored age-encrypted via cryptbox
+-- (nil-sentinel: NULL means "keep stored secret on update"). Heartbeat-sourced
+-- status columns enable SSE state-transition detection without hitting the agent.
+-- ---------------------------------------------------------------------------
+CREATE TABLE site_object_cache_config (
+    site_id                 uuid        NOT NULL,
+    tenant_id               uuid        NOT NULL,
+    enabled                 boolean     NOT NULL DEFAULT false,
+    scheme                  text        NOT NULL DEFAULT 'tcp',
+    host                    text        NOT NULL DEFAULT '',
+    port                    integer     NOT NULL DEFAULT 6379,
+    socket_path             text        NOT NULL DEFAULT '',
+    database                integer     NOT NULL DEFAULT 0,
+    username                text        NOT NULL DEFAULT '',
+    password_encrypted      bytea,
+    prefix                  text        NOT NULL DEFAULT '',
+    maxttl_seconds          integer     NOT NULL DEFAULT 604800,
+    queryttl_seconds        integer     NOT NULL DEFAULT 86400,
+    connect_timeout_ms      integer     NOT NULL DEFAULT 1000,
+    read_timeout_ms         integer     NOT NULL DEFAULT 1000,
+    retry_count             integer     NOT NULL DEFAULT 3,
+    retry_interval_ms       integer     NOT NULL DEFAULT 25,
+    serializer              text        NOT NULL DEFAULT 'php',
+    compression             text        NOT NULL DEFAULT 'none',
+    async_flush             boolean     NOT NULL DEFAULT false,
+    flush_strategy          text        NOT NULL DEFAULT 'auto',
+    shared                  boolean     NOT NULL DEFAULT true,
+    flush_on_failback       boolean     NOT NULL DEFAULT true,
+    analytics_enabled       boolean     NOT NULL DEFAULT true,
+    last_test_config_hash   text,
+    last_test_result_json   jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    last_tested_at          timestamptz,
+    oc_state                text        NOT NULL DEFAULT '',
+    oc_latency_ms           integer     NOT NULL DEFAULT 0,
+    oc_last_error_class     text        NOT NULL DEFAULT '',
+    oc_used_memory_bytes    bigint      NOT NULL DEFAULT 0,
+    oc_hit_ratio_pct        numeric(5,2),
+    created_at              timestamptz NOT NULL DEFAULT now(),
+    updated_at              timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_object_cache_config_pkey PRIMARY KEY (site_id),
+    CONSTRAINT site_object_cache_config_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE,
+    CONSTRAINT site_object_cache_config_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE
+);
+
+CREATE INDEX site_object_cache_config_tenant_idx
+    ON site_object_cache_config (tenant_id);
+
+ALTER TABLE site_object_cache_config ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_object_cache_config FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_object_cache_config_tenant_isolation ON site_object_cache_config
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY site_object_cache_config_agent ON site_object_cache_config
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- site_object_cache_stats_history -- M68: append-only hit-ratio + server-metric
+-- time-series. Mirrors site_cache_hit_ratio_history (m52) exactly.
+-- Retention: 7 days raw + 90 days daily downsample (River GC sweep, D4).
+-- ---------------------------------------------------------------------------
+CREATE TABLE site_object_cache_stats_history (
+    id                  uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+    site_id             uuid          NOT NULL REFERENCES sites   (id) ON DELETE CASCADE,
+    tenant_id           uuid          NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    hit_count           bigint        NOT NULL DEFAULT 0,
+    miss_count          bigint        NOT NULL DEFAULT 0,
+    ratio_pct           numeric(5,2),
+    used_memory_bytes   bigint        NOT NULL DEFAULT 0,
+    avg_wait_ms         numeric(8,3)  NOT NULL DEFAULT 0,
+    ops_per_sec         integer       NOT NULL DEFAULT 0,
+    evicted_keys_delta  bigint        NOT NULL DEFAULT 0,
+    connected_clients   integer       NOT NULL DEFAULT 0,
+    sampled_at          timestamptz   NOT NULL,
+    created_at          timestamptz   NOT NULL DEFAULT now(),
+    CONSTRAINT site_object_cache_stats_history_site_sampled_uniq UNIQUE (site_id, sampled_at)
+);
+
+CREATE INDEX site_object_cache_stats_history_site_sampled_idx
+    ON site_object_cache_stats_history (site_id, sampled_at DESC);
+CREATE INDEX site_object_cache_stats_history_created_idx
+    ON site_object_cache_stats_history (created_at);
+
+ALTER TABLE site_object_cache_stats_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_object_cache_stats_history FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_object_cache_stats_history_tenant_isolation ON site_object_cache_stats_history
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+-- GC path only deletes; inserts flow through tenant_isolation via InTenantTx.
+CREATE POLICY site_object_cache_stats_history_agent ON site_object_cache_stats_history
+    USING (current_setting('app.agent', true) = 'on');

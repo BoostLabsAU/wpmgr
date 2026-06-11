@@ -134,8 +134,11 @@ final class Purge
         $glob = @glob($dir . '/*' . CacheKey::EXTENSION);
         if (is_array($glob)) {
             foreach ($glob as $file) {
-                if (@is_file($file) && wp_delete_file($file)) {
-                    $removed++;
+                if (@is_file($file)) {
+                    wp_delete_file($file);
+                    if (!@is_file($file)) {
+                        $removed++;
+                    }
                 }
             }
         }

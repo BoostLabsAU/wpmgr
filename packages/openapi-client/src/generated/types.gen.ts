@@ -4417,6 +4417,159 @@ export type PortalSummary = {
 };
 
 /**
+ * Per-site object cache configuration and live status.
+ */
+export type ObjectCacheConfig = {
+  enabled: boolean;
+  scheme: "tcp" | "unix" | "tls";
+  host: string;
+  port: number;
+  socket_path?: string;
+  database: number;
+  username?: string;
+  /**
+   * True when an encrypted password is stored. The password itself is never returned.
+   */
+  has_password: boolean;
+  prefix: string;
+  maxttl_seconds: number;
+  queryttl_seconds: number;
+  connect_timeout_ms: number;
+  read_timeout_ms: number;
+  retry_count: number;
+  retry_interval_ms: number;
+  serializer: "php" | "igbinary";
+  compression: "none" | "lzf" | "lz4" | "zstd";
+  async_flush: boolean;
+  flush_strategy: "auto" | "flushdb" | "scan";
+  /**
+   * True when the Redis instance is shared with other sites (prefix isolation).
+   */
+  shared: boolean;
+  /**
+   * Flush all keys when the object cache recovers from a down state.
+   */
+  flush_on_failback: boolean;
+  analytics_enabled: boolean;
+  /**
+   * Non-empty after a passing test; cleared when connection fields change.
+   */
+  last_test_config_hash?: string;
+  last_tested_at?: string;
+  /**
+   * The stored result of the most recent connection test, including the server capability report, so the dashboard can show requirements without re-running a test.
+   */
+  last_test_result?: ObjectCacheTestResult;
+  /**
+   * Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
+   */
+  oc_state: string;
+  oc_latency_ms: number;
+  oc_last_error_class?: string;
+  oc_used_memory_bytes: number;
+  oc_hit_ratio_pct?: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+/**
+ * Fields accepted by PUT /perf/object-cache/config. All fields are optional; omitted fields are unchanged. An empty password preserves the stored password.
+ */
+export type ObjectCacheConfigPut = {
+  enabled?: boolean;
+  scheme?: "tcp" | "unix" | "tls";
+  host?: string;
+  port?: number;
+  socket_path?: string;
+  database?: number;
+  username?: string;
+  /**
+   * Write-only. Empty string means "keep stored password".
+   */
+  password?: string;
+  prefix?: string;
+  maxttl_seconds?: number;
+  queryttl_seconds?: number;
+  connect_timeout_ms?: number;
+  read_timeout_ms?: number;
+  retry_count?: number;
+  retry_interval_ms?: number;
+  serializer?: "php" | "igbinary";
+  compression?: "none" | "lzf" | "lz4" | "zstd";
+  async_flush?: boolean;
+  flush_strategy?: "auto" | "flushdb" | "scan";
+  shared?: boolean;
+  flush_on_failback?: boolean;
+  analytics_enabled?: boolean;
+};
+
+/**
+ * Server and PHP extension capabilities detected by the agent during a connection test. phpredis_version empty or absent means the phpredis extension is not installed on the server.
+ */
+export type ObjectCacheCapabilities = {
+  phpredis_version?: string;
+  igbinary_available: boolean;
+  lzf_available: boolean;
+  lz4_available: boolean;
+  zstd_available: boolean;
+  tls_supported: boolean;
+  value_metadata_reads: boolean;
+  native_retry_options: boolean;
+  keepttl_supported: boolean;
+  flush_async_supported: boolean;
+};
+
+/**
+ * Result of an objectcache.test command.
+ */
+export type ObjectCacheTestResult = {
+  ok: boolean;
+  detail?: string;
+  reachable: boolean;
+  latency_ms?: number;
+  server_version?: string;
+  eviction_policy?: string;
+  max_memory_bytes?: number;
+  used_memory_bytes?: number;
+  capabilities?: ObjectCacheCapabilities;
+  /**
+   * dedicated_db or shared_prefix; drives the flush strategy disclosure.
+   */
+  flush_capability_class?: string;
+  acl_denials?: Array<string>;
+  round_trip_ok: boolean;
+  config_hash?: string;
+};
+
+/**
+ * One daily-aggregated data point in the stats history.
+ */
+export type ObjectCacheStatsHistoryPoint = {
+  sampled_at: string;
+  /**
+   * Hit ratio as a percentage (0–100). Null when no data.
+   */
+  ratio_pct?: number;
+  hit_count: number;
+  miss_count: number;
+  used_memory_bytes: number;
+  avg_wait_ms?: number;
+  ops_per_sec: number;
+  evicted_keys_delta: number;
+};
+
+/**
+ * Daily-aggregated object cache stats history for trend charts.
+ */
+export type ObjectCacheStatsHistory = {
+  points: Array<ObjectCacheStatsHistoryPoint>;
+  /**
+   * Average hit ratio across all data points in the window.
+   */
+  avg_ratio_pct: number;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -9789,6 +9942,175 @@ export type ComputeRucssResponses = {
 
 export type ComputeRucssResponse =
   ComputeRucssResponses[keyof ComputeRucssResponses];
+
+export type GetObjectCacheConfigData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/config";
+};
+
+export type GetObjectCacheConfigResponses = {
+  /**
+   * Object cache configuration
+   */
+  200: ObjectCacheConfig;
+};
+
+export type GetObjectCacheConfigResponse =
+  GetObjectCacheConfigResponses[keyof GetObjectCacheConfigResponses];
+
+export type PutObjectCacheConfigData = {
+  body: ObjectCacheConfigPut;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/config";
+};
+
+export type PutObjectCacheConfigErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+};
+
+export type PutObjectCacheConfigError =
+  PutObjectCacheConfigErrors[keyof PutObjectCacheConfigErrors];
+
+export type PutObjectCacheConfigResponses = {
+  /**
+   * Saved configuration
+   */
+  200: ObjectCacheConfig;
+};
+
+export type PutObjectCacheConfigResponse =
+  PutObjectCacheConfigResponses[keyof PutObjectCacheConfigResponses];
+
+export type TestObjectCacheData = {
+  body?: {
+    /**
+     * Override the stored password for this test only.
+     */
+    password?: string;
+  };
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/test";
+};
+
+export type TestObjectCacheResponses = {
+  /**
+   * Test result (ok may be false for a reachability failure)
+   */
+  200: ObjectCacheTestResult;
+};
+
+export type TestObjectCacheResponse =
+  TestObjectCacheResponses[keyof TestObjectCacheResponses];
+
+export type EnableObjectCacheData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/enable";
+};
+
+export type EnableObjectCacheErrors = {
+  /**
+   * Gate failure or agent rejection
+   */
+  400: Error;
+};
+
+export type EnableObjectCacheError =
+  EnableObjectCacheErrors[keyof EnableObjectCacheErrors];
+
+export type EnableObjectCacheResponses = {
+  /**
+   * Enable result
+   */
+  200: PerfActionResult;
+};
+
+export type EnableObjectCacheResponse =
+  EnableObjectCacheResponses[keyof EnableObjectCacheResponses];
+
+export type DisableObjectCacheData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/disable";
+};
+
+export type DisableObjectCacheResponses = {
+  /**
+   * Disable result
+   */
+  200: PerfActionResult;
+};
+
+export type DisableObjectCacheResponse =
+  DisableObjectCacheResponses[keyof DisableObjectCacheResponses];
+
+export type FlushObjectCacheData = {
+  body?: {
+    scope?: "all" | "site" | "group";
+    /**
+     * Required when scope is "group".
+     */
+    group?: string;
+  };
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/object-cache/flush";
+};
+
+export type FlushObjectCacheResponses = {
+  /**
+   * Flush result
+   */
+  200: PerfActionResult;
+};
+
+export type FlushObjectCacheResponse =
+  FlushObjectCacheResponses[keyof FlushObjectCacheResponses];
+
+export type GetObjectCacheStatsHistoryData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Number of days of history to return.
+     */
+    days?: number;
+  };
+  url: "/api/v1/sites/{siteId}/perf/object-cache/stats-history";
+};
+
+export type GetObjectCacheStatsHistoryResponses = {
+  /**
+   * Daily-aggregated stats history
+   */
+  200: ObjectCacheStatsHistory;
+};
+
+export type GetObjectCacheStatsHistoryResponse =
+  GetObjectCacheStatsHistoryResponses[keyof GetObjectCacheStatsHistoryResponses];
 
 export type BulkPurgeCacheData = {
   body: BulkPurgeRequest;

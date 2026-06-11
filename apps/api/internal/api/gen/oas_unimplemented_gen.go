@@ -747,6 +747,17 @@ func (UnimplementedHandler) DisableCache(ctx context.Context, params DisableCach
 	return r, ht.ErrNotImplemented
 }
 
+// DisableObjectCache implements disableObjectCache operation.
+//
+// Removes the WP object-cache drop-in and flushes. Sends an
+// `objectcache.disable` signed command. Requires `site.cache.manage`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/disable
+func (UnimplementedHandler) DisableObjectCache(ctx context.Context, params DisableObjectCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DownloadPortalReport implements downloadPortalReport operation.
 //
 // Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
@@ -766,6 +777,18 @@ func (UnimplementedHandler) DownloadPortalReport(ctx context.Context, params Dow
 //
 // POST /api/v1/sites/{siteId}/perf/cache/enable
 func (UnimplementedHandler) EnableCache(ctx context.Context, params EnableCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// EnableObjectCache implements enableObjectCache operation.
+//
+// Installs the WP object-cache drop-in on the site. Rejected with 400
+// `objectcache_test_required` when no passing test result exists for the
+// current configuration (handshake gate). Sends an `objectcache.enable`
+// signed command. Requires `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/enable
+func (UnimplementedHandler) EnableObjectCache(ctx context.Context, params EnableObjectCacheParams) (r EnableObjectCacheRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -792,6 +815,19 @@ func (UnimplementedHandler) Enroll(ctx context.Context, req *EnrollRequest) (r E
 //
 // GET /api/v1/sites/{siteId}/email/log/export
 func (UnimplementedHandler) ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (r ExportSiteEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// FlushObjectCache implements flushObjectCache operation.
+//
+// Flushes the Redis/cache store for this site. The `scope` field
+// controls what is flushed: `all` (default), `site` (prefix-scoped),
+// or `group` (requires `group` field). Sends an `objectcache.flush`
+// command and publishes an `objectcache.flushed` SSE event. Requires
+// `site.cache.purge` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/flush
+func (UnimplementedHandler) FlushObjectCache(ctx context.Context, req OptFlushObjectCacheReq, params FlushObjectCacheParams) (r *PerfActionResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -998,6 +1034,29 @@ func (UnimplementedHandler) GetMe(ctx context.Context) (r GetMeRes, _ error) {
 //
 // GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 func (UnimplementedHandler) GetMediaJob(ctx context.Context, params GetMediaJobParams) (r *MediaJobDetail, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetObjectCacheConfig implements getObjectCacheConfig operation.
+//
+// Returns the stored object cache configuration for the site. The password
+// is never returned; `has_password` indicates whether one is stored.
+// Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+// heartbeat from the agent.
+//
+// GET /api/v1/sites/{siteId}/perf/object-cache/config
+func (UnimplementedHandler) GetObjectCacheConfig(ctx context.Context, params GetObjectCacheConfigParams) (r *ObjectCacheConfig, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetObjectCacheStatsHistory implements getObjectCacheStatsHistory operation.
+//
+// Returns daily-aggregated object cache stats (hit/miss ratio, memory
+// usage, eviction count) for up to 365 days. Default window is 90 days.
+// Requires `site.read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/object-cache/stats-history
+func (UnimplementedHandler) GetObjectCacheStatsHistory(ctx context.Context, params GetObjectCacheStatsHistoryParams) (r *ObjectCacheStatsHistory, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1892,6 +1951,22 @@ func (UnimplementedHandler) PutEmailNotifySettings(ctx context.Context, req *Put
 	return r, ht.ErrNotImplemented
 }
 
+// PutObjectCacheConfig implements putObjectCacheConfig operation.
+//
+// Stores the object cache configuration. An empty `password` field
+// preserves the stored password (nil-sentinel). If connection-critical
+// fields change (host, port, scheme, database, username, prefix, or
+// password), the stored test hash is cleared and a new test is required
+// before re-enabling. The agent receives the new config via an
+// `objectcache.apply_config` signed command (best-effort: a push failure
+// returns 200 with an `X-Agent-Push-Warning` header). Requires
+// `site.perf.config` permission.
+//
+// PUT /api/v1/sites/{siteId}/perf/object-cache/config
+func (UnimplementedHandler) PutObjectCacheConfig(ctx context.Context, req *ObjectCacheConfigPut, params PutObjectCacheConfigParams) (r PutObjectCacheConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // PutOrgEmailConfig implements putOrgEmailConfig operation.
 //
 // Creates or updates the org-wide default email configuration. This row is
@@ -2284,6 +2359,21 @@ func (UnimplementedHandler) SyncMedia(ctx context.Context, params SyncMediaParam
 //
 // POST /api/v1/sites/{siteId}/email/sync
 func (UnimplementedHandler) SyncSiteEmailConfig(ctx context.Context, params SyncSiteEmailConfigParams) (r SyncSiteEmailConfigRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// TestObjectCache implements testObjectCache operation.
+//
+// Sends an `objectcache.test` command to the agent using the stored
+// configuration. An optional `password` in the body overrides the stored
+// password for this call only (useful for testing before saving). On
+// success the control plane stores the config hash as the enable-gate
+// token; on failure the hash is NOT updated. The result is also published
+// as an `objectcache.test_completed` SSE event. Requires
+// `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/test
+func (UnimplementedHandler) TestObjectCache(ctx context.Context, req OptTestObjectCacheReq, params TestObjectCacheParams) (r *ObjectCacheTestResult, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

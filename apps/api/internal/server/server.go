@@ -33,6 +33,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
+	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
@@ -142,6 +143,10 @@ type Deps struct {
 	// may be nil.
 	PerfH      *perf.Handler
 	PerfAgentH *perf.AgentHandler
+	// m68 — Object Cache (P0+P1). ObjectCacheH serves the operator-facing
+	// /api/v1/sites/{siteId}/perf/object-cache/... routes.
+	// nil => routes not mounted.
+	ObjectCacheH *objectcache.Handler
 	// FontResultsAgentH serves POST /agent/v1/fonts/results (M55 — font results
 	// catalog push from the media-encoder). nil ⇒ route not mounted.
 	FontResultsAgentH *perf.FontResultsAgentHandler
@@ -416,6 +421,12 @@ func New(deps Deps) *Server {
 	// portfolio bulk cache routes.
 	if deps.PerfH != nil {
 		deps.PerfH.Register(v1)
+	}
+
+	// m68 — Object Cache operator routes: GET/PUT config, POST test/enable/
+	// disable/flush, GET stats-history. All under /sites/:siteId/perf/object-cache.
+	if deps.ObjectCacheH != nil {
+		deps.ObjectCacheH.Register(v1)
 	}
 
 	// m59 — per-site email management (config + secrets + provider catalog +

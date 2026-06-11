@@ -148,12 +148,14 @@ final class DropinInstaller
         }
 
         // On non-WP-Engine hosts, never clobber a foreign canonical drop-in.
+        // Treat an unreadable existing file as foreign: we cannot confirm it is
+        // ours, so we must not overwrite it.
         if (!$this->isWpEngine() && @is_file($path)) {
             $existing = @file_get_contents($path);
-            if ($existing !== false
-                && strpos($existing, self::SIGNATURE) === false
-                && trim($existing) !== ''
-            ) {
+            if ($existing === false) {
+                return false; // unreadable: treat as foreign, refuse to overwrite
+            }
+            if (strpos($existing, self::SIGNATURE) === false && trim($existing) !== '') {
                 return false; // another cache plugin owns advanced-cache.php
             }
             if ($existing === $rendered) {

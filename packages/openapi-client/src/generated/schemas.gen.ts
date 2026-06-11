@@ -8015,6 +8015,416 @@ export const PortalSummarySchema = {
   },
 } as const;
 
+export const ObjectCacheConfigSchema = {
+  type: "object",
+  description: "Per-site object cache configuration and live status.",
+  required: [
+    "enabled",
+    "scheme",
+    "host",
+    "port",
+    "database",
+    "has_password",
+    "prefix",
+    "maxttl_seconds",
+    "queryttl_seconds",
+    "connect_timeout_ms",
+    "read_timeout_ms",
+    "retry_count",
+    "retry_interval_ms",
+    "serializer",
+    "compression",
+    "async_flush",
+    "flush_strategy",
+    "shared",
+    "flush_on_failback",
+    "analytics_enabled",
+    "oc_state",
+    "oc_latency_ms",
+    "oc_used_memory_bytes",
+  ],
+  properties: {
+    enabled: {
+      type: "boolean",
+    },
+    scheme: {
+      type: "string",
+      enum: ["tcp", "unix", "tls"],
+    },
+    host: {
+      type: "string",
+    },
+    port: {
+      type: "integer",
+    },
+    socket_path: {
+      type: "string",
+    },
+    database: {
+      type: "integer",
+    },
+    username: {
+      type: "string",
+    },
+    has_password: {
+      type: "boolean",
+      description:
+        "True when an encrypted password is stored. The password itself is never returned.",
+    },
+    prefix: {
+      type: "string",
+    },
+    maxttl_seconds: {
+      type: "integer",
+    },
+    queryttl_seconds: {
+      type: "integer",
+    },
+    connect_timeout_ms: {
+      type: "integer",
+    },
+    read_timeout_ms: {
+      type: "integer",
+    },
+    retry_count: {
+      type: "integer",
+    },
+    retry_interval_ms: {
+      type: "integer",
+    },
+    serializer: {
+      type: "string",
+      enum: ["php", "igbinary"],
+    },
+    compression: {
+      type: "string",
+      enum: ["none", "lzf", "lz4", "zstd"],
+    },
+    async_flush: {
+      type: "boolean",
+    },
+    flush_strategy: {
+      type: "string",
+      enum: ["auto", "flushdb", "scan"],
+    },
+    shared: {
+      type: "boolean",
+      description:
+        "True when the Redis instance is shared with other sites (prefix isolation).",
+    },
+    flush_on_failback: {
+      type: "boolean",
+      description:
+        "Flush all keys when the object cache recovers from a down state.",
+    },
+    analytics_enabled: {
+      type: "boolean",
+    },
+    last_test_config_hash: {
+      type: "string",
+      nullable: true,
+      description:
+        "Non-empty after a passing test; cleared when connection fields change.",
+    },
+    last_tested_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+    },
+    last_test_result: {
+      allOf: [
+        {
+          $ref: "#/components/schemas/ObjectCacheTestResult",
+        },
+      ],
+      nullable: true,
+      description:
+        "The stored result of the most recent connection test, including the server capability report, so the dashboard can show requirements without re-running a test.",
+    },
+    oc_state: {
+      type: "string",
+      description:
+        "Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.",
+    },
+    oc_latency_ms: {
+      type: "integer",
+    },
+    oc_last_error_class: {
+      type: "string",
+      nullable: true,
+    },
+    oc_used_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    oc_hit_ratio_pct: {
+      type: "number",
+      nullable: true,
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    updated_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const ObjectCacheConfigPutSchema = {
+  type: "object",
+  description:
+    "Fields accepted by PUT /perf/object-cache/config. All fields are optional; omitted fields are unchanged. An empty password preserves the stored password.",
+  properties: {
+    enabled: {
+      type: "boolean",
+    },
+    scheme: {
+      type: "string",
+      enum: ["tcp", "unix", "tls"],
+    },
+    host: {
+      type: "string",
+    },
+    port: {
+      type: "integer",
+    },
+    socket_path: {
+      type: "string",
+    },
+    database: {
+      type: "integer",
+    },
+    username: {
+      type: "string",
+    },
+    password: {
+      type: "string",
+      description: 'Write-only. Empty string means "keep stored password".',
+    },
+    prefix: {
+      type: "string",
+    },
+    maxttl_seconds: {
+      type: "integer",
+    },
+    queryttl_seconds: {
+      type: "integer",
+    },
+    connect_timeout_ms: {
+      type: "integer",
+    },
+    read_timeout_ms: {
+      type: "integer",
+    },
+    retry_count: {
+      type: "integer",
+    },
+    retry_interval_ms: {
+      type: "integer",
+    },
+    serializer: {
+      type: "string",
+      enum: ["php", "igbinary"],
+    },
+    compression: {
+      type: "string",
+      enum: ["none", "lzf", "lz4", "zstd"],
+    },
+    async_flush: {
+      type: "boolean",
+    },
+    flush_strategy: {
+      type: "string",
+      enum: ["auto", "flushdb", "scan"],
+    },
+    shared: {
+      type: "boolean",
+    },
+    flush_on_failback: {
+      type: "boolean",
+    },
+    analytics_enabled: {
+      type: "boolean",
+    },
+  },
+} as const;
+
+export const ObjectCacheCapabilitiesSchema = {
+  type: "object",
+  description:
+    "Server and PHP extension capabilities detected by the agent during a connection test. phpredis_version empty or absent means the phpredis extension is not installed on the server.",
+  required: [
+    "igbinary_available",
+    "lzf_available",
+    "lz4_available",
+    "zstd_available",
+    "tls_supported",
+    "value_metadata_reads",
+    "native_retry_options",
+    "keepttl_supported",
+    "flush_async_supported",
+  ],
+  properties: {
+    phpredis_version: {
+      type: "string",
+      nullable: true,
+    },
+    igbinary_available: {
+      type: "boolean",
+    },
+    lzf_available: {
+      type: "boolean",
+    },
+    lz4_available: {
+      type: "boolean",
+    },
+    zstd_available: {
+      type: "boolean",
+    },
+    tls_supported: {
+      type: "boolean",
+    },
+    value_metadata_reads: {
+      type: "boolean",
+    },
+    native_retry_options: {
+      type: "boolean",
+    },
+    keepttl_supported: {
+      type: "boolean",
+    },
+    flush_async_supported: {
+      type: "boolean",
+    },
+  },
+} as const;
+
+export const ObjectCacheTestResultSchema = {
+  type: "object",
+  description: "Result of an objectcache.test command.",
+  required: ["ok", "reachable", "round_trip_ok"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    detail: {
+      type: "string",
+      nullable: true,
+    },
+    reachable: {
+      type: "boolean",
+    },
+    latency_ms: {
+      type: "integer",
+    },
+    server_version: {
+      type: "string",
+      nullable: true,
+    },
+    eviction_policy: {
+      type: "string",
+      nullable: true,
+    },
+    max_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    used_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    capabilities: {
+      $ref: "#/components/schemas/ObjectCacheCapabilities",
+    },
+    flush_capability_class: {
+      type: "string",
+      description:
+        "dedicated_db or shared_prefix; drives the flush strategy disclosure.",
+      nullable: true,
+    },
+    acl_denials: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      nullable: true,
+    },
+    round_trip_ok: {
+      type: "boolean",
+    },
+    config_hash: {
+      type: "string",
+      nullable: true,
+    },
+  },
+} as const;
+
+export const ObjectCacheStatsHistoryPointSchema = {
+  type: "object",
+  description: "One daily-aggregated data point in the stats history.",
+  required: [
+    "sampled_at",
+    "hit_count",
+    "miss_count",
+    "used_memory_bytes",
+    "ops_per_sec",
+    "evicted_keys_delta",
+  ],
+  properties: {
+    sampled_at: {
+      type: "string",
+      format: "date-time",
+    },
+    ratio_pct: {
+      type: "number",
+      nullable: true,
+      description: "Hit ratio as a percentage (0–100). Null when no data.",
+    },
+    hit_count: {
+      type: "integer",
+      format: "int64",
+    },
+    miss_count: {
+      type: "integer",
+      format: "int64",
+    },
+    used_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    avg_wait_ms: {
+      type: "number",
+    },
+    ops_per_sec: {
+      type: "integer",
+    },
+    evicted_keys_delta: {
+      type: "integer",
+      format: "int64",
+    },
+  },
+} as const;
+
+export const ObjectCacheStatsHistorySchema = {
+  type: "object",
+  description: "Daily-aggregated object cache stats history for trend charts.",
+  required: ["points", "avg_ratio_pct"],
+  properties: {
+    points: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/ObjectCacheStatsHistoryPoint",
+      },
+    },
+    avg_ratio_pct: {
+      type: "number",
+      description: "Average hit ratio across all data points in the window.",
+    },
+  },
+} as const;
+
 export const PerfConfigWritableSchema = {
   type: "object",
   description:

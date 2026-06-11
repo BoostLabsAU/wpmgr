@@ -212,6 +212,16 @@ export const FEATURES: {
           link: { href: "#media" },
           visual: "media-compare",
         },
+        {
+          icon: "HardDrive",
+          title: "Redis Object Cache",
+          summary: "Per-site persistent object cache that accelerates logged-in users, admin, and every uncacheable database round-trip.",
+          bullets: [
+            "phpredis connection, TLS, ACL, and per-site key prefix",
+            "Degrades safely to in-memory cache if Redis is unreachable",
+            "Hit ratio, memory, and latency history in the dashboard",
+          ],
+        },
       ],
     },
     {

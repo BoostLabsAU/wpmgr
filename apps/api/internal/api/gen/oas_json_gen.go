@@ -21850,6 +21850,129 @@ func (s *ExportSiteEmailLogUnauthorized) UnmarshalJSON(data []byte) error {
 }
 
 // Encode implements json.Marshaler.
+func (s *FlushObjectCacheReq) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *FlushObjectCacheReq) encodeFields(e *jx.Encoder) {
+	{
+		if s.Scope.Set {
+			e.FieldStart("scope")
+			s.Scope.Encode(e)
+		}
+	}
+	{
+		if s.Group.Set {
+			e.FieldStart("group")
+			s.Group.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfFlushObjectCacheReq = [2]string{
+	0: "scope",
+	1: "group",
+}
+
+// Decode decodes FlushObjectCacheReq from json.
+func (s *FlushObjectCacheReq) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode FlushObjectCacheReq to nil")
+	}
+	s.setDefaults()
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "scope":
+			if err := func() error {
+				s.Scope.Reset()
+				if err := s.Scope.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"scope\"")
+			}
+		case "group":
+			if err := func() error {
+				s.Group.Reset()
+				if err := s.Group.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"group\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode FlushObjectCacheReq")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *FlushObjectCacheReq) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *FlushObjectCacheReq) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes FlushObjectCacheReqScope as json.
+func (s FlushObjectCacheReqScope) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes FlushObjectCacheReqScope from json.
+func (s *FlushObjectCacheReqScope) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode FlushObjectCacheReqScope to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch FlushObjectCacheReqScope(v) {
+	case FlushObjectCacheReqScopeAll:
+		*s = FlushObjectCacheReqScopeAll
+	case FlushObjectCacheReqScopeSite:
+		*s = FlushObjectCacheReqScopeSite
+	case FlushObjectCacheReqScopeGroup:
+		*s = FlushObjectCacheReqScopeGroup
+	default:
+		*s = FlushObjectCacheReqScope(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s FlushObjectCacheReqScope) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *FlushObjectCacheReqScope) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
 func (s *FontResult) Encode(e *jx.Encoder) {
 	e.ObjStart()
 	s.encodeFields(e)
@@ -32321,6 +32444,2269 @@ func (s *MembershipList) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode implements json.Marshaler.
+func (s *ObjectCacheCapabilities) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheCapabilities) encodeFields(e *jx.Encoder) {
+	{
+		if s.PhpredisVersion.Set {
+			e.FieldStart("phpredis_version")
+			s.PhpredisVersion.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("igbinary_available")
+		e.Bool(s.IgbinaryAvailable)
+	}
+	{
+		e.FieldStart("lzf_available")
+		e.Bool(s.LzfAvailable)
+	}
+	{
+		e.FieldStart("lz4_available")
+		e.Bool(s.Lz4Available)
+	}
+	{
+		e.FieldStart("zstd_available")
+		e.Bool(s.ZstdAvailable)
+	}
+	{
+		e.FieldStart("tls_supported")
+		e.Bool(s.TLSSupported)
+	}
+	{
+		e.FieldStart("value_metadata_reads")
+		e.Bool(s.ValueMetadataReads)
+	}
+	{
+		e.FieldStart("native_retry_options")
+		e.Bool(s.NativeRetryOptions)
+	}
+	{
+		e.FieldStart("keepttl_supported")
+		e.Bool(s.KeepttlSupported)
+	}
+	{
+		e.FieldStart("flush_async_supported")
+		e.Bool(s.FlushAsyncSupported)
+	}
+}
+
+var jsonFieldsNameOfObjectCacheCapabilities = [10]string{
+	0: "phpredis_version",
+	1: "igbinary_available",
+	2: "lzf_available",
+	3: "lz4_available",
+	4: "zstd_available",
+	5: "tls_supported",
+	6: "value_metadata_reads",
+	7: "native_retry_options",
+	8: "keepttl_supported",
+	9: "flush_async_supported",
+}
+
+// Decode decodes ObjectCacheCapabilities from json.
+func (s *ObjectCacheCapabilities) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheCapabilities to nil")
+	}
+	var requiredBitSet [2]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "phpredis_version":
+			if err := func() error {
+				s.PhpredisVersion.Reset()
+				if err := s.PhpredisVersion.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"phpredis_version\"")
+			}
+		case "igbinary_available":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := d.Bool()
+				s.IgbinaryAvailable = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"igbinary_available\"")
+			}
+		case "lzf_available":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Bool()
+				s.LzfAvailable = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lzf_available\"")
+			}
+		case "lz4_available":
+			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Bool()
+				s.Lz4Available = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"lz4_available\"")
+			}
+		case "zstd_available":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Bool()
+				s.ZstdAvailable = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"zstd_available\"")
+			}
+		case "tls_supported":
+			requiredBitSet[0] |= 1 << 5
+			if err := func() error {
+				v, err := d.Bool()
+				s.TLSSupported = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"tls_supported\"")
+			}
+		case "value_metadata_reads":
+			requiredBitSet[0] |= 1 << 6
+			if err := func() error {
+				v, err := d.Bool()
+				s.ValueMetadataReads = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"value_metadata_reads\"")
+			}
+		case "native_retry_options":
+			requiredBitSet[0] |= 1 << 7
+			if err := func() error {
+				v, err := d.Bool()
+				s.NativeRetryOptions = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"native_retry_options\"")
+			}
+		case "keepttl_supported":
+			requiredBitSet[1] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.KeepttlSupported = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"keepttl_supported\"")
+			}
+		case "flush_async_supported":
+			requiredBitSet[1] |= 1 << 1
+			if err := func() error {
+				v, err := d.Bool()
+				s.FlushAsyncSupported = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_async_supported\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheCapabilities")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [2]uint8{
+		0b11111110,
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfObjectCacheCapabilities) {
+					name = jsonFieldsNameOfObjectCacheCapabilities[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheCapabilities) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheCapabilities) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *ObjectCacheConfig) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheConfig) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("enabled")
+		e.Bool(s.Enabled)
+	}
+	{
+		e.FieldStart("scheme")
+		s.Scheme.Encode(e)
+	}
+	{
+		e.FieldStart("host")
+		e.Str(s.Host)
+	}
+	{
+		e.FieldStart("port")
+		e.Int(s.Port)
+	}
+	{
+		if s.SocketPath.Set {
+			e.FieldStart("socket_path")
+			s.SocketPath.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("database")
+		e.Int(s.Database)
+	}
+	{
+		if s.Username.Set {
+			e.FieldStart("username")
+			s.Username.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("has_password")
+		e.Bool(s.HasPassword)
+	}
+	{
+		e.FieldStart("prefix")
+		e.Str(s.Prefix)
+	}
+	{
+		e.FieldStart("maxttl_seconds")
+		e.Int(s.MaxttlSeconds)
+	}
+	{
+		e.FieldStart("queryttl_seconds")
+		e.Int(s.QueryttlSeconds)
+	}
+	{
+		e.FieldStart("connect_timeout_ms")
+		e.Int(s.ConnectTimeoutMs)
+	}
+	{
+		e.FieldStart("read_timeout_ms")
+		e.Int(s.ReadTimeoutMs)
+	}
+	{
+		e.FieldStart("retry_count")
+		e.Int(s.RetryCount)
+	}
+	{
+		e.FieldStart("retry_interval_ms")
+		e.Int(s.RetryIntervalMs)
+	}
+	{
+		e.FieldStart("serializer")
+		s.Serializer.Encode(e)
+	}
+	{
+		e.FieldStart("compression")
+		s.Compression.Encode(e)
+	}
+	{
+		e.FieldStart("async_flush")
+		e.Bool(s.AsyncFlush)
+	}
+	{
+		e.FieldStart("flush_strategy")
+		s.FlushStrategy.Encode(e)
+	}
+	{
+		e.FieldStart("shared")
+		e.Bool(s.Shared)
+	}
+	{
+		e.FieldStart("flush_on_failback")
+		e.Bool(s.FlushOnFailback)
+	}
+	{
+		e.FieldStart("analytics_enabled")
+		e.Bool(s.AnalyticsEnabled)
+	}
+	{
+		if s.LastTestConfigHash.Set {
+			e.FieldStart("last_test_config_hash")
+			s.LastTestConfigHash.Encode(e)
+		}
+	}
+	{
+		if s.LastTestedAt.Set {
+			e.FieldStart("last_tested_at")
+			s.LastTestedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.LastTestResult.Set {
+			e.FieldStart("last_test_result")
+			s.LastTestResult.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("oc_state")
+		e.Str(s.OcState)
+	}
+	{
+		e.FieldStart("oc_latency_ms")
+		e.Int(s.OcLatencyMs)
+	}
+	{
+		if s.OcLastErrorClass.Set {
+			e.FieldStart("oc_last_error_class")
+			s.OcLastErrorClass.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("oc_used_memory_bytes")
+		e.Int64(s.OcUsedMemoryBytes)
+	}
+	{
+		if s.OcHitRatioPct.Set {
+			e.FieldStart("oc_hit_ratio_pct")
+			s.OcHitRatioPct.Encode(e)
+		}
+	}
+	{
+		if s.CreatedAt.Set {
+			e.FieldStart("created_at")
+			s.CreatedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.UpdatedAt.Set {
+			e.FieldStart("updated_at")
+			s.UpdatedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+}
+
+var jsonFieldsNameOfObjectCacheConfig = [32]string{
+	0:  "enabled",
+	1:  "scheme",
+	2:  "host",
+	3:  "port",
+	4:  "socket_path",
+	5:  "database",
+	6:  "username",
+	7:  "has_password",
+	8:  "prefix",
+	9:  "maxttl_seconds",
+	10: "queryttl_seconds",
+	11: "connect_timeout_ms",
+	12: "read_timeout_ms",
+	13: "retry_count",
+	14: "retry_interval_ms",
+	15: "serializer",
+	16: "compression",
+	17: "async_flush",
+	18: "flush_strategy",
+	19: "shared",
+	20: "flush_on_failback",
+	21: "analytics_enabled",
+	22: "last_test_config_hash",
+	23: "last_tested_at",
+	24: "last_test_result",
+	25: "oc_state",
+	26: "oc_latency_ms",
+	27: "oc_last_error_class",
+	28: "oc_used_memory_bytes",
+	29: "oc_hit_ratio_pct",
+	30: "created_at",
+	31: "updated_at",
+}
+
+// Decode decodes ObjectCacheConfig from json.
+func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfig to nil")
+	}
+	var requiredBitSet [4]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "enabled":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.Enabled = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"enabled\"")
+			}
+		case "scheme":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				if err := s.Scheme.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"scheme\"")
+			}
+		case "host":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Str()
+				s.Host = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"host\"")
+			}
+		case "port":
+			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Int()
+				s.Port = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"port\"")
+			}
+		case "socket_path":
+			if err := func() error {
+				s.SocketPath.Reset()
+				if err := s.SocketPath.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"socket_path\"")
+			}
+		case "database":
+			requiredBitSet[0] |= 1 << 5
+			if err := func() error {
+				v, err := d.Int()
+				s.Database = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"database\"")
+			}
+		case "username":
+			if err := func() error {
+				s.Username.Reset()
+				if err := s.Username.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"username\"")
+			}
+		case "has_password":
+			requiredBitSet[0] |= 1 << 7
+			if err := func() error {
+				v, err := d.Bool()
+				s.HasPassword = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"has_password\"")
+			}
+		case "prefix":
+			requiredBitSet[1] |= 1 << 0
+			if err := func() error {
+				v, err := d.Str()
+				s.Prefix = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"prefix\"")
+			}
+		case "maxttl_seconds":
+			requiredBitSet[1] |= 1 << 1
+			if err := func() error {
+				v, err := d.Int()
+				s.MaxttlSeconds = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"maxttl_seconds\"")
+			}
+		case "queryttl_seconds":
+			requiredBitSet[1] |= 1 << 2
+			if err := func() error {
+				v, err := d.Int()
+				s.QueryttlSeconds = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"queryttl_seconds\"")
+			}
+		case "connect_timeout_ms":
+			requiredBitSet[1] |= 1 << 3
+			if err := func() error {
+				v, err := d.Int()
+				s.ConnectTimeoutMs = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"connect_timeout_ms\"")
+			}
+		case "read_timeout_ms":
+			requiredBitSet[1] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int()
+				s.ReadTimeoutMs = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"read_timeout_ms\"")
+			}
+		case "retry_count":
+			requiredBitSet[1] |= 1 << 5
+			if err := func() error {
+				v, err := d.Int()
+				s.RetryCount = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"retry_count\"")
+			}
+		case "retry_interval_ms":
+			requiredBitSet[1] |= 1 << 6
+			if err := func() error {
+				v, err := d.Int()
+				s.RetryIntervalMs = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"retry_interval_ms\"")
+			}
+		case "serializer":
+			requiredBitSet[1] |= 1 << 7
+			if err := func() error {
+				if err := s.Serializer.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"serializer\"")
+			}
+		case "compression":
+			requiredBitSet[2] |= 1 << 0
+			if err := func() error {
+				if err := s.Compression.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"compression\"")
+			}
+		case "async_flush":
+			requiredBitSet[2] |= 1 << 1
+			if err := func() error {
+				v, err := d.Bool()
+				s.AsyncFlush = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"async_flush\"")
+			}
+		case "flush_strategy":
+			requiredBitSet[2] |= 1 << 2
+			if err := func() error {
+				if err := s.FlushStrategy.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_strategy\"")
+			}
+		case "shared":
+			requiredBitSet[2] |= 1 << 3
+			if err := func() error {
+				v, err := d.Bool()
+				s.Shared = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"shared\"")
+			}
+		case "flush_on_failback":
+			requiredBitSet[2] |= 1 << 4
+			if err := func() error {
+				v, err := d.Bool()
+				s.FlushOnFailback = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_on_failback\"")
+			}
+		case "analytics_enabled":
+			requiredBitSet[2] |= 1 << 5
+			if err := func() error {
+				v, err := d.Bool()
+				s.AnalyticsEnabled = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"analytics_enabled\"")
+			}
+		case "last_test_config_hash":
+			if err := func() error {
+				s.LastTestConfigHash.Reset()
+				if err := s.LastTestConfigHash.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_test_config_hash\"")
+			}
+		case "last_tested_at":
+			if err := func() error {
+				s.LastTestedAt.Reset()
+				if err := s.LastTestedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_tested_at\"")
+			}
+		case "last_test_result":
+			if err := func() error {
+				s.LastTestResult.Reset()
+				if err := s.LastTestResult.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_test_result\"")
+			}
+		case "oc_state":
+			requiredBitSet[3] |= 1 << 1
+			if err := func() error {
+				v, err := d.Str()
+				s.OcState = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"oc_state\"")
+			}
+		case "oc_latency_ms":
+			requiredBitSet[3] |= 1 << 2
+			if err := func() error {
+				v, err := d.Int()
+				s.OcLatencyMs = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"oc_latency_ms\"")
+			}
+		case "oc_last_error_class":
+			if err := func() error {
+				s.OcLastErrorClass.Reset()
+				if err := s.OcLastErrorClass.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"oc_last_error_class\"")
+			}
+		case "oc_used_memory_bytes":
+			requiredBitSet[3] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int64()
+				s.OcUsedMemoryBytes = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"oc_used_memory_bytes\"")
+			}
+		case "oc_hit_ratio_pct":
+			if err := func() error {
+				s.OcHitRatioPct.Reset()
+				if err := s.OcHitRatioPct.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"oc_hit_ratio_pct\"")
+			}
+		case "created_at":
+			if err := func() error {
+				s.CreatedAt.Reset()
+				if err := s.CreatedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"created_at\"")
+			}
+		case "updated_at":
+			if err := func() error {
+				s.UpdatedAt.Reset()
+				if err := s.UpdatedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"updated_at\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheConfig")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [4]uint8{
+		0b10101111,
+		0b11111111,
+		0b00111111,
+		0b00010110,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfObjectCacheConfig) {
+					name = jsonFieldsNameOfObjectCacheConfig[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheConfig) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfig) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigCompression as json.
+func (s ObjectCacheConfigCompression) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigCompression from json.
+func (s *ObjectCacheConfigCompression) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigCompression to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigCompression(v) {
+	case ObjectCacheConfigCompressionNone:
+		*s = ObjectCacheConfigCompressionNone
+	case ObjectCacheConfigCompressionLzf:
+		*s = ObjectCacheConfigCompressionLzf
+	case ObjectCacheConfigCompressionLz4:
+		*s = ObjectCacheConfigCompressionLz4
+	case ObjectCacheConfigCompressionZstd:
+		*s = ObjectCacheConfigCompressionZstd
+	default:
+		*s = ObjectCacheConfigCompression(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigCompression) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigCompression) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigFlushStrategy as json.
+func (s ObjectCacheConfigFlushStrategy) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigFlushStrategy from json.
+func (s *ObjectCacheConfigFlushStrategy) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigFlushStrategy to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigFlushStrategy(v) {
+	case ObjectCacheConfigFlushStrategyAuto:
+		*s = ObjectCacheConfigFlushStrategyAuto
+	case ObjectCacheConfigFlushStrategyFlushdb:
+		*s = ObjectCacheConfigFlushStrategyFlushdb
+	case ObjectCacheConfigFlushStrategyScan:
+		*s = ObjectCacheConfigFlushStrategyScan
+	default:
+		*s = ObjectCacheConfigFlushStrategy(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigFlushStrategy) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigFlushStrategy) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *ObjectCacheConfigPut) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheConfigPut) encodeFields(e *jx.Encoder) {
+	{
+		if s.Enabled.Set {
+			e.FieldStart("enabled")
+			s.Enabled.Encode(e)
+		}
+	}
+	{
+		if s.Scheme.Set {
+			e.FieldStart("scheme")
+			s.Scheme.Encode(e)
+		}
+	}
+	{
+		if s.Host.Set {
+			e.FieldStart("host")
+			s.Host.Encode(e)
+		}
+	}
+	{
+		if s.Port.Set {
+			e.FieldStart("port")
+			s.Port.Encode(e)
+		}
+	}
+	{
+		if s.SocketPath.Set {
+			e.FieldStart("socket_path")
+			s.SocketPath.Encode(e)
+		}
+	}
+	{
+		if s.Database.Set {
+			e.FieldStart("database")
+			s.Database.Encode(e)
+		}
+	}
+	{
+		if s.Username.Set {
+			e.FieldStart("username")
+			s.Username.Encode(e)
+		}
+	}
+	{
+		if s.Password.Set {
+			e.FieldStart("password")
+			s.Password.Encode(e)
+		}
+	}
+	{
+		if s.Prefix.Set {
+			e.FieldStart("prefix")
+			s.Prefix.Encode(e)
+		}
+	}
+	{
+		if s.MaxttlSeconds.Set {
+			e.FieldStart("maxttl_seconds")
+			s.MaxttlSeconds.Encode(e)
+		}
+	}
+	{
+		if s.QueryttlSeconds.Set {
+			e.FieldStart("queryttl_seconds")
+			s.QueryttlSeconds.Encode(e)
+		}
+	}
+	{
+		if s.ConnectTimeoutMs.Set {
+			e.FieldStart("connect_timeout_ms")
+			s.ConnectTimeoutMs.Encode(e)
+		}
+	}
+	{
+		if s.ReadTimeoutMs.Set {
+			e.FieldStart("read_timeout_ms")
+			s.ReadTimeoutMs.Encode(e)
+		}
+	}
+	{
+		if s.RetryCount.Set {
+			e.FieldStart("retry_count")
+			s.RetryCount.Encode(e)
+		}
+	}
+	{
+		if s.RetryIntervalMs.Set {
+			e.FieldStart("retry_interval_ms")
+			s.RetryIntervalMs.Encode(e)
+		}
+	}
+	{
+		if s.Serializer.Set {
+			e.FieldStart("serializer")
+			s.Serializer.Encode(e)
+		}
+	}
+	{
+		if s.Compression.Set {
+			e.FieldStart("compression")
+			s.Compression.Encode(e)
+		}
+	}
+	{
+		if s.AsyncFlush.Set {
+			e.FieldStart("async_flush")
+			s.AsyncFlush.Encode(e)
+		}
+	}
+	{
+		if s.FlushStrategy.Set {
+			e.FieldStart("flush_strategy")
+			s.FlushStrategy.Encode(e)
+		}
+	}
+	{
+		if s.Shared.Set {
+			e.FieldStart("shared")
+			s.Shared.Encode(e)
+		}
+	}
+	{
+		if s.FlushOnFailback.Set {
+			e.FieldStart("flush_on_failback")
+			s.FlushOnFailback.Encode(e)
+		}
+	}
+	{
+		if s.AnalyticsEnabled.Set {
+			e.FieldStart("analytics_enabled")
+			s.AnalyticsEnabled.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfObjectCacheConfigPut = [22]string{
+	0:  "enabled",
+	1:  "scheme",
+	2:  "host",
+	3:  "port",
+	4:  "socket_path",
+	5:  "database",
+	6:  "username",
+	7:  "password",
+	8:  "prefix",
+	9:  "maxttl_seconds",
+	10: "queryttl_seconds",
+	11: "connect_timeout_ms",
+	12: "read_timeout_ms",
+	13: "retry_count",
+	14: "retry_interval_ms",
+	15: "serializer",
+	16: "compression",
+	17: "async_flush",
+	18: "flush_strategy",
+	19: "shared",
+	20: "flush_on_failback",
+	21: "analytics_enabled",
+}
+
+// Decode decodes ObjectCacheConfigPut from json.
+func (s *ObjectCacheConfigPut) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigPut to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "enabled":
+			if err := func() error {
+				s.Enabled.Reset()
+				if err := s.Enabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"enabled\"")
+			}
+		case "scheme":
+			if err := func() error {
+				s.Scheme.Reset()
+				if err := s.Scheme.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"scheme\"")
+			}
+		case "host":
+			if err := func() error {
+				s.Host.Reset()
+				if err := s.Host.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"host\"")
+			}
+		case "port":
+			if err := func() error {
+				s.Port.Reset()
+				if err := s.Port.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"port\"")
+			}
+		case "socket_path":
+			if err := func() error {
+				s.SocketPath.Reset()
+				if err := s.SocketPath.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"socket_path\"")
+			}
+		case "database":
+			if err := func() error {
+				s.Database.Reset()
+				if err := s.Database.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"database\"")
+			}
+		case "username":
+			if err := func() error {
+				s.Username.Reset()
+				if err := s.Username.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"username\"")
+			}
+		case "password":
+			if err := func() error {
+				s.Password.Reset()
+				if err := s.Password.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"password\"")
+			}
+		case "prefix":
+			if err := func() error {
+				s.Prefix.Reset()
+				if err := s.Prefix.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"prefix\"")
+			}
+		case "maxttl_seconds":
+			if err := func() error {
+				s.MaxttlSeconds.Reset()
+				if err := s.MaxttlSeconds.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"maxttl_seconds\"")
+			}
+		case "queryttl_seconds":
+			if err := func() error {
+				s.QueryttlSeconds.Reset()
+				if err := s.QueryttlSeconds.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"queryttl_seconds\"")
+			}
+		case "connect_timeout_ms":
+			if err := func() error {
+				s.ConnectTimeoutMs.Reset()
+				if err := s.ConnectTimeoutMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"connect_timeout_ms\"")
+			}
+		case "read_timeout_ms":
+			if err := func() error {
+				s.ReadTimeoutMs.Reset()
+				if err := s.ReadTimeoutMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"read_timeout_ms\"")
+			}
+		case "retry_count":
+			if err := func() error {
+				s.RetryCount.Reset()
+				if err := s.RetryCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"retry_count\"")
+			}
+		case "retry_interval_ms":
+			if err := func() error {
+				s.RetryIntervalMs.Reset()
+				if err := s.RetryIntervalMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"retry_interval_ms\"")
+			}
+		case "serializer":
+			if err := func() error {
+				s.Serializer.Reset()
+				if err := s.Serializer.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"serializer\"")
+			}
+		case "compression":
+			if err := func() error {
+				s.Compression.Reset()
+				if err := s.Compression.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"compression\"")
+			}
+		case "async_flush":
+			if err := func() error {
+				s.AsyncFlush.Reset()
+				if err := s.AsyncFlush.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"async_flush\"")
+			}
+		case "flush_strategy":
+			if err := func() error {
+				s.FlushStrategy.Reset()
+				if err := s.FlushStrategy.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_strategy\"")
+			}
+		case "shared":
+			if err := func() error {
+				s.Shared.Reset()
+				if err := s.Shared.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"shared\"")
+			}
+		case "flush_on_failback":
+			if err := func() error {
+				s.FlushOnFailback.Reset()
+				if err := s.FlushOnFailback.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_on_failback\"")
+			}
+		case "analytics_enabled":
+			if err := func() error {
+				s.AnalyticsEnabled.Reset()
+				if err := s.AnalyticsEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"analytics_enabled\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheConfigPut")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheConfigPut) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigPut) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutCompression as json.
+func (s ObjectCacheConfigPutCompression) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigPutCompression from json.
+func (s *ObjectCacheConfigPutCompression) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigPutCompression to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigPutCompression(v) {
+	case ObjectCacheConfigPutCompressionNone:
+		*s = ObjectCacheConfigPutCompressionNone
+	case ObjectCacheConfigPutCompressionLzf:
+		*s = ObjectCacheConfigPutCompressionLzf
+	case ObjectCacheConfigPutCompressionLz4:
+		*s = ObjectCacheConfigPutCompressionLz4
+	case ObjectCacheConfigPutCompressionZstd:
+		*s = ObjectCacheConfigPutCompressionZstd
+	default:
+		*s = ObjectCacheConfigPutCompression(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigPutCompression) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigPutCompression) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutFlushStrategy as json.
+func (s ObjectCacheConfigPutFlushStrategy) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigPutFlushStrategy from json.
+func (s *ObjectCacheConfigPutFlushStrategy) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigPutFlushStrategy to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigPutFlushStrategy(v) {
+	case ObjectCacheConfigPutFlushStrategyAuto:
+		*s = ObjectCacheConfigPutFlushStrategyAuto
+	case ObjectCacheConfigPutFlushStrategyFlushdb:
+		*s = ObjectCacheConfigPutFlushStrategyFlushdb
+	case ObjectCacheConfigPutFlushStrategyScan:
+		*s = ObjectCacheConfigPutFlushStrategyScan
+	default:
+		*s = ObjectCacheConfigPutFlushStrategy(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigPutFlushStrategy) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigPutFlushStrategy) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutScheme as json.
+func (s ObjectCacheConfigPutScheme) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigPutScheme from json.
+func (s *ObjectCacheConfigPutScheme) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigPutScheme to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigPutScheme(v) {
+	case ObjectCacheConfigPutSchemeTCP:
+		*s = ObjectCacheConfigPutSchemeTCP
+	case ObjectCacheConfigPutSchemeUnix:
+		*s = ObjectCacheConfigPutSchemeUnix
+	case ObjectCacheConfigPutSchemeTLS:
+		*s = ObjectCacheConfigPutSchemeTLS
+	default:
+		*s = ObjectCacheConfigPutScheme(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigPutScheme) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigPutScheme) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutSerializer as json.
+func (s ObjectCacheConfigPutSerializer) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigPutSerializer from json.
+func (s *ObjectCacheConfigPutSerializer) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigPutSerializer to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigPutSerializer(v) {
+	case ObjectCacheConfigPutSerializerPhp:
+		*s = ObjectCacheConfigPutSerializerPhp
+	case ObjectCacheConfigPutSerializerIgbinary:
+		*s = ObjectCacheConfigPutSerializerIgbinary
+	default:
+		*s = ObjectCacheConfigPutSerializer(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigPutSerializer) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigPutSerializer) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigScheme as json.
+func (s ObjectCacheConfigScheme) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigScheme from json.
+func (s *ObjectCacheConfigScheme) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigScheme to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigScheme(v) {
+	case ObjectCacheConfigSchemeTCP:
+		*s = ObjectCacheConfigSchemeTCP
+	case ObjectCacheConfigSchemeUnix:
+		*s = ObjectCacheConfigSchemeUnix
+	case ObjectCacheConfigSchemeTLS:
+		*s = ObjectCacheConfigSchemeTLS
+	default:
+		*s = ObjectCacheConfigScheme(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigScheme) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigScheme) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigSerializer as json.
+func (s ObjectCacheConfigSerializer) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes ObjectCacheConfigSerializer from json.
+func (s *ObjectCacheConfigSerializer) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheConfigSerializer to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch ObjectCacheConfigSerializer(v) {
+	case ObjectCacheConfigSerializerPhp:
+		*s = ObjectCacheConfigSerializerPhp
+	case ObjectCacheConfigSerializerIgbinary:
+		*s = ObjectCacheConfigSerializerIgbinary
+	default:
+		*s = ObjectCacheConfigSerializer(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s ObjectCacheConfigSerializer) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheConfigSerializer) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *ObjectCacheStatsHistory) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheStatsHistory) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("points")
+		e.ArrStart()
+		for _, elem := range s.Points {
+			elem.Encode(e)
+		}
+		e.ArrEnd()
+	}
+	{
+		e.FieldStart("avg_ratio_pct")
+		e.Float64(s.AvgRatioPct)
+	}
+}
+
+var jsonFieldsNameOfObjectCacheStatsHistory = [2]string{
+	0: "points",
+	1: "avg_ratio_pct",
+}
+
+// Decode decodes ObjectCacheStatsHistory from json.
+func (s *ObjectCacheStatsHistory) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheStatsHistory to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "points":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				s.Points = make([]ObjectCacheStatsHistoryPoint, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem ObjectCacheStatsHistoryPoint
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Points = append(s.Points, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"points\"")
+			}
+		case "avg_ratio_pct":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := d.Float64()
+				s.AvgRatioPct = float64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"avg_ratio_pct\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheStatsHistory")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfObjectCacheStatsHistory) {
+					name = jsonFieldsNameOfObjectCacheStatsHistory[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheStatsHistory) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheStatsHistory) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *ObjectCacheStatsHistoryPoint) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheStatsHistoryPoint) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("sampled_at")
+		json.EncodeDateTime(e, s.SampledAt)
+	}
+	{
+		if s.RatioPct.Set {
+			e.FieldStart("ratio_pct")
+			s.RatioPct.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("hit_count")
+		e.Int64(s.HitCount)
+	}
+	{
+		e.FieldStart("miss_count")
+		e.Int64(s.MissCount)
+	}
+	{
+		e.FieldStart("used_memory_bytes")
+		e.Int64(s.UsedMemoryBytes)
+	}
+	{
+		if s.AvgWaitMs.Set {
+			e.FieldStart("avg_wait_ms")
+			s.AvgWaitMs.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("ops_per_sec")
+		e.Int(s.OpsPerSec)
+	}
+	{
+		e.FieldStart("evicted_keys_delta")
+		e.Int64(s.EvictedKeysDelta)
+	}
+}
+
+var jsonFieldsNameOfObjectCacheStatsHistoryPoint = [8]string{
+	0: "sampled_at",
+	1: "ratio_pct",
+	2: "hit_count",
+	3: "miss_count",
+	4: "used_memory_bytes",
+	5: "avg_wait_ms",
+	6: "ops_per_sec",
+	7: "evicted_keys_delta",
+}
+
+// Decode decodes ObjectCacheStatsHistoryPoint from json.
+func (s *ObjectCacheStatsHistoryPoint) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheStatsHistoryPoint to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "sampled_at":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := json.DecodeDateTime(d)
+				s.SampledAt = v
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sampled_at\"")
+			}
+		case "ratio_pct":
+			if err := func() error {
+				s.RatioPct.Reset()
+				if err := s.RatioPct.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ratio_pct\"")
+			}
+		case "hit_count":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Int64()
+				s.HitCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"hit_count\"")
+			}
+		case "miss_count":
+			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Int64()
+				s.MissCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"miss_count\"")
+			}
+		case "used_memory_bytes":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int64()
+				s.UsedMemoryBytes = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"used_memory_bytes\"")
+			}
+		case "avg_wait_ms":
+			if err := func() error {
+				s.AvgWaitMs.Reset()
+				if err := s.AvgWaitMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"avg_wait_ms\"")
+			}
+		case "ops_per_sec":
+			requiredBitSet[0] |= 1 << 6
+			if err := func() error {
+				v, err := d.Int()
+				s.OpsPerSec = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ops_per_sec\"")
+			}
+		case "evicted_keys_delta":
+			requiredBitSet[0] |= 1 << 7
+			if err := func() error {
+				v, err := d.Int64()
+				s.EvictedKeysDelta = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"evicted_keys_delta\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheStatsHistoryPoint")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b11011101,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfObjectCacheStatsHistoryPoint) {
+					name = jsonFieldsNameOfObjectCacheStatsHistoryPoint[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheStatsHistoryPoint) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheStatsHistoryPoint) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *ObjectCacheTestResult) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *ObjectCacheTestResult) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("ok")
+		e.Bool(s.Ok)
+	}
+	{
+		if s.Detail.Set {
+			e.FieldStart("detail")
+			s.Detail.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("reachable")
+		e.Bool(s.Reachable)
+	}
+	{
+		if s.LatencyMs.Set {
+			e.FieldStart("latency_ms")
+			s.LatencyMs.Encode(e)
+		}
+	}
+	{
+		if s.ServerVersion.Set {
+			e.FieldStart("server_version")
+			s.ServerVersion.Encode(e)
+		}
+	}
+	{
+		if s.EvictionPolicy.Set {
+			e.FieldStart("eviction_policy")
+			s.EvictionPolicy.Encode(e)
+		}
+	}
+	{
+		if s.MaxMemoryBytes.Set {
+			e.FieldStart("max_memory_bytes")
+			s.MaxMemoryBytes.Encode(e)
+		}
+	}
+	{
+		if s.UsedMemoryBytes.Set {
+			e.FieldStart("used_memory_bytes")
+			s.UsedMemoryBytes.Encode(e)
+		}
+	}
+	{
+		if s.Capabilities.Set {
+			e.FieldStart("capabilities")
+			s.Capabilities.Encode(e)
+		}
+	}
+	{
+		if s.FlushCapabilityClass.Set {
+			e.FieldStart("flush_capability_class")
+			s.FlushCapabilityClass.Encode(e)
+		}
+	}
+	{
+		if s.ACLDenials.Set {
+			e.FieldStart("acl_denials")
+			s.ACLDenials.Encode(e)
+		}
+	}
+	{
+		e.FieldStart("round_trip_ok")
+		e.Bool(s.RoundTripOk)
+	}
+	{
+		if s.ConfigHash.Set {
+			e.FieldStart("config_hash")
+			s.ConfigHash.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfObjectCacheTestResult = [13]string{
+	0:  "ok",
+	1:  "detail",
+	2:  "reachable",
+	3:  "latency_ms",
+	4:  "server_version",
+	5:  "eviction_policy",
+	6:  "max_memory_bytes",
+	7:  "used_memory_bytes",
+	8:  "capabilities",
+	9:  "flush_capability_class",
+	10: "acl_denials",
+	11: "round_trip_ok",
+	12: "config_hash",
+}
+
+// Decode decodes ObjectCacheTestResult from json.
+func (s *ObjectCacheTestResult) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode ObjectCacheTestResult to nil")
+	}
+	var requiredBitSet [2]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "ok":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Bool()
+				s.Ok = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"ok\"")
+			}
+		case "detail":
+			if err := func() error {
+				s.Detail.Reset()
+				if err := s.Detail.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"detail\"")
+			}
+		case "reachable":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Bool()
+				s.Reachable = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"reachable\"")
+			}
+		case "latency_ms":
+			if err := func() error {
+				s.LatencyMs.Reset()
+				if err := s.LatencyMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"latency_ms\"")
+			}
+		case "server_version":
+			if err := func() error {
+				s.ServerVersion.Reset()
+				if err := s.ServerVersion.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"server_version\"")
+			}
+		case "eviction_policy":
+			if err := func() error {
+				s.EvictionPolicy.Reset()
+				if err := s.EvictionPolicy.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"eviction_policy\"")
+			}
+		case "max_memory_bytes":
+			if err := func() error {
+				s.MaxMemoryBytes.Reset()
+				if err := s.MaxMemoryBytes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"max_memory_bytes\"")
+			}
+		case "used_memory_bytes":
+			if err := func() error {
+				s.UsedMemoryBytes.Reset()
+				if err := s.UsedMemoryBytes.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"used_memory_bytes\"")
+			}
+		case "capabilities":
+			if err := func() error {
+				s.Capabilities.Reset()
+				if err := s.Capabilities.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"capabilities\"")
+			}
+		case "flush_capability_class":
+			if err := func() error {
+				s.FlushCapabilityClass.Reset()
+				if err := s.FlushCapabilityClass.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"flush_capability_class\"")
+			}
+		case "acl_denials":
+			if err := func() error {
+				s.ACLDenials.Reset()
+				if err := s.ACLDenials.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"acl_denials\"")
+			}
+		case "round_trip_ok":
+			requiredBitSet[1] |= 1 << 3
+			if err := func() error {
+				v, err := d.Bool()
+				s.RoundTripOk = bool(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"round_trip_ok\"")
+			}
+		case "config_hash":
+			if err := func() error {
+				s.ConfigHash.Reset()
+				if err := s.ConfigHash.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"config_hash\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode ObjectCacheTestResult")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [2]uint8{
+		0b00000101,
+		0b00001000,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfObjectCacheTestResult) {
+					name = jsonFieldsNameOfObjectCacheTestResult[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *ObjectCacheTestResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *ObjectCacheTestResult) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes OidcCallbackNotImplemented as json.
 func (s *OidcCallbackNotImplemented) Encode(e *jx.Encoder) {
 	unwrapped := (*Error)(s)
@@ -33306,6 +35692,72 @@ func (s *OptFloat64) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes FlushObjectCacheReq as json.
+func (o OptFlushObjectCacheReq) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes FlushObjectCacheReq from json.
+func (o *OptFlushObjectCacheReq) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptFlushObjectCacheReq to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptFlushObjectCacheReq) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptFlushObjectCacheReq) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes FlushObjectCacheReqScope as json.
+func (o OptFlushObjectCacheReqScope) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes FlushObjectCacheReqScope from json.
+func (o *OptFlushObjectCacheReqScope) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptFlushObjectCacheReqScope to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptFlushObjectCacheReqScope) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptFlushObjectCacheReqScope) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes FontResultState as json.
 func (o OptFontResultState) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -34159,6 +36611,57 @@ func (s *OptNilFloat32) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes float64 as json.
+func (o OptNilFloat64) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	if o.Null {
+		e.Null()
+		return
+	}
+	e.Float64(float64(o.Value))
+}
+
+// Decode decodes float64 from json.
+func (o *OptNilFloat64) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptNilFloat64 to nil")
+	}
+	if d.Next() == jx.Null {
+		if err := d.Null(); err != nil {
+			return err
+		}
+
+		var v float64
+		o.Value = v
+		o.Set = true
+		o.Null = true
+		return nil
+	}
+	o.Set = true
+	o.Null = false
+	v, err := d.Float64()
+	if err != nil {
+		return err
+	}
+	o.Value = float64(v)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptNilFloat64) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptNilFloat64) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes int as json.
 func (o OptNilInt) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -34308,6 +36811,55 @@ func (s OptNilInt64) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptNilInt64) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheTestResult as json.
+func (o OptNilObjectCacheTestResult) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	if o.Null {
+		e.Null()
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes ObjectCacheTestResult from json.
+func (o *OptNilObjectCacheTestResult) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptNilObjectCacheTestResult to nil")
+	}
+	if d.Next() == jx.Null {
+		if err := d.Null(); err != nil {
+			return err
+		}
+
+		var v ObjectCacheTestResult
+		o.Value = v
+		o.Set = true
+		o.Null = true
+		return nil
+	}
+	o.Set = true
+	o.Null = false
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptNilObjectCacheTestResult) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptNilObjectCacheTestResult) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -34891,6 +37443,171 @@ func (s OptNilUUID) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptNilUUID) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheCapabilities as json.
+func (o OptObjectCacheCapabilities) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes ObjectCacheCapabilities from json.
+func (o *OptObjectCacheCapabilities) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptObjectCacheCapabilities to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptObjectCacheCapabilities) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptObjectCacheCapabilities) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutCompression as json.
+func (o OptObjectCacheConfigPutCompression) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes ObjectCacheConfigPutCompression from json.
+func (o *OptObjectCacheConfigPutCompression) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptObjectCacheConfigPutCompression to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptObjectCacheConfigPutCompression) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptObjectCacheConfigPutCompression) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutFlushStrategy as json.
+func (o OptObjectCacheConfigPutFlushStrategy) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes ObjectCacheConfigPutFlushStrategy from json.
+func (o *OptObjectCacheConfigPutFlushStrategy) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptObjectCacheConfigPutFlushStrategy to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptObjectCacheConfigPutFlushStrategy) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptObjectCacheConfigPutFlushStrategy) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutScheme as json.
+func (o OptObjectCacheConfigPutScheme) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes ObjectCacheConfigPutScheme from json.
+func (o *OptObjectCacheConfigPutScheme) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptObjectCacheConfigPutScheme to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptObjectCacheConfigPutScheme) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptObjectCacheConfigPutScheme) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes ObjectCacheConfigPutSerializer as json.
+func (o OptObjectCacheConfigPutSerializer) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes ObjectCacheConfigPutSerializer from json.
+func (o *OptObjectCacheConfigPutSerializer) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptObjectCacheConfigPutSerializer to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptObjectCacheConfigPutSerializer) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptObjectCacheConfigPutSerializer) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -35655,6 +38372,39 @@ func (s OptString) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *OptString) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes TestObjectCacheReq as json.
+func (o OptTestObjectCacheReq) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	o.Value.Encode(e)
+}
+
+// Decode decodes TestObjectCacheReq from json.
+func (o *OptTestObjectCacheReq) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptTestObjectCacheReq to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptTestObjectCacheReq) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptTestObjectCacheReq) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -59668,6 +62418,69 @@ func (s *TenantList) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *TenantList) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *TestObjectCacheReq) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *TestObjectCacheReq) encodeFields(e *jx.Encoder) {
+	{
+		if s.Password.Set {
+			e.FieldStart("password")
+			s.Password.Encode(e)
+		}
+	}
+}
+
+var jsonFieldsNameOfTestObjectCacheReq = [1]string{
+	0: "password",
+}
+
+// Decode decodes TestObjectCacheReq from json.
+func (s *TestObjectCacheReq) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode TestObjectCacheReq to nil")
+	}
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "password":
+			if err := func() error {
+				s.Password.Reset()
+				if err := s.Password.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"password\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode TestObjectCacheReq")
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *TestObjectCacheReq) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *TestObjectCacheReq) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

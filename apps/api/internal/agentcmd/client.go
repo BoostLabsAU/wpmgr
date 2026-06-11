@@ -516,6 +516,14 @@ func (c *Client) MediaClean(ctx context.Context, siteID uuid.UUID, siteURL strin
 	return out, nil
 }
 
+// Do is the public generic version of post, used by domain packages that issue
+// a variety of commands without type-specific wrapper methods. It mints a fresh
+// JWT bound to siteID, POSTs body to the named command endpoint, and decodes
+// the JSON response into out. A non-2xx HTTP response is an error.
+func (c *Client) Do(ctx context.Context, siteID uuid.UUID, siteURL, command string, body, out any) error {
+	return c.post(ctx, siteID, siteURL, command, body, out)
+}
+
 // post mints a fresh JWT bound to siteID (aud) and command (cmd), POSTs body to
 // the named command endpoint at siteURL, and decodes the JSON response into
 // out. A non-2xx response is an error.

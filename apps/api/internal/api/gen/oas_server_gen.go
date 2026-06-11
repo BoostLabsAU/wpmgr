@@ -568,6 +568,14 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/disable
 	DisableCache(ctx context.Context, params DisableCacheParams) (*PerfActionResult, error)
+	// DisableObjectCache implements disableObjectCache operation.
+	//
+	// Removes the WP object-cache drop-in and flushes. Sends an
+	// `objectcache.disable` signed command. Requires `site.cache.manage`
+	// permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/disable
+	DisableObjectCache(ctx context.Context, params DisableObjectCacheParams) (*PerfActionResult, error)
 	// DownloadPortalReport implements downloadPortalReport operation.
 	//
 	// Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
@@ -584,6 +592,15 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/enable
 	EnableCache(ctx context.Context, params EnableCacheParams) (*PerfActionResult, error)
+	// EnableObjectCache implements enableObjectCache operation.
+	//
+	// Installs the WP object-cache drop-in on the site. Rejected with 400
+	// `objectcache_test_required` when no passing test result exists for the
+	// current configuration (handshake gate). Sends an `objectcache.enable`
+	// signed command. Requires `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/enable
+	EnableObjectCache(ctx context.Context, params EnableObjectCacheParams) (EnableObjectCacheRes, error)
 	// Enroll implements enroll operation.
 	//
 	// Called by an agent (NOT an authenticated control-plane user) to enroll a
@@ -604,6 +621,16 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/log/export
 	ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (ExportSiteEmailLogRes, error)
+	// FlushObjectCache implements flushObjectCache operation.
+	//
+	// Flushes the Redis/cache store for this site. The `scope` field
+	// controls what is flushed: `all` (default), `site` (prefix-scoped),
+	// or `group` (requires `group` field). Sends an `objectcache.flush`
+	// command and publishes an `objectcache.flushed` SSE event. Requires
+	// `site.cache.purge` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/flush
+	FlushObjectCache(ctx context.Context, req OptFlushObjectCacheReq, params FlushObjectCacheParams) (*PerfActionResult, error)
 	// ForgotPassword implements forgotPassword operation.
 	//
 	// Always returns 200 {ok: true} whether or not the email maps to an
@@ -753,6 +780,23 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 	GetMediaJob(ctx context.Context, params GetMediaJobParams) (*MediaJobDetail, error)
+	// GetObjectCacheConfig implements getObjectCacheConfig operation.
+	//
+	// Returns the stored object cache configuration for the site. The password
+	// is never returned; `has_password` indicates whether one is stored.
+	// Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+	// heartbeat from the agent.
+	//
+	// GET /api/v1/sites/{siteId}/perf/object-cache/config
+	GetObjectCacheConfig(ctx context.Context, params GetObjectCacheConfigParams) (*ObjectCacheConfig, error)
+	// GetObjectCacheStatsHistory implements getObjectCacheStatsHistory operation.
+	//
+	// Returns daily-aggregated object cache stats (hit/miss ratio, memory
+	// usage, eviction count) for up to 365 days. Default window is 90 days.
+	// Requires `site.read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/object-cache/stats-history
+	GetObjectCacheStatsHistory(ctx context.Context, params GetObjectCacheStatsHistoryParams) (*ObjectCacheStatsHistory, error)
 	// GetOrgEmailConfig implements getOrgEmailConfig operation.
 	//
 	// Returns the org-wide default email configuration. Sites with no per-site
@@ -1404,6 +1448,19 @@ type Handler interface {
 	//
 	// PUT /api/v1/email/notify-settings
 	PutEmailNotifySettings(ctx context.Context, req *PutEmailNotifySettingsRequest) (PutEmailNotifySettingsRes, error)
+	// PutObjectCacheConfig implements putObjectCacheConfig operation.
+	//
+	// Stores the object cache configuration. An empty `password` field
+	// preserves the stored password (nil-sentinel). If connection-critical
+	// fields change (host, port, scheme, database, username, prefix, or
+	// password), the stored test hash is cleared and a new test is required
+	// before re-enabling. The agent receives the new config via an
+	// `objectcache.apply_config` signed command (best-effort: a push failure
+	// returns 200 with an `X-Agent-Push-Warning` header). Requires
+	// `site.perf.config` permission.
+	//
+	// PUT /api/v1/sites/{siteId}/perf/object-cache/config
+	PutObjectCacheConfig(ctx context.Context, req *ObjectCacheConfigPut, params PutObjectCacheConfigParams) (PutObjectCacheConfigRes, error)
 	// PutOrgEmailConfig implements putOrgEmailConfig operation.
 	//
 	// Creates or updates the org-wide default email configuration. This row is
@@ -1709,6 +1766,18 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/email/sync
 	SyncSiteEmailConfig(ctx context.Context, params SyncSiteEmailConfigParams) (SyncSiteEmailConfigRes, error)
+	// TestObjectCache implements testObjectCache operation.
+	//
+	// Sends an `objectcache.test` command to the agent using the stored
+	// configuration. An optional `password` in the body overrides the stored
+	// password for this call only (useful for testing before saving). On
+	// success the control plane stores the config hash as the enable-gate
+	// token; on failure the hash is NOT updated. The result is also published
+	// as an `objectcache.test_completed` SSE event. Requires
+	// `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/test
+	TestObjectCache(ctx context.Context, req OptTestObjectCacheReq, params TestObjectCacheParams) (*ObjectCacheTestResult, error)
 	// TestSiteDestination implements testSiteDestination operation.
 	//
 	// Returns 200 with `{ok, message}` regardless of success/failure so the

@@ -30,6 +30,7 @@ function CacheTabRoute() {
         hostname={hostname}
         canOperate={canOperate(me)}
         canManage={canManage(me)}
+        agentVersion={site?.agent_version ?? undefined}
       />
     </section>
   );

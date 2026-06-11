@@ -59,6 +59,11 @@ use WPMgr\Agent\Commands\CachePreloadQueueStatusCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueRetryFailedCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueClearCommand;
 use WPMgr\Agent\Commands\CachePreloadQueueTestRestCommand;
+use WPMgr\Agent\Commands\ObjectcacheApplyConfigCommand;
+use WPMgr\Agent\Commands\ObjectcacheDisableCommand;
+use WPMgr\Agent\Commands\ObjectcacheEnableCommand;
+use WPMgr\Agent\Commands\ObjectcacheFlushCommand;
+use WPMgr\Agent\Commands\ObjectcacheTestCommand;
 use WPMgr\Agent\Commands\ResendEmailCommand;
 use WPMgr\Agent\Commands\SendTestEmailCommand;
 use WPMgr\Agent\Commands\SyncEmailConfigCommand;
@@ -1203,6 +1208,19 @@ final class Plugin
             // the body was stored (body_stored=1). Returns body_not_stored when
             // the body was not captured so the CP/UI can surface a clear reason.
             new ResendEmailCommand($this->providerRouter),
+            // Object Cache Phase 2 — five CP->agent commands for the Redis
+            // persistent object cache. All commands ride the existing signed
+            // Ed25519 channel:
+            //   objectcache.apply_config -> persist 0600 config file
+            //   objectcache.test         -> probe candidate config (no persist)
+            //   objectcache.enable       -> install object-cache.php drop-in
+            //   objectcache.disable      -> remove drop-in + optional flush
+            //   objectcache.flush        -> FLUSHDB or SCAN+MATCH+UNLINK
+            new ObjectcacheApplyConfigCommand(),
+            new ObjectcacheTestCommand(),
+            new ObjectcacheEnableCommand(),
+            new ObjectcacheDisableCommand(),
+            new ObjectcacheFlushCommand(),
         ];
     }
 

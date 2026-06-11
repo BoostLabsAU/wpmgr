@@ -481,6 +481,44 @@ export function perfEventReducer(ev: SiteEvent, deps: PerfEventDeps): void {
       });
       break;
 
+    // ── Object cache (m68 Phase 3) ───────────────────────────────────────────
+    // objectcache.status_changed: a connectivity state transition (connected /
+    // degraded / down / disabled). Bypass the 10s stats debounce — transition
+    // events must update the pill immediately. Re-read the config (carries live
+    // oc_state / oc_latency_ms / oc_last_error_class / oc_used_memory_bytes).
+    case "objectcache.status_changed":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+      break;
+
+    // objectcache.stats_updated: non-transition heartbeat drift (latency /
+    // memory). Apply the same 10s badge-debounce precedent: the query
+    // invalidation is throttled naturally because the CP publishes this at most
+    // once per heartbeat cycle. Re-read config for the updated metric fields.
+    case "objectcache.stats_updated":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheStats(siteId) });
+      break;
+
+    // objectcache.flushed: flush completed — refresh the config so the panel
+    // reflects any state reset.
+    case "objectcache.flushed":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+      break;
+
+    // objectcache.config_applied: the agent has applied the new connection
+    // config. Refresh the config so last_test_config_hash and updated_at
+    // are current.
+    case "objectcache.config_applied":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+      break;
+
+    // objectcache.test_completed: the test probe has returned. Refresh the
+    // config so last_tested_at and last_test_config_hash are current, and
+    // the test-result panel can update.
+    case "objectcache.test_completed":
+      void queryClient.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+      break;
+
     default:
       break;
   }
@@ -494,7 +532,8 @@ function isPerfEvent(type: string): boolean {
     type.startsWith("db.") ||
     type.startsWith("perf.") ||
     type.startsWith("font.") ||
-    type.startsWith("rum.")
+    type.startsWith("rum.") ||
+    type.startsWith("objectcache.")
   );
 }
 

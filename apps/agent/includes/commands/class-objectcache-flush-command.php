@@ -1,0 +1,161 @@
+<?php
+/**
+ * ObjectcacheFlushCommand — flushes the Redis cache with the strategy selected
+ * per the plan (FLUSHDB on confirmed dedicated DB, SCAN+MATCH+UNLINK on shared).
+ *
+ * Wire contract (CP -> agent):
+ *   POST /wp-json/wpmgr/v1/command/objectcache.flush
+ *   Authorization: Bearer <Ed25519 JWT, cmd="objectcache.flush", aud=<siteId>>
+ *   Body: ObjectCacheFlushRequest { scope: "all"|"site"|"group", group?: string, reason?: string }
+ *
+ * Response: ObjectCacheFlushResult { ok, detail, strategy, keys_deleted }
+ *
+ * FLUSHALL is never issued. The strategy used is reported in the response.
+ *
+ * @package WPMgr\Agent\Commands
+ */
+
+declare(strict_types=1);
+
+namespace WPMgr\Agent\Commands;
+
+use WPMgr\Agent\ObjectCache\ObjectCacheConfig;
+use WPMgr\Agent\ObjectCache\RedisConnection;
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Flushes the Redis object cache.
+ */
+final class ObjectcacheFlushCommand implements CommandInterface
+{
+	/**
+	 * {@inheritDoc}
+	 */
+	public function name(): string
+	{
+		return 'objectcache.flush';
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * @param array<string,mixed> $claims Validated JWT claims (unused).
+	 * @param array<string,mixed> $params ObjectCacheFlushRequest fields.
+	 * @return array{ok:bool,detail:string,strategy:string,keys_deleted:int}
+	 */
+	public function execute( array $claims, array $params ): array
+	{
+		$scope  = isset( $params['scope'] ) && is_string( $params['scope'] )
+			? sanitize_key( $params['scope'] ) : 'all';
+		if ( ! in_array( $scope, [ 'all', 'site', 'group' ], true ) ) {
+			$scope = 'all';
+		}
+
+		$group = isset( $params['group'] ) && is_string( $params['group'] )
+			? sanitize_text_field( $params['group'] ) : '';
+
+		try {
+			$loader = new ObjectCacheConfig();
+			$config = $loader->load();
+
+			if ( $config === [] ) {
+				return [
+					'ok'          => false,
+					'detail'      => 'no config stored',
+					'strategy'    => '',
+					'keys_deleted' => 0,
+				];
+			}
+
+			$conn   = new RedisConnection( $config );
+			$redis  = $conn->acquire();
+			$prefix = isset( $config['prefix'] ) && is_string( $config['prefix'] )
+				? (string) $config['prefix'] : 'wpmgr';
+			$shared = ! isset( $config['shared'] ) || (bool) $config['shared'];
+			$async  = isset( $config['async_flush'] ) && (bool) $config['async_flush'];
+			$strategy = isset( $config['flush_strategy'] ) && is_string( $config['flush_strategy'] )
+				? (string) $config['flush_strategy'] : 'auto';
+
+			$usedStrategy  = 'scan';
+			$keysDeleted   = 0;
+
+			if ( $scope === 'group' ) {
+				if ( $group === '' ) {
+					$conn->close();
+					return [
+						'ok'          => false,
+						'detail'      => 'group scope requires a group name',
+						'strategy'    => '',
+						'keys_deleted' => 0,
+					];
+				}
+				$keysDeleted = $this->scanFlush( $redis, $prefix . ':*:' . $group . ':*', $async );
+				$keysDeleted += $this->scanFlush( $redis, $prefix . ':' . $group . ':*', $async );
+				$usedStrategy = 'scan';
+
+			} elseif ( ( $strategy === 'flushdb' || $strategy === 'auto' ) && ! $shared ) {
+				$redis->flushDB( $async );
+				$usedStrategy = 'flushdb';
+
+			} else {
+				// Shared or scan: SCAN+MATCH+UNLINK prefix-scoped.
+				$keysDeleted = $this->scanFlush( $redis, $prefix . ':*', $async );
+				$usedStrategy = 'scan';
+			}
+
+			$conn->close();
+
+			return [
+				'ok'          => true,
+				'detail'      => 'flushed',
+				'strategy'    => $usedStrategy,
+				'keys_deleted' => $keysDeleted,
+			];
+
+		} catch ( \Throwable $e ) {
+			return [
+				'ok'          => false,
+				'detail'      => 'objectcache.flush failed',
+				'strategy'    => '',
+				'keys_deleted' => 0,
+			];
+		}
+	}
+
+	/**
+	 * SCAN+MATCH+UNLINK flush for a given key pattern.
+	 * Returns the approximate number of keys deleted.
+	 *
+	 * @param \Redis $redis   Active phpredis handle.
+	 * @param string $pattern Key pattern (e.g. "prefix:*").
+	 * @param bool   $async   Use UNLINK (async) vs DEL.
+	 * @return int Approximate keys deleted.
+	 */
+	private function scanFlush( \Redis $redis, string $pattern, bool $async ): int
+	{
+		$cursor = '0';
+		$total  = 0;
+		do {
+			$result = $redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
+			if ( ! is_array( $result ) || count( $result ) !== 2 ) {
+				break;
+			}
+			$cursor = (string) $result[0];
+			$keys   = is_array( $result[1] ) ? $result[1] : [];
+			if ( $keys !== [] ) {
+				$total += count( $keys );
+				if ( $async ) {
+					$redis->unlink( ...$keys );
+				} else {
+					$redis->del( ...$keys );
+				}
+				usleep( 500 ); // 0.5ms inter-batch sleep.
+			}
+		} while ( $cursor !== '0' );
+
+		return $total;
+	}
+}

@@ -20,4 +20,7 @@ export const perfKeys = {
   // RUM daily p75 trend series (dashboard redesign).
   rumTrend: (siteId: string, device: string, windowDays: number) =>
     [...perfKeys.all, "rumTrend", siteId, device, windowDays] as const,
+  // Object cache (m68 Phase 3 web).
+  objectCacheConfig: (siteId: string) => [...perfKeys.all, "objectCacheConfig", siteId] as const,
+  objectCacheStats: (siteId: string) => [...perfKeys.all, "objectCacheStats", siteId] as const,
 } as const;

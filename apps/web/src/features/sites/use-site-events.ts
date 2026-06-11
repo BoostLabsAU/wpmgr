@@ -129,6 +129,17 @@ const SITE_EVENT_TYPES = [
   "email.bounce",
   // m62 — org-config propagation result (tenant-wide fan-out, site_id=null)
   "email.config_propagated",
+  // Object cache (m68 Phase 3 — status transitions + stats updates + lifecycle).
+  // Published on this SAME shared tenant bus (filtered by site_id), mirroring
+  // the Go constants in apps/api/internal/site/connection.go. Any objectcache.*
+  // type MISSING from this array is silently dropped by z.enum(SITE_EVENT_TYPES)
+  // frame validation before it reaches usePerfEvents — every object-cache event
+  // must be listed.
+  "objectcache.status_changed",
+  "objectcache.stats_updated",
+  "objectcache.flushed",
+  "objectcache.config_applied",
+  "objectcache.test_completed",
 ] as const;
 
 export type SiteEventType = (typeof SITE_EVENT_TYPES)[number];

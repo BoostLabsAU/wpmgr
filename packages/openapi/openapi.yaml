@@ -75,6 +75,8 @@ tags:
     description: Per-site wp-login whitelabeling (logo, link, message).
   - name: performance
     description: Per-site Performance Suite (page cache, CSS/JS optimization, RUCSS, CDN, database cleanup) plus portfolio-wide bulk cache actions.
+  - name: object-cache
+    description: Per-site object (Redis/Memcached) cache management — config, test, enable/disable, flush, and stats history.
 paths:
   /healthz:
     get:
@@ -5621,6 +5623,194 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/object-cache/config:
+    get:
+      operationId: getObjectCacheConfig
+      summary: Get object cache configuration
+      description: |
+        Returns the stored object cache configuration for the site. The password
+        is never returned; `has_password` indicates whether one is stored.
+        Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+        heartbeat from the agent.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Object cache configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectCacheConfig"
+    put:
+      operationId: putObjectCacheConfig
+      summary: Update object cache configuration
+      description: |
+        Stores the object cache configuration. An empty `password` field
+        preserves the stored password (nil-sentinel). If connection-critical
+        fields change (host, port, scheme, database, username, prefix, or
+        password), the stored test hash is cleared and a new test is required
+        before re-enabling. The agent receives the new config via an
+        `objectcache.apply_config` signed command (best-effort: a push failure
+        returns 200 with an `X-Agent-Push-Warning` header). Requires
+        `site.perf.config` permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ObjectCacheConfigPut"
+      responses:
+        "200":
+          description: Saved configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectCacheConfig"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/perf/object-cache/test:
+    post:
+      operationId: testObjectCache
+      summary: Test object cache connectivity
+      description: |
+        Sends an `objectcache.test` command to the agent using the stored
+        configuration. An optional `password` in the body overrides the stored
+        password for this call only (useful for testing before saving). On
+        success the control plane stores the config hash as the enable-gate
+        token; on failure the hash is NOT updated. The result is also published
+        as an `objectcache.test_completed` SSE event. Requires
+        `site.cache.manage` permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                password:
+                  type: string
+                  description: Override the stored password for this test only.
+      responses:
+        "200":
+          description: Test result (ok may be false for a reachability failure)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectCacheTestResult"
+  /api/v1/sites/{siteId}/perf/object-cache/enable:
+    post:
+      operationId: enableObjectCache
+      summary: Enable the object cache drop-in
+      description: |
+        Installs the WP object-cache drop-in on the site. Rejected with 400
+        `objectcache_test_required` when no passing test result exists for the
+        current configuration (handshake gate). Sends an `objectcache.enable`
+        signed command. Requires `site.cache.manage` permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Enable result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+        "400":
+          description: Gate failure or agent rejection
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/perf/object-cache/disable:
+    post:
+      operationId: disableObjectCache
+      summary: Disable the object cache drop-in
+      description: |
+        Removes the WP object-cache drop-in and flushes. Sends an
+        `objectcache.disable` signed command. Requires `site.cache.manage`
+        permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Disable result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/object-cache/flush:
+    post:
+      operationId: flushObjectCache
+      summary: Flush the object cache
+      description: |
+        Flushes the Redis/cache store for this site. The `scope` field
+        controls what is flushed: `all` (default), `site` (prefix-scoped),
+        or `group` (requires `group` field). Sends an `objectcache.flush`
+        command and publishes an `objectcache.flushed` SSE event. Requires
+        `site.cache.purge` permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [all, site, group]
+                  default: all
+                group:
+                  type: string
+                  description: Required when scope is "group".
+      responses:
+        "200":
+          description: Flush result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfActionResult"
+  /api/v1/sites/{siteId}/perf/object-cache/stats-history:
+    get:
+      operationId: getObjectCacheStatsHistory
+      summary: Get object cache stats history
+      description: |
+        Returns daily-aggregated object cache stats (hit/miss ratio, memory
+        usage, eviction count) for up to 365 days. Default window is 90 days.
+        Requires `site.read` permission.
+      tags: [object-cache]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: days
+          in: query
+          schema:
+            type: integer
+            minimum: 7
+            maximum: 365
+            default: 90
+          description: Number of days of history to return.
+      responses:
+        "200":
+          description: Daily-aggregated stats history
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectCacheStatsHistory"
   /api/v1/cache/bulk-purge:
     post:
       operationId: bulkPurgeCache
@@ -12217,3 +12407,276 @@ components:
           description: "Up to 20 most recent successful updates and backups, descending by time."
           items:
             $ref: "#/components/schemas/PortalRecentWorkItem"
+
+    ObjectCacheConfig:
+      type: object
+      description: Per-site object cache configuration and live status.
+      required: [enabled, scheme, host, port, database, has_password, prefix, maxttl_seconds, queryttl_seconds, connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms, serializer, compression, async_flush, flush_strategy, shared, flush_on_failback, analytics_enabled, oc_state, oc_latency_ms, oc_used_memory_bytes]
+      properties:
+        enabled:
+          type: boolean
+        scheme:
+          type: string
+          enum: [tcp, unix, tls]
+        host:
+          type: string
+        port:
+          type: integer
+        socket_path:
+          type: string
+        database:
+          type: integer
+        username:
+          type: string
+        has_password:
+          type: boolean
+          description: True when an encrypted password is stored. The password itself is never returned.
+        prefix:
+          type: string
+        maxttl_seconds:
+          type: integer
+        queryttl_seconds:
+          type: integer
+        connect_timeout_ms:
+          type: integer
+        read_timeout_ms:
+          type: integer
+        retry_count:
+          type: integer
+        retry_interval_ms:
+          type: integer
+        serializer:
+          type: string
+          enum: [php, igbinary]
+        compression:
+          type: string
+          enum: [none, lzf, lz4, zstd]
+        async_flush:
+          type: boolean
+        flush_strategy:
+          type: string
+          enum: [auto, flushdb, scan]
+        shared:
+          type: boolean
+          description: True when the Redis instance is shared with other sites (prefix isolation).
+        flush_on_failback:
+          type: boolean
+          description: Flush all keys when the object cache recovers from a down state.
+        analytics_enabled:
+          type: boolean
+        last_test_config_hash:
+          type: string
+          nullable: true
+          description: Non-empty after a passing test; cleared when connection fields change.
+        last_tested_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_test_result:
+          allOf:
+            - $ref: "#/components/schemas/ObjectCacheTestResult"
+          nullable: true
+          description: >-
+            The stored result of the most recent connection test, including the
+            server capability report, so the dashboard can show requirements
+            without re-running a test.
+        oc_state:
+          type: string
+          description: "Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'."
+        oc_latency_ms:
+          type: integer
+        oc_last_error_class:
+          type: string
+          nullable: true
+        oc_used_memory_bytes:
+          type: integer
+          format: int64
+        oc_hit_ratio_pct:
+          type: number
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ObjectCacheConfigPut:
+      type: object
+      description: Fields accepted by PUT /perf/object-cache/config. All fields are optional; omitted fields are unchanged. An empty password preserves the stored password.
+      properties:
+        enabled:
+          type: boolean
+        scheme:
+          type: string
+          enum: [tcp, unix, tls]
+        host:
+          type: string
+        port:
+          type: integer
+        socket_path:
+          type: string
+        database:
+          type: integer
+        username:
+          type: string
+        password:
+          type: string
+          description: Write-only. Empty string means "keep stored password".
+        prefix:
+          type: string
+        maxttl_seconds:
+          type: integer
+        queryttl_seconds:
+          type: integer
+        connect_timeout_ms:
+          type: integer
+        read_timeout_ms:
+          type: integer
+        retry_count:
+          type: integer
+        retry_interval_ms:
+          type: integer
+        serializer:
+          type: string
+          enum: [php, igbinary]
+        compression:
+          type: string
+          enum: [none, lzf, lz4, zstd]
+        async_flush:
+          type: boolean
+        flush_strategy:
+          type: string
+          enum: [auto, flushdb, scan]
+        shared:
+          type: boolean
+        flush_on_failback:
+          type: boolean
+        analytics_enabled:
+          type: boolean
+
+    ObjectCacheCapabilities:
+      type: object
+      description: >-
+        Server and PHP extension capabilities detected by the agent during a
+        connection test. phpredis_version empty or absent means the phpredis
+        extension is not installed on the server.
+      required:
+        [
+          igbinary_available,
+          lzf_available,
+          lz4_available,
+          zstd_available,
+          tls_supported,
+          value_metadata_reads,
+          native_retry_options,
+          keepttl_supported,
+          flush_async_supported,
+        ]
+      properties:
+        phpredis_version:
+          type: string
+          nullable: true
+        igbinary_available:
+          type: boolean
+        lzf_available:
+          type: boolean
+        lz4_available:
+          type: boolean
+        zstd_available:
+          type: boolean
+        tls_supported:
+          type: boolean
+        value_metadata_reads:
+          type: boolean
+        native_retry_options:
+          type: boolean
+        keepttl_supported:
+          type: boolean
+        flush_async_supported:
+          type: boolean
+
+    ObjectCacheTestResult:
+      type: object
+      description: Result of an objectcache.test command.
+      required: [ok, reachable, round_trip_ok]
+      properties:
+        ok:
+          type: boolean
+        detail:
+          type: string
+          nullable: true
+        reachable:
+          type: boolean
+        latency_ms:
+          type: integer
+        server_version:
+          type: string
+          nullable: true
+        eviction_policy:
+          type: string
+          nullable: true
+        max_memory_bytes:
+          type: integer
+          format: int64
+        used_memory_bytes:
+          type: integer
+          format: int64
+        capabilities:
+          $ref: "#/components/schemas/ObjectCacheCapabilities"
+        flush_capability_class:
+          type: string
+          description: dedicated_db or shared_prefix; drives the flush strategy disclosure.
+          nullable: true
+        acl_denials:
+          type: array
+          items:
+            type: string
+          nullable: true
+        round_trip_ok:
+          type: boolean
+        config_hash:
+          type: string
+          nullable: true
+
+    ObjectCacheStatsHistoryPoint:
+      type: object
+      description: One daily-aggregated data point in the stats history.
+      required: [sampled_at, hit_count, miss_count, used_memory_bytes, ops_per_sec, evicted_keys_delta]
+      properties:
+        sampled_at:
+          type: string
+          format: date-time
+        ratio_pct:
+          type: number
+          nullable: true
+          description: Hit ratio as a percentage (0–100). Null when no data.
+        hit_count:
+          type: integer
+          format: int64
+        miss_count:
+          type: integer
+          format: int64
+        used_memory_bytes:
+          type: integer
+          format: int64
+        avg_wait_ms:
+          type: number
+        ops_per_sec:
+          type: integer
+        evicted_keys_delta:
+          type: integer
+          format: int64
+
+    ObjectCacheStatsHistory:
+      type: object
+      description: Daily-aggregated object cache stats history for trend charts.
+      required: [points, avg_ratio_pct]
+      properties:
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/ObjectCacheStatsHistoryPoint"
+        avg_ratio_pct:
+          type: number
+          description: Average hit ratio across all data points in the window.

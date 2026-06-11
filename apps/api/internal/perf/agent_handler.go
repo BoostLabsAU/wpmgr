@@ -3,6 +3,7 @@ package perf
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
 )
 
@@ -39,12 +41,17 @@ const (
 type AgentHandler struct {
 	svc   *Service
 	rucss *RucssIngestService
+	// ocSvc is the Object Cache service for the optional object_cache ingest block
+	// that the agent appends to its stats-report push. May be nil when the Object
+	// Cache feature is not wired.
+	ocSvc *objectcache.Service
 }
 
-// NewAgentHandler wires the agent handler. rucss may be nil (RUCSS endpoint then
-// reports unavailable so the agent keeps serving full CSS).
-func NewAgentHandler(svc *Service, rucss *RucssIngestService) *AgentHandler {
-	return &AgentHandler{svc: svc, rucss: rucss}
+// NewAgentHandler wires the agent handler. rucss and ocSvc may be nil.
+// rucss: RUCSS endpoint reports unavailable so the agent keeps serving full CSS.
+// ocSvc: object_cache block in stats-report is silently skipped.
+func NewAgentHandler(svc *Service, rucss *RucssIngestService, ocSvc *objectcache.Service) *AgentHandler {
+	return &AgentHandler{svc: svc, rucss: rucss, ocSvc: ocSvc}
 }
 
 // Register mounts the routes on the agent-authenticated group.
@@ -79,6 +86,34 @@ type statsReportBody struct {
 	// stats heartbeat so the dashboard can gate the shell-cache toggle. Optional:
 	// pre-M53 agents omit it; when absent the CP leaves the stored value unchanged.
 	WooThemeFragmentsSupported *bool `json:"woo_theme_fragments_supported,omitempty"`
+	// M68 — optional object_cache block emitted by the agent alongside the page
+	// cache stats. Pre-M68 agents omit it; the block is silently dropped when
+	// absent or when the Object Cache service is not wired. All fields are
+	// attacker-controlled (a compromised site can forge them), so the handler
+	// clamps numeric ranges and validates string enums before forwarding.
+	ObjectCache *agentObjectCacheBlock `json:"object_cache,omitempty"`
+}
+
+// agentObjectCacheBlock is the optional object_cache sub-object inside a
+// stats-report push. It carries both heartbeat state (live status pill) and
+// a stats delta (hit/miss counts and server metrics). Every field is optional;
+// a missing or partially-missing block is a tolerant-ingest no-op.
+// The fields mirror the agent's class-object-cache-heartbeat.php build() output.
+type agentObjectCacheBlock struct {
+	// Heartbeat fields (state pill).
+	State          string `json:"state"`
+	LatencyMs      float64 `json:"latency_ms"`
+	LastErrorClass string `json:"last_error_class,omitempty"`
+	HitRatioPct    float64 `json:"hit_ratio_window_pct"`
+	UsedMemoryBytes int64  `json:"used_memory_bytes"`
+
+	// Stats delta fields (time-series history).
+	HitCount         int64   `json:"hit_count,omitempty"`
+	MissCount        int64   `json:"miss_count,omitempty"`
+	AvgWaitMs        float64 `json:"avg_wait_ms,omitempty"`
+	OpsPerSec        int     `json:"ops_per_sec,omitempty"`
+	EvictedKeysDelta int64   `json:"evicted_keys_delta,omitempty"`
+	ConnectedClients int     `json:"connected_clients,omitempty"`
 }
 
 func (h *AgentHandler) statsReport(c *gin.Context) {
@@ -128,6 +163,110 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 	if in.WooThemeFragmentsSupported != nil {
 		if wooErr := h.svc.MarkWooFragmentsSupported(c.Request.Context(), id.SiteID, *in.WooThemeFragmentsSupported); wooErr != nil {
 			_ = wooErr
+		}
+	}
+	// M68 — object_cache block: best-effort, tolerant. A malformed or missing
+	// block MUST NOT 4xx this response (the email-log 422 lesson). The block is
+	// attacker-controlled (a compromised site can forge any value) so every field
+	// is clamped/validated before forwarding. siteID and tenantID come STRICTLY
+	// from the verified agent identity (id), never from the body.
+	if in.ObjectCache != nil && h.ocSvc != nil {
+		ocBlock := in.ObjectCache
+		// Validate the state enum; unknown values are coerced to the disabled state
+		// so a rogue agent cannot inject a spurious "connected" pill.
+		validOCState := func(s string) bool {
+			switch s {
+			case "", "connected", "degraded", "down":
+				return true
+			}
+			return false
+		}
+		state := ocBlock.State
+		if !validOCState(state) {
+			state = ""
+		}
+		// Clamp numerics: latency and ratio must be non-negative and sane.
+		latencyMs := ocBlock.LatencyMs
+		if latencyMs < 0 {
+			latencyMs = 0
+		}
+		if latencyMs > 60000 { // 60 s max
+			latencyMs = 60000
+		}
+		hitRatioPct := ocBlock.HitRatioPct
+		if hitRatioPct < 0 {
+			hitRatioPct = 0
+		}
+		if hitRatioPct > 100 {
+			hitRatioPct = 100
+		}
+		usedMemoryBytes := ocBlock.UsedMemoryBytes
+		if usedMemoryBytes < 0 {
+			usedMemoryBytes = 0
+		}
+		// Bound the error class string to prevent unbounded memory/storage.
+		lastErrorClass := ocBlock.LastErrorClass
+		if len(lastErrorClass) > 128 {
+			lastErrorClass = lastErrorClass[:128]
+		}
+
+		// IngestHeartbeat: updates the live status pill and emits SSE.
+		// tenantID and siteID come from the verified agent identity.
+		hbBlock := &objectcache.HeartbeatBlock{
+			State:           objectcache.OCState(state),
+			LatencyMs:       int(latencyMs),
+			LastErrorClass:  lastErrorClass,
+			UsedMemoryBytes: usedMemoryBytes,
+			HitRatioPct:     hitRatioPct,
+		}
+		if hbErr := h.ocSvc.IngestHeartbeat(c.Request.Context(), id.TenantID, id.SiteID, hbBlock); hbErr != nil {
+			_ = hbErr // best-effort
+		}
+
+		// IngestStats: appends a time-series data point when hit/miss counts are
+		// non-zero. Clamp to non-negative to prevent ratio skew from a rogue agent.
+		hitCount := max(int64(0), ocBlock.HitCount)
+		missCount := max(int64(0), ocBlock.MissCount)
+		if hitCount > 0 || missCount > 0 {
+			// Upper clamps match the columns' representable ranges: a forged
+			// out-of-range value would otherwise fail the INSERT and silently
+			// drop the site's own stats row (avg_wait_ms is numeric(8,3);
+			// ops_per_sec and connected_clients are integer columns).
+			avgWaitMs := ocBlock.AvgWaitMs
+			if avgWaitMs < 0 {
+				avgWaitMs = 0
+			} else if avgWaitMs > 60000 {
+				avgWaitMs = 60000
+			}
+			opsPerSec := ocBlock.OpsPerSec
+			if opsPerSec < 0 {
+				opsPerSec = 0
+			} else if opsPerSec > math.MaxInt32 {
+				opsPerSec = math.MaxInt32
+			}
+			evictedKeysDelta := ocBlock.EvictedKeysDelta
+			if evictedKeysDelta < 0 {
+				evictedKeysDelta = 0
+			}
+			connectedClients := ocBlock.ConnectedClients
+			if connectedClients < 0 {
+				connectedClients = 0
+			} else if connectedClients > math.MaxInt32 {
+				connectedClients = math.MaxInt32
+			}
+			if statsErr := h.ocSvc.IngestStats(c.Request.Context(), objectcache.IngestStatsInput{
+				TenantID:         id.TenantID,
+				SiteID:           id.SiteID,
+				HitCount:         hitCount,
+				MissCount:        missCount,
+				UsedMemoryBytes:  usedMemoryBytes,
+				AvgWaitMs:        avgWaitMs,
+				OpsPerSec:        opsPerSec,
+				EvictedKeysDelta: evictedKeysDelta,
+				ConnectedClients: connectedClients,
+			}); statsErr != nil {
+				_ = statsErr // best-effort
+			}
 		}
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true})
