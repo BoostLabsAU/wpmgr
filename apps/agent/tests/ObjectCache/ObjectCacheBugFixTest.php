@@ -324,13 +324,13 @@ final class ObjectCacheBugFixTest extends TestCase
 			 * this class stays loadable when ext-redis is present (CI runners) and
 			 * when only the constants-only test stub exists (local).
 			 *
-			 * @param ?int    $it      By-ref iterator (null or int only).
-			 * @param ?string $pattern Key pattern.
-			 * @param int     $count   Hint count.
-			 * @param ?string $type    Key type filter (unused by the fake).
+			 * @param string|int|null $it      By-ref iterator cursor.
+			 * @param ?string         $pattern Key pattern.
+			 * @param int             $count   Hint count.
+			 * @param ?string         $type    Key type filter (unused by the fake).
 			 * @return array<string>|false
 			 */
-			public function scan( ?int &$it, ?string $pattern = null, int $count = 0, ?string $type = null ): array|false
+			public function scan( string|int|null &$it, ?string $pattern = null, int $count = 0, ?string $type = null ): array|false
 			{
 				if ( $this->pos >= count( $this->store ) ) {
 					$it = 0;
