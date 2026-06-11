@@ -34,6 +34,18 @@ func (UnimplementedHandler) ActivateOrg(ctx context.Context, params ActivateOrgP
 	return r, ht.ErrNotImplemented
 }
 
+// AddClientMember implements addClientMember operation.
+//
+// If the email belongs to a known user, grants portal access immediately and returns `201` with the
+// member record. If the email is unknown, creates a client-scope invitation and returns `201` with
+// `invited: true` and an `accept_link` (always present as a copyable fallback when SMTP is
+// unconfigured).
+//
+// POST /api/v1/clients/{clientId}/members
+func (UnimplementedHandler) AddClientMember(ctx context.Context, req *ClientMemberCreateRequest, params AddClientMemberParams) (r AddClientMemberRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // AddFleetEmailSuppression implements addFleetEmailSuppression operation.
 //
 // Adds a suppression entry with `site_id=null`, applying to all sites
@@ -735,6 +747,17 @@ func (UnimplementedHandler) DisableCache(ctx context.Context, params DisableCach
 	return r, ht.ErrNotImplemented
 }
 
+// DownloadPortalReport implements downloadPortalReport operation.
+//
+// Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
+// to one of the principal's clients; otherwise 404 is returned (not 403, to avoid confirming report
+// existence).
+//
+// GET /api/v1/portal/reports/{reportId}/download
+func (UnimplementedHandler) DownloadPortalReport(ctx context.Context, params DownloadPortalReportParams) (r DownloadPortalReportRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // EnableCache implements enableCache operation.
 //
 // Turns on agent-side page caching. Returns an `{ok, detail}` ack;
@@ -1004,6 +1027,33 @@ func (UnimplementedHandler) GetPerfConfig(ctx context.Context, params GetPerfCon
 	return r, ht.ErrNotImplemented
 }
 
+// GetPortalOverview implements getPortalOverview operation.
+//
+// Returns identity and branding for the portal principal's primary client.
+//
+// GET /api/v1/portal/overview
+func (UnimplementedHandler) GetPortalOverview(ctx context.Context) (r GetPortalOverviewRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetPortalSiteUptime implements getPortalSiteUptime operation.
+//
+// Returns windowed uptime percentage, average latency, TLS expiry, and incident history.
+//
+// GET /api/v1/portal/sites/{siteId}/uptime
+func (UnimplementedHandler) GetPortalSiteUptime(ctx context.Context, params GetPortalSiteUptimeParams) (r GetPortalSiteUptimeRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// GetPortalSiteVitals implements getPortalSiteVitals operation.
+//
+// Returns all-devices aggregate p75 field data for LCP, INP, and CLS.
+//
+// GET /api/v1/portal/sites/{siteId}/vitals
+func (UnimplementedHandler) GetPortalSiteVitals(ctx context.Context, params GetPortalSiteVitalsParams) (r GetPortalSiteVitalsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetReadyz implements getReadyz operation.
 //
 // Returns 200 when the service can serve traffic (DB reachable).
@@ -1261,6 +1311,24 @@ func (UnimplementedHandler) ListBackups(ctx context.Context, params ListBackupsP
 	return r, ht.ErrNotImplemented
 }
 
+// ListClientInvitations implements listClientInvitations operation.
+//
+// Returns all client-scope invitations (pending, accepted, expired, revoked).
+//
+// GET /api/v1/clients/{clientId}/invitations
+func (UnimplementedHandler) ListClientInvitations(ctx context.Context, params ListClientInvitationsParams) (r ListClientInvitationsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListClientMembers implements listClientMembers operation.
+//
+// Returns the roster of portal users granted access to this client.
+//
+// GET /api/v1/clients/{clientId}/members
+func (UnimplementedHandler) ListClientMembers(ctx context.Context, params ListClientMembersParams) (r ListClientMembersRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListClientReports implements listClientReports operation.
 //
 // Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
@@ -1383,6 +1451,43 @@ func (UnimplementedHandler) ListMediaJobs(ctx context.Context, params ListMediaJ
 //
 // GET /api/v1/members
 func (UnimplementedHandler) ListMembers(ctx context.Context, params ListMembersParams) (r ListMembersRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListPortalReports implements listPortalReports operation.
+//
+// Returns completed white-label reports for all of the principal's clients. The client_id =
+// ANY(principal.ClientIDs) filter is enforced in the query.
+//
+// GET /api/v1/portal/reports
+func (UnimplementedHandler) ListPortalReports(ctx context.Context) (r ListPortalReportsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListPortalSiteBackups implements listPortalSiteBackups operation.
+//
+// Returns completed backups only. No blob keys, destinations, or download links are included.
+//
+// GET /api/v1/portal/sites/{siteId}/backups
+func (UnimplementedHandler) ListPortalSiteBackups(ctx context.Context, params ListPortalSiteBackupsParams) (r ListPortalSiteBackupsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListPortalSiteUpdates implements listPortalSiteUpdates operation.
+//
+// Returns successfully applied update tasks only.
+//
+// GET /api/v1/portal/sites/{siteId}/updates
+func (UnimplementedHandler) ListPortalSiteUpdates(ctx context.Context, params ListPortalSiteUpdatesParams) (r ListPortalSiteUpdatesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListPortalSites implements listPortalSites operation.
+//
+// Returns a summary of each site the portal user can see (their client's sites only).
+//
+// GET /api/v1/portal/sites
+func (UnimplementedHandler) ListPortalSites(ctx context.Context) (r ListPortalSitesRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1902,6 +2007,16 @@ func (UnimplementedHandler) RefreshSiteUpdates(ctx context.Context, params Refre
 	return r, ht.ErrNotImplemented
 }
 
+// RegenerateClientInvitation implements regenerateClientInvitation operation.
+//
+// Rotates the token (kills the old link), resets expiry and attempt counter, and clears any prior
+// revocation.
+//
+// POST /api/v1/clients/{clientId}/invitations/{invitationId}/regenerate
+func (UnimplementedHandler) RegenerateClientInvitation(ctx context.Context, params RegenerateClientInvitationParams) (r RegenerateClientInvitationRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // Register implements register operation.
 //
 // On first run (zero users in the database) this bootstraps the instance:
@@ -1914,6 +2029,16 @@ func (UnimplementedHandler) RefreshSiteUpdates(ctx context.Context, params Refre
 //
 // POST /auth/register
 func (UnimplementedHandler) Register(ctx context.Context, req *RegisterRequest) (r RegisterRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// RemoveClientMember implements removeClientMember operation.
+//
+// Immediately removes the client_members row. The user's session remains valid but subsequent portal
+// requests resolve no tenant.
+//
+// DELETE /api/v1/clients/{clientId}/members/{userId}
+func (UnimplementedHandler) RemoveClientMember(ctx context.Context, params RemoveClientMemberParams) (r RemoveClientMemberRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2008,6 +2133,15 @@ func (UnimplementedHandler) RevertDbSnapshot(ctx context.Context, req *DbSnapsho
 //
 // DELETE /api/v1/api-keys/{apiKeyId}
 func (UnimplementedHandler) RevokeApiKey(ctx context.Context, params RevokeApiKeyParams) (r RevokeApiKeyRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// RevokeClientInvitation implements revokeClientInvitation operation.
+//
+// Soft-revokes the invitation. The accept link becomes inert.
+//
+// DELETE /api/v1/clients/{clientId}/invitations/{invitationId}
+func (UnimplementedHandler) RevokeClientInvitation(ctx context.Context, params RevokeClientInvitationParams) (r RevokeClientInvitationRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

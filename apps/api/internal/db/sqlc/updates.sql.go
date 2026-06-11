@@ -254,6 +254,62 @@ func (q *Queries) GetUpdateTask(ctx context.Context, arg GetUpdateTaskParams) (U
 	return i, err
 }
 
+const listAppliedTasksForSite = `-- name: ListAppliedTasksForSite :many
+SELECT target_type, target_slug, from_version, to_version, status, finished_at
+FROM update_tasks
+WHERE site_id   = $1
+  AND tenant_id = $2
+  AND status    = 'succeeded'
+ORDER BY finished_at DESC, id DESC
+LIMIT $3
+`
+
+type ListAppliedTasksForSiteParams struct {
+	SiteID   uuid.UUID `json:"site_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	RowLimit int32     `json:"row_limit"`
+}
+
+type ListAppliedTasksForSiteRow struct {
+	TargetType  string             `json:"target_type"`
+	TargetSlug  string             `json:"target_slug"`
+	FromVersion string             `json:"from_version"`
+	ToVersion   string             `json:"to_version"`
+	Status      string             `json:"status"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
+// Returns successfully applied update tasks for one site, ordered newest first.
+// Used by the client portal /portal/sites/:siteId/updates endpoint. Site-scope
+// RLS AND the explicit (site_id, tenant_id) filter together prevent cross-site
+// leakage.
+func (q *Queries) ListAppliedTasksForSite(ctx context.Context, arg ListAppliedTasksForSiteParams) ([]ListAppliedTasksForSiteRow, error) {
+	rows, err := q.db.Query(ctx, listAppliedTasksForSite, arg.SiteID, arg.TenantID, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAppliedTasksForSiteRow
+	for rows.Next() {
+		var i ListAppliedTasksForSiteRow
+		if err := rows.Scan(
+			&i.TargetType,
+			&i.TargetSlug,
+			&i.FromVersion,
+			&i.ToVersion,
+			&i.Status,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdateRuns = `-- name: ListUpdateRuns :many
 SELECT id, tenant_id, created_by, status, dry_run, scheduled_at, created_at, updated_at FROM update_runs
 WHERE tenant_id = $1

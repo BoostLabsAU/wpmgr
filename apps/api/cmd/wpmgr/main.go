@@ -35,6 +35,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
 	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
+	portalpkg "github.com/mosamlife/wpmgr/apps/api/internal/portal"
 	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
 	reporthtml "github.com/mosamlife/wpmgr/apps/api/internal/report/render/html"
 	reportpdf "github.com/mosamlife/wpmgr/apps/api/internal/report/render/pdf"
@@ -1468,6 +1469,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	invitationSvc.SetInviteEnqueuer(mailer.NewEnqueuer(mailerSvc, riverClient))
 	invitationH := invitation.NewHandler(invitationSvc)
 
+	// m66 — client portal. Member management mounts under the existing client
+	// handler (RequireOrgScope group); the read-only /portal group is gated by
+	// RequireClientPortal. authRepo (not authSvc) carries GetUsersByIDs. The
+	// portal gets its own backup repo: the backup-service one is scoped inside
+	// the S3-enabled block, and the portal's snapshot listing must work (as
+	// empty history) even when backups are disabled.
+	clientMemberH := clientpkg.NewMemberHandler(pool, authRepo, invitationSvc, auditRec, publicBaseURL)
+	clientH.SetMemberHandler(clientMemberH)
+	portalH := portalpkg.NewHandler(pool, siteSvc, uptimeSvc, backup.NewRepo(pool), reportSvc, rumStore)
+
 	// m33 — superadmin instance-management area.
 	// authSvc satisfies admin.VerificationResender via ResendVerificationByID.
 	adminRepo := admin.NewRepo(pool)
@@ -1589,7 +1600,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m63 — agency clients.
 		ClientH: clientH,
 		// m64 — white-label client reports.
-		ReportH:     reportH,
+		ReportH: reportH,
+		// m66 — read-only client portal.
+		PortalH:     portalH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})

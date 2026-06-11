@@ -9,6 +9,9 @@ import type {
   ActivateOrgData,
   ActivateOrgErrors,
   ActivateOrgResponses,
+  AddClientMemberData,
+  AddClientMemberErrors,
+  AddClientMemberResponses,
   AddFleetEmailSuppressionData,
   AddFleetEmailSuppressionErrors,
   AddFleetEmailSuppressionResponses,
@@ -164,6 +167,9 @@ import type {
   DeleteSiteShareResponses,
   DisableCacheData,
   DisableCacheResponses,
+  DownloadPortalReportData,
+  DownloadPortalReportErrors,
+  DownloadPortalReportResponses,
   EnableCacheData,
   EnableCacheResponses,
   EnrollData,
@@ -228,6 +234,15 @@ import type {
   GetOrgEmailConfigResponses,
   GetPerfConfigData,
   GetPerfConfigResponses,
+  GetPortalOverviewData,
+  GetPortalOverviewErrors,
+  GetPortalOverviewResponses,
+  GetPortalSiteUptimeData,
+  GetPortalSiteUptimeErrors,
+  GetPortalSiteUptimeResponses,
+  GetPortalSiteVitalsData,
+  GetPortalSiteVitalsErrors,
+  GetPortalSiteVitalsResponses,
   GetReadyzData,
   GetReadyzErrors,
   GetReadyzResponses,
@@ -291,6 +306,12 @@ import type {
   ListAuditResponses,
   ListBackupsData,
   ListBackupsResponses,
+  ListClientInvitationsData,
+  ListClientInvitationsErrors,
+  ListClientInvitationsResponses,
+  ListClientMembersData,
+  ListClientMembersErrors,
+  ListClientMembersResponses,
   ListClientReportsData,
   ListClientReportsErrors,
   ListClientReportsResponses,
@@ -320,6 +341,18 @@ import type {
   ListMembersData,
   ListMembersErrors,
   ListMembersResponses,
+  ListPortalReportsData,
+  ListPortalReportsErrors,
+  ListPortalReportsResponses,
+  ListPortalSiteBackupsData,
+  ListPortalSiteBackupsErrors,
+  ListPortalSiteBackupsResponses,
+  ListPortalSitesData,
+  ListPortalSitesErrors,
+  ListPortalSitesResponses,
+  ListPortalSiteUpdatesData,
+  ListPortalSiteUpdatesErrors,
+  ListPortalSiteUpdatesResponses,
   ListQuarantinedMediaData,
   ListQuarantinedMediaResponses,
   ListRestoreRunEventsData,
@@ -437,9 +470,15 @@ import type {
   RefreshSiteUpdatesData,
   RefreshSiteUpdatesErrors,
   RefreshSiteUpdatesResponses,
+  RegenerateClientInvitationData,
+  RegenerateClientInvitationErrors,
+  RegenerateClientInvitationResponses,
   RegisterData,
   RegisterErrors,
   RegisterResponses,
+  RemoveClientMemberData,
+  RemoveClientMemberErrors,
+  RemoveClientMemberResponses,
   ResendEmailLogData,
   ResendEmailLogErrors,
   ResendEmailLogResponses,
@@ -460,6 +499,9 @@ import type {
   RevokeApiKeyData,
   RevokeApiKeyErrors,
   RevokeApiKeyResponses,
+  RevokeClientInvitationData,
+  RevokeClientInvitationErrors,
+  RevokeClientInvitationResponses,
   RevokeSiteData,
   RevokeSiteErrors,
   RevokeSiteResponses,
@@ -4378,3 +4420,217 @@ export const getClientReport = <ThrowOnError extends boolean = false>(
     GetClientReportErrors,
     ThrowOnError
   >({ url: "/api/v1/clients/{clientId}/reports/{reportId}", ...options });
+
+/**
+ * List portal members for a client
+ *
+ * Returns the roster of portal users granted access to this client.
+ */
+export const listClientMembers = <ThrowOnError extends boolean = false>(
+  options: Options<ListClientMembersData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListClientMembersResponses,
+    ListClientMembersErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/members", ...options });
+
+/**
+ * Add or invite a portal member
+ *
+ * If the email belongs to a known user, grants portal access immediately and returns `201` with the member record. If the email is unknown, creates a client-scope invitation and returns `201` with `invited: true` and an `accept_link` (always present as a copyable fallback when SMTP is unconfigured).
+ *
+ */
+export const addClientMember = <ThrowOnError extends boolean = false>(
+  options: Options<AddClientMemberData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    AddClientMemberResponses,
+    AddClientMemberErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}/members",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Revoke portal access for a member
+ *
+ * Immediately removes the client_members row. The user's session remains valid but subsequent portal requests resolve no tenant.
+ */
+export const removeClientMember = <ThrowOnError extends boolean = false>(
+  options: Options<RemoveClientMemberData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    RemoveClientMemberResponses,
+    RemoveClientMemberErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/members/{userId}", ...options });
+
+/**
+ * List portal invitations for a client
+ *
+ * Returns all client-scope invitations (pending, accepted, expired, revoked).
+ */
+export const listClientInvitations = <ThrowOnError extends boolean = false>(
+  options: Options<ListClientInvitationsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListClientInvitationsResponses,
+    ListClientInvitationsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/clients/{clientId}/invitations", ...options });
+
+/**
+ * Revoke a pending portal invitation
+ *
+ * Soft-revokes the invitation. The accept link becomes inert.
+ */
+export const revokeClientInvitation = <ThrowOnError extends boolean = false>(
+  options: Options<RevokeClientInvitationData, ThrowOnError>,
+) =>
+  (options.client ?? client).delete<
+    RevokeClientInvitationResponses,
+    RevokeClientInvitationErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}/invitations/{invitationId}",
+    ...options,
+  });
+
+/**
+ * Regenerate a portal invitation token
+ *
+ * Rotates the token (kills the old link), resets expiry and attempt counter, and clears any prior revocation.
+ */
+export const regenerateClientInvitation = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<RegenerateClientInvitationData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RegenerateClientInvitationResponses,
+    RegenerateClientInvitationErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/clients/{clientId}/invitations/{invitationId}/regenerate",
+    ...options,
+  });
+
+/**
+ * Portal overview (client branding + site count)
+ *
+ * Returns identity and branding for the portal principal's primary client.
+ */
+export const getPortalOverview = <ThrowOnError extends boolean = false>(
+  options?: Options<GetPortalOverviewData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetPortalOverviewResponses,
+    GetPortalOverviewErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/overview", ...options });
+
+/**
+ * List sites accessible to the portal principal
+ *
+ * Returns a summary of each site the portal user can see (their client's sites only).
+ */
+export const listPortalSites = <ThrowOnError extends boolean = false>(
+  options?: Options<ListPortalSitesData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListPortalSitesResponses,
+    ListPortalSitesErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/sites", ...options });
+
+/**
+ * Uptime summary for a portal site
+ *
+ * Returns windowed uptime percentage, average latency, TLS expiry, and incident history.
+ */
+export const getPortalSiteUptime = <ThrowOnError extends boolean = false>(
+  options: Options<GetPortalSiteUptimeData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetPortalSiteUptimeResponses,
+    GetPortalSiteUptimeErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/sites/{siteId}/uptime", ...options });
+
+/**
+ * Backup inventory for a portal site
+ *
+ * Returns completed backups only. No blob keys, destinations, or download links are included.
+ */
+export const listPortalSiteBackups = <ThrowOnError extends boolean = false>(
+  options: Options<ListPortalSiteBackupsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListPortalSiteBackupsResponses,
+    ListPortalSiteBackupsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/sites/{siteId}/backups", ...options });
+
+/**
+ * Applied updates log for a portal site
+ *
+ * Returns successfully applied update tasks only.
+ */
+export const listPortalSiteUpdates = <ThrowOnError extends boolean = false>(
+  options: Options<ListPortalSiteUpdatesData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListPortalSiteUpdatesResponses,
+    ListPortalSiteUpdatesErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/sites/{siteId}/updates", ...options });
+
+/**
+ * Core Web Vitals p75 summary for a portal site
+ *
+ * Returns all-devices aggregate p75 field data for LCP, INP, and CLS.
+ */
+export const getPortalSiteVitals = <ThrowOnError extends boolean = false>(
+  options: Options<GetPortalSiteVitalsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetPortalSiteVitalsResponses,
+    GetPortalSiteVitalsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/sites/{siteId}/vitals", ...options });
+
+/**
+ * List completed reports for the portal principal
+ *
+ * Returns completed white-label reports for all of the principal's clients. The client_id = ANY(principal.ClientIDs) filter is enforced in the query.
+ *
+ */
+export const listPortalReports = <ThrowOnError extends boolean = false>(
+  options?: Options<ListPortalReportsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListPortalReportsResponses,
+    ListPortalReportsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/reports", ...options });
+
+/**
+ * Get a presigned download URL for a portal report
+ *
+ * Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong to one of the principal's clients; otherwise 404 is returned (not 403, to avoid confirming report existence).
+ *
+ */
+export const downloadPortalReport = <ThrowOnError extends boolean = false>(
+  options: Options<DownloadPortalReportData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    DownloadPortalReportResponses,
+    DownloadPortalReportErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/reports/{reportId}/download", ...options });

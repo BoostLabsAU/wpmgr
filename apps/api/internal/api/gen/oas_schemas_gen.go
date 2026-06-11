@@ -233,6 +233,22 @@ func (s *ActivityVerifyResult) SetTotal(val int) {
 	s.Total = val
 }
 
+type AddClientMemberConflict Error
+
+func (*AddClientMemberConflict) addClientMemberRes() {}
+
+type AddClientMemberForbidden Error
+
+func (*AddClientMemberForbidden) addClientMemberRes() {}
+
+type AddClientMemberNotFound Error
+
+func (*AddClientMemberNotFound) addClientMemberRes() {}
+
+type AddClientMemberUnauthorized Error
+
+func (*AddClientMemberUnauthorized) addClientMemberRes() {}
+
 type AddFleetEmailSuppressionBadRequest Error
 
 func (*AddFleetEmailSuppressionBadRequest) addFleetEmailSuppressionRes() {}
@@ -3960,6 +3976,310 @@ func (s *CdnCredentials) SetZone(val OptString) {
 	s.Zone = val
 }
 
+// Ref: #/components/schemas/ClientInvitation
+type ClientInvitation struct {
+	ID        uuid.UUID `json:"id"`
+	Email     string    `json:"email"`
+	CreatedAt time.Time `json:"created_at"`
+	ExpiresAt time.Time `json:"expires_at"`
+	// Derived status: pending, accepted, expired, or revoked.
+	Status ClientInvitationStatus `json:"status"`
+}
+
+// GetID returns the value of ID.
+func (s *ClientInvitation) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetEmail returns the value of Email.
+func (s *ClientInvitation) GetEmail() string {
+	return s.Email
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ClientInvitation) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *ClientInvitation) GetExpiresAt() time.Time {
+	return s.ExpiresAt
+}
+
+// GetStatus returns the value of Status.
+func (s *ClientInvitation) GetStatus() ClientInvitationStatus {
+	return s.Status
+}
+
+// SetID sets the value of ID.
+func (s *ClientInvitation) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetEmail sets the value of Email.
+func (s *ClientInvitation) SetEmail(val string) {
+	s.Email = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ClientInvitation) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *ClientInvitation) SetExpiresAt(val time.Time) {
+	s.ExpiresAt = val
+}
+
+// SetStatus sets the value of Status.
+func (s *ClientInvitation) SetStatus(val ClientInvitationStatus) {
+	s.Status = val
+}
+
+// Ref: #/components/schemas/ClientInvitationList
+type ClientInvitationList struct {
+	Items []ClientInvitation `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *ClientInvitationList) GetItems() []ClientInvitation {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *ClientInvitationList) SetItems(val []ClientInvitation) {
+	s.Items = val
+}
+
+func (*ClientInvitationList) listClientInvitationsRes() {}
+
+// Derived status: pending, accepted, expired, or revoked.
+type ClientInvitationStatus string
+
+const (
+	ClientInvitationStatusPending  ClientInvitationStatus = "pending"
+	ClientInvitationStatusAccepted ClientInvitationStatus = "accepted"
+	ClientInvitationStatusExpired  ClientInvitationStatus = "expired"
+	ClientInvitationStatusRevoked  ClientInvitationStatus = "revoked"
+)
+
+// AllValues returns all ClientInvitationStatus values.
+func (ClientInvitationStatus) AllValues() []ClientInvitationStatus {
+	return []ClientInvitationStatus{
+		ClientInvitationStatusPending,
+		ClientInvitationStatusAccepted,
+		ClientInvitationStatusExpired,
+		ClientInvitationStatusRevoked,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ClientInvitationStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ClientInvitationStatusPending:
+		return []byte(s), nil
+	case ClientInvitationStatusAccepted:
+		return []byte(s), nil
+	case ClientInvitationStatusExpired:
+		return []byte(s), nil
+	case ClientInvitationStatusRevoked:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ClientInvitationStatus) UnmarshalText(data []byte) error {
+	switch ClientInvitationStatus(data) {
+	case ClientInvitationStatusPending:
+		*s = ClientInvitationStatusPending
+		return nil
+	case ClientInvitationStatusAccepted:
+		*s = ClientInvitationStatusAccepted
+		return nil
+	case ClientInvitationStatusExpired:
+		*s = ClientInvitationStatusExpired
+		return nil
+	case ClientInvitationStatusRevoked:
+		*s = ClientInvitationStatusRevoked
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/ClientMember
+type ClientMember struct {
+	UserID    uuid.UUID `json:"user_id"`
+	Email     string    `json:"email"`
+	Name      OptString `json:"name"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// GetUserID returns the value of UserID.
+func (s *ClientMember) GetUserID() uuid.UUID {
+	return s.UserID
+}
+
+// GetEmail returns the value of Email.
+func (s *ClientMember) GetEmail() string {
+	return s.Email
+}
+
+// GetName returns the value of Name.
+func (s *ClientMember) GetName() OptString {
+	return s.Name
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ClientMember) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// SetUserID sets the value of UserID.
+func (s *ClientMember) SetUserID(val uuid.UUID) {
+	s.UserID = val
+}
+
+// SetEmail sets the value of Email.
+func (s *ClientMember) SetEmail(val string) {
+	s.Email = val
+}
+
+// SetName sets the value of Name.
+func (s *ClientMember) SetName(val OptString) {
+	s.Name = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ClientMember) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// Ref: #/components/schemas/ClientMemberCreateRequest
+type ClientMemberCreateRequest struct {
+	Email string `json:"email"`
+}
+
+// GetEmail returns the value of Email.
+func (s *ClientMemberCreateRequest) GetEmail() string {
+	return s.Email
+}
+
+// SetEmail sets the value of Email.
+func (s *ClientMemberCreateRequest) SetEmail(val string) {
+	s.Email = val
+}
+
+// Ref: #/components/schemas/ClientMemberInviteResult
+type ClientMemberInviteResult struct {
+	Email string `json:"email"`
+	// True when an invitation was created (unknown email); false when an existing user was added
+	// directly.
+	Invited OptBool `json:"invited"`
+	// Present when invited=false (the user already existed).
+	UserID OptUUID `json:"user_id"`
+	// Present when invited=false.
+	CreatedAt OptDateTime `json:"created_at"`
+	// Always present. The invite accept URL (copyable fallback when SMTP is unconfigured).
+	AcceptLink OptString `json:"accept_link"`
+	// Present when invited=true.
+	InvitationID OptUUID `json:"invitation_id"`
+	// Present when invited=true.
+	ExpiresAt OptDateTime `json:"expires_at"`
+}
+
+// GetEmail returns the value of Email.
+func (s *ClientMemberInviteResult) GetEmail() string {
+	return s.Email
+}
+
+// GetInvited returns the value of Invited.
+func (s *ClientMemberInviteResult) GetInvited() OptBool {
+	return s.Invited
+}
+
+// GetUserID returns the value of UserID.
+func (s *ClientMemberInviteResult) GetUserID() OptUUID {
+	return s.UserID
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ClientMemberInviteResult) GetCreatedAt() OptDateTime {
+	return s.CreatedAt
+}
+
+// GetAcceptLink returns the value of AcceptLink.
+func (s *ClientMemberInviteResult) GetAcceptLink() OptString {
+	return s.AcceptLink
+}
+
+// GetInvitationID returns the value of InvitationID.
+func (s *ClientMemberInviteResult) GetInvitationID() OptUUID {
+	return s.InvitationID
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *ClientMemberInviteResult) GetExpiresAt() OptDateTime {
+	return s.ExpiresAt
+}
+
+// SetEmail sets the value of Email.
+func (s *ClientMemberInviteResult) SetEmail(val string) {
+	s.Email = val
+}
+
+// SetInvited sets the value of Invited.
+func (s *ClientMemberInviteResult) SetInvited(val OptBool) {
+	s.Invited = val
+}
+
+// SetUserID sets the value of UserID.
+func (s *ClientMemberInviteResult) SetUserID(val OptUUID) {
+	s.UserID = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ClientMemberInviteResult) SetCreatedAt(val OptDateTime) {
+	s.CreatedAt = val
+}
+
+// SetAcceptLink sets the value of AcceptLink.
+func (s *ClientMemberInviteResult) SetAcceptLink(val OptString) {
+	s.AcceptLink = val
+}
+
+// SetInvitationID sets the value of InvitationID.
+func (s *ClientMemberInviteResult) SetInvitationID(val OptUUID) {
+	s.InvitationID = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *ClientMemberInviteResult) SetExpiresAt(val OptDateTime) {
+	s.ExpiresAt = val
+}
+
+func (*ClientMemberInviteResult) addClientMemberRes()            {}
+func (*ClientMemberInviteResult) regenerateClientInvitationRes() {}
+
+// Ref: #/components/schemas/ClientMemberList
+type ClientMemberList struct {
+	Items []ClientMember `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *ClientMemberList) GetItems() []ClientMember {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *ClientMemberList) SetItems(val []ClientMember) {
+	s.Items = val
+}
+
+func (*ClientMemberList) listClientMembersRes() {}
+
 // A generated client report record.
 // Ref: #/components/schemas/ClientReport
 type ClientReport struct {
@@ -6211,6 +6531,59 @@ type DeleteSiteShareUnauthorized Error
 
 func (*DeleteSiteShareUnauthorized) deleteSiteShareRes() {}
 
+type DownloadPortalReportForbidden Error
+
+func (*DownloadPortalReportForbidden) downloadPortalReportRes() {}
+
+type DownloadPortalReportFormat string
+
+const (
+	DownloadPortalReportFormatHTML DownloadPortalReportFormat = "html"
+	DownloadPortalReportFormatPdf  DownloadPortalReportFormat = "pdf"
+)
+
+// AllValues returns all DownloadPortalReportFormat values.
+func (DownloadPortalReportFormat) AllValues() []DownloadPortalReportFormat {
+	return []DownloadPortalReportFormat{
+		DownloadPortalReportFormatHTML,
+		DownloadPortalReportFormatPdf,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s DownloadPortalReportFormat) MarshalText() ([]byte, error) {
+	switch s {
+	case DownloadPortalReportFormatHTML:
+		return []byte(s), nil
+	case DownloadPortalReportFormatPdf:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *DownloadPortalReportFormat) UnmarshalText(data []byte) error {
+	switch DownloadPortalReportFormat(data) {
+	case DownloadPortalReportFormatHTML:
+		*s = DownloadPortalReportFormatHTML
+		return nil
+	case DownloadPortalReportFormatPdf:
+		*s = DownloadPortalReportFormatPdf
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type DownloadPortalReportNotFound Error
+
+func (*DownloadPortalReportNotFound) downloadPortalReportRes() {}
+
+type DownloadPortalReportUnauthorized Error
+
+func (*DownloadPortalReportUnauthorized) downloadPortalReportRes() {}
+
 // Metadata for one email attachment (m62+).
 // Ref: #/components/schemas/EmailAttachmentMeta
 type EmailAttachmentMeta struct {
@@ -8427,6 +8800,127 @@ type GetOrgEmailConfigUnauthorized Error
 
 func (*GetOrgEmailConfigUnauthorized) getOrgEmailConfigRes() {}
 
+type GetPortalOverviewForbidden Error
+
+func (*GetPortalOverviewForbidden) getPortalOverviewRes() {}
+
+type GetPortalOverviewUnauthorized Error
+
+func (*GetPortalOverviewUnauthorized) getPortalOverviewRes() {}
+
+type GetPortalSiteUptimeForbidden Error
+
+func (*GetPortalSiteUptimeForbidden) getPortalSiteUptimeRes() {}
+
+type GetPortalSiteUptimeNotFound Error
+
+func (*GetPortalSiteUptimeNotFound) getPortalSiteUptimeRes() {}
+
+type GetPortalSiteUptimeRange string
+
+const (
+	GetPortalSiteUptimeRange24h GetPortalSiteUptimeRange = "24h"
+	GetPortalSiteUptimeRange7d  GetPortalSiteUptimeRange = "7d"
+	GetPortalSiteUptimeRange30d GetPortalSiteUptimeRange = "30d"
+	GetPortalSiteUptimeRange90d GetPortalSiteUptimeRange = "90d"
+)
+
+// AllValues returns all GetPortalSiteUptimeRange values.
+func (GetPortalSiteUptimeRange) AllValues() []GetPortalSiteUptimeRange {
+	return []GetPortalSiteUptimeRange{
+		GetPortalSiteUptimeRange24h,
+		GetPortalSiteUptimeRange7d,
+		GetPortalSiteUptimeRange30d,
+		GetPortalSiteUptimeRange90d,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s GetPortalSiteUptimeRange) MarshalText() ([]byte, error) {
+	switch s {
+	case GetPortalSiteUptimeRange24h:
+		return []byte(s), nil
+	case GetPortalSiteUptimeRange7d:
+		return []byte(s), nil
+	case GetPortalSiteUptimeRange30d:
+		return []byte(s), nil
+	case GetPortalSiteUptimeRange90d:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *GetPortalSiteUptimeRange) UnmarshalText(data []byte) error {
+	switch GetPortalSiteUptimeRange(data) {
+	case GetPortalSiteUptimeRange24h:
+		*s = GetPortalSiteUptimeRange24h
+		return nil
+	case GetPortalSiteUptimeRange7d:
+		*s = GetPortalSiteUptimeRange7d
+		return nil
+	case GetPortalSiteUptimeRange30d:
+		*s = GetPortalSiteUptimeRange30d
+		return nil
+	case GetPortalSiteUptimeRange90d:
+		*s = GetPortalSiteUptimeRange90d
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type GetPortalSiteUptimeUnauthorized Error
+
+func (*GetPortalSiteUptimeUnauthorized) getPortalSiteUptimeRes() {}
+
+type GetPortalSiteVitalsForbidden Error
+
+func (*GetPortalSiteVitalsForbidden) getPortalSiteVitalsRes() {}
+
+type GetPortalSiteVitalsNotFound Error
+
+func (*GetPortalSiteVitalsNotFound) getPortalSiteVitalsRes() {}
+
+type GetPortalSiteVitalsRange string
+
+const (
+	GetPortalSiteVitalsRange28d GetPortalSiteVitalsRange = "28d"
+)
+
+// AllValues returns all GetPortalSiteVitalsRange values.
+func (GetPortalSiteVitalsRange) AllValues() []GetPortalSiteVitalsRange {
+	return []GetPortalSiteVitalsRange{
+		GetPortalSiteVitalsRange28d,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s GetPortalSiteVitalsRange) MarshalText() ([]byte, error) {
+	switch s {
+	case GetPortalSiteVitalsRange28d:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *GetPortalSiteVitalsRange) UnmarshalText(data []byte) error {
+	switch GetPortalSiteVitalsRange(data) {
+	case GetPortalSiteVitalsRange28d:
+		*s = GetPortalSiteVitalsRange28d
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type GetPortalSiteVitalsUnauthorized Error
+
+func (*GetPortalSiteVitalsUnauthorized) getPortalSiteVitalsRes() {}
+
 type GetReadyzOK Readiness
 
 func (*GetReadyzOK) getReadyzRes() {}
@@ -8679,6 +9173,30 @@ type ListAuditUnauthorized Error
 
 func (*ListAuditUnauthorized) listAuditRes() {}
 
+type ListClientInvitationsForbidden Error
+
+func (*ListClientInvitationsForbidden) listClientInvitationsRes() {}
+
+type ListClientInvitationsNotFound Error
+
+func (*ListClientInvitationsNotFound) listClientInvitationsRes() {}
+
+type ListClientInvitationsUnauthorized Error
+
+func (*ListClientInvitationsUnauthorized) listClientInvitationsRes() {}
+
+type ListClientMembersForbidden Error
+
+func (*ListClientMembersForbidden) listClientMembersRes() {}
+
+type ListClientMembersNotFound Error
+
+func (*ListClientMembersNotFound) listClientMembersRes() {}
+
+type ListClientMembersUnauthorized Error
+
+func (*ListClientMembersUnauthorized) listClientMembersRes() {}
+
 type ListClientReportsForbidden Error
 
 func (*ListClientReportsForbidden) listClientReportsRes() {}
@@ -8758,6 +9276,46 @@ func (*ListMembersForbidden) listMembersRes() {}
 type ListMembersUnauthorized Error
 
 func (*ListMembersUnauthorized) listMembersRes() {}
+
+type ListPortalReportsForbidden Error
+
+func (*ListPortalReportsForbidden) listPortalReportsRes() {}
+
+type ListPortalReportsUnauthorized Error
+
+func (*ListPortalReportsUnauthorized) listPortalReportsRes() {}
+
+type ListPortalSiteBackupsForbidden Error
+
+func (*ListPortalSiteBackupsForbidden) listPortalSiteBackupsRes() {}
+
+type ListPortalSiteBackupsNotFound Error
+
+func (*ListPortalSiteBackupsNotFound) listPortalSiteBackupsRes() {}
+
+type ListPortalSiteBackupsUnauthorized Error
+
+func (*ListPortalSiteBackupsUnauthorized) listPortalSiteBackupsRes() {}
+
+type ListPortalSiteUpdatesForbidden Error
+
+func (*ListPortalSiteUpdatesForbidden) listPortalSiteUpdatesRes() {}
+
+type ListPortalSiteUpdatesNotFound Error
+
+func (*ListPortalSiteUpdatesNotFound) listPortalSiteUpdatesRes() {}
+
+type ListPortalSiteUpdatesUnauthorized Error
+
+func (*ListPortalSiteUpdatesUnauthorized) listPortalSiteUpdatesRes() {}
+
+type ListPortalSitesForbidden Error
+
+func (*ListPortalSitesForbidden) listPortalSitesRes() {}
+
+type ListPortalSitesUnauthorized Error
+
+func (*ListPortalSitesUnauthorized) listPortalSitesRes() {}
 
 type ListRestoreRunEventsForbidden Error
 
@@ -9075,6 +9633,11 @@ type Me struct {
 	User           User         `json:"user"`
 	Memberships    []Membership `json:"memberships"`
 	ActiveTenantID OptUUID      `json:"active_tenant_id"`
+	// Principal scope: org for full members, site for collaborators/portal principals, empty for
+	// unauthenticated.
+	Scope  OptMeScope       `json:"scope"`
+	Role   OptPrincipalRole `json:"role"`
+	Portal OptMePortal      `json:"portal"`
 }
 
 // GetUser returns the value of User.
@@ -9092,6 +9655,21 @@ func (s *Me) GetActiveTenantID() OptUUID {
 	return s.ActiveTenantID
 }
 
+// GetScope returns the value of Scope.
+func (s *Me) GetScope() OptMeScope {
+	return s.Scope
+}
+
+// GetRole returns the value of Role.
+func (s *Me) GetRole() OptPrincipalRole {
+	return s.Role
+}
+
+// GetPortal returns the value of Portal.
+func (s *Me) GetPortal() OptMePortal {
+	return s.Portal
+}
+
 // SetUser sets the value of User.
 func (s *Me) SetUser(val User) {
 	s.User = val
@@ -9107,11 +9685,137 @@ func (s *Me) SetActiveTenantID(val OptUUID) {
 	s.ActiveTenantID = val
 }
 
+// SetScope sets the value of Scope.
+func (s *Me) SetScope(val OptMeScope) {
+	s.Scope = val
+}
+
+// SetRole sets the value of Role.
+func (s *Me) SetRole(val OptPrincipalRole) {
+	s.Role = val
+}
+
+// SetPortal sets the value of Portal.
+func (s *Me) SetPortal(val OptMePortal) {
+	s.Portal = val
+}
+
 func (*Me) getMeRes()        {}
 func (*Me) loginRes()        {}
 func (*Me) oidcCallbackRes() {}
 func (*Me) registerRes()     {}
 func (*Me) verifyEmailRes()  {}
+
+// Portal branding context. Present only when role == "client".
+// Ref: #/components/schemas/MePortal
+type MePortal struct {
+	ClientID   uuid.UUID `json:"client_id"`
+	ClientName string    `json:"client_name"`
+	LogoURL    OptURI    `json:"logo_url"`
+	// Hex color for portal accent (e.g. #0E7C8B). Web layer validates before applying.
+	Color      OptString `json:"color"`
+	AgencyName string    `json:"agency_name"`
+}
+
+// GetClientID returns the value of ClientID.
+func (s *MePortal) GetClientID() uuid.UUID {
+	return s.ClientID
+}
+
+// GetClientName returns the value of ClientName.
+func (s *MePortal) GetClientName() string {
+	return s.ClientName
+}
+
+// GetLogoURL returns the value of LogoURL.
+func (s *MePortal) GetLogoURL() OptURI {
+	return s.LogoURL
+}
+
+// GetColor returns the value of Color.
+func (s *MePortal) GetColor() OptString {
+	return s.Color
+}
+
+// GetAgencyName returns the value of AgencyName.
+func (s *MePortal) GetAgencyName() string {
+	return s.AgencyName
+}
+
+// SetClientID sets the value of ClientID.
+func (s *MePortal) SetClientID(val uuid.UUID) {
+	s.ClientID = val
+}
+
+// SetClientName sets the value of ClientName.
+func (s *MePortal) SetClientName(val string) {
+	s.ClientName = val
+}
+
+// SetLogoURL sets the value of LogoURL.
+func (s *MePortal) SetLogoURL(val OptURI) {
+	s.LogoURL = val
+}
+
+// SetColor sets the value of Color.
+func (s *MePortal) SetColor(val OptString) {
+	s.Color = val
+}
+
+// SetAgencyName sets the value of AgencyName.
+func (s *MePortal) SetAgencyName(val string) {
+	s.AgencyName = val
+}
+
+// Principal scope: org for full members, site for collaborators/portal principals, empty for
+// unauthenticated.
+type MeScope string
+
+const (
+	MeScopeOrg   MeScope = "org"
+	MeScopeSite  MeScope = "site"
+	MeScopeEmpty MeScope = ""
+)
+
+// AllValues returns all MeScope values.
+func (MeScope) AllValues() []MeScope {
+	return []MeScope{
+		MeScopeOrg,
+		MeScopeSite,
+		MeScopeEmpty,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s MeScope) MarshalText() ([]byte, error) {
+	switch s {
+	case MeScopeOrg:
+		return []byte(s), nil
+	case MeScopeSite:
+		return []byte(s), nil
+	case MeScopeEmpty:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *MeScope) UnmarshalText(data []byte) error {
+	switch MeScope(data) {
+	case MeScopeOrg:
+		*s = MeScopeOrg
+		return nil
+	case MeScopeSite:
+		*s = MeScopeSite
+		return nil
+	case MeScopeEmpty:
+		*s = MeScopeEmpty
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 // Ref: #/components/schemas/MediaAsset
 type MediaAsset struct {
@@ -12541,6 +13245,98 @@ func (o OptGenerateClientReportRequest) Or(d GenerateClientReportRequest) Genera
 	return d
 }
 
+// NewOptGetPortalSiteUptimeRange returns new OptGetPortalSiteUptimeRange with value set to v.
+func NewOptGetPortalSiteUptimeRange(v GetPortalSiteUptimeRange) OptGetPortalSiteUptimeRange {
+	return OptGetPortalSiteUptimeRange{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGetPortalSiteUptimeRange is optional GetPortalSiteUptimeRange.
+type OptGetPortalSiteUptimeRange struct {
+	Value GetPortalSiteUptimeRange
+	Set   bool
+}
+
+// IsSet returns true if OptGetPortalSiteUptimeRange was set.
+func (o OptGetPortalSiteUptimeRange) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGetPortalSiteUptimeRange) Reset() {
+	var v GetPortalSiteUptimeRange
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGetPortalSiteUptimeRange) SetTo(v GetPortalSiteUptimeRange) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGetPortalSiteUptimeRange) Get() (v GetPortalSiteUptimeRange, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGetPortalSiteUptimeRange) Or(d GetPortalSiteUptimeRange) GetPortalSiteUptimeRange {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptGetPortalSiteVitalsRange returns new OptGetPortalSiteVitalsRange with value set to v.
+func NewOptGetPortalSiteVitalsRange(v GetPortalSiteVitalsRange) OptGetPortalSiteVitalsRange {
+	return OptGetPortalSiteVitalsRange{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGetPortalSiteVitalsRange is optional GetPortalSiteVitalsRange.
+type OptGetPortalSiteVitalsRange struct {
+	Value GetPortalSiteVitalsRange
+	Set   bool
+}
+
+// IsSet returns true if OptGetPortalSiteVitalsRange was set.
+func (o OptGetPortalSiteVitalsRange) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGetPortalSiteVitalsRange) Reset() {
+	var v GetPortalSiteVitalsRange
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGetPortalSiteVitalsRange) SetTo(v GetPortalSiteVitalsRange) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGetPortalSiteVitalsRange) Get() (v GetPortalSiteVitalsRange, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGetPortalSiteVitalsRange) Or(d GetPortalSiteVitalsRange) GetPortalSiteVitalsRange {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptGetSiteUptimeWindow returns new OptGetSiteUptimeWindow with value set to v.
 func NewOptGetSiteUptimeWindow(v GetSiteUptimeWindow) OptGetSiteUptimeWindow {
 	return OptGetSiteUptimeWindow{
@@ -12949,6 +13745,98 @@ func (o OptListSitesState) Get() (v ListSitesState, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptListSitesState) Or(d ListSitesState) ListSitesState {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptMePortal returns new OptMePortal with value set to v.
+func NewOptMePortal(v MePortal) OptMePortal {
+	return OptMePortal{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptMePortal is optional MePortal.
+type OptMePortal struct {
+	Value MePortal
+	Set   bool
+}
+
+// IsSet returns true if OptMePortal was set.
+func (o OptMePortal) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptMePortal) Reset() {
+	var v MePortal
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptMePortal) SetTo(v MePortal) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptMePortal) Get() (v MePortal, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptMePortal) Or(d MePortal) MePortal {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptMeScope returns new OptMeScope with value set to v.
+func NewOptMeScope(v MeScope) OptMeScope {
+	return OptMeScope{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptMeScope is optional MeScope.
+type OptMeScope struct {
+	Value MeScope
+	Set   bool
+}
+
+// IsSet returns true if OptMeScope was set.
+func (o OptMeScope) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptMeScope) Reset() {
+	var v MeScope
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptMeScope) SetTo(v MeScope) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptMeScope) Get() (v MeScope, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptMeScope) Or(d MeScope) MeScope {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -14458,6 +15346,52 @@ func (o OptPairingCodeCreate) Get() (v PairingCodeCreate, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptPairingCodeCreate) Or(d PairingCodeCreate) PairingCodeCreate {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPrincipalRole returns new OptPrincipalRole with value set to v.
+func NewOptPrincipalRole(v PrincipalRole) OptPrincipalRole {
+	return OptPrincipalRole{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPrincipalRole is optional PrincipalRole.
+type OptPrincipalRole struct {
+	Value PrincipalRole
+	Set   bool
+}
+
+// IsSet returns true if OptPrincipalRole was set.
+func (o OptPrincipalRole) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPrincipalRole) Reset() {
+	var v PrincipalRole
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPrincipalRole) SetTo(v PrincipalRole) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPrincipalRole) Get() (v PrincipalRole, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPrincipalRole) Or(d PrincipalRole) PrincipalRole {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -16667,6 +17601,842 @@ func (s *PerfConfig) SetUpdatedAt(val OptDateTime) {
 
 func (*PerfConfig) putPerfConfigRes() {}
 
+// Ref: #/components/schemas/PortalBackupItem
+type PortalBackupItem struct {
+	ID          uuid.UUID   `json:"id"`
+	Kind        string      `json:"kind"`
+	Status      string      `json:"status"`
+	SizeBytes   OptInt64    `json:"size_bytes"`
+	CreatedAt   time.Time   `json:"created_at"`
+	CompletedAt OptDateTime `json:"completed_at"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalBackupItem) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetKind returns the value of Kind.
+func (s *PortalBackupItem) GetKind() string {
+	return s.Kind
+}
+
+// GetStatus returns the value of Status.
+func (s *PortalBackupItem) GetStatus() string {
+	return s.Status
+}
+
+// GetSizeBytes returns the value of SizeBytes.
+func (s *PortalBackupItem) GetSizeBytes() OptInt64 {
+	return s.SizeBytes
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *PortalBackupItem) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetCompletedAt returns the value of CompletedAt.
+func (s *PortalBackupItem) GetCompletedAt() OptDateTime {
+	return s.CompletedAt
+}
+
+// SetID sets the value of ID.
+func (s *PortalBackupItem) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetKind sets the value of Kind.
+func (s *PortalBackupItem) SetKind(val string) {
+	s.Kind = val
+}
+
+// SetStatus sets the value of Status.
+func (s *PortalBackupItem) SetStatus(val string) {
+	s.Status = val
+}
+
+// SetSizeBytes sets the value of SizeBytes.
+func (s *PortalBackupItem) SetSizeBytes(val OptInt64) {
+	s.SizeBytes = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *PortalBackupItem) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetCompletedAt sets the value of CompletedAt.
+func (s *PortalBackupItem) SetCompletedAt(val OptDateTime) {
+	s.CompletedAt = val
+}
+
+// Ref: #/components/schemas/PortalBackupList
+type PortalBackupList struct {
+	Items []PortalBackupItem `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *PortalBackupList) GetItems() []PortalBackupItem {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *PortalBackupList) SetItems(val []PortalBackupItem) {
+	s.Items = val
+}
+
+func (*PortalBackupList) listPortalSiteBackupsRes() {}
+
+// Ref: #/components/schemas/PortalIncident
+type PortalIncident struct {
+	StartedAt       time.Time   `json:"started_at"`
+	EndedAt         OptDateTime `json:"ended_at"`
+	DurationSeconds int         `json:"duration_seconds"`
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *PortalIncident) GetStartedAt() time.Time {
+	return s.StartedAt
+}
+
+// GetEndedAt returns the value of EndedAt.
+func (s *PortalIncident) GetEndedAt() OptDateTime {
+	return s.EndedAt
+}
+
+// GetDurationSeconds returns the value of DurationSeconds.
+func (s *PortalIncident) GetDurationSeconds() int {
+	return s.DurationSeconds
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *PortalIncident) SetStartedAt(val time.Time) {
+	s.StartedAt = val
+}
+
+// SetEndedAt sets the value of EndedAt.
+func (s *PortalIncident) SetEndedAt(val OptDateTime) {
+	s.EndedAt = val
+}
+
+// SetDurationSeconds sets the value of DurationSeconds.
+func (s *PortalIncident) SetDurationSeconds(val int) {
+	s.DurationSeconds = val
+}
+
+// Ref: #/components/schemas/PortalOverview
+type PortalOverview struct {
+	Client      PortalOverviewClient `json:"client"`
+	AgencyName  string               `json:"agency_name"`
+	SiteCount   int                  `json:"site_count"`
+	ReportCount int                  `json:"report_count"`
+}
+
+// GetClient returns the value of Client.
+func (s *PortalOverview) GetClient() PortalOverviewClient {
+	return s.Client
+}
+
+// GetAgencyName returns the value of AgencyName.
+func (s *PortalOverview) GetAgencyName() string {
+	return s.AgencyName
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *PortalOverview) GetSiteCount() int {
+	return s.SiteCount
+}
+
+// GetReportCount returns the value of ReportCount.
+func (s *PortalOverview) GetReportCount() int {
+	return s.ReportCount
+}
+
+// SetClient sets the value of Client.
+func (s *PortalOverview) SetClient(val PortalOverviewClient) {
+	s.Client = val
+}
+
+// SetAgencyName sets the value of AgencyName.
+func (s *PortalOverview) SetAgencyName(val string) {
+	s.AgencyName = val
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *PortalOverview) SetSiteCount(val int) {
+	s.SiteCount = val
+}
+
+// SetReportCount sets the value of ReportCount.
+func (s *PortalOverview) SetReportCount(val int) {
+	s.ReportCount = val
+}
+
+func (*PortalOverview) getPortalOverviewRes() {}
+
+type PortalOverviewClient struct {
+	ID      uuid.UUID `json:"id"`
+	Name    string    `json:"name"`
+	LogoURL OptURI    `json:"logo_url"`
+	Color   OptString `json:"color"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalOverviewClient) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetName returns the value of Name.
+func (s *PortalOverviewClient) GetName() string {
+	return s.Name
+}
+
+// GetLogoURL returns the value of LogoURL.
+func (s *PortalOverviewClient) GetLogoURL() OptURI {
+	return s.LogoURL
+}
+
+// GetColor returns the value of Color.
+func (s *PortalOverviewClient) GetColor() OptString {
+	return s.Color
+}
+
+// SetID sets the value of ID.
+func (s *PortalOverviewClient) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetName sets the value of Name.
+func (s *PortalOverviewClient) SetName(val string) {
+	s.Name = val
+}
+
+// SetLogoURL sets the value of LogoURL.
+func (s *PortalOverviewClient) SetLogoURL(val OptURI) {
+	s.LogoURL = val
+}
+
+// SetColor sets the value of Color.
+func (s *PortalOverviewClient) SetColor(val OptString) {
+	s.Color = val
+}
+
+// Ref: #/components/schemas/PortalReportDownload
+type PortalReportDownload struct {
+	// Presigned download URL (valid for the object storage TTL).
+	URL       string    `json:"url"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// GetURL returns the value of URL.
+func (s *PortalReportDownload) GetURL() string {
+	return s.URL
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *PortalReportDownload) GetExpiresAt() time.Time {
+	return s.ExpiresAt
+}
+
+// SetURL sets the value of URL.
+func (s *PortalReportDownload) SetURL(val string) {
+	s.URL = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *PortalReportDownload) SetExpiresAt(val time.Time) {
+	s.ExpiresAt = val
+}
+
+func (*PortalReportDownload) downloadPortalReportRes() {}
+
+// Ref: #/components/schemas/PortalReportItem
+type PortalReportItem struct {
+	ID          uuid.UUID   `json:"id"`
+	ClientID    uuid.UUID   `json:"client_id"`
+	PeriodStart time.Time   `json:"period_start"`
+	PeriodEnd   time.Time   `json:"period_end"`
+	CreatedAt   time.Time   `json:"created_at"`
+	CompletedAt OptDateTime `json:"completed_at"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalReportItem) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetClientID returns the value of ClientID.
+func (s *PortalReportItem) GetClientID() uuid.UUID {
+	return s.ClientID
+}
+
+// GetPeriodStart returns the value of PeriodStart.
+func (s *PortalReportItem) GetPeriodStart() time.Time {
+	return s.PeriodStart
+}
+
+// GetPeriodEnd returns the value of PeriodEnd.
+func (s *PortalReportItem) GetPeriodEnd() time.Time {
+	return s.PeriodEnd
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *PortalReportItem) GetCreatedAt() time.Time {
+	return s.CreatedAt
+}
+
+// GetCompletedAt returns the value of CompletedAt.
+func (s *PortalReportItem) GetCompletedAt() OptDateTime {
+	return s.CompletedAt
+}
+
+// SetID sets the value of ID.
+func (s *PortalReportItem) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetClientID sets the value of ClientID.
+func (s *PortalReportItem) SetClientID(val uuid.UUID) {
+	s.ClientID = val
+}
+
+// SetPeriodStart sets the value of PeriodStart.
+func (s *PortalReportItem) SetPeriodStart(val time.Time) {
+	s.PeriodStart = val
+}
+
+// SetPeriodEnd sets the value of PeriodEnd.
+func (s *PortalReportItem) SetPeriodEnd(val time.Time) {
+	s.PeriodEnd = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *PortalReportItem) SetCreatedAt(val time.Time) {
+	s.CreatedAt = val
+}
+
+// SetCompletedAt sets the value of CompletedAt.
+func (s *PortalReportItem) SetCompletedAt(val OptDateTime) {
+	s.CompletedAt = val
+}
+
+// Ref: #/components/schemas/PortalReportList
+type PortalReportList struct {
+	Items []PortalReportItem `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *PortalReportList) GetItems() []PortalReportItem {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *PortalReportList) SetItems(val []PortalReportItem) {
+	s.Items = val
+}
+
+func (*PortalReportList) listPortalReportsRes() {}
+
+// Ref: #/components/schemas/PortalSite
+type PortalSite struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	URL  url.URL   `json:"url"`
+	// Real connection state value (connected/degraded/disconnected). Web layer applies soft labels.
+	Status       string      `json:"status"`
+	LastBackupAt OptDateTime `json:"last_backup_at"`
+	Uptime30dPct OptFloat32  `json:"uptime_30d_pct"`
+	TLSExpiresAt OptDateTime `json:"tls_expires_at"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalSite) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetName returns the value of Name.
+func (s *PortalSite) GetName() string {
+	return s.Name
+}
+
+// GetURL returns the value of URL.
+func (s *PortalSite) GetURL() url.URL {
+	return s.URL
+}
+
+// GetStatus returns the value of Status.
+func (s *PortalSite) GetStatus() string {
+	return s.Status
+}
+
+// GetLastBackupAt returns the value of LastBackupAt.
+func (s *PortalSite) GetLastBackupAt() OptDateTime {
+	return s.LastBackupAt
+}
+
+// GetUptime30dPct returns the value of Uptime30dPct.
+func (s *PortalSite) GetUptime30dPct() OptFloat32 {
+	return s.Uptime30dPct
+}
+
+// GetTLSExpiresAt returns the value of TLSExpiresAt.
+func (s *PortalSite) GetTLSExpiresAt() OptDateTime {
+	return s.TLSExpiresAt
+}
+
+// SetID sets the value of ID.
+func (s *PortalSite) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetName sets the value of Name.
+func (s *PortalSite) SetName(val string) {
+	s.Name = val
+}
+
+// SetURL sets the value of URL.
+func (s *PortalSite) SetURL(val url.URL) {
+	s.URL = val
+}
+
+// SetStatus sets the value of Status.
+func (s *PortalSite) SetStatus(val string) {
+	s.Status = val
+}
+
+// SetLastBackupAt sets the value of LastBackupAt.
+func (s *PortalSite) SetLastBackupAt(val OptDateTime) {
+	s.LastBackupAt = val
+}
+
+// SetUptime30dPct sets the value of Uptime30dPct.
+func (s *PortalSite) SetUptime30dPct(val OptFloat32) {
+	s.Uptime30dPct = val
+}
+
+// SetTLSExpiresAt sets the value of TLSExpiresAt.
+func (s *PortalSite) SetTLSExpiresAt(val OptDateTime) {
+	s.TLSExpiresAt = val
+}
+
+// Ref: #/components/schemas/PortalSiteList
+type PortalSiteList struct {
+	Items []PortalSite `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *PortalSiteList) GetItems() []PortalSite {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *PortalSiteList) SetItems(val []PortalSite) {
+	s.Items = val
+}
+
+func (*PortalSiteList) listPortalSitesRes() {}
+
+// Ref: #/components/schemas/PortalUpdateItem
+type PortalUpdateItem struct {
+	Type        string      `json:"type"`
+	Name        string      `json:"name"`
+	FromVersion OptString   `json:"from_version"`
+	ToVersion   OptString   `json:"to_version"`
+	Status      string      `json:"status"`
+	FinishedAt  OptDateTime `json:"finished_at"`
+}
+
+// GetType returns the value of Type.
+func (s *PortalUpdateItem) GetType() string {
+	return s.Type
+}
+
+// GetName returns the value of Name.
+func (s *PortalUpdateItem) GetName() string {
+	return s.Name
+}
+
+// GetFromVersion returns the value of FromVersion.
+func (s *PortalUpdateItem) GetFromVersion() OptString {
+	return s.FromVersion
+}
+
+// GetToVersion returns the value of ToVersion.
+func (s *PortalUpdateItem) GetToVersion() OptString {
+	return s.ToVersion
+}
+
+// GetStatus returns the value of Status.
+func (s *PortalUpdateItem) GetStatus() string {
+	return s.Status
+}
+
+// GetFinishedAt returns the value of FinishedAt.
+func (s *PortalUpdateItem) GetFinishedAt() OptDateTime {
+	return s.FinishedAt
+}
+
+// SetType sets the value of Type.
+func (s *PortalUpdateItem) SetType(val string) {
+	s.Type = val
+}
+
+// SetName sets the value of Name.
+func (s *PortalUpdateItem) SetName(val string) {
+	s.Name = val
+}
+
+// SetFromVersion sets the value of FromVersion.
+func (s *PortalUpdateItem) SetFromVersion(val OptString) {
+	s.FromVersion = val
+}
+
+// SetToVersion sets the value of ToVersion.
+func (s *PortalUpdateItem) SetToVersion(val OptString) {
+	s.ToVersion = val
+}
+
+// SetStatus sets the value of Status.
+func (s *PortalUpdateItem) SetStatus(val string) {
+	s.Status = val
+}
+
+// SetFinishedAt sets the value of FinishedAt.
+func (s *PortalUpdateItem) SetFinishedAt(val OptDateTime) {
+	s.FinishedAt = val
+}
+
+// Ref: #/components/schemas/PortalUpdateList
+type PortalUpdateList struct {
+	Items []PortalUpdateItem `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *PortalUpdateList) GetItems() []PortalUpdateItem {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *PortalUpdateList) SetItems(val []PortalUpdateItem) {
+	s.Items = val
+}
+
+func (*PortalUpdateList) listPortalSiteUpdatesRes() {}
+
+// Ref: #/components/schemas/PortalUptimeSummary
+type PortalUptimeSummary struct {
+	Range        string           `json:"range"`
+	UptimePct    float32          `json:"uptime_pct"`
+	AvgLatencyMs float32          `json:"avg_latency_ms"`
+	TLSExpiresAt OptDateTime      `json:"tls_expires_at"`
+	Incidents    []PortalIncident `json:"incidents"`
+}
+
+// GetRange returns the value of Range.
+func (s *PortalUptimeSummary) GetRange() string {
+	return s.Range
+}
+
+// GetUptimePct returns the value of UptimePct.
+func (s *PortalUptimeSummary) GetUptimePct() float32 {
+	return s.UptimePct
+}
+
+// GetAvgLatencyMs returns the value of AvgLatencyMs.
+func (s *PortalUptimeSummary) GetAvgLatencyMs() float32 {
+	return s.AvgLatencyMs
+}
+
+// GetTLSExpiresAt returns the value of TLSExpiresAt.
+func (s *PortalUptimeSummary) GetTLSExpiresAt() OptDateTime {
+	return s.TLSExpiresAt
+}
+
+// GetIncidents returns the value of Incidents.
+func (s *PortalUptimeSummary) GetIncidents() []PortalIncident {
+	return s.Incidents
+}
+
+// SetRange sets the value of Range.
+func (s *PortalUptimeSummary) SetRange(val string) {
+	s.Range = val
+}
+
+// SetUptimePct sets the value of UptimePct.
+func (s *PortalUptimeSummary) SetUptimePct(val float32) {
+	s.UptimePct = val
+}
+
+// SetAvgLatencyMs sets the value of AvgLatencyMs.
+func (s *PortalUptimeSummary) SetAvgLatencyMs(val float32) {
+	s.AvgLatencyMs = val
+}
+
+// SetTLSExpiresAt sets the value of TLSExpiresAt.
+func (s *PortalUptimeSummary) SetTLSExpiresAt(val OptDateTime) {
+	s.TLSExpiresAt = val
+}
+
+// SetIncidents sets the value of Incidents.
+func (s *PortalUptimeSummary) SetIncidents(val []PortalIncident) {
+	s.Incidents = val
+}
+
+func (*PortalUptimeSummary) getPortalSiteUptimeRes() {}
+
+// Ref: #/components/schemas/PortalVitalMetric
+type PortalVitalMetric struct {
+	Metric  PortalVitalMetricMetric `json:"metric"`
+	P75     float32                 `json:"p75"`
+	Rating  PortalVitalMetricRating `json:"rating"`
+	Samples int64                   `json:"samples"`
+}
+
+// GetMetric returns the value of Metric.
+func (s *PortalVitalMetric) GetMetric() PortalVitalMetricMetric {
+	return s.Metric
+}
+
+// GetP75 returns the value of P75.
+func (s *PortalVitalMetric) GetP75() float32 {
+	return s.P75
+}
+
+// GetRating returns the value of Rating.
+func (s *PortalVitalMetric) GetRating() PortalVitalMetricRating {
+	return s.Rating
+}
+
+// GetSamples returns the value of Samples.
+func (s *PortalVitalMetric) GetSamples() int64 {
+	return s.Samples
+}
+
+// SetMetric sets the value of Metric.
+func (s *PortalVitalMetric) SetMetric(val PortalVitalMetricMetric) {
+	s.Metric = val
+}
+
+// SetP75 sets the value of P75.
+func (s *PortalVitalMetric) SetP75(val float32) {
+	s.P75 = val
+}
+
+// SetRating sets the value of Rating.
+func (s *PortalVitalMetric) SetRating(val PortalVitalMetricRating) {
+	s.Rating = val
+}
+
+// SetSamples sets the value of Samples.
+func (s *PortalVitalMetric) SetSamples(val int64) {
+	s.Samples = val
+}
+
+type PortalVitalMetricMetric string
+
+const (
+	PortalVitalMetricMetricLcp PortalVitalMetricMetric = "lcp"
+	PortalVitalMetricMetricInp PortalVitalMetricMetric = "inp"
+	PortalVitalMetricMetricCls PortalVitalMetricMetric = "cls"
+)
+
+// AllValues returns all PortalVitalMetricMetric values.
+func (PortalVitalMetricMetric) AllValues() []PortalVitalMetricMetric {
+	return []PortalVitalMetricMetric{
+		PortalVitalMetricMetricLcp,
+		PortalVitalMetricMetricInp,
+		PortalVitalMetricMetricCls,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PortalVitalMetricMetric) MarshalText() ([]byte, error) {
+	switch s {
+	case PortalVitalMetricMetricLcp:
+		return []byte(s), nil
+	case PortalVitalMetricMetricInp:
+		return []byte(s), nil
+	case PortalVitalMetricMetricCls:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PortalVitalMetricMetric) UnmarshalText(data []byte) error {
+	switch PortalVitalMetricMetric(data) {
+	case PortalVitalMetricMetricLcp:
+		*s = PortalVitalMetricMetricLcp
+		return nil
+	case PortalVitalMetricMetricInp:
+		*s = PortalVitalMetricMetricInp
+		return nil
+	case PortalVitalMetricMetricCls:
+		*s = PortalVitalMetricMetricCls
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type PortalVitalMetricRating string
+
+const (
+	PortalVitalMetricRatingGood             PortalVitalMetricRating = "good"
+	PortalVitalMetricRatingNeedsImprovement PortalVitalMetricRating = "needs-improvement"
+	PortalVitalMetricRatingPoor             PortalVitalMetricRating = "poor"
+	PortalVitalMetricRatingInsufficientData PortalVitalMetricRating = "insufficient-data"
+)
+
+// AllValues returns all PortalVitalMetricRating values.
+func (PortalVitalMetricRating) AllValues() []PortalVitalMetricRating {
+	return []PortalVitalMetricRating{
+		PortalVitalMetricRatingGood,
+		PortalVitalMetricRatingNeedsImprovement,
+		PortalVitalMetricRatingPoor,
+		PortalVitalMetricRatingInsufficientData,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PortalVitalMetricRating) MarshalText() ([]byte, error) {
+	switch s {
+	case PortalVitalMetricRatingGood:
+		return []byte(s), nil
+	case PortalVitalMetricRatingNeedsImprovement:
+		return []byte(s), nil
+	case PortalVitalMetricRatingPoor:
+		return []byte(s), nil
+	case PortalVitalMetricRatingInsufficientData:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PortalVitalMetricRating) UnmarshalText(data []byte) error {
+	switch PortalVitalMetricRating(data) {
+	case PortalVitalMetricRatingGood:
+		*s = PortalVitalMetricRatingGood
+		return nil
+	case PortalVitalMetricRatingNeedsImprovement:
+		*s = PortalVitalMetricRatingNeedsImprovement
+		return nil
+	case PortalVitalMetricRatingPoor:
+		*s = PortalVitalMetricRatingPoor
+		return nil
+	case PortalVitalMetricRatingInsufficientData:
+		*s = PortalVitalMetricRatingInsufficientData
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/PortalVitalsSummary
+type PortalVitalsSummary struct {
+	Range   string              `json:"range"`
+	Metrics []PortalVitalMetric `json:"metrics"`
+}
+
+// GetRange returns the value of Range.
+func (s *PortalVitalsSummary) GetRange() string {
+	return s.Range
+}
+
+// GetMetrics returns the value of Metrics.
+func (s *PortalVitalsSummary) GetMetrics() []PortalVitalMetric {
+	return s.Metrics
+}
+
+// SetRange sets the value of Range.
+func (s *PortalVitalsSummary) SetRange(val string) {
+	s.Range = val
+}
+
+// SetMetrics sets the value of Metrics.
+func (s *PortalVitalsSummary) SetMetrics(val []PortalVitalMetric) {
+	s.Metrics = val
+}
+
+func (*PortalVitalsSummary) getPortalSiteVitalsRes() {}
+
+// Effective role of the authenticated principal. Extends the member Role enum with "client" for
+// portal principals. The existing Role enum (owner/admin/operator/viewer) is unchanged; this
+// standalone enum is used only in Me responses.
+// Ref: #/components/schemas/PrincipalRole
+type PrincipalRole string
+
+const (
+	PrincipalRoleOwner    PrincipalRole = "owner"
+	PrincipalRoleAdmin    PrincipalRole = "admin"
+	PrincipalRoleOperator PrincipalRole = "operator"
+	PrincipalRoleViewer   PrincipalRole = "viewer"
+	PrincipalRoleClient   PrincipalRole = "client"
+	PrincipalRoleEmpty    PrincipalRole = ""
+)
+
+// AllValues returns all PrincipalRole values.
+func (PrincipalRole) AllValues() []PrincipalRole {
+	return []PrincipalRole{
+		PrincipalRoleOwner,
+		PrincipalRoleAdmin,
+		PrincipalRoleOperator,
+		PrincipalRoleViewer,
+		PrincipalRoleClient,
+		PrincipalRoleEmpty,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PrincipalRole) MarshalText() ([]byte, error) {
+	switch s {
+	case PrincipalRoleOwner:
+		return []byte(s), nil
+	case PrincipalRoleAdmin:
+		return []byte(s), nil
+	case PrincipalRoleOperator:
+		return []byte(s), nil
+	case PrincipalRoleViewer:
+		return []byte(s), nil
+	case PrincipalRoleClient:
+		return []byte(s), nil
+	case PrincipalRoleEmpty:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PrincipalRole) UnmarshalText(data []byte) error {
+	switch PrincipalRole(data) {
+	case PrincipalRoleOwner:
+		*s = PrincipalRoleOwner
+		return nil
+	case PrincipalRoleAdmin:
+		*s = PrincipalRoleAdmin
+		return nil
+	case PrincipalRoleOperator:
+		*s = PrincipalRoleOperator
+		return nil
+	case PrincipalRoleViewer:
+		*s = PrincipalRoleViewer
+		return nil
+	case PrincipalRoleClient:
+		*s = PrincipalRoleClient
+		return nil
+	case PrincipalRoleEmpty:
+		*s = PrincipalRoleEmpty
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // A page-cache purge request.
 // Ref: #/components/schemas/PurgeRequest
 type PurgeRequest struct {
@@ -17399,6 +19169,18 @@ type RefreshSiteUpdatesNotFound Error
 
 func (*RefreshSiteUpdatesNotFound) refreshSiteUpdatesRes() {}
 
+type RegenerateClientInvitationForbidden Error
+
+func (*RegenerateClientInvitationForbidden) regenerateClientInvitationRes() {}
+
+type RegenerateClientInvitationNotFound Error
+
+func (*RegenerateClientInvitationNotFound) regenerateClientInvitationRes() {}
+
+type RegenerateClientInvitationUnauthorized Error
+
+func (*RegenerateClientInvitationUnauthorized) regenerateClientInvitationRes() {}
+
 type RegisterConflict Error
 
 func (*RegisterConflict) registerRes() {}
@@ -17492,6 +19274,23 @@ func (s *RegisterRequest) SetTenantSlug(val OptString) {
 type RegisterUnprocessableEntity Error
 
 func (*RegisterUnprocessableEntity) registerRes() {}
+
+type RemoveClientMemberForbidden Error
+
+func (*RemoveClientMemberForbidden) removeClientMemberRes() {}
+
+// RemoveClientMemberNoContent is response for RemoveClientMember operation.
+type RemoveClientMemberNoContent struct{}
+
+func (*RemoveClientMemberNoContent) removeClientMemberRes() {}
+
+type RemoveClientMemberNotFound Error
+
+func (*RemoveClientMemberNotFound) removeClientMemberRes() {}
+
+type RemoveClientMemberUnauthorized Error
+
+func (*RemoveClientMemberUnauthorized) removeClientMemberRes() {}
 
 type ResendEmailLogConflict Error
 
@@ -18292,6 +20091,23 @@ func (*RevokeApiKeyNotFound) revokeApiKeyRes() {}
 type RevokeApiKeyUnauthorized Error
 
 func (*RevokeApiKeyUnauthorized) revokeApiKeyRes() {}
+
+type RevokeClientInvitationForbidden Error
+
+func (*RevokeClientInvitationForbidden) revokeClientInvitationRes() {}
+
+// RevokeClientInvitationNoContent is response for RevokeClientInvitation operation.
+type RevokeClientInvitationNoContent struct{}
+
+func (*RevokeClientInvitationNoContent) revokeClientInvitationRes() {}
+
+type RevokeClientInvitationNotFound Error
+
+func (*RevokeClientInvitationNotFound) revokeClientInvitationRes() {}
+
+type RevokeClientInvitationUnauthorized Error
+
+func (*RevokeClientInvitationUnauthorized) revokeClientInvitationRes() {}
 
 // Ref: #/components/schemas/Role
 type Role string

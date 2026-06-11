@@ -38,6 +38,7 @@ type acceptResponseDTO struct {
 	TenantID string  `json:"tenant_id"`
 	Scope    string  `json:"scope"`
 	SiteID   *string `json:"site_id,omitempty"`
+	ClientID *string `json:"client_id,omitempty"`
 }
 
 func (h *Handler) accept(c *gin.Context) {
@@ -73,6 +74,10 @@ func (h *Handler) accept(c *gin.Context) {
 	if result.SiteID != nil {
 		v := result.SiteID.String()
 		resp.SiteID = &v
+	}
+	if result.ClientID != nil {
+		v := result.ClientID.String()
+		resp.ClientID = &v
 	}
 	c.JSON(http.StatusOK, resp)
 }

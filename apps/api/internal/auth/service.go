@@ -96,10 +96,8 @@ func (s *Service) Login(ctx context.Context, email, password string) (LoginResul
 
 // resolveActiveTenant picks the session's active tenant after authentication.
 // Org members use their first membership; a user with NO membership but an
-// active site_share (an outside collaborator) falls back to that share's
-// tenant, so site-scoped access survives logout/login. Without the fallback the
-// session would carry no tenant and every tenant-scoped request would 403 — even
-// though accept-time access worked, because Accept() set the tenant directly.
+// active site_share falls back to that share's tenant; a portal-only user
+// (no membership, no share) falls back to their earliest client_member tenant.
 func (s *Service) resolveActiveTenant(ctx context.Context, userID uuid.UUID, memberships []Membership) uuid.UUID {
 	if len(memberships) > 0 {
 		return memberships[0].TenantID
@@ -107,21 +105,36 @@ func (s *Service) resolveActiveTenant(ctx context.Context, userID uuid.UUID, mem
 	if tid, ok := s.repo.FirstActiveShareTenant(ctx, userID); ok {
 		return tid
 	}
+	if tid, ok := s.repo.FirstClientMemberTenant(ctx, userID); ok {
+		return tid
+	}
 	return uuid.Nil
 }
 
 func (s *Service) recordLogin(ctx context.Context, memberships []Membership, userID uuid.UUID, action string) {
-	if len(memberships) == 0 {
+	if len(memberships) > 0 {
+		_, _ = s.audit.Record(ctx, audit.Event{
+			TenantID:   memberships[0].TenantID,
+			ActorType:  audit.ActorUser,
+			ActorID:    userID.String(),
+			Action:     action,
+			TargetType: "user",
+			TargetID:   userID.String(),
+		})
 		return
 	}
-	_, _ = s.audit.Record(ctx, audit.Event{
-		TenantID:   memberships[0].TenantID,
-		ActorType:  audit.ActorUser,
-		ActorID:    userID.String(),
-		Action:     action,
-		TargetType: "user",
-		TargetID:   userID.String(),
-	})
+	// Portal-only users have no org membership. Best-effort record the login
+	// event under their client member tenant so it reaches the audit log.
+	if tid, ok := s.repo.FirstClientMemberTenant(ctx, userID); ok {
+		_, _ = s.audit.Record(ctx, audit.Event{
+			TenantID:   tid,
+			ActorType:  audit.ActorUser,
+			ActorID:    userID.String(),
+			Action:     action,
+			TargetType: "user",
+			TargetID:   userID.String(),
+		})
+	}
 }
 
 // RegisterInput is the registration request body.

@@ -6016,6 +6016,421 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  # ---------------------------------------------------------------------------
+  # m66 — Client portal member management (agency side)
+  # ---------------------------------------------------------------------------
+
+  /api/v1/clients/{clientId}/members:
+    get:
+      operationId: listClientMembers
+      summary: List portal members for a client
+      description: Returns the roster of portal users granted access to this client.
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Member list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientMemberList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    post:
+      operationId: addClientMember
+      summary: Add or invite a portal member
+      description: >
+        If the email belongs to a known user, grants portal access immediately
+        and returns `201` with the member record. If the email is unknown, creates
+        a client-scope invitation and returns `201` with `invited: true` and an
+        `accept_link` (always present as a copyable fallback when SMTP is
+        unconfigured).
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClientMemberCreateRequest"
+      responses:
+        "201":
+          description: Member added or invited
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientMemberInviteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/clients/{clientId}/members/{userId}:
+    delete:
+      operationId: removeClientMember
+      summary: Revoke portal access for a member
+      description: Immediately removes the client_members row. The user's session remains valid but subsequent portal requests resolve no tenant.
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: No Content
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/clients/{clientId}/invitations:
+    get:
+      operationId: listClientInvitations
+      summary: List portal invitations for a client
+      description: Returns all client-scope invitations (pending, accepted, expired, revoked).
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Invitation list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientInvitationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/clients/{clientId}/invitations/{invitationId}:
+    delete:
+      operationId: revokeClientInvitation
+      summary: Revoke a pending portal invitation
+      description: Soft-revokes the invitation. The accept link becomes inert.
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: invitationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "204":
+          description: No Content
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/clients/{clientId}/invitations/{invitationId}/regenerate:
+    post:
+      operationId: regenerateClientInvitation
+      summary: Regenerate a portal invitation token
+      description: Rotates the token (kills the old link), resets expiry and attempt counter, and clears any prior revocation.
+      tags: [clients]
+      parameters:
+        - name: clientId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: invitationId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Regenerated invitation with new accept_link
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClientMemberInviteResult"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ---------------------------------------------------------------------------
+  # m66 — Client portal endpoints (portal side; RequireClientPortal gating)
+  # ---------------------------------------------------------------------------
+
+  /api/v1/portal/overview:
+    get:
+      operationId: getPortalOverview
+      summary: Portal overview (client branding + site count)
+      description: Returns identity and branding for the portal principal's primary client.
+      tags: [portal]
+      responses:
+        "200":
+          description: Portal overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalOverview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/portal/sites:
+    get:
+      operationId: listPortalSites
+      summary: List sites accessible to the portal principal
+      description: Returns a summary of each site the portal user can see (their client's sites only).
+      tags: [portal]
+      responses:
+        "200":
+          description: Site list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalSiteList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/portal/sites/{siteId}/uptime:
+    get:
+      operationId: getPortalSiteUptime
+      summary: Uptime summary for a portal site
+      description: Returns windowed uptime percentage, average latency, TLS expiry, and incident history.
+      tags: [portal]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: range
+          in: query
+          schema:
+            type: string
+            enum: [24h, 7d, 30d, 90d]
+            default: 30d
+      responses:
+        "200":
+          description: Uptime summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalUptimeSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/portal/sites/{siteId}/backups:
+    get:
+      operationId: listPortalSiteBackups
+      summary: Backup inventory for a portal site
+      description: Returns completed backups only. No blob keys, destinations, or download links are included.
+      tags: [portal]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 20
+            default: 10
+      responses:
+        "200":
+          description: Backup list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalBackupList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/portal/sites/{siteId}/updates:
+    get:
+      operationId: listPortalSiteUpdates
+      summary: Applied updates log for a portal site
+      description: Returns successfully applied update tasks only.
+      tags: [portal]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            maximum: 50
+            default: 20
+      responses:
+        "200":
+          description: Update list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalUpdateList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/portal/sites/{siteId}/vitals:
+    get:
+      operationId: getPortalSiteVitals
+      summary: Core Web Vitals p75 summary for a portal site
+      description: Returns all-devices aggregate p75 field data for LCP, INP, and CLS.
+      tags: [portal]
+      parameters:
+        - name: siteId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: range
+          in: query
+          schema:
+            type: string
+            enum: [28d]
+            default: 28d
+      responses:
+        "200":
+          description: Vitals summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalVitalsSummary"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/portal/reports:
+    get:
+      operationId: listPortalReports
+      summary: List completed reports for the portal principal
+      description: >
+        Returns completed white-label reports for all of the principal's clients.
+        The client_id = ANY(principal.ClientIDs) filter is enforced in the query.
+      tags: [portal]
+      responses:
+        "200":
+          description: Report list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalReportList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+
+  /api/v1/portal/reports/{reportId}/download:
+    get:
+      operationId: downloadPortalReport
+      summary: Get a presigned download URL for a portal report
+      description: >
+        Returns a presigned URL for the HTML or PDF version of a completed report.
+        The report must belong to one of the principal's clients; otherwise 404 is
+        returned (not 403, to avoid confirming report existence).
+      tags: [portal]
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: format
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [html, pdf]
+      responses:
+        "200":
+          description: Presigned download URL
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PortalReportDownload"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
 components:
   responses:
     Unauthorized:
@@ -6888,6 +7303,42 @@ components:
         active_tenant_id:
           type: string
           format: uuid
+        scope:
+          type: string
+          description: "Principal scope: org for full members, site for collaborators/portal principals, empty for unauthenticated."
+          enum: [org, site, ""]
+        role:
+          $ref: "#/components/schemas/PrincipalRole"
+        portal:
+          $ref: "#/components/schemas/MePortal"
+
+    PrincipalRole:
+      type: string
+      description: >
+        Effective role of the authenticated principal. Extends the member Role
+        enum with "client" for portal principals. The existing Role enum
+        (owner/admin/operator/viewer) is unchanged; this standalone enum is used
+        only in Me responses.
+      enum: [owner, admin, operator, viewer, client, ""]
+
+    MePortal:
+      type: object
+      description: Portal branding context. Present only when role == "client".
+      required: [client_id, client_name, agency_name]
+      properties:
+        client_id:
+          type: string
+          format: uuid
+        client_name:
+          type: string
+        logo_url:
+          type: string
+          format: uri
+        color:
+          type: string
+          description: "Hex color for portal accent (e.g. #0E7C8B). Web layer validates before applying."
+        agency_name:
+          type: string
     LoginRequest:
       type: object
       required: [email, password]
@@ -11220,3 +11671,324 @@ components:
         next_cursor:
           type: string
           description: Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when there are no more pages.
+
+    # ---------------------------------------------------------------------------
+    # m66 — Client member management schemas
+    # ---------------------------------------------------------------------------
+
+    ClientMember:
+      type: object
+      required: [user_id, email, created_at]
+      properties:
+        user_id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    ClientMemberList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientMember"
+
+    ClientMemberCreateRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+
+    ClientMemberInviteResult:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+          format: email
+        invited:
+          type: boolean
+          description: True when an invitation was created (unknown email); false when an existing user was added directly.
+        user_id:
+          type: string
+          format: uuid
+          description: Present when invited=false (the user already existed).
+        created_at:
+          type: string
+          format: date-time
+          description: Present when invited=false.
+        accept_link:
+          type: string
+          description: Always present. The invite accept URL (copyable fallback when SMTP is unconfigured).
+        invitation_id:
+          type: string
+          format: uuid
+          description: Present when invited=true.
+        expires_at:
+          type: string
+          format: date-time
+          description: Present when invited=true.
+
+    ClientInvitation:
+      type: object
+      required: [id, email, created_at, expires_at, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        email:
+          type: string
+          format: email
+        created_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          description: "Derived status: pending, accepted, expired, or revoked."
+          enum: [pending, accepted, expired, revoked]
+
+    ClientInvitationList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/ClientInvitation"
+
+    # ---------------------------------------------------------------------------
+    # m66 — Portal schemas
+    # ---------------------------------------------------------------------------
+
+    PortalOverview:
+      type: object
+      required: [client, agency_name, site_count, report_count]
+      properties:
+        client:
+          type: object
+          required: [id, name]
+          properties:
+            id:
+              type: string
+              format: uuid
+            name:
+              type: string
+            logo_url:
+              type: string
+              format: uri
+            color:
+              type: string
+        agency_name:
+          type: string
+        site_count:
+          type: integer
+        report_count:
+          type: integer
+
+    PortalSite:
+      type: object
+      required: [id, name, url, status]
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        url:
+          type: string
+          format: uri
+        status:
+          type: string
+          description: "Real connection state value (connected/degraded/disconnected). Web layer applies soft labels."
+        last_backup_at:
+          type: string
+          format: date-time
+        uptime_30d_pct:
+          type: number
+          format: float
+        tls_expires_at:
+          type: string
+          format: date-time
+
+    PortalSiteList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalSite"
+
+    PortalIncident:
+      type: object
+      required: [started_at, duration_seconds]
+      properties:
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+
+    PortalUptimeSummary:
+      type: object
+      required: [range, uptime_pct, avg_latency_ms]
+      properties:
+        range:
+          type: string
+        uptime_pct:
+          type: number
+          format: float
+        avg_latency_ms:
+          type: number
+          format: float
+        tls_expires_at:
+          type: string
+          format: date-time
+        incidents:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalIncident"
+
+    PortalBackupItem:
+      type: object
+      required: [id, kind, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        kind:
+          type: string
+        status:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    PortalBackupList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalBackupItem"
+
+    PortalUpdateItem:
+      type: object
+      required: [type, name, status]
+      properties:
+        type:
+          type: string
+        name:
+          type: string
+        from_version:
+          type: string
+        to_version:
+          type: string
+        status:
+          type: string
+        finished_at:
+          type: string
+          format: date-time
+
+    PortalUpdateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalUpdateItem"
+
+    PortalVitalMetric:
+      type: object
+      required: [metric, p75, rating, samples]
+      properties:
+        metric:
+          type: string
+          enum: [lcp, inp, cls]
+        p75:
+          type: number
+          format: float
+        rating:
+          type: string
+          enum: [good, needs-improvement, poor, insufficient-data]
+        samples:
+          type: integer
+          format: int64
+
+    PortalVitalsSummary:
+      type: object
+      required: [range, metrics]
+      properties:
+        range:
+          type: string
+        metrics:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalVitalMetric"
+
+    PortalReportItem:
+      type: object
+      required: [id, client_id, period_start, period_end, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+        client_id:
+          type: string
+          format: uuid
+        period_start:
+          type: string
+          format: date-time
+        period_end:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    PortalReportList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/PortalReportItem"
+
+    PortalReportDownload:
+      type: object
+      required: [url, expires_at]
+      properties:
+        url:
+          type: string
+          description: Presigned download URL (valid for the object storage TTL).
+        expires_at:
+          type: string
+          format: date-time

@@ -26,14 +26,19 @@ import (
 // All routes require RequireOrgScope (clients are org-level; site-scoped
 // collaborators must never enumerate or mutate the client roster).
 type Handler struct {
-	svc   *Service
-	audit *audit.Recorder
+	svc     *Service
+	audit   *audit.Recorder
+	members *MemberHandler // optional; wired via SetMemberHandler
 }
 
 // NewHandler constructs the client handler.
 func NewHandler(svc *Service, rec *audit.Recorder) *Handler {
 	return &Handler{svc: svc, audit: rec}
 }
+
+// SetMemberHandler wires the m66 client-member management handler so Register
+// mounts the member routes on the same /clients group.
+func (h *Handler) SetMemberHandler(mh *MemberHandler) { h.members = mh }
 
 // Register mounts all client routes on the authenticated /api/v1 group.
 func (h *Handler) Register(r *gin.RouterGroup) {
@@ -45,6 +50,10 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/:clientId", authz.RequirePermission(authz.PermClientRead), h.get)
 	g.PATCH("/:clientId", authz.RequirePermission(authz.PermClientManage), h.update)
 	g.DELETE("/:clientId", authz.RequirePermission(authz.PermClientManage), h.delete)
+	// m66 — member management (optional; requires SetMemberHandler).
+	if h.members != nil {
+		h.members.RegisterMembers(g)
+	}
 }
 
 // ---------------------------------------------------------------------------

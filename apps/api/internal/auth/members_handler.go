@@ -127,6 +127,11 @@ func (h *MembersHandler) invite(c *gin.Context) {
 		if role == "" {
 			role = string(authz.RoleViewer)
 		}
+		// RoleClient is portal-only; org membership invitations must never carry it.
+		if authz.Role(role) == authz.RoleClient {
+			httpx.Error(c, domain.Validation("role_invalid", "client role cannot be assigned via org invitation"))
+			return
+		}
 		link, err := h.inviter.CreateOrgInvitation(c.Request.Context(), p.TenantID, p.UserID, authz.Role(p.Role), body.Email, role)
 		if err != nil {
 			httpx.Error(c, err)
@@ -173,6 +178,11 @@ func (h *MembersHandler) patchRole(c *gin.Context) {
 	newRole := authz.Role(body.Role)
 	if !newRole.Valid() {
 		httpx.Error(c, domain.Validation("role_invalid", "invalid role"))
+		return
+	}
+	// RoleClient is portal-only and must never be set as an org membership role.
+	if newRole == authz.RoleClient {
+		httpx.Error(c, domain.Validation("role_invalid", "client role cannot be assigned as an org membership role"))
 		return
 	}
 	actorRole := authz.Role(p.Role)

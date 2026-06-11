@@ -23,6 +23,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/autologin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
+	portalpkg "github.com/mosamlife/wpmgr/apps/api/internal/portal"
 	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
@@ -173,6 +174,9 @@ type Deps struct {
 	// /api/v1/clients/:clientId/report-schedule and /api/v1/clients/:clientId/reports.
 	// nil ⇒ routes not mounted.
 	ReportH *reportpkg.Handler
+	// PortalH serves the m66 read-only client portal routes under /api/v1/portal.
+	// nil ⇒ routes not mounted. All portal routes are gated by RequireClientPortal.
+	PortalH *portalpkg.Handler
 	ServiceName string
 	Version     string
 }
@@ -431,6 +435,13 @@ func New(deps Deps) *Server {
 	// Routes are nested under /clients/:clientId/ and share RequireOrgScope().
 	if deps.ReportH != nil {
 		deps.ReportH.Register(v1)
+	}
+
+	// m66 — read-only client portal. Routes under /api/v1/portal/*; gated by
+	// RequireClientPortal (session user resolved via client_members). Per-site
+	// sub-routes additionally carry RequireSiteAccess. GET-only.
+	if deps.PortalH != nil {
+		deps.PortalH.Register(v1)
 	}
 
 	// m33 — superadmin instance-management area (auth-only, not tenant-gated).

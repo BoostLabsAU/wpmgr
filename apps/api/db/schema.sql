@@ -162,6 +162,25 @@ CREATE POLICY sites_shared_read ON sites
           AND (s.expires_at IS NULL OR s.expires_at > now())
     ));
 
+-- m66 sites_client_read — PERMISSIVE SELECT-only policy. Mirrors sites_shared_read.
+-- Under InUserTx (auth-time client-member expansion) there is no app.tenant_id,
+-- so sites_tenant_isolation hides every row. This policy lets a client member
+-- read site rows for sites belonging to their client only. Still AND-gated by
+-- the RESTRICTIVE sites_site_scope policy (m19). archived_at gate ensures
+-- members of an archived client lose access instantly.
+CREATE POLICY sites_client_read ON sites
+    FOR SELECT
+    USING (EXISTS (
+        SELECT 1
+        FROM client_members cm
+        JOIN clients cl
+          ON cl.id = cm.client_id AND cl.tenant_id = cm.tenant_id
+        WHERE cm.client_id = sites.client_id
+          AND cm.tenant_id = sites.tenant_id
+          AND cm.user_id   = nullif(current_setting('app.user_id', true), '')::uuid
+          AND cl.archived_at IS NULL
+    ));
+
 -- ---------------------------------------------------------------------------
 -- users
 -- ---------------------------------------------------------------------------
@@ -1074,7 +1093,8 @@ CREATE TABLE invitations (
     id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id        uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
     email            citext      NOT NULL,
-    scope            text        NOT NULL CHECK (scope IN ('org', 'site')),
+    -- m66: widened from ('org','site') to include 'client' portal invitations.
+    scope            text        NOT NULL CHECK (scope IN ('org', 'site', 'client')),
     site_id          uuid        REFERENCES sites (id) ON DELETE CASCADE,
     role             text        NOT NULL,
     token_hash       text        NOT NULL UNIQUE,
@@ -1085,12 +1105,24 @@ CREATE TABLE invitations (
     accepted_user_id uuid        REFERENCES users (id) ON DELETE SET NULL,
     revoked_at       timestamptz,
     revoked_by       uuid        REFERENCES users (id) ON DELETE SET NULL,
-    created_at       timestamptz NOT NULL DEFAULT now()
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    -- m66: portal invitation client binding. ON DELETE CASCADE removes pending
+    -- invites when a client is deleted (composite FK mirrors m63 pattern).
+    client_id        uuid        NULL
 );
+
+-- m66: composite FK so deleting a client cascades pending client invitations.
+ALTER TABLE invitations
+    ADD CONSTRAINT invitations_client_tenant_fkey
+    FOREIGN KEY (client_id, tenant_id)
+    REFERENCES clients (id, tenant_id)
+    ON DELETE CASCADE;
 
 CREATE INDEX invitations_tenant_id_idx ON invitations (tenant_id);
 CREATE INDEX invitations_email_idx ON invitations (email);
 CREATE INDEX invitations_site_id_idx ON invitations (site_id, created_at DESC) WHERE scope = 'site';
+-- m66: pending client invitation listing per client.
+CREATE INDEX invitations_client_id_idx ON invitations (client_id, created_at DESC) WHERE scope = 'client';
 
 ALTER TABLE invitations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE invitations FORCE ROW LEVEL SECURITY;
@@ -2410,3 +2442,50 @@ CREATE POLICY generated_reports_tenant_isolation ON generated_reports
 CREATE POLICY generated_reports_agent ON generated_reports
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m66 — client_members (Client portal Phase 3)
+-- ---------------------------------------------------------------------------
+-- Portal user roster per client. user_id refers to a users row that has NO
+-- tenant membership; access is resolved entirely at auth time by the
+-- client_members_self_read + sites_client_read RLS policies.
+-- Deleting a client CASCADEs client_members and pending client invitations.
+CREATE TABLE client_members (
+    id         uuid        NOT NULL DEFAULT gen_random_uuid(),
+    tenant_id  uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    client_id  uuid        NOT NULL,
+    user_id    uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    invited_by uuid        NULL     REFERENCES users (id) ON DELETE SET NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT client_members_pkey PRIMARY KEY (id),
+    CONSTRAINT client_members_client_user_key UNIQUE (client_id, user_id),
+    CONSTRAINT client_members_client_tenant_fkey
+        FOREIGN KEY (client_id, tenant_id)
+        REFERENCES clients (id, tenant_id)
+        ON DELETE CASCADE
+);
+
+-- Auth-time lookup: (user_id, tenant_id) on every portal request.
+CREATE INDEX client_members_user_tenant_idx ON client_members (user_id, tenant_id);
+-- Roster listing per client (agency UI).
+CREATE INDEX client_members_client_idx ON client_members (client_id);
+
+ALTER TABLE client_members ENABLE ROW LEVEL SECURITY;
+ALTER TABLE client_members FORCE ROW LEVEL SECURITY;
+
+-- Operator / API path: full read+write scoped to the current tenant.
+CREATE POLICY client_members_tenant_isolation ON client_members
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+-- Agent / worker path: cross-tenant reads/writes when app.agent='on'.
+CREATE POLICY client_members_agent ON client_members
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- Self-read: auth-time lookup runs under InUserTx (only app.user_id is set).
+-- SELECT-only; mirrors site_shares_self_read (m19).
+CREATE POLICY client_members_self_read ON client_members
+    FOR SELECT
+    USING (user_id = nullif(current_setting('app.user_id', true), '')::uuid);

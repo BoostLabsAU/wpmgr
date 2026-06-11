@@ -72,3 +72,16 @@ WHERE run_id = $1 AND tenant_id = $2
 -- one tenant cannot saturate the worker pool. Runs in the tenant's RLS scope.
 SELECT count(*) FROM update_tasks
 WHERE tenant_id = $1 AND status = 'running';
+
+-- name: ListAppliedTasksForSite :many
+-- Returns successfully applied update tasks for one site, ordered newest first.
+-- Used by the client portal /portal/sites/:siteId/updates endpoint. Site-scope
+-- RLS AND the explicit (site_id, tenant_id) filter together prevent cross-site
+-- leakage.
+SELECT target_type, target_slug, from_version, to_version, status, finished_at
+FROM update_tasks
+WHERE site_id   = @site_id
+  AND tenant_id = @tenant_id
+  AND status    = 'succeeded'
+ORDER BY finished_at DESC, id DESC
+LIMIT @row_limit;

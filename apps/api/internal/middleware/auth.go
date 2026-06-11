@@ -17,6 +17,12 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
 )
 
+// clientAccess is the result of resolveClientAccess.
+type clientAccess struct {
+	clientIDs []uuid.UUID
+	siteIDs   []uuid.UUID
+}
+
 // HeaderTenantOverride lets a multi-tenant session caller pick which of their
 // tenants the request operates in (must be one they're a member of). It is NOT
 // trusted on its own: membership is always re-verified. API-key callers ignore
@@ -119,13 +125,12 @@ func (a *Authenticator) Authenticate() gin.HandlerFunc {
 				// Run under InUserTx so the site_shares_self_read RLS policy
 				// (USING user_id = app.user_id) allows the SELECT.
 				shares, shareErr := a.resolveActiveShares(ctx, userID, activeTenant)
-				if shareErr != nil || len(shares) == 0 {
-					// No shares or lookup error: user has no access to this
-					// tenant. Clear TenantID so RequireTenant returns 403, but
-					// keep UserID so /auth/me still works.
-					p.TenantID = uuid.Nil
-				} else {
+				if shareErr == nil && len(shares) > 0 {
 					// Site-scoped collaborator: collect site IDs + highest role.
+					// site_shares win and are EXCLUSIVE: when the user has one or
+					// more active shares, client_members is NOT consulted. Merging
+					// would let a share role (up to operator) escalate to cover
+					// the client's sites, which the share never granted.
 					p.Scope = domain.ScopeSite
 					p.TenantID = activeTenant
 					siteIDs := make([]uuid.UUID, 0, len(shares))
@@ -149,6 +154,27 @@ func (a *Authenticator) Authenticate() gin.HandlerFunc {
 					}
 					p.AllowedSiteIDs = siteIDs
 					p.Role = string(highestRole)
+				} else {
+					// No shares (or lookup error). Check client_members for portal
+					// access. This branch is only reached when zero site_shares
+					// exist so there is no risk of role mixing.
+					ca, caErr := a.resolveClientAccess(ctx, userID, activeTenant)
+					if caErr != nil || len(ca.clientIDs) == 0 {
+						// No client memberships either: user has no access to this
+						// tenant. Clear TenantID so RequireTenant returns 403, but
+						// keep UserID so /auth/me still works.
+						p.TenantID = uuid.Nil
+					} else {
+						// Portal principal: site allowlist is the union across ALL
+						// client memberships in this tenant.
+						p.Scope = domain.ScopeSite
+						p.TenantID = activeTenant
+						p.AllowedSiteIDs = ca.siteIDs
+						p.ClientIDs = ca.clientIDs
+						// Hard-clamp to RoleClient; client_members has no role
+						// column so nothing stored can ever raise this above client.
+						p.Role = string(authz.RoleClient)
+					}
 				}
 			}
 		}
@@ -173,4 +199,40 @@ func (a *Authenticator) resolveActiveShares(ctx context.Context, userID, tenantI
 		return txErr
 	})
 	return shares, err
+}
+
+// resolveClientAccess loads client_members rows for (userID, tenantID) and
+// returns the union of client IDs and site IDs across all memberships. Runs
+// under InUserTx so client_members_self_read (user_id = app.user_id) and
+// sites_client_read policies allow the necessary SELECTs. Fail-closed: any
+// error or empty result returns (clientAccess{}, nil) or (clientAccess{}, err).
+func (a *Authenticator) resolveClientAccess(ctx context.Context, userID, tenantID uuid.UUID) (clientAccess, error) {
+	var ca clientAccess
+	err := a.pool.InUserTx(ctx, userID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetClientAccessForUserTenant(ctx, sqlc.GetClientAccessForUserTenantParams{
+			UserID:   userID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			return qerr
+		}
+		clientSeen := make(map[uuid.UUID]struct{})
+		siteSeen := make(map[uuid.UUID]struct{})
+		for _, row := range rows {
+			if _, ok := clientSeen[row.ClientID]; !ok {
+				clientSeen[row.ClientID] = struct{}{}
+				ca.clientIDs = append(ca.clientIDs, row.ClientID)
+			}
+			// LEFT JOIN: SiteID may be NULL for a zero-site client.
+			if row.SiteID.Valid {
+				sid := uuid.UUID(row.SiteID.Bytes)
+				if _, ok := siteSeen[sid]; !ok {
+					siteSeen[sid] = struct{}{}
+					ca.siteIDs = append(ca.siteIDs, sid)
+				}
+			}
+		}
+		return nil
+	})
+	return ca, err
 }

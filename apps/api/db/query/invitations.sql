@@ -1,9 +1,10 @@
 -- name: CreateInvitation :one
+-- m66: client_id param added. Org/site callers pass pgtype.UUID{Valid:false}.
 INSERT INTO invitations (
     tenant_id, email, scope, site_id, role,
-    token_hash, invited_by, expires_at
+    token_hash, invited_by, expires_at, client_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: GetInvitationByTokenHash :one
@@ -78,3 +79,13 @@ SET token_hash = $2,
 WHERE id = $1
   AND accepted_at IS NULL
 RETURNING *;
+
+-- name: ListInvitationsForClient :many
+-- Pending + accepted + expired + revoked client invitations for a client,
+-- newest first. Mirrors ListInvitationsForSite. tenant_id filter is redundant
+-- with RLS but adds an explicit index hint for performance.
+SELECT * FROM invitations
+WHERE tenant_id = $1
+  AND scope     = 'client'
+  AND client_id = $2
+ORDER BY created_at DESC;

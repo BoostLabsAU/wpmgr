@@ -542,6 +542,45 @@ export type Me = {
   user: User;
   memberships: Array<Membership>;
   active_tenant_id?: string;
+  /**
+   * Principal scope: org for full members, site for collaborators/portal principals, empty for unauthenticated.
+   */
+  scope?: "org" | "site" | "";
+  role?: PrincipalRole;
+  portal?: MePortal;
+};
+
+/**
+ * Effective role of the authenticated principal. Extends the member Role enum with "client" for portal principals. The existing Role enum (owner/admin/operator/viewer) is unchanged; this standalone enum is used only in Me responses.
+ *
+ */
+export const PrincipalRole = {
+  OWNER: "owner",
+  ADMIN: "admin",
+  OPERATOR: "operator",
+  VIEWER: "viewer",
+  CLIENT: "client",
+  "": "",
+} as const;
+
+/**
+ * Effective role of the authenticated principal. Extends the member Role enum with "client" for portal principals. The existing Role enum (owner/admin/operator/viewer) is unchanged; this standalone enum is used only in Me responses.
+ *
+ */
+export type PrincipalRole = (typeof PrincipalRole)[keyof typeof PrincipalRole];
+
+/**
+ * Portal branding context. Present only when role == "client".
+ */
+export type MePortal = {
+  client_id: string;
+  client_name: string;
+  logo_url?: string;
+  /**
+   * Hex color for portal accent (e.g. #0E7C8B). Web layer validates before applying.
+   */
+  color?: string;
+  agency_name: string;
 };
 
 export type LoginRequest = {
@@ -4102,6 +4141,166 @@ export type ClientReportList = {
    * Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when there are no more pages.
    */
   next_cursor?: string;
+};
+
+export type ClientMember = {
+  user_id: string;
+  email: string;
+  name?: string;
+  created_at: string;
+};
+
+export type ClientMemberList = {
+  items: Array<ClientMember>;
+};
+
+export type ClientMemberCreateRequest = {
+  email: string;
+};
+
+export type ClientMemberInviteResult = {
+  email: string;
+  /**
+   * True when an invitation was created (unknown email); false when an existing user was added directly.
+   */
+  invited?: boolean;
+  /**
+   * Present when invited=false (the user already existed).
+   */
+  user_id?: string;
+  /**
+   * Present when invited=false.
+   */
+  created_at?: string;
+  /**
+   * Always present. The invite accept URL (copyable fallback when SMTP is unconfigured).
+   */
+  accept_link?: string;
+  /**
+   * Present when invited=true.
+   */
+  invitation_id?: string;
+  /**
+   * Present when invited=true.
+   */
+  expires_at?: string;
+};
+
+export type ClientInvitation = {
+  id: string;
+  email: string;
+  created_at: string;
+  expires_at: string;
+  /**
+   * Derived status: pending, accepted, expired, or revoked.
+   */
+  status: "pending" | "accepted" | "expired" | "revoked";
+};
+
+export type ClientInvitationList = {
+  items: Array<ClientInvitation>;
+};
+
+export type PortalOverview = {
+  client: {
+    id: string;
+    name: string;
+    logo_url?: string;
+    color?: string;
+  };
+  agency_name: string;
+  site_count: number;
+  report_count: number;
+};
+
+export type PortalSite = {
+  id: string;
+  name: string;
+  url: string;
+  /**
+   * Real connection state value (connected/degraded/disconnected). Web layer applies soft labels.
+   */
+  status: string;
+  last_backup_at?: string;
+  uptime_30d_pct?: number;
+  tls_expires_at?: string;
+};
+
+export type PortalSiteList = {
+  items: Array<PortalSite>;
+};
+
+export type PortalIncident = {
+  started_at: string;
+  ended_at?: string;
+  duration_seconds: number;
+};
+
+export type PortalUptimeSummary = {
+  range: string;
+  uptime_pct: number;
+  avg_latency_ms: number;
+  tls_expires_at?: string;
+  incidents?: Array<PortalIncident>;
+};
+
+export type PortalBackupItem = {
+  id: string;
+  kind: string;
+  status: string;
+  size_bytes?: number;
+  created_at: string;
+  completed_at?: string;
+};
+
+export type PortalBackupList = {
+  items: Array<PortalBackupItem>;
+};
+
+export type PortalUpdateItem = {
+  type: string;
+  name: string;
+  from_version?: string;
+  to_version?: string;
+  status: string;
+  finished_at?: string;
+};
+
+export type PortalUpdateList = {
+  items: Array<PortalUpdateItem>;
+};
+
+export type PortalVitalMetric = {
+  metric: "lcp" | "inp" | "cls";
+  p75: number;
+  rating: "good" | "needs-improvement" | "poor" | "insufficient-data";
+  samples: number;
+};
+
+export type PortalVitalsSummary = {
+  range: string;
+  metrics: Array<PortalVitalMetric>;
+};
+
+export type PortalReportItem = {
+  id: string;
+  client_id: string;
+  period_start: string;
+  period_end: string;
+  created_at: string;
+  completed_at?: string;
+};
+
+export type PortalReportList = {
+  items: Array<PortalReportItem>;
+};
+
+export type PortalReportDownload = {
+  /**
+   * Presigned download URL (valid for the object storage TTL).
+   */
+  url: string;
+  expires_at: string;
 };
 
 /**
@@ -9977,3 +10176,520 @@ export type GetClientReportResponses = {
 
 export type GetClientReportResponse =
   GetClientReportResponses[keyof GetClientReportResponses];
+
+export type ListClientMembersData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/members";
+};
+
+export type ListClientMembersErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListClientMembersError =
+  ListClientMembersErrors[keyof ListClientMembersErrors];
+
+export type ListClientMembersResponses = {
+  /**
+   * Member list
+   */
+  200: ClientMemberList;
+};
+
+export type ListClientMembersResponse =
+  ListClientMembersResponses[keyof ListClientMembersResponses];
+
+export type AddClientMemberData = {
+  body: ClientMemberCreateRequest;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/members";
+};
+
+export type AddClientMemberErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type AddClientMemberError =
+  AddClientMemberErrors[keyof AddClientMemberErrors];
+
+export type AddClientMemberResponses = {
+  /**
+   * Member added or invited
+   */
+  201: ClientMemberInviteResult;
+};
+
+export type AddClientMemberResponse =
+  AddClientMemberResponses[keyof AddClientMemberResponses];
+
+export type RemoveClientMemberData = {
+  body?: never;
+  path: {
+    clientId: string;
+    userId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/members/{userId}";
+};
+
+export type RemoveClientMemberErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type RemoveClientMemberError =
+  RemoveClientMemberErrors[keyof RemoveClientMemberErrors];
+
+export type RemoveClientMemberResponses = {
+  /**
+   * No Content
+   */
+  204: void;
+};
+
+export type RemoveClientMemberResponse =
+  RemoveClientMemberResponses[keyof RemoveClientMemberResponses];
+
+export type ListClientInvitationsData = {
+  body?: never;
+  path: {
+    clientId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/invitations";
+};
+
+export type ListClientInvitationsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListClientInvitationsError =
+  ListClientInvitationsErrors[keyof ListClientInvitationsErrors];
+
+export type ListClientInvitationsResponses = {
+  /**
+   * Invitation list
+   */
+  200: ClientInvitationList;
+};
+
+export type ListClientInvitationsResponse =
+  ListClientInvitationsResponses[keyof ListClientInvitationsResponses];
+
+export type RevokeClientInvitationData = {
+  body?: never;
+  path: {
+    clientId: string;
+    invitationId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/invitations/{invitationId}";
+};
+
+export type RevokeClientInvitationErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type RevokeClientInvitationError =
+  RevokeClientInvitationErrors[keyof RevokeClientInvitationErrors];
+
+export type RevokeClientInvitationResponses = {
+  /**
+   * No Content
+   */
+  204: void;
+};
+
+export type RevokeClientInvitationResponse =
+  RevokeClientInvitationResponses[keyof RevokeClientInvitationResponses];
+
+export type RegenerateClientInvitationData = {
+  body?: never;
+  path: {
+    clientId: string;
+    invitationId: string;
+  };
+  query?: never;
+  url: "/api/v1/clients/{clientId}/invitations/{invitationId}/regenerate";
+};
+
+export type RegenerateClientInvitationErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type RegenerateClientInvitationError =
+  RegenerateClientInvitationErrors[keyof RegenerateClientInvitationErrors];
+
+export type RegenerateClientInvitationResponses = {
+  /**
+   * Regenerated invitation with new accept_link
+   */
+  200: ClientMemberInviteResult;
+};
+
+export type RegenerateClientInvitationResponse =
+  RegenerateClientInvitationResponses[keyof RegenerateClientInvitationResponses];
+
+export type GetPortalOverviewData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/portal/overview";
+};
+
+export type GetPortalOverviewErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type GetPortalOverviewError =
+  GetPortalOverviewErrors[keyof GetPortalOverviewErrors];
+
+export type GetPortalOverviewResponses = {
+  /**
+   * Portal overview
+   */
+  200: PortalOverview;
+};
+
+export type GetPortalOverviewResponse =
+  GetPortalOverviewResponses[keyof GetPortalOverviewResponses];
+
+export type ListPortalSitesData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/portal/sites";
+};
+
+export type ListPortalSitesErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListPortalSitesError =
+  ListPortalSitesErrors[keyof ListPortalSitesErrors];
+
+export type ListPortalSitesResponses = {
+  /**
+   * Site list
+   */
+  200: PortalSiteList;
+};
+
+export type ListPortalSitesResponse =
+  ListPortalSitesResponses[keyof ListPortalSitesResponses];
+
+export type GetPortalSiteUptimeData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    range?: "24h" | "7d" | "30d" | "90d";
+  };
+  url: "/api/v1/portal/sites/{siteId}/uptime";
+};
+
+export type GetPortalSiteUptimeErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetPortalSiteUptimeError =
+  GetPortalSiteUptimeErrors[keyof GetPortalSiteUptimeErrors];
+
+export type GetPortalSiteUptimeResponses = {
+  /**
+   * Uptime summary
+   */
+  200: PortalUptimeSummary;
+};
+
+export type GetPortalSiteUptimeResponse =
+  GetPortalSiteUptimeResponses[keyof GetPortalSiteUptimeResponses];
+
+export type ListPortalSiteBackupsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    limit?: number;
+  };
+  url: "/api/v1/portal/sites/{siteId}/backups";
+};
+
+export type ListPortalSiteBackupsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListPortalSiteBackupsError =
+  ListPortalSiteBackupsErrors[keyof ListPortalSiteBackupsErrors];
+
+export type ListPortalSiteBackupsResponses = {
+  /**
+   * Backup list
+   */
+  200: PortalBackupList;
+};
+
+export type ListPortalSiteBackupsResponse =
+  ListPortalSiteBackupsResponses[keyof ListPortalSiteBackupsResponses];
+
+export type ListPortalSiteUpdatesData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    limit?: number;
+  };
+  url: "/api/v1/portal/sites/{siteId}/updates";
+};
+
+export type ListPortalSiteUpdatesErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListPortalSiteUpdatesError =
+  ListPortalSiteUpdatesErrors[keyof ListPortalSiteUpdatesErrors];
+
+export type ListPortalSiteUpdatesResponses = {
+  /**
+   * Update list
+   */
+  200: PortalUpdateList;
+};
+
+export type ListPortalSiteUpdatesResponse =
+  ListPortalSiteUpdatesResponses[keyof ListPortalSiteUpdatesResponses];
+
+export type GetPortalSiteVitalsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    range?: "28d";
+  };
+  url: "/api/v1/portal/sites/{siteId}/vitals";
+};
+
+export type GetPortalSiteVitalsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetPortalSiteVitalsError =
+  GetPortalSiteVitalsErrors[keyof GetPortalSiteVitalsErrors];
+
+export type GetPortalSiteVitalsResponses = {
+  /**
+   * Vitals summary
+   */
+  200: PortalVitalsSummary;
+};
+
+export type GetPortalSiteVitalsResponse =
+  GetPortalSiteVitalsResponses[keyof GetPortalSiteVitalsResponses];
+
+export type ListPortalReportsData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/portal/reports";
+};
+
+export type ListPortalReportsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type ListPortalReportsError =
+  ListPortalReportsErrors[keyof ListPortalReportsErrors];
+
+export type ListPortalReportsResponses = {
+  /**
+   * Report list
+   */
+  200: PortalReportList;
+};
+
+export type ListPortalReportsResponse =
+  ListPortalReportsResponses[keyof ListPortalReportsResponses];
+
+export type DownloadPortalReportData = {
+  body?: never;
+  path: {
+    reportId: string;
+  };
+  query: {
+    format: "html" | "pdf";
+  };
+  url: "/api/v1/portal/reports/{reportId}/download";
+};
+
+export type DownloadPortalReportErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DownloadPortalReportError =
+  DownloadPortalReportErrors[keyof DownloadPortalReportErrors];
+
+export type DownloadPortalReportResponses = {
+  /**
+   * Presigned download URL
+   */
+  200: PortalReportDownload;
+};
+
+export type DownloadPortalReportResponse =
+  DownloadPortalReportResponses[keyof DownloadPortalReportResponses];

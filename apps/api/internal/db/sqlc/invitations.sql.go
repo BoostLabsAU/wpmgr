@@ -16,10 +16,10 @@ import (
 const createInvitation = `-- name: CreateInvitation :one
 INSERT INTO invitations (
     tenant_id, email, scope, site_id, role,
-    token_hash, invited_by, expires_at
+    token_hash, invited_by, expires_at, client_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id
 `
 
 type CreateInvitationParams struct {
@@ -31,8 +31,10 @@ type CreateInvitationParams struct {
 	TokenHash string      `json:"token_hash"`
 	InvitedBy pgtype.UUID `json:"invited_by"`
 	ExpiresAt time.Time   `json:"expires_at"`
+	ClientID  pgtype.UUID `json:"client_id"`
 }
 
+// m66: client_id param added. Org/site callers pass pgtype.UUID{Valid:false}.
 func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationParams) (Invitation, error) {
 	row := q.db.QueryRow(ctx, createInvitation,
 		arg.TenantID,
@@ -43,6 +45,7 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 		arg.TokenHash,
 		arg.InvitedBy,
 		arg.ExpiresAt,
+		arg.ClientID,
 	)
 	var i Invitation
 	err := row.Scan(
@@ -61,12 +64,13 @@ func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationPara
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
 
 const getInvitationByID = `-- name: GetInvitationByID :one
-SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at FROM invitations
+SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id FROM invitations
 WHERE id = $1
 `
 
@@ -92,12 +96,13 @@ func (q *Queries) GetInvitationByID(ctx context.Context, id uuid.UUID) (Invitati
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
 
 const getInvitationByTokenHash = `-- name: GetInvitationByTokenHash :one
-SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at FROM invitations
+SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id FROM invitations
 WHERE token_hash = $1
 `
 
@@ -121,6 +126,7 @@ func (q *Queries) GetInvitationByTokenHash(ctx context.Context, tokenHash string
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
@@ -129,7 +135,7 @@ const incrementInviteAttempts = `-- name: IncrementInviteAttempts :one
 UPDATE invitations
 SET attempts = attempts + 1
 WHERE id = $1
-RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at
+RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id
 `
 
 func (q *Queries) IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (Invitation, error) {
@@ -151,12 +157,66 @@ func (q *Queries) IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (In
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
 
+const listInvitationsForClient = `-- name: ListInvitationsForClient :many
+SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id FROM invitations
+WHERE tenant_id = $1
+  AND scope     = 'client'
+  AND client_id = $2
+ORDER BY created_at DESC
+`
+
+type ListInvitationsForClientParams struct {
+	TenantID uuid.UUID   `json:"tenant_id"`
+	ClientID pgtype.UUID `json:"client_id"`
+}
+
+// Pending + accepted + expired + revoked client invitations for a client,
+// newest first. Mirrors ListInvitationsForSite. tenant_id filter is redundant
+// with RLS but adds an explicit index hint for performance.
+func (q *Queries) ListInvitationsForClient(ctx context.Context, arg ListInvitationsForClientParams) ([]Invitation, error) {
+	rows, err := q.db.Query(ctx, listInvitationsForClient, arg.TenantID, arg.ClientID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Invitation
+	for rows.Next() {
+		var i Invitation
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Email,
+			&i.Scope,
+			&i.SiteID,
+			&i.Role,
+			&i.TokenHash,
+			&i.InvitedBy,
+			&i.ExpiresAt,
+			&i.Attempts,
+			&i.AcceptedAt,
+			&i.AcceptedUserID,
+			&i.RevokedAt,
+			&i.RevokedBy,
+			&i.CreatedAt,
+			&i.ClientID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listInvitationsForSite = `-- name: ListInvitationsForSite :many
-SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at FROM invitations
+SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id FROM invitations
 WHERE tenant_id = $1
   AND scope     = 'site'
   AND site_id   = $2
@@ -196,6 +256,7 @@ func (q *Queries) ListInvitationsForSite(ctx context.Context, arg ListInvitation
 			&i.RevokedAt,
 			&i.RevokedBy,
 			&i.CreatedAt,
+			&i.ClientID,
 		); err != nil {
 			return nil, err
 		}
@@ -208,7 +269,7 @@ func (q *Queries) ListInvitationsForSite(ctx context.Context, arg ListInvitation
 }
 
 const listPendingInvitations = `-- name: ListPendingInvitations :many
-SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at FROM invitations
+SELECT id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id FROM invitations
 WHERE tenant_id  = $1
   AND accepted_at IS NULL
   AND revoked_at  IS NULL
@@ -243,6 +304,7 @@ func (q *Queries) ListPendingInvitations(ctx context.Context, tenantID uuid.UUID
 			&i.RevokedAt,
 			&i.RevokedBy,
 			&i.CreatedAt,
+			&i.ClientID,
 		); err != nil {
 			return nil, err
 		}
@@ -260,7 +322,7 @@ SET accepted_at      = now(),
     accepted_user_id = $2
 WHERE id = $1
   AND accepted_at IS NULL
-RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at
+RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id
 `
 
 type MarkInvitationAcceptedParams struct {
@@ -287,6 +349,7 @@ func (q *Queries) MarkInvitationAccepted(ctx context.Context, arg MarkInvitation
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
@@ -300,7 +363,7 @@ SET token_hash = $2,
     revoked_by = NULL
 WHERE id = $1
   AND accepted_at IS NULL
-RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at
+RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id
 `
 
 type RegenerateInvitationTokenParams struct {
@@ -332,6 +395,7 @@ func (q *Queries) RegenerateInvitationToken(ctx context.Context, arg RegenerateI
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }
@@ -343,7 +407,7 @@ SET revoked_at = now(),
 WHERE id = $1
   AND accepted_at IS NULL
   AND revoked_at  IS NULL
-RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at
+RETURNING id, tenant_id, email, scope, site_id, role, token_hash, invited_by, expires_at, attempts, accepted_at, accepted_user_id, revoked_at, revoked_by, created_at, client_id
 `
 
 type RevokeInvitationParams struct {
@@ -373,6 +437,7 @@ func (q *Queries) RevokeInvitation(ctx context.Context, arg RevokeInvitationPara
 		&i.RevokedAt,
 		&i.RevokedBy,
 		&i.CreatedAt,
+		&i.ClientID,
 	)
 	return i, err
 }

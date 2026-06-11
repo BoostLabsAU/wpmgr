@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
+	"net/url"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/api/gen"
 	"github.com/mosamlife/wpmgr/apps/api/internal/audit"
@@ -197,6 +199,8 @@ func (h *Handler) me(c *gin.Context) {
 		return
 	}
 	out := toMe(u, memberships, p.TenantID)
+	// m66 — portal principal: enrich Me with scope, role, and portal branding.
+	enrichMePortal(c.Request.Context(), &out, p, h.svc.repo)
 	c.JSON(http.StatusOK, &out)
 }
 
@@ -359,6 +363,76 @@ func toMe(u User, memberships []Membership, active uuid.UUID) gen.Me {
 	return me
 }
 
+// enrichMePortal sets the Me.Scope, Me.Role, and Me.Portal fields from the
+// resolved principal. Portal branding (client name, logo, color, agency name)
+// is fetched via a best-effort DB query; failures leave the fields empty.
+// Called only from me() where the principal is fully resolved.
+func enrichMePortal(ctx context.Context, me *gen.Me, p domain.Principal, repo *Repo) {
+	if p.Scope != "" {
+		me.Scope = gen.NewOptMeScope(gen.MeScope(p.Scope))
+	}
+	if p.Role != "" {
+		me.Role = gen.NewOptPrincipalRole(gen.PrincipalRole(p.Role))
+	}
+
+	if authz.Role(p.Role) != authz.RoleClient || len(p.ClientIDs) == 0 || p.TenantID == uuid.Nil {
+		return
+	}
+
+	// Resolve client branding: earliest-created client by the order in ClientIDs
+	// (which is ordered by client_members.created_at ASC in resolveClientAccess).
+	// Fetch all client brands and pick the first one that appears in ClientIDs
+	// (preserves created_at ASC order since GetClientBrandsByIDs orders the same way).
+	var clientName, logoURL, color, agencyName string
+
+	_ = repo.pool.InUserTx(ctx, p.UserID, func(tx pgx.Tx) error {
+		// GetClientBrandsByIDs runs under InUserTx; the client_members_self_read
+		// + sites_client_read policies admit the rows. We use a direct query here
+		// because sqlc.Queries is tied to the tx.
+		rows, qerr := tx.Query(ctx,
+			`SELECT c.id, c.name, c.color, c.logo_url, t.name AS tenant_name
+			 FROM clients c
+			 JOIN tenants t ON t.id = c.tenant_id
+			 WHERE c.id = ANY($1::uuid[]) AND c.tenant_id = $2 AND c.archived_at IS NULL
+			 ORDER BY c.created_at ASC, c.id ASC
+			 LIMIT 1`,
+			p.ClientIDs, p.TenantID,
+		)
+		if qerr != nil {
+			return qerr
+		}
+		defer rows.Close()
+		if rows.Next() {
+			var clientID uuid.UUID
+			var color_, logoURL_ *string
+			if err := rows.Scan(&clientID, &clientName, &color_, &logoURL_, &agencyName); err == nil {
+				if color_ != nil {
+					color = *color_
+				}
+				if logoURL_ != nil {
+					logoURL = *logoURL_
+				}
+			}
+		}
+		return rows.Err()
+	})
+
+	portal := gen.MePortal{
+		ClientID:   p.ClientIDs[0], // earliest; same as query result
+		ClientName: clientName,
+		AgencyName: agencyName,
+	}
+	if logoURL != "" {
+		if u, err := parseLogoURI(logoURL); err == nil {
+			portal.LogoURL = gen.NewOptURI(u)
+		}
+	}
+	if color != "" {
+		portal.Color = gen.NewOptString(color)
+	}
+	me.Portal = gen.NewOptMePortal(portal)
+}
+
 func toAPIUser(u User) gen.User {
 	out := gen.User{
 		ID:           u.ID,
@@ -376,6 +450,15 @@ func toAPIUser(u User) gen.User {
 
 func toAPIMembership(m Membership) gen.Membership {
 	return gen.Membership{UserID: m.UserID, TenantID: m.TenantID, Role: gen.Role(m.Role)}
+}
+
+// parseLogoURI parses a logo URL string into a url.URL. Used by enrichMePortal.
+func parseLogoURI(raw string) (url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u == nil {
+		return url.URL{}, err
+	}
+	return *u, nil
 }
 
 func toAPIMemberships(ms []Membership) []gen.Membership {

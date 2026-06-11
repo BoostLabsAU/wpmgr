@@ -44,6 +44,11 @@ type Principal struct {
 	// set of site UUIDs the principal may access in the active tenant, derived at
 	// auth time from non-expired site_shares rows. It is empty for Scope=="org".
 	AllowedSiteIDs []uuid.UUID
+
+	// ClientIDs holds the client UUIDs the principal belongs to as a portal
+	// member. Populated only when Role == "client" (resolved via client_members).
+	// Empty for every non-portal principal.
+	ClientIDs []uuid.UUID
 }
 
 // ActorID returns the stable identifier of the principal for audit logging.

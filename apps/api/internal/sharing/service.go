@@ -226,6 +226,7 @@ func (s *Service) createSiteInvitation(ctx context.Context, tenantID, siteID uui
 			Email:     in.Email,
 			Scope:     "site",
 			SiteID:    siteIDPg,
+			ClientID:  pgtype.UUID{Valid: false},
 			Role:      in.Role,
 			TokenHash: tokenHash,
 			InvitedBy: pgtype.UUID{Bytes: in.ActorID, Valid: in.ActorID != uuid.Nil},

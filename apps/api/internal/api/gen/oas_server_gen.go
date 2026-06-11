@@ -23,6 +23,15 @@ type Handler interface {
 	//
 	// POST /api/v1/orgs/{orgId}/activate
 	ActivateOrg(ctx context.Context, params ActivateOrgParams) (ActivateOrgRes, error)
+	// AddClientMember implements addClientMember operation.
+	//
+	// If the email belongs to a known user, grants portal access immediately and returns `201` with the
+	// member record. If the email is unknown, creates a client-scope invitation and returns `201` with
+	// `invited: true` and an `accept_link` (always present as a copyable fallback when SMTP is
+	// unconfigured).
+	//
+	// POST /api/v1/clients/{clientId}/members
+	AddClientMember(ctx context.Context, req *ClientMemberCreateRequest, params AddClientMemberParams) (AddClientMemberRes, error)
 	// AddFleetEmailSuppression implements addFleetEmailSuppression operation.
 	//
 	// Adds a suppression entry with `site_id=null`, applying to all sites
@@ -559,6 +568,14 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/disable
 	DisableCache(ctx context.Context, params DisableCacheParams) (*PerfActionResult, error)
+	// DownloadPortalReport implements downloadPortalReport operation.
+	//
+	// Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
+	// to one of the principal's clients; otherwise 404 is returned (not 403, to avoid confirming report
+	// existence).
+	//
+	// GET /api/v1/portal/reports/{reportId}/download
+	DownloadPortalReport(ctx context.Context, params DownloadPortalReportParams) (DownloadPortalReportRes, error)
 	// EnableCache implements enableCache operation.
 	//
 	// Turns on agent-side page caching. Returns an `{ok, detail}` ack;
@@ -756,6 +773,24 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/perf/config
 	GetPerfConfig(ctx context.Context, params GetPerfConfigParams) (*PerfConfig, error)
+	// GetPortalOverview implements getPortalOverview operation.
+	//
+	// Returns identity and branding for the portal principal's primary client.
+	//
+	// GET /api/v1/portal/overview
+	GetPortalOverview(ctx context.Context) (GetPortalOverviewRes, error)
+	// GetPortalSiteUptime implements getPortalSiteUptime operation.
+	//
+	// Returns windowed uptime percentage, average latency, TLS expiry, and incident history.
+	//
+	// GET /api/v1/portal/sites/{siteId}/uptime
+	GetPortalSiteUptime(ctx context.Context, params GetPortalSiteUptimeParams) (GetPortalSiteUptimeRes, error)
+	// GetPortalSiteVitals implements getPortalSiteVitals operation.
+	//
+	// Returns all-devices aggregate p75 field data for LCP, INP, and CLS.
+	//
+	// GET /api/v1/portal/sites/{siteId}/vitals
+	GetPortalSiteVitals(ctx context.Context, params GetPortalSiteVitalsParams) (GetPortalSiteVitalsRes, error)
 	// GetReadyz implements getReadyz operation.
 	//
 	// Returns 200 when the service can serve traffic (DB reachable).
@@ -944,6 +979,18 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/backups
 	ListBackups(ctx context.Context, params ListBackupsParams) (*BackupSnapshotList, error)
+	// ListClientInvitations implements listClientInvitations operation.
+	//
+	// Returns all client-scope invitations (pending, accepted, expired, revoked).
+	//
+	// GET /api/v1/clients/{clientId}/invitations
+	ListClientInvitations(ctx context.Context, params ListClientInvitationsParams) (ListClientInvitationsRes, error)
+	// ListClientMembers implements listClientMembers operation.
+	//
+	// Returns the roster of portal users granted access to this client.
+	//
+	// GET /api/v1/clients/{clientId}/members
+	ListClientMembers(ctx context.Context, params ListClientMembersParams) (ListClientMembersRes, error)
 	// ListClientReports implements listClientReports operation.
 	//
 	// Returns generated reports in reverse chronological order (newest first). Supports keyset cursor
@@ -1036,6 +1083,31 @@ type Handler interface {
 	//
 	// GET /api/v1/members
 	ListMembers(ctx context.Context, params ListMembersParams) (ListMembersRes, error)
+	// ListPortalReports implements listPortalReports operation.
+	//
+	// Returns completed white-label reports for all of the principal's clients. The client_id =
+	// ANY(principal.ClientIDs) filter is enforced in the query.
+	//
+	// GET /api/v1/portal/reports
+	ListPortalReports(ctx context.Context) (ListPortalReportsRes, error)
+	// ListPortalSiteBackups implements listPortalSiteBackups operation.
+	//
+	// Returns completed backups only. No blob keys, destinations, or download links are included.
+	//
+	// GET /api/v1/portal/sites/{siteId}/backups
+	ListPortalSiteBackups(ctx context.Context, params ListPortalSiteBackupsParams) (ListPortalSiteBackupsRes, error)
+	// ListPortalSiteUpdates implements listPortalSiteUpdates operation.
+	//
+	// Returns successfully applied update tasks only.
+	//
+	// GET /api/v1/portal/sites/{siteId}/updates
+	ListPortalSiteUpdates(ctx context.Context, params ListPortalSiteUpdatesParams) (ListPortalSiteUpdatesRes, error)
+	// ListPortalSites implements listPortalSites operation.
+	//
+	// Returns a summary of each site the portal user can see (their client's sites only).
+	//
+	// GET /api/v1/portal/sites
+	ListPortalSites(ctx context.Context) (ListPortalSitesRes, error)
 	// ListQuarantinedMedia implements listQuarantinedMedia operation.
 	//
 	// Returns all quarantine manifests currently held on the site. Each manifest
@@ -1423,6 +1495,13 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/updates/refresh
 	RefreshSiteUpdates(ctx context.Context, params RefreshSiteUpdatesParams) (RefreshSiteUpdatesRes, error)
+	// RegenerateClientInvitation implements regenerateClientInvitation operation.
+	//
+	// Rotates the token (kills the old link), resets expiry and attempt counter, and clears any prior
+	// revocation.
+	//
+	// POST /api/v1/clients/{clientId}/invitations/{invitationId}/regenerate
+	RegenerateClientInvitation(ctx context.Context, params RegenerateClientInvitationParams) (RegenerateClientInvitationRes, error)
 	// Register implements register operation.
 	//
 	// On first run (zero users in the database) this bootstraps the instance:
@@ -1435,6 +1514,13 @@ type Handler interface {
 	//
 	// POST /auth/register
 	Register(ctx context.Context, req *RegisterRequest) (RegisterRes, error)
+	// RemoveClientMember implements removeClientMember operation.
+	//
+	// Immediately removes the client_members row. The user's session remains valid but subsequent portal
+	// requests resolve no tenant.
+	//
+	// DELETE /api/v1/clients/{clientId}/members/{userId}
+	RemoveClientMember(ctx context.Context, params RemoveClientMemberParams) (RemoveClientMemberRes, error)
 	// ResendEmailLog implements resendEmailLog operation.
 	//
 	// Dispatches the `resend_email` agent command for the given log entry.
@@ -1505,6 +1591,12 @@ type Handler interface {
 	//
 	// DELETE /api/v1/api-keys/{apiKeyId}
 	RevokeApiKey(ctx context.Context, params RevokeApiKeyParams) (RevokeApiKeyRes, error)
+	// RevokeClientInvitation implements revokeClientInvitation operation.
+	//
+	// Soft-revokes the invitation. The accept link becomes inert.
+	//
+	// DELETE /api/v1/clients/{clientId}/invitations/{invitationId}
+	RevokeClientInvitation(ctx context.Context, params RevokeClientInvitationParams) (RevokeClientInvitationRes, error)
 	// RevokeSite implements revokeSite operation.
 	//
 	// M21 / ADR-041 — operator action. Transitions the site to `revoked` and

@@ -112,6 +112,10 @@ func (s *Service) Create(ctx context.Context, tenantID uuid.UUID, name string, r
 	if !role.Valid() {
 		return Created{}, domain.Validation("apikey_role_invalid", "invalid API key role")
 	}
+	// RoleClient is portal-only; API keys must never carry it.
+	if role == authz.RoleClient {
+		return Created{}, domain.Validation("apikey_role_invalid", "client role cannot be assigned to an API key")
+	}
 	prefix, err := randomToken(6)
 	if err != nil {
 		return Created{}, domain.Internal("apikey_gen_failed", "failed to generate key").WithCause(err)

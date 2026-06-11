@@ -222,6 +222,15 @@ type Client struct {
 	Timezone     string             `json:"timezone"`
 }
 
+type ClientMember struct {
+	ID        uuid.UUID   `json:"id"`
+	TenantID  uuid.UUID   `json:"tenant_id"`
+	ClientID  uuid.UUID   `json:"client_id"`
+	UserID    uuid.UUID   `json:"user_id"`
+	InvitedBy pgtype.UUID `json:"invited_by"`
+	CreatedAt time.Time   `json:"created_at"`
+}
+
 type EmailAlertState struct {
 	TenantID           uuid.UUID          `json:"tenant_id"`
 	SiteID             uuid.UUID          `json:"site_id"`
@@ -357,6 +366,7 @@ type Invitation struct {
 	RevokedAt      pgtype.Timestamptz `json:"revoked_at"`
 	RevokedBy      pgtype.UUID        `json:"revoked_by"`
 	CreatedAt      time.Time          `json:"created_at"`
+	ClientID       pgtype.UUID        `json:"client_id"`
 }
 
 type Membership struct {

@@ -135,6 +135,10 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	CreateBackupSnapshot(ctx context.Context, arg CreateBackupSnapshotParams) (BackupSnapshot, error)
 	CreateClient(ctx context.Context, arg CreateClientParams) (Client, error)
+	// Upsert: ON CONFLICT DO NOTHING so the caller detects "already a member" by
+	// checking for zero RETURNING rows (pgx.ErrNoRows), matching the Conflict pattern.
+	CreateClientMember(ctx context.Context, arg CreateClientMemberParams) (ClientMember, error)
+	// m66: client_id param added. Org/site callers pass pgtype.UUID{Valid:false}.
 	CreateInvitation(ctx context.Context, arg CreateInvitationParams) (Invitation, error)
 	// ---------------------------------------------------------------------------
 	// backup_manifest_entries
@@ -186,6 +190,8 @@ type Querier interface {
 	// row (predicates still hold) or returns 0 rows (the agent already enrolled).
 	// rowsAffected==0 must be treated as not_cancellable by the service layer.
 	DeleteCancellableSite(ctx context.Context, arg DeleteCancellableSiteParams) (int64, error)
+	// Immediate revoke. Returns 0 rows when the member does not exist.
+	DeleteClientMember(ctx context.Context, arg DeleteClientMemberParams) (int64, error)
 	// Delete a named connection by (config_id, connection_key). The caller checks
 	// for routing references (default/fallback/mappings) and returns 409 before
 	// calling this. Runs under InTenantTx.
@@ -226,6 +232,10 @@ type Querier interface {
 	// Records a terminal task state (succeeded|failed|rolled_back|skipped) with the
 	// resolved versions and any detail/error. Tenant-scoped by id+tenant_id.
 	FinishUpdateTask(ctx context.Context, arg FinishUpdateTaskParams) (UpdateTask, error)
+	// Runs under InUserTx. Returns the tenant of the user's earliest client
+	// membership, used at login to resolve an active tenant for portal-only users
+	// (mirrors FirstActiveShareTenant in auth/repo.go).
+	FirstClientMemberTenant(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
 	GetAPIKey(ctx context.Context, arg GetAPIKeyParams) (ApiKey, error)
 	// GetAPIKeyByPrefix resolves a presented key by its unique prefix. This runs
 	// WITHOUT a tenant GUC (the auth layer does not yet know the tenant), so it must
@@ -314,7 +324,22 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCacheStat, error)
 	GetClient(ctx context.Context, arg GetClientParams) (GetClientRow, error)
+	// Client portal member queries (m66). Auth-time and agency roster operations.
+	// GetClientAccessForUserTenant and FirstClientMemberTenant run under InUserTx
+	// (app.user_id only); all other queries run under InTenantTx.
+	// Runs under InUserTx (app.user_id). LEFT JOIN: a zero-site client still
+	// yields a row (NULL site_id) so the principal gets portal access + branding
+	// even when the client has no sites assigned yet.
+	GetClientAccessForUserTenant(ctx context.Context, arg GetClientAccessForUserTenantParams) ([]GetClientAccessForUserTenantRow, error)
+	// m66: portal branding — fetches client name + branding fields for the given
+	// client IDs. Runs under RunTenantTx(p) (site-scope with portal principal).
+	// The portal uses the earliest-created client for primary branding.
+	GetClientBrandsByIDs(ctx context.Context, arg GetClientBrandsByIDsParams) ([]GetClientBrandsByIDsRow, error)
 	GetClientWithTimezone(ctx context.Context, arg GetClientWithTimezoneParams) (Client, error)
+	// Load a single completed report checking client_id membership in the caller's
+	// client list. Returns ErrNoRows when the report is not found, not completed,
+	// or the client_id is not in the provided list (cross-client IDOR guard).
+	GetCompletedReportForPortal(ctx context.Context, arg GetCompletedReportForPortalParams) (GetCompletedReportForPortalRow, error)
 	// Fetch (connection_key, provider_secret_encrypted) for all connections under a
 	// config row. Used by buildAgentConfigReq to decrypt and build the connections
 	// registry. Runs under InTenantTx.
@@ -619,6 +644,11 @@ type Querier interface {
 	// Cross-tenant enumeration for the evaluator (app.agent GUC). Only enabled
 	// configs are returned.
 	ListAlertConfigsAllTenants(ctx context.Context) ([]AlertConfig, error)
+	// Returns successfully applied update tasks for one site, ordered newest first.
+	// Used by the client portal /portal/sites/:siteId/updates endpoint. Site-scope
+	// RLS AND the explicit (site_id, tenant_id) filter together prevent cross-site
+	// leakage.
+	ListAppliedTasksForSite(ctx context.Context, arg ListAppliedTasksForSiteParams) ([]ListAppliedTasksForSiteRow, error)
 	ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error)
 	ListAuditEntriesForVerify(ctx context.Context, tenantID uuid.UUID) ([]AuditLog, error)
 	// Returns the tenant's already-stored chunks among the given hashes (dedup: the
@@ -639,6 +669,16 @@ type Querier interface {
 	// Lists clients for the tenant, ordered by name.
 	// When include_archived is false (the default) archived clients are excluded.
 	ListClients(ctx context.Context, arg ListClientsParams) ([]ListClientsRow, error)
+	// ---------------------------------------------------------------------------
+	// m66 — Portal report queries
+	// ---------------------------------------------------------------------------
+	// Portal report list: completed reports for a set of client IDs. The
+	// client_id = ANY(@client_ids) predicate is the cross-client isolation gate
+	// (generated_reports has no site_scope restrictive policy). Only
+	// status='completed' rows are returned — the portal must not surface
+	// pending/generating/failed states (locked decision, section 8).
+	// Keyset cursor: composite (created_at, id) predicate matches ListReports.
+	ListCompletedReportsForClients(ctx context.Context, arg ListCompletedReportsForClientsParams) ([]ListCompletedReportsForClientsRow, error)
 	// Completed snapshots for a site, newest first, used to compute the retention
 	// archive set (newest per calendar month). ADR-050 widened the projection to
 	// carry the chain columns so the mark-and-sweep GC can do chain-aware
@@ -719,6 +759,10 @@ type Querier interface {
 	// min(markStart, inflightFloor) as the deletion horizon. Returns NULL when no
 	// in-flight snapshot exists (the caller then uses markStart alone).
 	ListInFlightSnapshotFloor(ctx context.Context, tenantID uuid.UUID) (time.Time, error)
+	// Pending + accepted + expired + revoked client invitations for a client,
+	// newest first. Mirrors ListInvitationsForSite. tenant_id filter is redundant
+	// with RLS but adds an explicit index hint for performance.
+	ListInvitationsForClient(ctx context.Context, arg ListInvitationsForClientParams) ([]Invitation, error)
 	// Link history for one site: pending + accepted + expired + revoked, newest
 	// first. Tenant-scoped by RLS; site-bound + scope-bound here. The caller derives
 	// the display status (pending/accepted/expired/revoked) from the columns.
@@ -729,6 +773,8 @@ type Querier interface {
 	// index-only seek per site, fetched in a single batched call for the listed ids.
 	ListLatestBackupsForSites(ctx context.Context, arg ListLatestBackupsForSitesParams) ([]ListLatestBackupsForSitesRow, error)
 	ListManifestEntries(ctx context.Context, arg ListManifestEntriesParams) ([]BackupManifestEntry, error)
+	// Agency roster: all members for a client, newest first.
+	ListMembersForClient(ctx context.Context, arg ListMembersForClientParams) ([]ListMembersForClientRow, error)
 	ListMembershipsForTenant(ctx context.Context, arg ListMembershipsForTenantParams) ([]Membership, error)
 	// ListMembershipsForUser reads the caller's own memberships across all tenants.
 	// It relies on the memberships_self_read policy (app.user_id GUC), so it must be

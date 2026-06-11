@@ -156,3 +156,107 @@ func TestRequireRole(t *testing.T) {
 		t.Fatalf("admin vs admin min = %d, want 200", code)
 	}
 }
+
+// TestRequireClientPortal verifies the m66 portal gate:
+//   - A portal principal (User, ScopeSite, RoleClient, non-empty ClientIDs) is admitted.
+//   - Every other principal shape is rejected with 403.
+func TestRequireClientPortal(t *testing.T) {
+	tenant := uuid.New()
+	user := uuid.New()
+	site1 := uuid.New()
+	client1 := uuid.New()
+
+	portalP := &domain.Principal{
+		Type:           domain.PrincipalUser,
+		UserID:         user,
+		TenantID:       tenant,
+		Role:           string(RoleClient),
+		Scope:          domain.ScopeSite,
+		AllowedSiteIDs: []uuid.UUID{site1},
+		ClientIDs:      []uuid.UUID{client1},
+	}
+
+	tests := []struct {
+		name     string
+		p        *domain.Principal
+		wantCode int
+	}{
+		{
+			name:     "portal principal admitted",
+			p:        portalP,
+			wantCode: http.StatusOK,
+		},
+		{
+			name:     "unauthenticated (no principal)",
+			p:        nil,
+			wantCode: http.StatusUnauthorized,
+		},
+		{
+			name: "org member (role=viewer) rejected",
+			p: &domain.Principal{
+				Type:     domain.PrincipalUser,
+				UserID:   uuid.New(),
+				TenantID: tenant,
+				Role:     string(RoleViewer),
+				Scope:    domain.ScopeOrg,
+			},
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name: "org member (role=admin) rejected",
+			p: &domain.Principal{
+				Type:     domain.PrincipalUser,
+				UserID:   uuid.New(),
+				TenantID: tenant,
+				Role:     string(RoleAdmin),
+				Scope:    domain.ScopeOrg,
+			},
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name: "site-share collaborator (role=operator, no ClientIDs) rejected",
+			p: &domain.Principal{
+				Type:           domain.PrincipalUser,
+				UserID:         uuid.New(),
+				TenantID:       tenant,
+				Role:           string(RoleOperator),
+				Scope:          domain.ScopeSite,
+				AllowedSiteIDs: []uuid.UUID{site1},
+			},
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name: "portal principal with empty ClientIDs rejected",
+			p: &domain.Principal{
+				Type:           domain.PrincipalUser,
+				UserID:         uuid.New(),
+				TenantID:       tenant,
+				Role:           string(RoleClient),
+				Scope:          domain.ScopeSite,
+				AllowedSiteIDs: []uuid.UUID{site1},
+				ClientIDs:      []uuid.UUID{}, // empty
+			},
+			wantCode: http.StatusForbidden,
+		},
+		{
+			name: "API key (not PrincipalUser) rejected",
+			p: &domain.Principal{
+				Type:     domain.PrincipalAPIKey,
+				TenantID: tenant,
+				Role:     string(RoleAdmin),
+				Scope:    domain.ScopeOrg,
+			},
+			wantCode: http.StatusForbidden,
+		},
+	}
+
+	mw := RequireClientPortal()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := runWithPrincipal(tt.p, mw)
+			if got != tt.wantCode {
+				t.Fatalf("RequireClientPortal: got %d, want %d", got, tt.wantCode)
+			}
+		})
+	}
+}

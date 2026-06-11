@@ -185,6 +185,28 @@ func principalWithTenant(c *gin.Context) (domain.Principal, bool) {
 	return p, true
 }
 
+// RequireClientPortal admits ONLY client-portal principals: a session user
+// resolved through client_members (Scope=site, Role=client, >=1 client).
+// Everything else 403s, including org members, API keys, and site-share
+// collaborators. Portal routes never use RequirePermission.
+func RequireClientPortal() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		p, ok := domain.PrincipalFromContext(c.Request.Context())
+		if !ok {
+			abort(c, domain.Unauthorized("unauthenticated", "authentication required"))
+			return
+		}
+		if p.Type != domain.PrincipalUser ||
+			p.Scope != domain.ScopeSite ||
+			Role(p.Role) != RoleClient ||
+			len(p.ClientIDs) == 0 {
+			abort(c, domain.Forbidden("portal_access_required", "this resource is only accessible to portal principals"))
+			return
+		}
+		c.Next()
+	}
+}
+
 func abort(c *gin.Context, err error) {
 	httpx.Error(c, err)
 	c.Abort()
