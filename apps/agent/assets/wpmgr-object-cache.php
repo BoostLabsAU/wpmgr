@@ -1,6 +1,8 @@
 <?php
 /**
  * WPMgr Object Cache drop-in stub (object-cache.php).
+ * WPMgr Object Cache drop-in
+ * Version: 1.3.0
  *
  * This file is a locator stub. WordPress loads it very early from
  * wp-content/object-cache.php. Its sole job is to find the real engine inside
@@ -22,9 +24,6 @@
  * wp-settings.php AFTER advanced-cache.php, so both drop-ins can be active
  * simultaneously. Neither calls exit() on a miss, so the other is never
  * silenced.
- *
- * WPMgr Object Cache drop-in
- * Version: 1.2.0
  *
  * @package WPMgr\Agent\ObjectCache
  */

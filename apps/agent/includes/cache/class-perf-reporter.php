@@ -405,7 +405,13 @@ final class PerfReporter
             return;
         }
 
-        $body = (string) wp_json_encode($payload);
+        $encoded = wp_json_encode($payload);
+        if ($encoded === false) {
+            // Payload contains a value that cannot be JSON-encoded (e.g. NAN/INF).
+            // Drop the whole report rather than send a corrupt body.
+            return;
+        }
+        $body = (string) $encoded;
 
         try {
             $auth = $this->signer->signHeaders('POST', $path, $body);

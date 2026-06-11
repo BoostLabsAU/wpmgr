@@ -194,7 +194,10 @@ final class RedisConnection
 		for ( $attempt = 1; $attempt <= $attempts; $attempt++ ) {
 			// Decorrelated jitter: sleep before retry (not before first attempt).
 			if ( $attempt > 1 ) {
-				$jitter = wp_rand( 0, min( $retryIntervalUs * $attempt, $maxJitterUs ) );
+				// random_int() is always available (PHP 7+) and works at drop-in
+				// load time before WordPress functions are defined; wp_rand() is a
+				// WP wrapper that is not guaranteed to be available this early.
+				$jitter = random_int( 0, min( $retryIntervalUs * $attempt, $maxJitterUs ) );
 				if ( $jitter > 0 ) {
 					usleep( $jitter );
 				}

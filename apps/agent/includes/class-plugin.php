@@ -367,6 +367,13 @@ final class Plugin
         // get_option() lookup when the schema is already current.
         add_action('plugins_loaded', [$this, 'maybeRunSchemaMigrations']);
 
+        // Opcache invalidation for the object-cache engine files: fires on any
+        // boot where the stored plugin version differs from the current version.
+        // This ensures stale bytecode from the previous version cannot keep
+        // executing after an agent update, even when the drop-in installer is
+        // not re-run (e.g. a background auto-update that does not re-enable).
+        add_action('plugins_loaded', [$this, 'maybeInvalidateEngineOpcache']);
+
         // Cron self-heal (mirrors maybeRunSchemaMigrations). register_activation_hook
         // does NOT fire on a plugin UPDATE / same-version re-upload, but the
         // update's deactivate step DOES fire register_deactivation_hook →
@@ -985,6 +992,57 @@ final class Plugin
     public function maybeRunSchemaMigrations(): void
     {
         Schema::ensureCurrent();
+    }
+
+    /**
+     * Opcache-invalidate the object-cache engine and its sibling class files
+     * when the stored plugin version differs from the current WPMGR_AGENT_VERSION.
+     *
+     * After a self-update WordPress swaps the plugin files, but the object-cache
+     * drop-in (in wp-content) is not replaced and the engine files (inside the
+     * plugin directory) have stale opcache entries. The next wp-cron or REST
+     * request would execute the old bytecode despite the new files being on disk.
+     * This runs once-per-version on plugins_loaded to force a recompile.
+     *
+     * Cheap on the hot path: one get_option() + one constant read + at most
+     * three opcache_invalidate() calls, only on the version-change boot.
+     *
+     * @return void
+     */
+    public function maybeInvalidateEngineOpcache(): void
+    {
+        if (!function_exists('get_option') || !function_exists('update_option')) {
+            return;
+        }
+
+        $currentVersion = defined('WPMGR_AGENT_VERSION') ? (string) constant('WPMGR_AGENT_VERSION') : '';
+        if ($currentVersion === '') {
+            return;
+        }
+
+        $storedVersion = (string) get_option('wpmgr_agent_engine_opcache_version', '');
+        if ($storedVersion === $currentVersion) {
+            // Already invalidated for this version — nothing to do.
+            return;
+        }
+
+        // Version changed (or first boot): invalidate engine opcache entries.
+        if (function_exists('opcache_invalidate') && defined('WPMGR_AGENT_DIR')) {
+            $engineDir = rtrim((string) constant('WPMGR_AGENT_DIR'), '/\\')
+                . '/includes/object-cache';
+
+            foreach ([
+                $engineDir . '/class-object-cache-engine.php',
+                $engineDir . '/class-object-cache-config.php',
+                $engineDir . '/class-redis-connection.php',
+            ] as $engineFile) {
+                if (@is_file($engineFile)) {
+                    @opcache_invalidate($engineFile, true);
+                }
+            }
+        }
+
+        update_option('wpmgr_agent_engine_opcache_version', $currentVersion, false);
     }
 
     /**
