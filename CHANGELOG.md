@@ -6,6 +6,20 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.3] - 2026-06-11
+
+### Changed
+
+- **Object cache: the status heartbeat now reads the live engine, not a persisted option.** The dashboard pill previously depended on a fragile chain (an analytics-gated shutdown write into a WordPress option, read back by a later request) where several links could silently fail and present as "Disabled". The reporting request has the drop-in active too, so the heartbeat now asks the running cache object for its state directly; the persisted option only carries the analytics counters. The heartbeat also reports the engine's own version on the wire, so "which code is actually executing on this site" is always visible.
+
+### Fixed
+
+- **Object cache: agent updates can no longer leave stale engine bytecode running.** On hosts with aggressive opcode caching, replacing the plugin files did not guarantee the new engine code executed. The agent now invalidates the engine and its supporting files on every version change at boot, and the drop-in installer invalidates them on every install.
+- **Object cache: the drop-in self-heal actually fires.** The installed-stub version check read only the first 512 bytes of the file while the version header sat past byte 1100, so outdated stubs were always misread as current. The header now sits at the top of the file and the check reads further regardless.
+- **Object cache: array mode always records a named reason** (such as a missing config or unloadable classes), the state snapshot persists regardless of the analytics toggle, and a connection-retry path no longer calls a WordPress function that may not exist at drop-in load time. A single invalid number can no longer silently drop an entire stats report.
+
+Agent-only release.
+
 ## [0.41.2] - 2026-06-11
 
 ### Fixed

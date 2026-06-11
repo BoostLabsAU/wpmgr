@@ -221,9 +221,11 @@ final class ObjectCacheDropinInstaller
 			return [ 'ok' => false, 'detail' => 'write failed', 'foreign_dropin' => false ];
 		}
 
-		// Invalidate opcache so the new file is picked up immediately.
+		// Invalidate opcache for the stub and all engine files so stale bytecode
+		// cannot keep executing old code after an agent update or reinstall.
 		if ( function_exists( 'opcache_invalidate' ) ) {
 			@opcache_invalidate( $path, true );
+			$this->invalidateEngineOpcache();
 		}
 
 		return [ 'ok' => true, 'detail' => 'installed', 'foreign_dropin' => false ];
@@ -314,6 +316,68 @@ final class ObjectCacheDropinInstaller
 	// -------------------------------------------------------------------------
 
 	/**
+	 * Opcache-invalidate the engine file and its two sibling class files.
+	 *
+	 * Called after installing/updating the stub so the next request executes
+	 * the freshly-written engine code, not a stale compiled version.
+	 *
+	 * Also exposed as a public method so the plugin boot path can call it
+	 * when it detects a version change (see Plugin::maybeInvalidateEngineOpcache).
+	 *
+	 * @return void
+	 */
+	public function invalidateEngineFiles(): void
+	{
+		if ( ! function_exists( 'opcache_invalidate' ) ) {
+			return;
+		}
+		$this->invalidateEngineOpcache();
+	}
+
+	/**
+	 * Inner: opcache_invalidate the engine + both sibling class files.
+	 *
+	 * @return void
+	 */
+	private function invalidateEngineOpcache(): void
+	{
+		// Derive the engine directory from the stub path or WPMGR_AGENT_DIR.
+		$engineDir = '';
+
+		if ( $this->stubPath !== '' ) {
+			$pluginRoot = dirname( dirname( $this->stubPath ) );
+			$candidate  = $pluginRoot . '/includes/object-cache';
+			if ( @is_dir( $candidate ) ) {
+				$engineDir = $candidate;
+			}
+		}
+
+		if ( $engineDir === '' && defined( 'WPMGR_AGENT_DIR' ) ) {
+			$candidate = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
+				. '/includes/object-cache';
+			if ( @is_dir( $candidate ) ) {
+				$engineDir = $candidate;
+			}
+		}
+
+		if ( $engineDir === '' ) {
+			return;
+		}
+
+		$files = [
+			$engineDir . '/class-object-cache-engine.php',
+			$engineDir . '/class-object-cache-config.php',
+			$engineDir . '/class-redis-connection.php',
+		];
+
+		foreach ( $files as $file ) {
+			if ( @is_file( $file ) ) {
+				@opcache_invalidate( $file, true );
+			}
+		}
+	}
+
+	/**
 	 * Stamp the resolved absolute engine path into the stub content.
 	 *
 	 * Replaces the ENGINE_PATH_PLACEHOLDER token with the var_export'd absolute
@@ -391,6 +455,11 @@ final class ObjectCacheDropinInstaller
 	/**
 	 * Extract the version from the stub template.
 	 *
+	 * Reads 2048 bytes to ensure the Version header is found even if there is
+	 * front-matter above it. The stub template keeps the Version line within the
+	 * first ~200 bytes, but installed stubs may have an engine path stamped in
+	 * before the closing doc-comment tag; 2048 bytes covers all realistic cases.
+	 *
 	 * @return string
 	 */
 	private function stubVersion(): string
@@ -398,14 +467,14 @@ final class ObjectCacheDropinInstaller
 		if ( $this->stubPath === '' || ! @is_file( $this->stubPath ) ) {
 			return '';
 		}
-		// Read only the first 512 bytes to find the version header cheaply.
+		// Read the first 2048 bytes to locate the Version header cheaply.
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- headless agent; WP_Filesystem not initialized; streaming read of plugin-controlled stub file only
 		$handle = @fopen( $this->stubPath, 'r' );
 		if ( $handle === false ) {
 			return '';
 		}
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- same justification as fopen above
-		$header = (string) fread( $handle, 512 );
+		$header = (string) fread( $handle, 2048 );
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- same justification as fopen above
 		fclose( $handle );
 		return $this->extractVersion( $header );

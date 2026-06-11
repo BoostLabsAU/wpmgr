@@ -359,6 +359,14 @@ function wp_cache_supports( $feature ): bool
 class WPMgr_Object_Cache
 {
 	// -------------------------------------------------------------------------
+	// Engine version — visible on the heartbeat wire so operators can confirm
+	// which code is actually executing after an agent update.
+	// -------------------------------------------------------------------------
+
+	/** Version of this engine class. Included in every heartbeat block. */
+	public const ENGINE_VERSION = '0.41.3';
+
+	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
 	// -------------------------------------------------------------------------
 
@@ -520,7 +528,7 @@ class WPMgr_Object_Cache
 			// Load config from the 0600 file.
 			if ( ! class_exists( 'WPMgr\Agent\ObjectCache\ObjectCacheConfig' ) ) {
 				// Supporting classes not loaded (e.g. engine loaded standalone).
-				$instance->bootArrayMode( 'supporting classes not loaded' );
+				$instance->bootArrayMode( 'classes_missing' );
 				return $instance;
 			}
 
@@ -528,8 +536,8 @@ class WPMgr_Object_Cache
 			$config       = $configLoader->load();
 
 			if ( $config === [] ) {
-				// No config stored yet; run in array mode silently.
-				$instance->bootArrayMode( '' );
+				// No config stored yet; run in array mode.
+				$instance->bootArrayMode( 'config_empty' );
 				return $instance;
 			}
 
@@ -1377,6 +1385,7 @@ class WPMgr_Object_Cache
 			'latency_ms'         => $latencyMs,
 			'last_error_class'   => $lastError,
 			'hit_ratio_window_pct' => $hitRatio,
+			'engine_version'     => self::ENGINE_VERSION,
 		];
 
 		// used_memory_bytes: attempt a live INFO query (best-effort, no extra cost
@@ -1844,7 +1853,7 @@ class WPMgr_Object_Cache
 				'prefix'      => $this->prefix,
 				'serializer'  => $config['serializer'] ?? 'php',
 				'compression' => $config['compression'] ?? 'none',
-				'wp_version'  => defined( 'WPINC' ) ? (string) ( get_bloginfo( 'version' ) ?? '' ) : '',
+				'wp_version'  => isset( $GLOBALS['wp_version'] ) ? (string) $GLOBALS['wp_version'] : '',
 			] );
 			$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_NONE );
 			$this->redis->set( $metaKey, $newMeta ); // maxttl-exempt: no TTL.
@@ -1869,6 +1878,12 @@ class WPMgr_Object_Cache
 	 * The heartbeat consumer reads the accumulated deltas and resets them
 	 * (consume-and-reset pattern).
 	 *
+	 * The STATE SNAPSHOT fields (state, latency_ms, last_error_class,
+	 * hit_ratio_window_pct, engine_version) are persisted UNCONDITIONALLY so
+	 * the heartbeat always has a fresh snapshot to report, even when analytics
+	 * is disabled. The delta accumulation fields are gated on analytics_enabled.
+	 * Missing analytics_enabled is treated as ON (matching the m68 default).
+	 *
 	 * @return void
 	 */
 	private function persistStats(): void
@@ -1876,9 +1891,11 @@ class WPMgr_Object_Cache
 		if ( ! function_exists( 'update_option' ) || ! function_exists( 'get_option' ) ) {
 			return;
 		}
-		if ( ! isset( $this->config['analytics_enabled'] ) || ! $this->config['analytics_enabled'] ) {
-			return;
-		}
+
+		// Compute per-request snapshot fields (state, latency, last error).
+		// These are written unconditionally so the heartbeat can always read
+		// a fresh live snapshot, independent of the analytics setting.
+		$snapshot = $this->getHeartbeatStats();
 
 		// Read the existing accumulated option (default empty array).
 		$existing = get_option( 'wpmgr_object_cache_stats', [] );
@@ -1886,30 +1903,37 @@ class WPMgr_Object_Cache
 			$existing = [];
 		}
 
-		// Compute per-request snapshot fields (state, latency, last error).
-		$snapshot = $this->getHeartbeatStats();
+		// Analytics-gated: accumulate delta counters only when analytics is on.
+		// Missing analytics_enabled is treated as ON (the default).
+		$analyticsOn = ! isset( $this->config['analytics_enabled'] ) || (bool) $this->config['analytics_enabled'];
 
-		// Accumulate cumulative delta counters into the stored option.
-		// These are consumed-and-reset by ObjectCacheHeartbeat::build().
-		$totalOps = $this->redisReads + $this->redisWrites;
+		if ( $analyticsOn ) {
+			// Accumulate cumulative delta counters into the stored option.
+			// These are consumed-and-reset by ObjectCacheHeartbeat::build().
+			$totalOps = $this->redisReads + $this->redisWrites;
 
-		$merged = array_merge( $snapshot, [
-			// Carry forward any unconsumed deltas from prior requests.
-			'delta_hit_count'   => ( isset( $existing['delta_hit_count'] ) ? (int) $existing['delta_hit_count'] : 0 )
-				+ $this->cache_hits,
-			'delta_miss_count'  => ( isset( $existing['delta_miss_count'] ) ? (int) $existing['delta_miss_count'] : 0 )
-				+ $this->cache_misses,
-			'delta_ops'         => ( isset( $existing['delta_ops'] ) ? (int) $existing['delta_ops'] : 0 )
-				+ $totalOps,
-			'delta_wait_ms'     => ( isset( $existing['delta_wait_ms'] ) ? (float) $existing['delta_wait_ms'] : 0.0 )
-				+ $this->totalWaitMs,
-			'delta_sample_count' => ( isset( $existing['delta_sample_count'] ) ? (int) $existing['delta_sample_count'] : 0 )
-				+ ( $totalOps > 0 ? 1 : 0 ),
-			// Timestamp of the first un-consumed delta (for ops_per_sec calculation).
-			'delta_since_ts'    => isset( $existing['delta_since_ts'] ) && (float) $existing['delta_since_ts'] > 0
-				? (float) $existing['delta_since_ts']
-				: microtime( true ),
-		] );
+			$merged = array_merge( $snapshot, [
+				// Carry forward any unconsumed deltas from prior requests.
+				'delta_hit_count'   => ( isset( $existing['delta_hit_count'] ) ? (int) $existing['delta_hit_count'] : 0 )
+					+ $this->cache_hits,
+				'delta_miss_count'  => ( isset( $existing['delta_miss_count'] ) ? (int) $existing['delta_miss_count'] : 0 )
+					+ $this->cache_misses,
+				'delta_ops'         => ( isset( $existing['delta_ops'] ) ? (int) $existing['delta_ops'] : 0 )
+					+ $totalOps,
+				'delta_wait_ms'     => ( isset( $existing['delta_wait_ms'] ) ? (float) $existing['delta_wait_ms'] : 0.0 )
+					+ $this->totalWaitMs,
+				'delta_sample_count' => ( isset( $existing['delta_sample_count'] ) ? (int) $existing['delta_sample_count'] : 0 )
+					+ ( $totalOps > 0 ? 1 : 0 ),
+				// Timestamp of the first un-consumed delta (for ops_per_sec calculation).
+				'delta_since_ts'    => isset( $existing['delta_since_ts'] ) && (float) $existing['delta_since_ts'] > 0
+					? (float) $existing['delta_since_ts']
+					: microtime( true ),
+			] );
+		} else {
+			// Analytics off: persist only the state snapshot; preserve any
+			// existing unconsumed delta fields so they are not silently lost.
+			$merged = array_merge( $existing, $snapshot );
+		}
 
 		update_option( 'wpmgr_object_cache_stats', $merged, false );
 	}
