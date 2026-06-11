@@ -1,0 +1,70 @@
+name: E2E — Agent Object Cache
+
+on:
+  # Manual trigger (for on-demand runs).
+  workflow_dispatch:
+
+  # Nightly run (UTC 02:00) to catch regressions.
+  schedule:
+    - cron: "0 2 * * *"
+
+jobs:
+  e2e-object-cache:
+    name: Object Cache E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: zip, sodium, openssl, mysqli
+          coverage: none
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: apps/agent/vendor
+          key: composer-agent-${{ hashFiles('apps/agent/composer.lock') }}
+          restore-keys: composer-agent-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+        working-directory: apps/agent
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: buildx-agent-e2e-${{ github.sha }}
+          restore-keys: buildx-agent-e2e-
+
+      - name: Build agent zip (wporg identity)
+        run: make agent-zip-wporg
+        env:
+          # Suppress interactive prompts; no version stamp needed for E2E.
+          VERSION: "0.0.0-e2e"
+
+      - name: Run E2E harness
+        run: |
+          chmod +x apps/agent/tests-e2e/run.sh
+          PLUGIN_ZIP="${PWD}/release/fleet-agent-for-wpmgr.zip" \
+            apps/agent/tests-e2e/run.sh
+        env:
+          DOCKER_BUILDKIT: "1"
+
+      - name: Upload E2E logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-logs
+          path: /tmp/wpmgr-e2e-*.log
+          if-no-files-found: ignore
+          retention-days: 7

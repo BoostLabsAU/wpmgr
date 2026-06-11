@@ -6,6 +6,19 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.6] - 2026-06-11
+
+### Fixed
+
+- **Object cache: the cache no longer flushes itself on every request.** The recovery mechanism that clears potentially stale keys after a Redis outage misread its per-request state and treated the first successful operation of every page load as an outage recovery, wiping the entire site keyspace each request. With the cache enabled this made wp-admin dramatically slower than no cache at all: every read missed, every option re-queried the database, and all transients died per request. The flush now fires only after a genuinely recorded outage-to-recovery transition, with regression tests asserting no flush ever happens without a prior failure.
+- **Object cache: non-activation diagnosis is accurate and names the culprit.** The previous cause detection used a leftover substring check that misread the current drop-in and made four causes unreachable. The rewritten diagnosis distinguishes a replaced cache object (reporting the replacing class and file), an incomplete boot, a stale opcode cache, a suppression filter, an early definer (reporting its file), and missing, outdated, or foreign drop-ins, in the correct precedence order.
+
+### Added
+
+- **A real-WordPress integration harness** (docker compose: WordPress, MariaDB, Redis) that installs the built agent zip and asserts what unit tests structurally cannot: the engine actually serving as the active cache, keys surviving across requests (the direct regression net for the per-request flush bug), loose-typed plugin call shapes against the installed drop-in, heartbeat correctness in web and cron contexts, and a negative test for early cache definition. Runs nightly and on demand; not part of the default CI gate.
+
+Agent-only release. Drop-in 2.0.2; existing installs refresh automatically after the agent updates.
+
 ## [0.41.5] - 2026-06-11
 
 ### Fixed

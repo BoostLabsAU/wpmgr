@@ -151,7 +151,7 @@ $fileHeader = <<<'HDR'
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.1
+ * Version: 2.0.2
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -171,7 +171,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.1', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.2', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -213,6 +213,31 @@ $block3 = "namespace {\n\n"
     . "\t\t" . ltrim($engineClassDefinition) . "\n"
     . "\t}\n\n"
     . "} // end namespace (WPMgr_Object_Cache class)\n";
+
+// Inject the 'booted' breadcrumb flag immediately after the top-level engine global
+// assignment (the unconditional boot block, NOT inside wpmgr_get_object_cache()).
+// This lets the heartbeat distinguish a complete engine boot (global assigned) from
+// an incomplete boot where an exception cut short the boot code. The flag is set
+// AFTER $wp_object_cache = \WPMgr_Object_Cache::boot(); so it only appears when
+// the boot call itself returned without throwing.
+//
+// The comment anchor (phpcs:ignore … MUST assign $wp_object_cache) uniquely
+// identifies the top-level boot call — wpmgr_get_object_cache() has a different
+// inline comment ("object-cache drop-ins MUST assign"), so the pattern is specific.
+$booted_needle   = "// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign \$wp_object_cache; this is the required WP pattern\n\$wp_object_cache = \\WPMgr_Object_Cache::boot();";
+$booted_replacement = "// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign \$wp_object_cache; this is the required WP pattern\n\$wp_object_cache = \\WPMgr_Object_Cache::boot();\n\$GLOBALS['wpmgr_oc_stub']['booted'] = true;";
+// Count occurrences: there should be exactly one in $engineFunctionsAndBoot.
+if (substr_count($engineFunctionsAndBoot, $booted_needle) === 1) {
+    $engineFunctionsAndBoot = str_replace($booted_needle, $booted_replacement, $engineFunctionsAndBoot);
+} else {
+    // Fallback: use preg_replace with limit=1 on the last occurrence (top-level boot).
+    $engineFunctionsAndBoot = preg_replace(
+        '/(\$wp_object_cache\s*=\s*\\\\WPMgr_Object_Cache::boot\(\)\s*;)(?!\s*\n[^}]*\n\s*\})/',
+        '$1' . "\n\$GLOBALS['wpmgr_oc_stub']['booted'] = true;",
+        $engineFunctionsAndBoot,
+        1
+    ) ?? $engineFunctionsAndBoot;
+}
 
 // Block 4: boot code + wp_cache_* functions.
 // Wrap each top-level function in function_exists guard for double-inclusion safety.

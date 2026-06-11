@@ -39,6 +39,14 @@ final class RedisConnection
 	/** Whether we are in a degraded (failed) state for this request. */
 	private bool $degraded = false;
 
+	/**
+	 * Whether markDegraded() has EVER been called on this instance.
+	 * Set by markDegraded(); never cleared by recordSuccess() or acquire().
+	 * Used by the engine to distinguish a genuine recovery (was degraded, now
+	 * healthy) from a request that was healthy all along.
+	 */
+	private bool $wasDegraded = false;
+
 	/** Timestamp of the last successful command. */
 	private float $lastUsed = 0.0;
 
@@ -78,12 +86,27 @@ final class RedisConnection
 
 	/**
 	 * Mark the connection degraded. Subsequent acquire() will reconnect once.
+	 * Also sets the permanent wasDegraded flag so the engine can detect recovery.
 	 *
 	 * @return void
 	 */
 	public function markDegraded(): void
 	{
-		$this->degraded = true;
+		$this->degraded    = true;
+		$this->wasDegraded = true;
+	}
+
+	/**
+	 * Whether markDegraded() has ever been called on this instance.
+	 * Never reset by recordSuccess() — stays true for the lifetime of the object.
+	 * The engine uses this alongside isDegraded() to detect a genuine recovery:
+	 *   wasDegraded() === true  &&  isDegraded() === false  => just recovered.
+	 *
+	 * @return bool
+	 */
+	public function wasDegraded(): bool
+	{
+		return $this->wasDegraded;
 	}
 
 	/**

@@ -246,6 +246,15 @@ agent-plugincheck: agent-zip-wporg ## AUTHORITATIVE: `wp plugin check` on real W
 	# trademark/updater/readme checks key off the right slug. Exits non-zero on any ERROR row.
 	cd tools/plugincheck && PLUGIN_ZIP="$(PWD)/release/fleet-agent-for-wpmgr.zip" ./run.sh
 
+.PHONY: agent-e2e-objectcache
+agent-e2e-objectcache: agent-zip ## Run the object-cache E2E harness (Docker; Redis + WordPress + phpredis)
+	# Spins a full Docker environment: WordPress 6.8 + MariaDB 11 + Redis 7 + phpredis.
+	# Exercises provision → assert-cli → cross-request persistence (FIX A net) →
+	# freshness guard → cron-check → negative-check → disable.
+	# Requires Docker. PLUGIN_ZIP can be overridden; defaults to the wporg build.
+	chmod +x apps/agent/tests-e2e/run.sh
+	PLUGIN_ZIP="$(PWD)/release/fleet-agent-for-wpmgr.zip" apps/agent/tests-e2e/run.sh
+
 .PHONY: agent-release
 agent-release: agent-zip ## Publish the agent release (zip + latest.json) to object storage for CP-driven self-update (ADR-042)
 	# Uploads the versioned package FIRST, then latest.json LAST, so the CP

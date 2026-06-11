@@ -388,9 +388,9 @@ final class ObjectCacheFix415Test extends TestCase
 	}
 
 	/**
-	 * R8b: Artifact must be Version: 2.0.1.
+	 * R8b: Artifact must be Version: 2.0.2 (bumped in 0.41.6 with booted flag + wasDegraded fix).
 	 */
-	public function test_artifact_is_version_201(): void
+	public function test_artifact_is_version_202(): void
 	{
 		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
 		if ( ! is_file( $artifactPath ) ) {
@@ -398,9 +398,9 @@ final class ObjectCacheFix415Test extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.0.1',
+			'Version: 2.0.2',
 			$first200,
-			'Artifact must be Version: 2.0.1 after the 0.41.5 fix'
+			'Artifact must be Version: 2.0.2 after the 0.41.6 fix'
 		);
 	}
 

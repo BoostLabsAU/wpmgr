@@ -6,8 +6,8 @@
  *   1. Running the builder twice produces byte-identical output.
  *   2. The committed artifact matches a fresh build (same discipline as sqlc).
  *   3. The generated artifact is syntactically valid PHP.
- *   4. The SIGNATURE and Version: 2.0.1 appear within the first 200 bytes.
- *   5. The breadcrumb assignment is present and sets 'v' => '2.0.1'.
+ *   4. The SIGNATURE and Version: 2.0.2 appear within the first 200 bytes.
+ *   5. The breadcrumb assignment is present and sets 'v' => '2.0.2'.
  *   6. All bail gate strings are present.
  *
  * @package WPMgr\Agent\Tests\ObjectCache
@@ -134,7 +134,7 @@ final class ObjectCacheDropinBuildTest extends TestCase
 	}
 
 	/**
-	 * Version: 2.0.1 must be in the first 200 bytes.
+	 * Version: 2.0.2 must be in the first 200 bytes.
 	 */
 	public function test_version_in_first_200_bytes(): void
 	{
@@ -143,14 +143,14 @@ final class ObjectCacheDropinBuildTest extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $this->artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.0.1',
+			'Version: 2.0.2',
 			$first200,
-			'Version: 2.0.1 must appear within the first 200 bytes'
+			'Version: 2.0.2 must appear within the first 200 bytes'
 		);
 	}
 
 	/**
-	 * The artifact must set the breadcrumb with v => '2.0.1'.
+	 * The artifact must set the breadcrumb with v => '2.0.2'.
 	 */
 	public function test_breadcrumb_initialization_present(): void
 	{
@@ -164,9 +164,9 @@ final class ObjectCacheDropinBuildTest extends TestCase
 			'Breadcrumb key wpmgr_oc_stub must be present'
 		);
 		$this->assertStringContainsString(
-			"'v' => '2.0.1'",
+			"'v' => '2.0.2'",
 			$content,
-			'Breadcrumb must set v => 2.0.1'
+			'Breadcrumb must set v => 2.0.2'
 		);
 	}
 

@@ -1,7 +1,7 @@
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.1
+ * Version: 2.0.2
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -17,7 +17,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.1', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.2', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -476,6 +476,14 @@ final class RedisConnection
 	/** Whether we are in a degraded (failed) state for this request. */
 	private bool $degraded = false;
 
+	/**
+	 * Whether markDegraded() has EVER been called on this instance.
+	 * Set by markDegraded(); never cleared by recordSuccess() or acquire().
+	 * Used by the engine to distinguish a genuine recovery (was degraded, now
+	 * healthy) from a request that was healthy all along.
+	 */
+	private bool $wasDegraded = false;
+
 	/** Timestamp of the last successful command. */
 	private float $lastUsed = 0.0;
 
@@ -515,12 +523,27 @@ final class RedisConnection
 
 	/**
 	 * Mark the connection degraded. Subsequent acquire() will reconnect once.
+	 * Also sets the permanent wasDegraded flag so the engine can detect recovery.
 	 *
 	 * @return void
 	 */
 	public function markDegraded(): void
 	{
-		$this->degraded = true;
+		$this->degraded    = true;
+		$this->wasDegraded = true;
+	}
+
+	/**
+	 * Whether markDegraded() has ever been called on this instance.
+	 * Never reset by recordSuccess() — stays true for the lifetime of the object.
+	 * The engine uses this alongside isDegraded() to detect a genuine recovery:
+	 *   wasDegraded() === true  &&  isDegraded() === false  => just recovered.
+	 *
+	 * @return bool
+	 */
+	public function wasDegraded(): bool
+	{
+		return $this->wasDegraded;
 	}
 
 	/**
@@ -886,7 +909,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.41.5';
+	public const ENGINE_VERSION = '0.41.6';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -2159,9 +2182,16 @@ class WPMgr_Object_Cache
 			$this->totalWaitMs += ( microtime( true ) - $t0 ) * 1000.0;
 			$this->connection->recordSuccess();
 
-			// Failback flush: if we were degraded and are now healthy again.
-			if ( $this->flushOnFailback && ! $this->failbackFlushed && $this->connection->isDegraded() === false ) {
-				// The connection is now healthy; schedule a flush.
+			// Failback flush: only when the connection genuinely recovered from a
+			// prior outage THIS request (wasDegraded() is set by markDegraded() and
+			// never cleared). Without the wasDegraded() guard, the first successful
+			// op of every healthy request would trigger a full keyspace SCAN+DEL.
+			if (
+				$this->flushOnFailback
+				&& ! $this->failbackFlushed
+				&& $this->connection->wasDegraded()
+				&& ! $this->connection->isDegraded()
+			) {
 				$this->executeFailbackFlush();
 			}
 
@@ -2583,6 +2613,7 @@ function wpmgr_get_object_cache(): \WPMgr_Object_Cache
 global $wp_object_cache;
 // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
 $wp_object_cache = \WPMgr_Object_Cache::boot();
+$GLOBALS['wpmgr_oc_stub']['booted'] = true;
 
 register_shutdown_function(
 	static function (): void {

@@ -87,7 +87,7 @@ final class ObjectCacheBugFixTest extends TestCase
 	// =========================================================================
 
 	/**
-	 * The generated drop-in artifact must contain our SIGNATURE and Version: 2.0.1
+	 * The generated drop-in artifact must contain our SIGNATURE and Version: 2.0.2
 	 * within the first 200 bytes.
 	 */
 	public function test_generated_artifact_signature_and_version_in_first_200_bytes(): void
@@ -101,9 +101,9 @@ final class ObjectCacheBugFixTest extends TestCase
 			'SIGNATURE must be in the first 200 bytes of the generated artifact'
 		);
 		$this->assertStringContainsString(
-			'Version: 2.0.1',
+			'Version: 2.0.2',
 			$first200,
-			'Version: 2.0.1 must be in the first 200 bytes of the generated artifact'
+			'Version: 2.0.2 must be in the first 200 bytes of the generated artifact'
 		);
 	}
 

@@ -471,7 +471,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.41.5';
+	public const ENGINE_VERSION = '0.41.6';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -1744,9 +1744,16 @@ class WPMgr_Object_Cache
 			$this->totalWaitMs += ( microtime( true ) - $t0 ) * 1000.0;
 			$this->connection->recordSuccess();
 
-			// Failback flush: if we were degraded and are now healthy again.
-			if ( $this->flushOnFailback && ! $this->failbackFlushed && $this->connection->isDegraded() === false ) {
-				// The connection is now healthy; schedule a flush.
+			// Failback flush: only when the connection genuinely recovered from a
+			// prior outage THIS request (wasDegraded() is set by markDegraded() and
+			// never cleared). Without the wasDegraded() guard, the first successful
+			// op of every healthy request would trigger a full keyspace SCAN+DEL.
+			if (
+				$this->flushOnFailback
+				&& ! $this->failbackFlushed
+				&& $this->connection->wasDegraded()
+				&& ! $this->connection->isDegraded()
+			) {
 				$this->executeFailbackFlush();
 			}
 
