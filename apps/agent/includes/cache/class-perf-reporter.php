@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Cache;
 
+use WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller;
 use WPMgr\Agent\ObjectCache\ObjectCacheHeartbeat;
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
@@ -199,6 +200,14 @@ final class PerfReporter
                     $body['cache_hit_count']  = $tally['hits'];
                     $body['cache_miss_count'] = $tally['misses'];
                 }
+            }
+
+            // Auto-refresh the object-cache drop-in stub when it is ours-outdated
+            // (e.g. after an agent update stamped a new stub version). Only refreshes
+            // our own stubs; never touches a foreign drop-in.
+            $ocInstaller = new ObjectCacheDropinInstaller();
+            if ($ocInstaller->isInstalled() && $ocInstaller->isWritable()) {
+                $ocInstaller->maybeAutoRefresh();
             }
 
             // Inject the optional object-cache heartbeat block when configured

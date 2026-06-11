@@ -135,6 +135,7 @@ export function useEnableObjectCache(
       const { data, error } = await enableObjectCache({ path: { siteId } });
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response from object-cache enable");
+      if (data.ok === false) throw new Error(data.detail || "Enable failed");
       return data;
     },
     onSuccess: () => {
@@ -162,6 +163,7 @@ export function useDisableObjectCache(
       const { data, error } = await disableObjectCache({ path: { siteId } });
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response from object-cache disable");
+      if (data.ok === false) throw new Error(data.detail || "Disable failed");
       return data;
     },
     onSuccess: () => {
@@ -197,6 +199,7 @@ export function useFlushObjectCache(
       });
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response from object-cache flush");
+      if (data.ok === false) throw new Error(data.detail || "Flush failed");
       return data;
     },
     onSuccess: () => {

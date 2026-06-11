@@ -38,6 +38,9 @@ final class ObjectCacheDropinInstaller
 	/** Version header string prefix in the stub. */
 	public const VERSION_PREFIX = 'Version: ';
 
+	/** Placeholder token in the stub template replaced at install time. */
+	public const ENGINE_PATH_PLACEHOLDER = '__WPMGR_OC_ENGINE_PATH__';
+
 	/** Drop-in state: ours and current. */
 	public const STATE_OURS_CURRENT = 'ours-current';
 
@@ -198,6 +201,13 @@ final class ObjectCacheDropinInstaller
 			return [ 'ok' => false, 'detail' => 'could not read stub template', 'foreign_dropin' => false ];
 		}
 
+		// Stamp the absolute engine path into the stub at install time. The stub
+		// template ships with the literal placeholder; we replace it here with the
+		// var_export'd resolved absolute path so the drop-in can locate the engine
+		// even before WordPress has defined plugin-directory constants (which are
+		// not available during wp_start_object_cache()).
+		$stub = $this->stampEnginePath( $stub );
+
 		// Idempotent: byte-identical content.
 		if ( @is_file( $path ) ) {
 			$current = @file_get_contents( $path );
@@ -272,9 +282,93 @@ final class ObjectCacheDropinInstaller
 		return $count;
 	}
 
+	/**
+	 * Auto-refresh the drop-in when it is ours-outdated and wp-content is writable.
+	 *
+	 * Called from the agent's periodic work path (PerfReporter / heartbeat) after
+	 * the object-cache config is confirmed enabled. Never touches a foreign drop-in.
+	 * Returns true when the stub is now current (already was, or successfully refreshed).
+	 *
+	 * @return bool True when the installed stub is current after this call.
+	 */
+	public function maybeAutoRefresh(): bool
+	{
+		$state = $this->state();
+
+		if ( $state === self::STATE_OURS_CURRENT ) {
+			return true;
+		}
+
+		if ( $state !== self::STATE_OURS_OUTDATED ) {
+			// Missing or foreign: do not auto-install/replace.
+			return false;
+		}
+
+		// Outdated ours-stub: refresh it.
+		$result = $this->install();
+		return (bool) $result['ok'];
+	}
+
 	// -------------------------------------------------------------------------
 	// Private helpers
 	// -------------------------------------------------------------------------
+
+	/**
+	 * Stamp the resolved absolute engine path into the stub content.
+	 *
+	 * Replaces the ENGINE_PATH_PLACEHOLDER token with the var_export'd absolute
+	 * path to the engine file, derived from the stub file's own location. The
+	 * engine file lives alongside the stub template inside the plugin tree, so
+	 * we can compute it reliably at install time when WPMGR_AGENT_DIR is defined.
+	 *
+	 * The SIGNATURE check used by state() and isInstalled() does NOT depend on
+	 * the placeholder content, so stamping does not affect foreign-detection.
+	 *
+	 * @param string $stubContent Raw stub template content.
+	 * @return string Stamped content (placeholder replaced with resolved path).
+	 */
+	private function stampEnginePath( string $stubContent ): string
+	{
+		// Derive the engine path from the stub template location. The engine file
+		// lives two directories up from assets/ at:
+		//   <plugin_root>/assets/wpmgr-object-cache.php  (stub template)
+		//   <plugin_root>/includes/object-cache/class-object-cache-engine.php  (engine)
+		$enginePath = '';
+
+		if ( $this->stubPath !== '' ) {
+			$pluginRoot = dirname( dirname( $this->stubPath ) );
+			$candidate  = $pluginRoot . '/includes/object-cache/class-object-cache-engine.php';
+			if ( @is_file( $candidate ) ) {
+				$enginePath = $candidate;
+			}
+		}
+
+		// Also try WPMGR_AGENT_DIR as a direct source of truth.
+		if ( $enginePath === '' && defined( 'WPMGR_AGENT_DIR' ) ) {
+			$candidate = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
+				. '/includes/object-cache/class-object-cache-engine.php';
+			if ( @is_file( $candidate ) ) {
+				$enginePath = $candidate;
+			}
+		}
+
+		if ( $enginePath === '' ) {
+			// Cannot resolve at install time; leave the placeholder in place.
+			// Probes 2 and 3 in the stub will still work as fallbacks.
+			return $stubContent;
+		}
+
+		// Use var_export to produce a valid PHP string literal (handles backslashes
+		// on Windows and any unusual characters in the path).
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- serializing a file path into a PHP stub file; not a debug/logging use
+		$exported = var_export( $enginePath, true );
+
+		return str_replace(
+			"'" . self::ENGINE_PATH_PLACEHOLDER . "'",
+			$exported,
+			$stubContent
+		);
+	}
 
 	/**
 	 * Extract the Version header value from a drop-in file's content.

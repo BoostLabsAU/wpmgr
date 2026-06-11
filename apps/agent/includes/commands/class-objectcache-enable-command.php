@@ -113,7 +113,7 @@ final class ObjectcacheEnableCommand implements CommandInterface
 			];
 
 		} catch ( \Throwable $e ) {
-			$defaultResult['detail'] = 'objectcache.enable failed';
+			$defaultResult['detail'] = 'objectcache.enable failed: ' . get_class( $e );
 			return $defaultResult;
 		}
 	}

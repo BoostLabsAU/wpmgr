@@ -3,6 +3,7 @@ package perf
 import (
 	"encoding/json"
 	"io"
+	"log/slog"
 	"math"
 	"mime"
 	"mime/multipart"
@@ -172,17 +173,20 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 	// from the verified agent identity (id), never from the body.
 	if in.ObjectCache != nil && h.ocSvc != nil {
 		ocBlock := in.ObjectCache
-		// Validate the state enum; unknown values are coerced to the disabled state
-		// so a rogue agent cannot inject a spurious "connected" pill.
+		// Validate the state enum. The agent legitimately emits 'disabled' when
+		// the drop-in is configured but not serving. Unknown values are coerced to
+		// "" (OCStateUnknown) and the heartbeat update is skipped entirely so we
+		// never overwrite a good stored state with a junk value.
 		validOCState := func(s string) bool {
 			switch s {
-			case "", "connected", "degraded", "down":
+			case "", "disabled", "connected", "degraded", "down":
 				return true
 			}
 			return false
 		}
 		state := ocBlock.State
-		if !validOCState(state) {
+		rawStateValid := validOCState(state)
+		if !rawStateValid {
 			state = ""
 		}
 		// Clamp numerics: latency and ratio must be non-negative and sane.
@@ -212,15 +216,32 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 
 		// IngestHeartbeat: updates the live status pill and emits SSE.
 		// tenantID and siteID come from the verified agent identity.
-		hbBlock := &objectcache.HeartbeatBlock{
-			State:           objectcache.OCState(state),
-			LatencyMs:       int(latencyMs),
-			LastErrorClass:  lastErrorClass,
-			UsedMemoryBytes: usedMemoryBytes,
-			HitRatioPct:     hitRatioPct,
-		}
-		if hbErr := h.ocSvc.IngestHeartbeat(c.Request.Context(), id.TenantID, id.SiteID, hbBlock); hbErr != nil {
-			_ = hbErr // best-effort
+		// Skip the update entirely when the agent sent an unrecognised state
+		// (clamped to "") to preserve whatever valid state is already stored.
+		if !rawStateValid {
+			// Cap before logging: state is agent-controlled (up to maxStatsBody).
+			rawState := ocBlock.State
+			if len(rawState) > 128 {
+				rawState = rawState[:128]
+			}
+			slog.Warn("objectcache: unknown state from agent, skipping heartbeat update",
+				slog.String("site_id", id.SiteID.String()),
+				slog.String("raw_state", rawState),
+			)
+		} else {
+			hbBlock := &objectcache.HeartbeatBlock{
+				State:           objectcache.OCState(state),
+				LatencyMs:       int(latencyMs),
+				LastErrorClass:  lastErrorClass,
+				UsedMemoryBytes: usedMemoryBytes,
+				HitRatioPct:     hitRatioPct,
+			}
+			if hbErr := h.ocSvc.IngestHeartbeat(c.Request.Context(), id.TenantID, id.SiteID, hbBlock); hbErr != nil {
+				slog.Warn("objectcache: heartbeat ingest error",
+					slog.String("site_id", id.SiteID.String()),
+					slog.Any("error", hbErr),
+				)
+			}
 		}
 
 		// IngestStats: appends a time-series data point when hit/miss counts are
@@ -265,7 +286,10 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 				EvictedKeysDelta: evictedKeysDelta,
 				ConnectedClients: connectedClients,
 			}); statsErr != nil {
-				_ = statsErr // best-effort
+				slog.Warn("objectcache: stats ingest error",
+					slog.String("site_id", id.SiteID.String()),
+					slog.Any("error", statsErr),
+				)
 			}
 		}
 	}

@@ -34,11 +34,17 @@ final class ObjectCacheHeartbeat
 	 * Build the optional object_cache block for the heartbeat payload.
 	 * Returns null when the feature is disabled or no stats are available.
 	 *
+	 * Consumes-and-resets the cumulative delta counters accumulated by the
+	 * engine's persistStats() shutdown hook across all requests since the
+	 * last heartbeat. The snapshot fields (state, latency_ms, last_error_class,
+	 * hit_ratio_window_pct, used_memory_bytes) are kept as-is from the last
+	 * persisted request; the delta fields are zeroed after consumption.
+	 *
 	 * @return array<string,mixed>|null
 	 */
 	public static function build(): ?array
 	{
-		if ( ! function_exists( 'get_option' ) ) {
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'update_option' ) ) {
 			return null;
 		}
 
@@ -70,12 +76,42 @@ final class ObjectCacheHeartbeat
 			];
 		}
 
+		// Consume the window-delta counters and compute derived analytics fields.
+		$hitCount    = isset( $stats['delta_hit_count'] ) ? (int) $stats['delta_hit_count'] : 0;
+		$missCount   = isset( $stats['delta_miss_count'] ) ? (int) $stats['delta_miss_count'] : 0;
+		$ops         = isset( $stats['delta_ops'] ) ? (int) $stats['delta_ops'] : 0;
+		$waitMs      = isset( $stats['delta_wait_ms'] ) ? (float) $stats['delta_wait_ms'] : 0.0;
+		$samples     = isset( $stats['delta_sample_count'] ) ? (int) $stats['delta_sample_count'] : 0;
+		$sinceTs     = isset( $stats['delta_since_ts'] ) ? (float) $stats['delta_since_ts'] : 0.0;
+
+		// ops_per_sec: total ops in the window / elapsed seconds since window start.
+		$elapsedSec = $sinceTs > 0 ? max( 0.001, microtime( true ) - $sinceTs ) : 0.0;
+		$opsPerSec  = ( $elapsedSec > 0 && $ops > 0 ) ? round( $ops / $elapsedSec, 2 ) : 0.0;
+
+		// avg_wait_ms: total wait time / number of samples (requests with Redis ops).
+		$avgWaitMs = $samples > 0 ? round( $waitMs / $samples, 2 ) : 0.0;
+
+		// Reset the delta counters in the stored option (consume-and-reset).
+		$reset = array_merge( $stats, [
+			'delta_hit_count'    => 0,
+			'delta_miss_count'   => 0,
+			'delta_ops'          => 0,
+			'delta_wait_ms'      => 0.0,
+			'delta_sample_count' => 0,
+			'delta_since_ts'     => 0.0,
+		] );
+		update_option( self::OPTION_STATS, $reset, false );
+
 		return [
 			'state'               => is_string( $stats['state'] ?? null ) ? $stats['state'] : 'disabled',
 			'latency_ms'          => is_float( $stats['latency_ms'] ?? null ) ? $stats['latency_ms'] : 0.0,
 			'last_error_class'    => is_string( $stats['last_error_class'] ?? null ) ? $stats['last_error_class'] : '',
 			'hit_ratio_window_pct' => is_float( $stats['hit_ratio_window_pct'] ?? null ) ? $stats['hit_ratio_window_pct'] : 0.0,
 			'used_memory_bytes'   => isset( $stats['used_memory_bytes'] ) ? (int) $stats['used_memory_bytes'] : 0,
+			'hit_count'           => $hitCount,
+			'miss_count'          => $missCount,
+			'ops_per_sec'         => $opsPerSec,
+			'avg_wait_ms'         => $avgWaitMs,
 		];
 	}
 
