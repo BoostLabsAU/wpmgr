@@ -18,30 +18,25 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 // ---------------------------------------------------------------------------
-// Load supporting classes. The Composer autoloader may not be available at
-// drop-in load time (wp-settings.php includes object-cache.php before plugins),
-// so we require_once each file directly.
+// Load supporting classes. Neither the Composer autoloader nor any plugin
+// constant exists at drop-in load time (wp-settings.php includes
+// object-cache.php before plugins), so resolve the siblings from this file's
+// own directory: they always live next to the engine.
 // ---------------------------------------------------------------------------
 
-$wpmgr_oc_dir = defined( 'WPMGR_AGENT_DIR' )
-	? rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' ) . '/includes/object-cache/'
-	: '';
-
-if ( $wpmgr_oc_dir !== '' ) {
-	foreach (
-		[
-			'class-object-cache-config.php',
-			'class-redis-connection.php',
-		] as $wpmgr_oc_dep
-	) {
-		$wpmgr_oc_dep_path = $wpmgr_oc_dir . $wpmgr_oc_dep;
-		if ( @is_file( $wpmgr_oc_dep_path ) ) {
-			require_once $wpmgr_oc_dep_path; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- path is derived from WPMGR_AGENT_DIR constant, always absolute
-		}
+foreach (
+	[
+		'class-object-cache-config.php',
+		'class-redis-connection.php',
+	] as $wpmgr_oc_dep
+) {
+	$wpmgr_oc_dep_path = __DIR__ . '/' . $wpmgr_oc_dep;
+	if ( @is_file( $wpmgr_oc_dep_path ) ) {
+		require_once $wpmgr_oc_dep_path; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- __DIR__-anchored sibling, always absolute
 	}
 }
 
-unset( $wpmgr_oc_dir, $wpmgr_oc_dep, $wpmgr_oc_dep_path );
+unset( $wpmgr_oc_dep, $wpmgr_oc_dep_path );
 
 // ---------------------------------------------------------------------------
 // Boot the cache: try Redis, fall back to pure array on any Throwable.

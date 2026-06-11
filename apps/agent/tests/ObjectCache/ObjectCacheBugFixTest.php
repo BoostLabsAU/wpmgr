@@ -141,6 +141,16 @@ final class ObjectCacheBugFixTest extends TestCase
 			);
 		}
 
+		// Probe 1 regression: the un-stamped guard comparison must survive
+		// stamping (it is concatenated in the template precisely so that the
+		// installer's str_replace cannot rewrite it into a self-comparison,
+		// which would make the stamped path dead code).
+		$this->assertStringContainsString(
+			"'__WPMGR' . '_OC_ENGINE_PATH__'",
+			$installed,
+			'The guard comparison token must remain concatenated after stamping (probe 1 must stay live)'
+		);
+
 		// The installed file must be syntactically valid PHP.
 		$tmpOut = sys_get_temp_dir() . '/wpmgr_stub_lint_' . uniqid( '', true ) . '.php';
 		file_put_contents( $tmpOut, $installed );
