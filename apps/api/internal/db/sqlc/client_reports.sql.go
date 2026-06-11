@@ -67,7 +67,7 @@ SET status        = 'completed',
     completed_at  = now(),
     updated_at    = now()
 WHERE id = $4 AND tenant_id = $5
-RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at
+RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at
 `
 
 type CompleteReportParams struct {
@@ -100,6 +100,7 @@ func (q *Queries) CompleteReport(ctx context.Context, arg CompleteReportParams) 
 		&i.PdfBlobKey,
 		&i.Error,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.CompletedAt,
 	)
 	return i, err
@@ -112,7 +113,7 @@ INSERT INTO generated_reports (
 ) VALUES (
     $1, $2, $3, $4, $5, 'pending'
 )
-RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at
+RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at
 `
 
 type CreateReportParams struct {
@@ -148,6 +149,7 @@ func (q *Queries) CreateReport(ctx context.Context, arg CreateReportParams) (Gen
 		&i.PdfBlobKey,
 		&i.Error,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.CompletedAt,
 	)
 	return i, err
@@ -178,7 +180,7 @@ SET status     = 'failed',
     error      = $1,
     updated_at = now()
 WHERE id = $2 AND tenant_id = $3
-RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at
+RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at
 `
 
 type FailReportParams struct {
@@ -203,6 +205,7 @@ func (q *Queries) FailReport(ctx context.Context, arg FailReportParams) (Generat
 		&i.PdfBlobKey,
 		&i.Error,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.CompletedAt,
 	)
 	return i, err
@@ -282,7 +285,7 @@ func (q *Queries) GetClientWithTimezone(ctx context.Context, arg GetClientWithTi
 }
 
 const getReport = `-- name: GetReport :one
-SELECT id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at FROM generated_reports
+SELECT id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at FROM generated_reports
 WHERE id = $1 AND tenant_id = $2 AND client_id = $3
 `
 
@@ -308,6 +311,7 @@ func (q *Queries) GetReport(ctx context.Context, arg GetReportParams) (Generated
 		&i.PdfBlobKey,
 		&i.Error,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.CompletedAt,
 	)
 	return i, err
@@ -503,7 +507,7 @@ func (q *Queries) ListDueReportSchedules(ctx context.Context, rowLimit int32) ([
 }
 
 const listReports = `-- name: ListReports :many
-SELECT id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at FROM generated_reports
+SELECT id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at FROM generated_reports
 WHERE tenant_id  = $1
   AND client_id  = $2
   AND (
@@ -553,6 +557,7 @@ func (q *Queries) ListReports(ctx context.Context, arg ListReportsParams) ([]Gen
 			&i.PdfBlobKey,
 			&i.Error,
 			&i.CreatedAt,
+			&i.UpdatedAt,
 			&i.CompletedAt,
 		); err != nil {
 			return nil, err
@@ -570,7 +575,7 @@ UPDATE generated_reports
 SET status = 'generating',
     updated_at = now()
 WHERE id = $1 AND tenant_id = $2
-RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, completed_at
+RETURNING id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at
 `
 
 type MarkReportGeneratingParams struct {
@@ -594,6 +599,7 @@ func (q *Queries) MarkReportGenerating(ctx context.Context, arg MarkReportGenera
 		&i.PdfBlobKey,
 		&i.Error,
 		&i.CreatedAt,
+		&i.UpdatedAt,
 		&i.CompletedAt,
 	)
 	return i, err

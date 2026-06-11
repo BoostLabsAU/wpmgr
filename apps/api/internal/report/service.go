@@ -203,16 +203,26 @@ func (s *Service) GetReportWithURLs(ctx context.Context, tenantID, clientID, rep
 	if err != nil {
 		return GeneratedReport{}, "", "", err
 	}
-	var htmlURL, pdfURL string
-	if rpt.Status == StatusCompleted && s.blob != nil {
-		if rpt.HTMLBlobKey != "" {
-			htmlURL, _ = s.blob.PresignGet(ctx, rpt.HTMLBlobKey, presignTTL)
-		}
-		if rpt.PDFBlobKey != "" {
-			pdfURL, _ = s.blob.PresignGet(ctx, rpt.PDFBlobKey, presignTTL)
-		}
-	}
+	htmlURL, pdfURL := s.PresignReportURLs(ctx, rpt)
 	return rpt, htmlURL, pdfURL, nil
+}
+
+// PresignReportURLs mints presigned download URLs for a completed report.
+// Returns empty strings when the report is not completed or object storage is
+// not configured. Presigning is local SigV4 computation (no round trip to the
+// storage backend), so calling this per list item is cheap.
+func (s *Service) PresignReportURLs(ctx context.Context, rpt GeneratedReport) (string, string) {
+	if rpt.Status != StatusCompleted || s.blob == nil {
+		return "", ""
+	}
+	var htmlURL, pdfURL string
+	if rpt.HTMLBlobKey != "" {
+		htmlURL, _ = s.blob.PresignGet(ctx, rpt.HTMLBlobKey, presignTTL)
+	}
+	if rpt.PDFBlobKey != "" {
+		pdfURL, _ = s.blob.PresignGet(ctx, rpt.PDFBlobKey, presignTTL)
+	}
+	return htmlURL, pdfURL
 }
 
 // DeleteReport deletes the DB row and best-effort deletes blob objects.

@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.38.1] - 2026-06-11
+
+### Fixed
+
+- **On-demand reports were stuck in pending forever.** The report job started but every status transition failed because the `generated_reports` table was missing its `updated_at` column (the m64 migration omitted it while all report mutations write it; the query compiler does not validate UPDATE SET column names, so it only surfaced at runtime). Migration m65 adds the column; stuck reports recover automatically on the job's next retry.
+- **Client rows were not clickable.** The Clients page listed clients with only Edit and Delete actions and no way to open a client's detail page (sites + reports). The client name is now a link, and the Client badge on the sites table also links to the client.
+- **Completed reports showed "Storage not configured" instead of download links.** The report list endpoint never minted presigned download URLs (only the per-report detail endpoint did), so the dashboard's report table had no HTML or PDF links to render even when object storage was configured and the artifacts were stored. The list endpoint now presigns URLs for every completed report (a local signing operation, no storage round trip).
+
 ## [0.38.0] - 2026-06-11
 
 ### Added

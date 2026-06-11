@@ -4,6 +4,7 @@
 // Mirrors destinations-list.tsx table pattern.
 
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Plus, Pencil, Trash2, Users } from "lucide-react";
 import type { AgencyClient } from "@wpmgr/api";
 
@@ -159,10 +160,14 @@ export function ClientsList() {
               {data.map((client) => (
                 <TableRow key={client.id}>
                   <TableCell>
-                    <div className="flex items-center gap-2">
+                    <Link
+                      to="/clients/$clientId"
+                      params={{ clientId: client.id }}
+                      className="flex items-center gap-2 underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
+                    >
                       <ColorDot color={client.color} />
                       <span className="font-medium">{client.name}</span>
-                    </div>
+                    </Link>
                   </TableCell>
                   <TableCell className="text-sm text-[var(--color-muted-foreground)]">
                     {client.company ?? (

@@ -337,6 +337,7 @@ type GeneratedReport struct {
 	PdfBlobKey   string             `json:"pdf_blob_key"`
 	Error        string             `json:"error"`
 	CreatedAt    time.Time          `json:"created_at"`
+	UpdatedAt    time.Time          `json:"updated_at"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
 }
 
