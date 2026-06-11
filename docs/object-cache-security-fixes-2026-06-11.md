@@ -32,3 +32,20 @@ S9. Test/Enable/Disable/Flush use context.Background() (service.go:137,203,233,2
 N1. Group flush glob `prefix:*:group:*` spans ':' so flushing group 'post' also hits interior ':post:' tokens (engine.php:1688-1698). Never crosses the prefix boundary; fail-safe. Post-filter SCAN results on the exact group segment.
 
 N2. No RouterTest covers the widened [a-z0-9_.]+ command regex. Add a regression test for '..'-style names, cmd-binding mismatch, and objectcache.* dispatch.
+
+## RE-REVIEW (post-fix, 2026-06-11)
+
+Focused re-review of the S1+S2 ingest wiring returned **SHIP**: the cross-tenant
+write (S2) and the attacker-controlled ingest surface (S1) are genuinely closed.
+No MUST-FIX. Two non-blocking robustness notes:
+
+R1. (FIXED) avg_wait_ms had no upper clamp: a forged value over numeric(8,3)'s
+    range failed the INSERT and silently dropped the site's own stats row.
+    Clamped to [0, 60000] in the stats-report handler; ops_per_sec and
+    connected_clients (integer columns) clamped to [0, MaxInt32] for the same
+    failure shape.
+
+R2. (DEFERRED) No per-site insert rate limit on site_object_cache_stats_history.
+    Same shape as the pre-existing m52 cache-stats history (accepted risk);
+    blast radius is the attacker's own tenant rows. Fold into a shared
+    agent-ingest rate-limit pass if/when m52 gets one.

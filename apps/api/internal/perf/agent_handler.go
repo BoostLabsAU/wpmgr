@@ -3,6 +3,7 @@ package perf
 import (
 	"encoding/json"
 	"io"
+	"math"
 	"mime"
 	"mime/multipart"
 	"net/http"
@@ -227,13 +228,21 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 		hitCount := max(int64(0), ocBlock.HitCount)
 		missCount := max(int64(0), ocBlock.MissCount)
 		if hitCount > 0 || missCount > 0 {
+			// Upper clamps match the columns' representable ranges: a forged
+			// out-of-range value would otherwise fail the INSERT and silently
+			// drop the site's own stats row (avg_wait_ms is numeric(8,3);
+			// ops_per_sec and connected_clients are integer columns).
 			avgWaitMs := ocBlock.AvgWaitMs
 			if avgWaitMs < 0 {
 				avgWaitMs = 0
+			} else if avgWaitMs > 60000 {
+				avgWaitMs = 60000
 			}
 			opsPerSec := ocBlock.OpsPerSec
 			if opsPerSec < 0 {
 				opsPerSec = 0
+			} else if opsPerSec > math.MaxInt32 {
+				opsPerSec = math.MaxInt32
 			}
 			evictedKeysDelta := ocBlock.EvictedKeysDelta
 			if evictedKeysDelta < 0 {
@@ -242,6 +251,8 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 			connectedClients := ocBlock.ConnectedClients
 			if connectedClients < 0 {
 				connectedClients = 0
+			} else if connectedClients > math.MaxInt32 {
+				connectedClients = math.MaxInt32
 			}
 			if statsErr := h.ocSvc.IngestStats(c.Request.Context(), objectcache.IngestStatsInput{
 				TenantID:         id.TenantID,
