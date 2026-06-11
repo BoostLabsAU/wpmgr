@@ -47,11 +47,18 @@ type ConfigDTO struct {
 	LastTestResult json.RawMessage `json:"last_test_result,omitempty"`
 
 	// Live status (from heartbeat).
-	OCState          string   `json:"oc_state"`
-	OCLatencyMs      int      `json:"oc_latency_ms"`
-	OCLastErrorClass string   `json:"oc_last_error_class,omitempty"`
-	OCUsedMemoryBytes int64   `json:"oc_used_memory_bytes"`
-	OCHitRatioPct    *float64 `json:"oc_hit_ratio_pct,omitempty"`
+	OCState           string   `json:"oc_state"`
+	OCLatencyMs       int      `json:"oc_latency_ms"`
+	OCLastErrorClass  string   `json:"oc_last_error_class,omitempty"`
+	OCUsedMemoryBytes int64    `json:"oc_used_memory_bytes"`
+	OCHitRatioPct     *float64 `json:"oc_hit_ratio_pct,omitempty"`
+	// ConfigDrift is true when the agent's live config hash differs from the
+	// CP-computed hash of the stored config (requires a config re-push).
+	ConfigDrift bool `json:"config_drift,omitempty"`
+
+	// PushWarning is set when the config was saved but the apply_config push to
+	// the agent failed. The value is a capped error string for display.
+	PushWarning string `json:"push_warning,omitempty"`
 
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	UpdatedAt time.Time `json:"updated_at,omitempty"`
@@ -117,13 +124,14 @@ func toConfigDTO(c Config) ConfigDTO {
 		LastTestConfigHash: c.LastTestConfigHash,
 		LastTestedAt:     c.LastTestedAt,
 		LastTestResult:   c.LastTestResultJSON,
-		OCState:          string(c.OCState),
-		OCLatencyMs:      c.OCLatencyMs,
-		OCLastErrorClass: c.OCLastErrorClass,
+		OCState:           string(c.OCState),
+		OCLatencyMs:       c.OCLatencyMs,
+		OCLastErrorClass:  c.OCLastErrorClass,
 		OCUsedMemoryBytes: c.OCUsedMemoryBytes,
-		OCHitRatioPct:    c.OCHitRatioPct,
-		CreatedAt:        c.CreatedAt,
-		UpdatedAt:        c.UpdatedAt,
+		OCHitRatioPct:     c.OCHitRatioPct,
+		ConfigDrift:       c.OCConfigDrift,
+		CreatedAt:         c.CreatedAt,
+		UpdatedAt:         c.UpdatedAt,
 	}
 	return dto
 }

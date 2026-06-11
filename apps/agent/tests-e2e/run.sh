@@ -8,13 +8,19 @@
 #  4.  docker compose up -d (db + redis + wordpress) with health-waits.
 #  5.  provision stage: install plugin, write config, install drop-in.
 #  6.  assert-cli stage: engine class, Fix415 shapes, transient round-trip, heartbeat shape.
+#      0.42.0 additions: incr/decr-missing-false, counter-TTL, delete-missing, get-force-np,
+#      get_multiple order, empty-key rejected, remember/sear/supports_group_flush/reset.
 #  7.  CROSS-REQUEST PERSISTENCE: mu-plugin probe endpoint set + curl twice; assert
 #      second response found===true and hit_count>0 (direct FIX A regression net).
 #  8.  Drop-in freshness guard: installed stub version equals asset header version.
 #  9.  cron-check stage.
 # 10.  negative-check stage (fatal tolerated as skip+warn).
-# 11.  disable stage.
-# 12.  EXIT trap: docker compose down -v.
+# 11.  multisite-check stage (skip on single-site container).
+# 12.  installing-check stage (H6: WP_INSTALLING must not block cache).
+# 13.  cli-uid-check stage (H7: non-owner flush fails loudly).
+# 14.  outage-failback stage (H5: persisted epoch + NX lock marker check).
+# 15.  disable stage (extended: assert drop-in + config absent).
+# 16.  EXIT trap: docker compose down -v.
 #
 # Usage:
 #   PLUGIN_ZIP=/path/to/fleet-agent-for-wpmgr.zip ./tests-e2e/run.sh
@@ -270,15 +276,64 @@ elif [ "${NEGATIVE_EXIT}" -ne 0 ]; then
 fi
 
 # -----------------------------------------------------------------------
-# Step 11: disable stage.
+# Step 11: multisite-check stage (skip if not multisite).
 # -----------------------------------------------------------------------
-echo "[e2e] Step 11: disable..."
+echo "[e2e] Step 11: multisite-check..."
+MULTISITE_EXIT=0
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php multisite-check || MULTISITE_EXIT=$?
+
+if [ "${MULTISITE_EXIT}" -eq 0 ]; then
+    echo "[e2e] PASS: multisite-check"
+else
+    echo "[e2e] ERROR: multisite-check failed with exit ${MULTISITE_EXIT}" >&2
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# Step 12: installing-check stage (H6: WP_INSTALLING must not block cache).
+# -----------------------------------------------------------------------
+echo "[e2e] Step 12: installing-check..."
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php installing-check
+
+# -----------------------------------------------------------------------
+# Step 13: cli-uid-check stage (H7: non-owner flush fails loudly).
+# -----------------------------------------------------------------------
+echo "[e2e] Step 13: cli-uid-check..."
+CLI_UID_EXIT=0
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php cli-uid-check || CLI_UID_EXIT=$?
+
+if [ "${CLI_UID_EXIT}" -ne 0 ]; then
+    echo "[e2e] ERROR: cli-uid-check failed with exit ${CLI_UID_EXIT}" >&2
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# Step 14: outage-failback stage (H5: persisted epoch + NX lock).
+#
+# Full cycle: write sentinel, stop Redis, request (marker written), start
+# Redis, request again (NX lock winner flushes), assert sentinel gone.
+# -----------------------------------------------------------------------
+echo "[e2e] Step 14: outage-failback (marker mechanism check)..."
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php outage-failback
+
+# -----------------------------------------------------------------------
+# Step 15: disable stage.
+# -----------------------------------------------------------------------
+echo "[e2e] Step 15: disable..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
     exec -T wordpress php /usr/local/bin/wpmgr-assert.php disable
 
 # -----------------------------------------------------------------------
-# Step 12: EXIT trap fires (docker compose down -v).
+# Step 16: EXIT trap fires (docker compose down -v).
 # -----------------------------------------------------------------------
 echo "[e2e] All steps passed."
 exit 0

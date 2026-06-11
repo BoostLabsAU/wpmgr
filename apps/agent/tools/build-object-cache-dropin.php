@@ -151,7 +151,7 @@ $fileHeader = <<<'HDR'
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.2
+ * Version: 2.1.0
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -171,7 +171,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.2', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.0', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -179,13 +179,21 @@ namespace {
 		return;
 	}
 
-	// WP install-mode bail-out: during install the DB is not ready.
-	if ( function_exists( 'wp_installing' ) && wp_installing() ) {
-		$GLOBALS['wpmgr_oc_stub']['bail'] = 'installing';
+	// H6: WP setup-config bail — the DB is not ready during the initial config wizard.
+	// The old installing bail has been removed: wp_upgrade() flushes and
+	// wp-activate.php invalidations now reach Redis during normal install mode.
+	if ( defined( 'WP_SETUP_CONFIG' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'setup_config';
 		return;
 	}
 
-	// Kill-switch: operator or host can disable without removing the file.
+	// H6: Env kill-switch — operator or host can disable the OC without removing the file.
+	if ( getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) !== false && (bool) getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch_env';
+		return;
+	}
+
+	// Kill-switch: constant-based disable (pre-existing).
 	if ( defined( 'WPMGR_OBJECT_CACHE_DISABLED' ) && WPMGR_OBJECT_CACHE_DISABLED ) {
 		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch';
 		return;

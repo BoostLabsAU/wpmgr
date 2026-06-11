@@ -31,6 +31,10 @@ declare(strict_types=1);
 namespace WPMgr\Agent;
 
 use WPMgr\Agent\Commands\MetadataCommand;
+use WPMgr\Agent\Commands\ObjectcacheDisableCommand;
+use WPMgr\Agent\ObjectCache\ObjectCacheConfig;
+use WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller;
+use WPMgr\Agent\ObjectCache\ObjectCacheHeartbeat;
 use WPMgr\Agent\Support\AgeIdentity;
 
 /**
@@ -271,12 +275,22 @@ final class Lifecycle
     public function onDeactivate(): void
     {
         if (!$this->settings->isEnrolled()) {
-            return;
+            // Still run OC drop-in teardown even when not enrolled.
+        } else {
+            try {
+                $this->enrollment->disconnect('deactivated');
+            } catch (\Throwable $e) {
+                // Best-effort: deactivation must complete even if the CP is down.
+            }
         }
+
+        // H8: deactivate removes the drop-in but KEEPS the config file so that
+        // re-activation can re-enable without re-configuring.
         try {
-            $this->enrollment->disconnect('deactivated');
+            $installer = new ObjectCacheDropinInstaller();
+            $installer->uninstall();
         } catch (\Throwable $e) {
-            // Best-effort: deactivation must complete even if the CP is down.
+            // Best-effort.
         }
     }
 
@@ -322,6 +336,21 @@ final class Lifecycle
         $this->keystore->clearSiteIdentity();
         $this->settings->clearEnrollment();
         $this->settings->clearLastSyncTimestamps();
+
+        // H8: uninstall = drop-in removed + config file deleted + options cleared.
+        try {
+            $disableCmd = new ObjectcacheDisableCommand();
+            $disableCmd->execute([], ['flush' => true]);
+        } catch (\Throwable $e) {
+            // Best-effort: uninstall must complete regardless.
+        }
+
+        try {
+            $configLoader = new ObjectCacheConfig();
+            $configLoader->delete();
+        } catch (\Throwable $e) {
+            // Best-effort.
+        }
 
         if (!function_exists('delete_option')) {
             return;
@@ -432,6 +461,10 @@ final class Lifecycle
             \WPMgr\Agent\Cache\CacheManager::OPTION_STATS,
             \WPMgr\Agent\Cache\NginxHelper::OPTION_NGINX_NOTICE,
             'wpmgr_cache_preload_queue',
+            // H8: object-cache options.
+            ObjectCacheConfig::OPTION_CONFIG_HASH,
+            ObjectCacheHeartbeat::OPTION_STATS,
+            'wpmgr_oc_outage_marker', // WPMgr_Object_Cache::FAILBACK_MARKER_OPTION (H5).
         ];
     }
 }

@@ -258,7 +258,7 @@ final class RedisConnection
 					$redis->select( 0 );
 				}
 
-				// Set phpredis client options.
+				// Set phpredis client options (H3: throws on unsupported codec).
 				$this->applyClientOptions( $redis, $serializer, $compression, $readTimeout );
 
 				$this->reconnectAttempts++;
@@ -286,26 +286,64 @@ final class RedisConnection
 	 * @param float  $readTimeout Read timeout in seconds.
 	 * @return void
 	 */
-	private function applyClientOptions( \Redis $redis, string $serializer, string $compression, float $readTimeout ): void
-	{
+	/**
+	 * Apply phpredis client options with H3 capability negotiation.
+	 * Throws a RuntimeException when a configured codec is unavailable —
+	 * the boot path will land in array mode with cause 'unsupported_codec'.
+	 *
+	 * @param \Redis  $redis       Client handle.
+	 * @param string  $serializer  Serializer: 'php' | 'igbinary'.
+	 * @param string  $compression Compression: 'none' | 'lzf' | 'lz4' | 'zstd'.
+	 * @param float   $readTimeout Read timeout in seconds.
+	 * @param array<string,mixed>|null $capabilityMap Injectable capability map for tests (H3).
+	 * @return void
+	 * @throws \RuntimeException When a configured codec is not available in the runtime.
+	 */
+	private function applyClientOptions(
+		\Redis $redis,
+		string $serializer,
+		string $compression,
+		float $readTimeout,
+		?array $capabilityMap = null
+	): void {
+		// H3: capability check before applying options.
+		$caps = $capabilityMap ?? self::runtimeCapabilityMap();
+
 		// Serializer.
-		if ( $serializer === 'igbinary' && defined( 'Redis::SERIALIZER_IGBINARY' ) ) {
+		if ( $serializer === 'igbinary' ) {
+			if ( ! ( $caps['igbinary_available'] ?? false ) ) {
+				// H3: configured-but-unsupported codec: throw so boot lands in unsupported_codec mode.
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: serializer igbinary configured but igbinary extension is not loaded (unsupported_codec)'
+				);
+			}
 			$redis->setOption( \Redis::OPT_SERIALIZER, (string) constant( 'Redis::SERIALIZER_IGBINARY' ) );
 		} else {
 			$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
 		}
 
 		// Compression.
-		if ( $compression !== 'none' && defined( 'Redis::OPT_COMPRESSION' ) ) {
+		if ( $compression !== 'none' ) {
+			if ( ! defined( 'Redis::OPT_COMPRESSION' ) ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but OPT_COMPRESSION is not available (unsupported_codec)'
+				);
+			}
 			$compressionMap = [
-				'lzf'  => defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
-				'lz4'  => defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
-				'zstd' => defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
+				'lzf'  => ( $caps['lzf_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
+				'lz4'  => ( $caps['lz4_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
+				'zstd' => ( $caps['zstd_available'] ?? false ) && defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
 			];
 			$compressionConst = $compressionMap[ $compression ] ?? null;
-			if ( $compressionConst !== null ) {
-				$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
+			if ( $compressionConst === null ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but not available in phpredis (unsupported_codec)'
+				);
 			}
+			$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
 		}
 
 		// Read timeout.
@@ -317,6 +355,23 @@ final class RedisConnection
 		if ( defined( 'Redis::OPT_MAX_RETRIES' ) ) {
 			$redis->setOption( constant( 'Redis::OPT_MAX_RETRIES' ), '0' ); // Engine handles its own retries.
 		}
+	}
+
+	/**
+	 * H3: Return a runtime capability map (used as the default for applyClientOptions).
+	 * Separating this from probeCapabilities (which needs a live Redis handle) allows
+	 * the serializer/compression check to happen before any network call.
+	 *
+	 * @return array<string,bool>
+	 */
+	private static function runtimeCapabilityMap(): array
+	{
+		return [
+			'igbinary_available' => defined( 'Redis::SERIALIZER_IGBINARY' ),
+			'lzf_available'      => defined( 'Redis::COMPRESSION_LZF' ),
+			'lz4_available'      => defined( 'Redis::COMPRESSION_LZ4' ),
+			'zstd_available'     => defined( 'Redis::COMPRESSION_ZSTD' ),
+		];
 	}
 
 	/**

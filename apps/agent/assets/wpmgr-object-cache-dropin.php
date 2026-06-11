@@ -1,7 +1,7 @@
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.2
+ * Version: 2.1.0
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -17,7 +17,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.2', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.0', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -25,13 +25,21 @@ namespace {
 		return;
 	}
 
-	// WP install-mode bail-out: during install the DB is not ready.
-	if ( function_exists( 'wp_installing' ) && wp_installing() ) {
-		$GLOBALS['wpmgr_oc_stub']['bail'] = 'installing';
+	// H6: WP setup-config bail — the DB is not ready during the initial config wizard.
+	// The old installing bail has been removed: wp_upgrade() flushes and
+	// wp-activate.php invalidations now reach Redis during normal install mode.
+	if ( defined( 'WP_SETUP_CONFIG' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'setup_config';
 		return;
 	}
 
-	// Kill-switch: operator or host can disable without removing the file.
+	// H6: Env kill-switch — operator or host can disable the OC without removing the file.
+	if ( getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) !== false && (bool) getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch_env';
+		return;
+	}
+
+	// Kill-switch: constant-based disable (pre-existing).
 	if ( defined( 'WPMGR_OBJECT_CACHE_DISABLED' ) && WPMGR_OBJECT_CACHE_DISABLED ) {
 		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch';
 		return;
@@ -133,15 +141,39 @@ final class ObjectCacheConfig
 	 *
 	 * @return array<string,mixed>
 	 */
+	/** Sentinel value indicating the file exists but could not be read (H7). */
+	public const LOAD_UNREADABLE = '__config_unreadable__';
+
+	/**
+	 * Load and return the config array. Returns an empty array when the file
+	 * is absent or malformed, and the LOAD_UNREADABLE sentinel as reason when
+	 * the file exists but cannot be read (H7: config_unreadable vs config_empty).
+	 *
+	 * Callers that need to distinguish the two cases can call loadWithReason().
+	 *
+	 * @return array<string,mixed>
+	 */
 	public function load(): array
 	{
+		[ $config ] = $this->loadWithReason();
+		return $config;
+	}
+
+	/**
+	 * Load the config and return [config_array, reason_string].
+	 * reason is one of: '' (success/empty), 'config_empty', 'config_unreadable'.
+	 *
+	 * @return array{0:array<string,mixed>,1:string}
+	 */
+	public function loadWithReason(): array
+	{
 		if ( $this->loaded !== null ) {
-			return $this->loaded;
+			return [ $this->loaded, '' ];
 		}
 
 		if ( $this->filePath === '' || ! @is_file( $this->filePath ) ) {
 			$this->loaded = [];
-			return $this->loaded;
+			return [ $this->loaded, 'config_empty' ];
 		}
 
 		// Permission check: refuse to use a world-readable secrets file.
@@ -155,7 +187,7 @@ final class ObjectCacheConfig
 						error_log( 'WPMgr Object Cache: config file is world-readable; refusing to load.' );
 					}
 					$this->loaded = [];
-					return $this->loaded;
+					return [ $this->loaded, 'config_unreadable' ];
 				}
 			}
 		}
@@ -164,11 +196,18 @@ final class ObjectCacheConfig
 			// phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- path is derived from WP_CONTENT_DIR, always absolute
 			$result = include $this->filePath;
 		} catch ( \Throwable $e ) {
-			$result = false;
+			// H7: include failure (e.g. permission denied, parse error).
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
 		}
 
-		$this->loaded = is_array( $result ) ? $result : [];
-		return $this->loaded;
+		if ( ! is_array( $result ) ) {
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
+		}
+
+		$this->loaded = $result;
+		return [ $this->loaded, '' ];
 	}
 
 	/**
@@ -695,7 +734,7 @@ final class RedisConnection
 					$redis->select( 0 );
 				}
 
-				// Set phpredis client options.
+				// Set phpredis client options (H3: throws on unsupported codec).
 				$this->applyClientOptions( $redis, $serializer, $compression, $readTimeout );
 
 				$this->reconnectAttempts++;
@@ -723,26 +762,64 @@ final class RedisConnection
 	 * @param float  $readTimeout Read timeout in seconds.
 	 * @return void
 	 */
-	private function applyClientOptions( \Redis $redis, string $serializer, string $compression, float $readTimeout ): void
-	{
+	/**
+	 * Apply phpredis client options with H3 capability negotiation.
+	 * Throws a RuntimeException when a configured codec is unavailable —
+	 * the boot path will land in array mode with cause 'unsupported_codec'.
+	 *
+	 * @param \Redis  $redis       Client handle.
+	 * @param string  $serializer  Serializer: 'php' | 'igbinary'.
+	 * @param string  $compression Compression: 'none' | 'lzf' | 'lz4' | 'zstd'.
+	 * @param float   $readTimeout Read timeout in seconds.
+	 * @param array<string,mixed>|null $capabilityMap Injectable capability map for tests (H3).
+	 * @return void
+	 * @throws \RuntimeException When a configured codec is not available in the runtime.
+	 */
+	private function applyClientOptions(
+		\Redis $redis,
+		string $serializer,
+		string $compression,
+		float $readTimeout,
+		?array $capabilityMap = null
+	): void {
+		// H3: capability check before applying options.
+		$caps = $capabilityMap ?? self::runtimeCapabilityMap();
+
 		// Serializer.
-		if ( $serializer === 'igbinary' && defined( 'Redis::SERIALIZER_IGBINARY' ) ) {
+		if ( $serializer === 'igbinary' ) {
+			if ( ! ( $caps['igbinary_available'] ?? false ) ) {
+				// H3: configured-but-unsupported codec: throw so boot lands in unsupported_codec mode.
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: serializer igbinary configured but igbinary extension is not loaded (unsupported_codec)'
+				);
+			}
 			$redis->setOption( \Redis::OPT_SERIALIZER, (string) constant( 'Redis::SERIALIZER_IGBINARY' ) );
 		} else {
 			$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
 		}
 
 		// Compression.
-		if ( $compression !== 'none' && defined( 'Redis::OPT_COMPRESSION' ) ) {
+		if ( $compression !== 'none' ) {
+			if ( ! defined( 'Redis::OPT_COMPRESSION' ) ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but OPT_COMPRESSION is not available (unsupported_codec)'
+				);
+			}
 			$compressionMap = [
-				'lzf'  => defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
-				'lz4'  => defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
-				'zstd' => defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
+				'lzf'  => ( $caps['lzf_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
+				'lz4'  => ( $caps['lz4_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
+				'zstd' => ( $caps['zstd_available'] ?? false ) && defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
 			];
 			$compressionConst = $compressionMap[ $compression ] ?? null;
-			if ( $compressionConst !== null ) {
-				$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
+			if ( $compressionConst === null ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but not available in phpredis (unsupported_codec)'
+				);
 			}
+			$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
 		}
 
 		// Read timeout.
@@ -754,6 +831,23 @@ final class RedisConnection
 		if ( defined( 'Redis::OPT_MAX_RETRIES' ) ) {
 			$redis->setOption( constant( 'Redis::OPT_MAX_RETRIES' ), '0' ); // Engine handles its own retries.
 		}
+	}
+
+	/**
+	 * H3: Return a runtime capability map (used as the default for applyClientOptions).
+	 * Separating this from probeCapabilities (which needs a live Redis handle) allows
+	 * the serializer/compression check to happen before any network call.
+	 *
+	 * @return array<string,bool>
+	 */
+	private static function runtimeCapabilityMap(): array
+	{
+		return [
+			'igbinary_available' => defined( 'Redis::SERIALIZER_IGBINARY' ),
+			'lzf_available'      => defined( 'Redis::COMPRESSION_LZF' ),
+			'lz4_available'      => defined( 'Redis::COMPRESSION_LZ4' ),
+			'zstd_available'     => defined( 'Redis::COMPRESSION_ZSTD' ),
+		];
 	}
 
 	/**
@@ -909,7 +1003,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.41.6';
+	public const ENGINE_VERSION = '0.42.0';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -951,15 +1045,19 @@ class WPMgr_Object_Cache
 
 	/** @var array<string> Groups whose values are never stored in Redis. */
 	private const DEFAULT_NON_PERSISTENT = [
-		'comment',
 		'counts',
 		'plugins',
-		'themes',
 	];
 
 	// -------------------------------------------------------------------------
 	// Instance state.
 	// -------------------------------------------------------------------------
+
+	/** wp-option name for the persisted outage epoch marker (H5). */
+	public const FAILBACK_MARKER_OPTION = 'wpmgr_oc_outage_marker';
+
+	/** Redis key suffix for the failback-flush NX lock (H5). */
+	private const FAILBACK_LOCK_SUFFIX = '__wpmgr_oc_failback_lock__';
 
 	/** @var \WPMgr\Agent\ObjectCache\RedisConnection|null Redis connection (null in array-only mode). */
 	private ?\WPMgr\Agent\ObjectCache\RedisConnection $connection = null;
@@ -973,7 +1071,7 @@ class WPMgr_Object_Cache
 	/** @var bool True when a reconnect this request has already been attempted. */
 	private bool $reconnectAttempted = false;
 
-	/** @var array<string,array<string,mixed>> L1 runtime cache: group => key => value. */
+	/** @var array<string,array<string,mixed>> L1 runtime cache: keyed by buildKey() output. */
 	private array $cache = [];
 
 	/** @var array<string> Global group registry. */
@@ -988,11 +1086,17 @@ class WPMgr_Object_Cache
 	/** @var array<string,bool> Memoized wildcard group-match results. */
 	private array $wildcardMemo = [];
 
+	/** @var array<string,string> Memoized per-group key prefix (H1: buildKey prefix without the key segment). */
+	private array $keyPrefixMemo = [];
+
 	/** @var string Prefix applied to all keys. */
 	private string $prefix = 'wpmgr';
 
 	/** @var int Current blog ID for key namespacing in multisite. */
 	private int $blogId = 1;
+
+	/** @var bool Whether is_multisite() returned true at boot (H1). */
+	private bool $isMultisite = false;
 
 	/** @var int Max TTL in seconds (D6, default 7d). */
 	private int $maxttl = 604800;
@@ -1012,7 +1116,7 @@ class WPMgr_Object_Cache
 	/** @var bool Whether to flush on failback after an outage. */
 	private bool $flushOnFailback = true;
 
-	/** @var bool Whether we flushed on a previous failback this boot. */
+	/** @var bool Whether we already ran the failback flush this boot. */
 	private bool $failbackFlushed = false;
 
 	/** @var array<string,mixed> Loaded config array. */
@@ -1064,6 +1168,9 @@ class WPMgr_Object_Cache
 		$instance->globalGroups         = array_flip( self::DEFAULT_GLOBAL_GROUPS );
 		$instance->nonPersistentGroups  = array_flip( self::DEFAULT_NON_PERSISTENT );
 
+		// H1: Capture multisite state at boot. switch_to_blog() becomes a no-op on single-site.
+		$instance->isMultisite = function_exists( 'is_multisite' ) && is_multisite();
+
 		// Set the current blog ID from WordPress globals when available.
 		if ( isset( $GLOBALS['blog_id'] ) ) {
 			$instance->blogId = (int) $GLOBALS['blog_id'];
@@ -1078,11 +1185,11 @@ class WPMgr_Object_Cache
 			}
 
 			$configLoader = new \WPMgr\Agent\ObjectCache\ObjectCacheConfig();
-			$config       = $configLoader->load();
+			[ $config, $reason ] = $configLoader->loadWithReason();
 
 			if ( $config === [] ) {
-				// No config stored yet; run in array mode.
-				$instance->bootArrayMode( 'config_empty' );
+				// H7: distinguish config_unreadable from config_empty.
+				$instance->bootArrayMode( $reason !== '' ? $reason : 'config_empty' );
 				return $instance;
 			}
 
@@ -1106,8 +1213,13 @@ class WPMgr_Object_Cache
 			$caps = \WPMgr\Agent\ObjectCache\RedisConnection::probeCapabilities( $instance->redis );
 			$instance->keepttlSupported = (bool) ( $caps['keepttl_supported'] ?? false );
 
+			// M8: phpredis 6 FLUSHDB flag gate — already handled in executeFlush.
+
 			// Metadata integrity check.
 			$instance->checkMetadataIntegrity( $config );
+
+			// H5: On healthy boot, if an outage marker exists, attempt NX-lock failback flush.
+			$instance->maybeFailbackFlushOnBoot();
 
 		} catch ( \Throwable $e ) {
 			$instance->bootArrayMode( $e->getMessage() );
@@ -1167,18 +1279,20 @@ class WPMgr_Object_Cache
 		$group  = $this->normalizeGroup( $group );
 		$keyStr = (string) $key;
 
+		// H1: L1 keyed by the fully-qualified Redis key so blog-switched L1 can never collide.
+		$redisKey = $this->buildKey( $keyStr, $group );
+
 		// L1 hit: key already exists.
-		if ( isset( $this->cache[ $group ][ $keyStr ] ) ) {
+		if ( array_key_exists( $redisKey, $this->cache ) ) {
 			return false;
 		}
 
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
-			$this->storeL1( $group, $keyStr, $data );
+			$this->storeL1( $redisKey, $data );
 			return true;
 		}
 
-		$redisKey = $this->buildKey( $keyStr, $group );
-		$ttl      = $this->clampTtl( $expire, $group );
+		$ttl = $this->clampTtl( $expire, $group );
 
 		return $this->redisOp(
 			function () use ( $redisKey, $data, $ttl ): bool {
@@ -1193,7 +1307,7 @@ class WPMgr_Object_Cache
 			static function (): bool {
 				return false;
 			}
-		) && $this->storeL1( $group, $keyStr, $data );
+		) && $this->storeL1( $redisKey, $data );
 	}
 
 	/**
@@ -1231,23 +1345,21 @@ class WPMgr_Object_Cache
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
+		$redisKey = $this->buildKey( $keyStr, $group );
 
-		// Must already exist.
-		$found  = null;
-		$this->get( $key, $group, false, $found );
-		if ( ! $found ) {
-			return false;
-		}
-
+		// M4: for non-persistent / array mode use hasInMemory check only (no pre-get round-trip).
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
-			$this->storeL1( $group, $keyStr, $data );
+			if ( ! array_key_exists( $redisKey, $this->cache ) ) {
+				return false;
+			}
+			$this->storeL1( $redisKey, $data );
 			return true;
 		}
 
-		$redisKey = $this->buildKey( $keyStr, $group );
-		$ttl      = $this->clampTtl( $expire, $group );
+		// M4: rely on SET XX (no pre-get); Redis will reject if key is absent.
+		$ttl = $this->clampTtl( $expire, $group );
 
 		return $this->redisOp(
 			function () use ( $redisKey, $data, $ttl ): bool {
@@ -1262,7 +1374,7 @@ class WPMgr_Object_Cache
 			static function (): bool {
 				return false;
 			}
-		) && $this->storeL1( $group, $keyStr, $data );
+		) && $this->storeL1( $redisKey, $data );
 	}
 
 	/**
@@ -1281,19 +1393,19 @@ class WPMgr_Object_Cache
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
-
-		$this->storeL1( $group, $keyStr, $data );
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
+		$redisKey = $this->buildKey( $keyStr, $group );
 
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
+			$this->storeL1( $redisKey, $data );
 			return true;
 		}
 
-		$redisKey = $this->buildKey( $keyStr, $group );
-		$ttl      = $this->clampTtl( $expire, $group );
+		$ttl = $this->clampTtl( $expire, $group );
 
-		return $this->redisOp(
+		// M3: storeL1 only on Redis success.
+		$ok = $this->redisOp(
 			function () use ( $redisKey, $data, $ttl ): bool {
 				$this->redisWrites++;
 				if ( $ttl > 0 ) {
@@ -1305,6 +1417,11 @@ class WPMgr_Object_Cache
 				return false;
 			}
 		);
+
+		if ( $ok ) {
+			$this->storeL1( $redisKey, $data );
+		}
+		return $ok;
 	}
 
 	/**
@@ -1325,7 +1442,8 @@ class WPMgr_Object_Cache
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
 			foreach ( $data as $key => $value ) {
 				if ( $this->validateKey( $key ) ) {
-					$this->storeL1( $group, (string) $key, $value );
+					$redisKey = $this->buildKey( (string) $key, $group );
+					$this->storeL1( $redisKey, $value );
 					$results[ $key ] = true;
 				} else {
 					$results[ $key ] = false;
@@ -1335,12 +1453,12 @@ class WPMgr_Object_Cache
 		}
 
 		// Validate and batch.
-		$valid   = [];
+		$valid    = []; // redisKey => [origKey, value]
 		foreach ( $data as $key => $value ) {
 			if ( $this->validateKey( $key ) ) {
-				$valid[ (string) $key ] = $value;
-				$this->storeL1( $group, (string) $key, $value );
-				$results[ $key ] = false; // Pre-fill; overwritten on success.
+				$redisKey         = $this->buildKey( (string) $key, $group );
+				$valid[ $redisKey ] = [ 'orig' => $key, 'val' => $value ];
+				$results[ $key ]  = false; // Pre-fill; overwritten on success (M3).
 			} else {
 				$results[ $key ] = false;
 			}
@@ -1353,23 +1471,28 @@ class WPMgr_Object_Cache
 		$ttl = $this->clampTtl( $expire, $group );
 
 		$this->redisOp(
-			function () use ( $valid, $group, $ttl, &$results ): bool {
+			function () use ( $valid, $ttl, &$results ): bool {
 				$this->redisWrites += count( $valid );
 				$pipe = $this->redis->pipeline();
-				foreach ( $valid as $keyStr => $value ) {
-					$redisKey = $this->buildKey( $keyStr, $group );
+				foreach ( $valid as $redisKey => $entry ) {
 					if ( $ttl > 0 ) {
-						$pipe->setex( $redisKey, $ttl, $value );
+						$pipe->setex( $redisKey, $ttl, $entry['val'] );
 					} else {
-						$pipe->set( $redisKey, $value );
+						$pipe->set( $redisKey, $entry['val'] );
 					}
 				}
 				$pipeResults = $pipe->exec();
 				if ( is_array( $pipeResults ) ) {
-					$keys = array_keys( $valid );
+					$rKeys = array_keys( $valid );
 					foreach ( $pipeResults as $i => $res ) {
-						if ( isset( $keys[ $i ] ) ) {
-							$results[ $keys[ $i ] ] = ( $res === true || $res === 'OK' );
+						if ( isset( $rKeys[ $i ] ) ) {
+							$rk = $rKeys[ $i ];
+							$ok = ( $res === true || $res === 'OK' );
+							$results[ $valid[ $rk ]['orig'] ] = $ok;
+							// M3: storeL1 per-key only on Redis success.
+							if ( $ok ) {
+								$this->storeL1( $rk, $valid[ $rk ]['val'] );
+							}
 						}
 					}
 				}
@@ -1400,25 +1523,31 @@ class WPMgr_Object_Cache
 			$found = false;
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
+		$redisKey = $this->buildKey( $keyStr, $group );
 
-		// L1 hit (unless forced).
-		if ( ! $force && isset( $this->cache[ $group ][ $keyStr ] ) ) {
-			$found = true;
-			$this->cache_hits++;
-			$this->hits++;
-			return $this->cloneValue( $this->cache[ $group ][ $keyStr ] );
-		}
-
+		// M2: non-persistent / array mode always serves L1 (force flag ignored for these groups).
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
+			if ( array_key_exists( $redisKey, $this->cache ) ) {
+				$found = true;
+				$this->cache_hits++;
+				$this->hits++;
+				return $this->cloneValue( $this->cache[ $redisKey ] );
+			}
 			$found = false;
 			$this->cache_misses++;
 			$this->misses++;
 			return false;
 		}
 
-		$redisKey = $this->buildKey( $keyStr, $group );
+		// H1: L1 hit (unless forced) — keyed by fully-qualified redisKey.
+		if ( ! $force && array_key_exists( $redisKey, $this->cache ) ) {
+			$found = true;
+			$this->cache_hits++;
+			$this->hits++;
+			return $this->cloneValue( $this->cache[ $redisKey ] );
+		}
 
 		$value = $this->redisOp(
 			function () use ( $redisKey ): mixed {
@@ -1442,7 +1571,7 @@ class WPMgr_Object_Cache
 		$found = true;
 		$this->cache_hits++;
 		$this->hits++;
-		$this->storeL1( $group, $keyStr, $value );
+		$this->storeL1( $redisKey, $value );
 		return $this->cloneValue( $value );
 	}
 
@@ -1458,48 +1587,43 @@ class WPMgr_Object_Cache
 	{
 		$group   = $this->castGroup( $group );
 		$group   = $this->normalizeGroup( $group );
+		// M6: pre-fill results in input order (invalid keys get false, valid start as false).
 		$results = [];
+		foreach ( $keys as $key ) {
+			$results[ $key ] = false;
+		}
 
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
 			foreach ( $keys as $key ) {
 				if ( $this->validateKey( $key ) ) {
-					$keyStr = (string) $key;
-					$results[ $key ] = isset( $this->cache[ $group ][ $keyStr ] )
-						? $this->cloneValue( $this->cache[ $group ][ $keyStr ] )
-						: false;
-				} else {
-					$results[ $key ] = false;
+					$redisKey = $this->buildKey( (string) $key, $group );
+					if ( array_key_exists( $redisKey, $this->cache ) ) {
+						$results[ $key ] = $this->cloneValue( $this->cache[ $redisKey ] );
+					}
 				}
+				// invalid keys stay false (M6 keeps them in order too)
 			}
 			return $results;
 		}
 
 		// Partition: L1 hits vs Redis misses.
-		$l1Results   = [];
 		$redisKeys   = [];
 		$redisKeyMap = []; // redisKey => original key
 
 		foreach ( $keys as $key ) {
 			if ( ! $this->validateKey( $key ) ) {
-				$results[ $key ] = false;
-				continue;
+				continue; // stays false in $results (pre-filled)
 			}
-			$keyStr = (string) $key;
-			if ( ! $force && isset( $this->cache[ $group ][ $keyStr ] ) ) {
-				$l1Results[ $key ] = $this->cloneValue( $this->cache[ $group ][ $keyStr ] );
+			$keyStr   = (string) $key;
+			$redisKey = $this->buildKey( $keyStr, $group );
+			if ( ! $force && array_key_exists( $redisKey, $this->cache ) ) {
+				$results[ $key ] = $this->cloneValue( $this->cache[ $redisKey ] );
 				$this->cache_hits++;
 				$this->hits++;
 			} else {
-				$redisKey = $this->buildKey( $keyStr, $group );
 				$redisKeys[]              = $redisKey;
 				$redisKeyMap[ $redisKey ] = $key;
-				$results[ $key ]          = false; // Default to miss.
 			}
-		}
-
-		// Merge L1 hits.
-		foreach ( $l1Results as $key => $value ) {
-			$results[ $key ] = $value;
 		}
 
 		if ( $redisKeys === [] ) {
@@ -1507,7 +1631,7 @@ class WPMgr_Object_Cache
 		}
 
 		$this->redisOp(
-			function () use ( $redisKeys, $redisKeyMap, $group, &$results ): bool {
+			function () use ( $redisKeys, $redisKeyMap, &$results ): bool {
 				$this->redisReads += count( $redisKeys );
 				$fetched = $this->redis->mget( $redisKeys );
 				if ( ! is_array( $fetched ) ) {
@@ -1517,7 +1641,7 @@ class WPMgr_Object_Cache
 					if ( ! isset( $fetched[ $i ] ) ) {
 						continue;
 					}
-					$val = $fetched[ $i ];
+					$val     = $fetched[ $i ];
 					$origKey = $redisKeyMap[ $redisKey ] ?? null;
 					if ( $origKey === null ) {
 						continue;
@@ -1528,13 +1652,13 @@ class WPMgr_Object_Cache
 					} else {
 						$this->cache_hits++;
 						$this->hits++;
-						$this->storeL1( $group, (string) $origKey, $val );
+						$this->storeL1( $redisKey, $val );
 						$results[ $origKey ] = $this->cloneValue( $val );
 					}
 				}
 				return true;
 			},
-			function () use ( $redisKeyMap, &$results ): bool {
+			function () use ( $redisKeyMap ): bool {
 				foreach ( $redisKeyMap as $origKey ) {
 					$this->cache_misses++;
 					$this->misses++;
@@ -1560,24 +1684,28 @@ class WPMgr_Object_Cache
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
-
-		unset( $this->cache[ $group ][ $keyStr ] );
-
-		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
-			return true;
-		}
-
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
 		$redisKey = $this->buildKey( $keyStr, $group );
 
+		$inL1 = array_key_exists( $redisKey, $this->cache );
+		unset( $this->cache[ $redisKey ] );
+
+		// M1: non-persistent / array mode returns false on missing keys.
+		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
+			return $inL1;
+		}
+
 		return $this->redisOp(
-			function () use ( $redisKey ): bool {
+			function () use ( $redisKey, $inL1 ): bool {
 				$this->redisWrites++;
 				if ( $this->asyncFlush ) {
-					return $this->redis->unlink( $redisKey ) >= 0;
+					$deleted = $this->redis->unlink( $redisKey );
+				} else {
+					$deleted = $this->redis->del( $redisKey );
 				}
-				return $this->redis->del( $redisKey ) >= 0;
+				// M1: > 0 means a key was actually deleted.
+				return ( $deleted > 0 ) || $inL1;
 			},
 			static function (): bool {
 				return false;
@@ -1618,42 +1746,52 @@ class WPMgr_Object_Cache
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
+		$redisKey = $this->buildKey( $keyStr, $group );
 
+		// H2: non-persistent / array mode: return false on missing key.
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
-			$current = isset( $this->cache[ $group ][ $keyStr ] )
-				? (int) $this->cache[ $group ][ $keyStr ] : 0;
-			$new = max( 0, $current + $offset );
-			$this->storeL1( $group, $keyStr, $new );
+			if ( ! array_key_exists( $redisKey, $this->cache ) ) {
+				$this->journalError( 'incr_missing', 'incr on non-existent key: ' . $keyStr );
+				return false;
+			}
+			$new = max( 0, (int) $this->cache[ $redisKey ] + $offset );
+			$this->storeL1( $redisKey, $new );
 			return $new;
 		}
 
-		$redisKey = $this->buildKey( $keyStr, $group );
-
 		$result = $this->redisOp(
-			function () use ( $redisKey, $keyStr, $group, $offset ): int|false {
+			function () use ( $redisKey, $offset ): int|false {
 				$this->redisWrites++;
+				// H2: GET first — if key missing, return false (no create).
+				$current = $this->redis->get( $redisKey );
+				if ( $current === false ) {
+					return false;
+				}
+				$newVal = max( 0, (int) $current + $offset ); // OURS-BETTER: (int) numeric-string coercion.
+				// H2: GET+SET fallback so values stay serializer-encoded.
 				if ( $this->keepttlSupported ) {
-					// Get current value and TTL, then SET KEEPTTL.
-					$current = $this->redis->get( $redisKey );
-					$newVal  = max( 0, ( $current === false ? 0 : (int) $current ) + $offset );
-					$ttl     = $this->redis->ttl( $redisKey );
-					$opts    = [ 'keepttl' ];
-					if ( $ttl > 0 ) {
-						$opts = [ 'ex' => $ttl ];
+					$ttl  = $this->redis->ttl( $redisKey );
+					$opts = $ttl > 0 ? [ 'ex' => $ttl ] : [ 'keepttl' ];
+					// If key expired between GET and TTL probe, treat as missing.
+					if ( $ttl === -2 ) {
+						return false;
 					}
 					$this->redis->set( $redisKey, $newVal, $opts );
-					return $newVal;
 				} else {
-					// Fallback: INCRBY (does not preserve TTL, but is atomic).
-					$newVal = $this->redis->incrBy( $redisKey, $offset );
-					if ( $newVal < 0 ) {
-						$this->redis->set( $redisKey, 0 );
-						return 0;
+					// No KEEPTTL: GET the TTL, then SET with ex when TTL > 0.
+					$ttl = $this->redis->ttl( $redisKey );
+					if ( $ttl === -2 ) {
+						return false;
 					}
-					return $newVal;
+					if ( $ttl > 0 ) {
+						$this->redis->set( $redisKey, $newVal, [ 'ex' => $ttl ] );
+					} else {
+						$this->redis->set( $redisKey, $newVal );
+					}
 				}
+				return $newVal;
 			},
 			static function (): false {
 				return false;
@@ -1661,9 +1799,9 @@ class WPMgr_Object_Cache
 		);
 
 		if ( $result !== false ) {
-			$this->storeL1( $group, $keyStr, $result );
+			$this->storeL1( $redisKey, $result );
 		} else {
-			unset( $this->cache[ $group ][ $keyStr ] );
+			unset( $this->cache[ $redisKey ] );
 		}
 		return $result;
 	}
@@ -1682,40 +1820,50 @@ class WPMgr_Object_Cache
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group  = $this->normalizeGroup( $group );
-		$keyStr = (string) $key;
+		$group    = $this->normalizeGroup( $group );
+		$keyStr   = (string) $key;
+		$redisKey = $this->buildKey( $keyStr, $group );
 
+		// H2: non-persistent / array mode: return false on missing key.
 		if ( $this->isNonPersistent( $group ) || $this->arrayMode ) {
-			$current = isset( $this->cache[ $group ][ $keyStr ] )
-				? (int) $this->cache[ $group ][ $keyStr ] : 0;
-			$new = max( 0, $current - $offset );
-			$this->storeL1( $group, $keyStr, $new );
+			if ( ! array_key_exists( $redisKey, $this->cache ) ) {
+				$this->journalError( 'incr_missing', 'decr on non-existent key: ' . $keyStr );
+				return false;
+			}
+			$new = max( 0, (int) $this->cache[ $redisKey ] - $offset );
+			$this->storeL1( $redisKey, $new );
 			return $new;
 		}
-
-		$redisKey = $this->buildKey( $keyStr, $group );
 
 		$result = $this->redisOp(
 			function () use ( $redisKey, $offset ): int|false {
 				$this->redisWrites++;
+				// H2: GET first — if key missing, return false (no create).
+				$current = $this->redis->get( $redisKey );
+				if ( $current === false ) {
+					return false;
+				}
+				$newVal = max( 0, (int) $current - $offset ); // OURS-BETTER: (int) numeric-string coercion.
+				// H2: GET+SET fallback so values stay serializer-encoded.
 				if ( $this->keepttlSupported ) {
-					$current = $this->redis->get( $redisKey );
-					$newVal  = max( 0, ( $current === false ? 0 : (int) $current ) - $offset );
-					$ttl     = $this->redis->ttl( $redisKey );
-					$opts    = [ 'keepttl' ];
-					if ( $ttl > 0 ) {
-						$opts = [ 'ex' => $ttl ];
+					$ttl  = $this->redis->ttl( $redisKey );
+					$opts = $ttl > 0 ? [ 'ex' => $ttl ] : [ 'keepttl' ];
+					if ( $ttl === -2 ) {
+						return false;
 					}
 					$this->redis->set( $redisKey, $newVal, $opts );
-					return $newVal;
 				} else {
-					$newVal = $this->redis->decrBy( $redisKey, $offset );
-					if ( $newVal < 0 ) {
-						$this->redis->set( $redisKey, 0 );
-						return 0;
+					$ttl = $this->redis->ttl( $redisKey );
+					if ( $ttl === -2 ) {
+						return false;
 					}
-					return $newVal;
+					if ( $ttl > 0 ) {
+						$this->redis->set( $redisKey, $newVal, [ 'ex' => $ttl ] );
+					} else {
+						$this->redis->set( $redisKey, $newVal );
+					}
 				}
+				return $newVal;
 			},
 			static function (): false {
 				return false;
@@ -1723,9 +1871,9 @@ class WPMgr_Object_Cache
 		);
 
 		if ( $result !== false ) {
-			$this->storeL1( $group, $keyStr, $result );
+			$this->storeL1( $redisKey, $result );
 		} else {
-			unset( $this->cache[ $group ][ $keyStr ] );
+			unset( $this->cache[ $redisKey ] );
 		}
 		return $result;
 	}
@@ -1740,6 +1888,22 @@ class WPMgr_Object_Cache
 		$this->cache = [];
 
 		if ( $this->arrayMode ) {
+			// H7: if config file exists but is unreadable (cross-uid CLI scenario),
+			// return false so WP-CLI surfaces an error instead of falsely reporting success.
+			if ( ! empty( $this->config ) ) {
+				// We had a config at some point — this should not happen; return true (normal array mode).
+				return true;
+			}
+			// Check whether a config file exists; if so, this flush is a no-op against Redis.
+			if (
+				class_exists( 'WPMgr\Agent\ObjectCache\ObjectCacheConfig' )
+				&& ( new \WPMgr\Agent\ObjectCache\ObjectCacheConfig() )->exists()
+			) {
+				// Config file exists but engine could not read it (unreadable) — be honest.
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- H7: WP-CLI flush-honesty diagnostic
+				error_log( 'WPMgr Object Cache: flush() called but engine is in array mode; config file exists but may be unreadable. Redis keyspace NOT flushed.' );
+				return false;
+			}
 			return true;
 		}
 
@@ -1760,7 +1924,8 @@ class WPMgr_Object_Cache
 	 */
 	public function flush_runtime(): bool
 	{
-		$this->cache = [];
+		$this->cache        = [];
+		$this->keyPrefixMemo = [];
 		return true;
 	}
 
@@ -1774,7 +1939,19 @@ class WPMgr_Object_Cache
 	{
 		$group = $this->castGroup( $group );
 		$group = $this->normalizeGroup( $group );
-		unset( $this->cache[ $group ] );
+
+		// H1: L1 is flat keyed by Redis key — evict all keys whose group segment matches.
+		// The key shape is prefix:[blogId:]group:key (colon-delimited).
+		// We do a prefix-match against the memoized group key prefix to avoid scanning all keys.
+		$groupPrefixGlobal = $this->prefix . ':' . $group . ':';
+		$groupPrefixBlog   = $this->prefix . ':' . $this->blogId . ':' . $group . ':';
+		foreach ( array_keys( $this->cache ) as $rk ) {
+			if ( strncmp( $rk, $groupPrefixGlobal, strlen( $groupPrefixGlobal ) ) === 0
+				|| strncmp( $rk, $groupPrefixBlog, strlen( $groupPrefixBlog ) ) === 0
+			) {
+				unset( $this->cache[ $rk ] );
+			}
+		}
 
 		if ( $this->arrayMode || $this->isNonPersistent( $group ) ) {
 			return true;
@@ -1837,8 +2014,22 @@ class WPMgr_Object_Cache
 	 */
 	public function switch_to_blog( int $blogId ): void
 	{
-		$this->blogId    = $blogId;
+		// H1: single-site installations ignore blog switches entirely.
+		if ( ! $this->isMultisite ) {
+			return;
+		}
+		if ( $this->blogId === $blogId ) {
+			return;
+		}
+		$this->blogId       = $blogId;
 		$this->wildcardMemo = []; // Invalidate memos when blog changes.
+		$this->keyPrefixMemo = []; // Invalidate memoized key prefixes (H1).
+
+		// Belt-and-braces: clear L1 entries that belong to the old blog (non-global).
+		// Since L1 is now keyed by the fully-qualified Redis key (which includes the
+		// blog-id segment), old-blog non-global keys will simply never match new-blog
+		// buildKey() output — so there is no correctness issue. We do NOT wipe global
+		// group L1 entries because they are shared across blogs by design.
 	}
 
 	/**
@@ -1854,6 +2045,9 @@ class WPMgr_Object_Cache
 				$this->globalGroups[ $group ] = true;
 				// Memo invalidation: a late registration may change routing.
 				unset( $this->wildcardMemo[ $group ] );
+				// H1: invalidate keyPrefixMemo for this group since global flag changed.
+				unset( $this->keyPrefixMemo[ $group . ':g' ] );
+				unset( $this->keyPrefixMemo[ $group . ':' . $this->blogId ] );
 			}
 		}
 	}
@@ -1898,6 +2092,71 @@ class WPMgr_Object_Cache
 	public function supports( string $feature ): bool
 	{
 		return in_array( $feature, self::SUPPORTS, true );
+	}
+
+	/**
+	 * M7: __get magic back-compat bridge for plugins that read internal properties.
+	 * Exposes cache, global_groups, non_persistent_groups, multisite, blog_prefix.
+	 * Triggers E_USER_WARNING on unknown property names.
+	 *
+	 * @param string $name Property name.
+	 * @return mixed
+	 */
+	public function __get( string $name ): mixed
+	{
+		switch ( $name ) {
+			case 'cache':
+				// Return a group-indexed array copy for back-compat.
+				$grouped = [];
+				foreach ( $this->cache as $rk => $val ) {
+					$parts = explode( ':', $rk, 4 );
+					$group = count( $parts ) >= 3 ? $parts[ count( $parts ) - 2 ] : 'default';
+					$key   = $parts[ count( $parts ) - 1 ] ?? $rk;
+					$grouped[ $group ][ $key ] = $val;
+				}
+				return $grouped;
+			case 'global_groups':
+				return array_keys( $this->globalGroups );
+			case 'non_persistent_groups':
+				return array_keys( $this->nonPersistentGroups );
+			case 'multisite':
+				return $this->isMultisite;
+			case 'blog_prefix':
+				return $this->prefix . ':' . $this->blogId . ':';
+			default:
+				trigger_error( // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_trigger_error -- M7: back-compat bridge; E_USER_WARNING on unknown property
+					'WPMgr_Object_Cache: Undefined property: ' . $name, // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- trigger_error string is a PHP diagnostic, not HTML output
+					E_USER_WARNING
+				);
+				return null;
+		}
+	}
+
+	/**
+	 * M7: __isset magic bridge — returns true for the back-compat properties.
+	 *
+	 * @param string $name Property name.
+	 * @return bool
+	 */
+	public function __isset( string $name ): bool
+	{
+		return in_array( $name, [ 'cache', 'global_groups', 'non_persistent_groups', 'multisite', 'blog_prefix' ], true );
+	}
+
+	/**
+	 * M7: Core-compatible stats() stub.
+	 * Some plugins call $wp_object_cache->stats() for diagnostics output.
+	 *
+	 * @return void
+	 */
+	public function stats(): void
+	{
+		echo '<p><strong>WPMgr Object Cache</strong> (engine ' . esc_html( self::ENGINE_VERSION ) . ')</p>';
+		echo '<ul>';
+		echo '<li>Cache hits: ' . (int) $this->cache_hits . '</li>';
+		echo '<li>Cache misses: ' . (int) $this->cache_misses . '</li>';
+		echo '<li>Mode: ' . ( $this->arrayMode ? 'array (degraded)' : 'redis' ) . '</li>';
+		echo '</ul>';
 	}
 
 	/**
@@ -1997,13 +2256,18 @@ class WPMgr_Object_Cache
 	 */
 	private function buildKey( string $key, string $group ): string
 	{
-		$isGlobal = isset( $this->globalGroups[ $group ] );
-		$prefix   = $this->prefix;
-
-		if ( $isGlobal ) {
-			return $prefix . ':' . $group . ':' . $key;
+		// H1: memoize the per-group prefix (prefix + optional blog segment + group + colon).
+		// The memo is invalidated by switch_to_blog() (blogId changes) and
+		// add_global_groups() (global flag changes). O(1) per call on warm path.
+		$memoKey = $group . ':' . ( isset( $this->globalGroups[ $group ] ) ? 'g' : $this->blogId );
+		if ( ! isset( $this->keyPrefixMemo[ $memoKey ] ) ) {
+			if ( isset( $this->globalGroups[ $group ] ) ) {
+				$this->keyPrefixMemo[ $memoKey ] = $this->prefix . ':' . $group . ':';
+			} else {
+				$this->keyPrefixMemo[ $memoKey ] = $this->prefix . ':' . $this->blogId . ':' . $group . ':';
+			}
 		}
-		return $prefix . ':' . $this->blogId . ':' . $group . ':' . $key;
+		return $this->keyPrefixMemo[ $memoKey ] . $key;
 	}
 
 	/**
@@ -2038,7 +2302,8 @@ class WPMgr_Object_Cache
 	private function normalizeGroup( string $group ): string
 	{
 		$group = trim( $group );
-		return $group !== '' ? $group : 'default';
+		// LOW: '0' and '' both map to 'default' (mirrors core behaviour).
+		return ( $group !== '' && $group !== '0' ) ? $group : 'default';
 	}
 
 	/**
@@ -2092,12 +2357,13 @@ class WPMgr_Object_Cache
 	 */
 	private function clampTtl( int $ttl, string $group ): int
 	{
+		// LOW: negative expire → 0 (use maxttl / delete-on-miss, not immediate expiry).
 		if ( $ttl < 0 ) {
-			return 1; // Treat negative as "expire immediately".
+			$ttl = 0;
 		}
 
-		// Query groups.
-		if ( strpos( $group, '-queries' ) !== false ) {
+		// LOW: query groups — suffix-match only (not substring anywhere in name).
+		if ( substr( $group, -8 ) === '-queries' ) {
 			$limit = min( $this->queryttl, $this->maxttl );
 			if ( $ttl === 0 || $ttl > $limit ) {
 				return $limit;
@@ -2113,15 +2379,15 @@ class WPMgr_Object_Cache
 
 	/**
 	 * Store a value in the L1 array cache with clone-on-store.
+	 * H1: the flat key is the fully-qualified Redis key (buildKey() output).
 	 *
-	 * @param string $group  Normalized group.
-	 * @param string $keyStr Key string.
-	 * @param mixed  $value  Value to store.
+	 * @param string $redisKey Fully-qualified Redis key from buildKey().
+	 * @param mixed  $value    Value to store.
 	 * @return bool Always true (for fluent chaining).
 	 */
-	private function storeL1( string $group, string $keyStr, mixed $value ): bool
+	private function storeL1( string $redisKey, mixed $value ): bool
 	{
-		$this->cache[ $group ][ $keyStr ] = $this->cloneValue( $value );
+		$this->cache[ $redisKey ] = $this->cloneValue( $value );
 		return true;
 	}
 
@@ -2145,11 +2411,19 @@ class WPMgr_Object_Cache
 	 */
 	private function validateKey( mixed $key ): bool
 	{
-		if ( is_int( $key ) || is_string( $key ) ) {
-			return true;
+		if ( is_int( $key ) ) {
+			return true; // Integers are always valid (M5: ints exempt from empty check).
 		}
-		$this->journalError( 'invalid_key', 'key must be int or string; got ' . gettype( $key ) );
-		return false;
+		if ( ! is_string( $key ) ) {
+			$this->journalError( 'invalid_key', 'key must be int or string; got ' . gettype( $key ) );
+			return false;
+		}
+		// M5: reject empty or whitespace-only string keys.
+		if ( trim( $key ) === '' ) {
+			$this->journalError( 'invalid_key', 'key must not be empty or whitespace-only' );
+			return false;
+		}
+		return true;
 	}
 
 	// -------------------------------------------------------------------------
@@ -2181,30 +2455,25 @@ class WPMgr_Object_Cache
 			$result = $op();
 			$this->totalWaitMs += ( microtime( true ) - $t0 ) * 1000.0;
 			$this->connection->recordSuccess();
-
-			// Failback flush: only when the connection genuinely recovered from a
-			// prior outage THIS request (wasDegraded() is set by markDegraded() and
-			// never cleared). Without the wasDegraded() guard, the first successful
-			// op of every healthy request would trigger a full keyspace SCAN+DEL.
-			if (
-				$this->flushOnFailback
-				&& ! $this->failbackFlushed
-				&& $this->connection->wasDegraded()
-				&& ! $this->connection->isDegraded()
-			) {
-				$this->executeFailbackFlush();
-			}
-
+			// H5: mid-request failback trigger REMOVED. The failback flush is now
+			// handled exclusively at healthy boot via maybeFailbackFlushOnBoot().
 			return $result;
 
 		} catch ( \Throwable $e ) {
 			$this->totalWaitMs += ( microtime( true ) - $t0 ) * 1000.0;
 			$this->journalError( get_class( $e ), $e->getMessage() );
 
+			// H5: persist the outage marker immediately on first degradation.
+			if ( $this->connection !== null && ! $this->connection->isDegraded() ) {
+				$this->connection->markDegraded();
+				$this->persistOutageMarker();
+			} elseif ( $this->connection !== null ) {
+				$this->connection->markDegraded();
+			}
+
 			// Attempt reconnect-once per request for idempotent reads.
 			if ( $idempotent && ! $this->reconnectAttempted && $this->connection !== null ) {
 				$this->reconnectAttempted = true;
-				$this->connection->markDegraded();
 				try {
 					$this->redis = $this->connection->acquire();
 					$t1 = microtime( true );
@@ -2216,7 +2485,6 @@ class WPMgr_Object_Cache
 				}
 			}
 
-			$this->connection->markDegraded();
 			return $onError();
 		}
 	}
@@ -2242,11 +2510,33 @@ class WPMgr_Object_Cache
 			$useFlushDb = true;
 		}
 
-		if ( $useFlushDb ) {
-			if ( $this->asyncFlush ) {
-				$this->redis->flushDB( true );
-			} else {
-				$this->redis->flushDB( false );
+		if ( $useFlushDb && $this->redis !== null ) {
+			// M8: phpredis 6 changed flushDB() — the boolean async flag is inverted.
+			// phpredis < 6: true = async; phpredis >= 6: pass Redis::ASYNC_FLUSHDB (1) or none.
+			// M9: save/restore read-timeout around sync FLUSHDB (H4-style try/finally).
+			$savedTimeout = null;
+			try {
+				if ( ! $this->asyncFlush ) {
+					$savedTimeout = $this->redis->getOption( \Redis::OPT_READ_TIMEOUT );
+					$this->redis->setOption( \Redis::OPT_READ_TIMEOUT, (string) -1 );
+				}
+				// M8: version_compare gate for the flag argument.
+				$phpredisVer = phpversion( 'redis' );
+				if ( $phpredisVer !== false && version_compare( (string) $phpredisVer, '6.0.0', '>=' ) ) {
+					// phpredis >= 6: pass no argument for sync flush (async is via ASYNC constant).
+					if ( $this->asyncFlush && defined( 'Redis::FLUSHDB_ASYNC' ) ) {
+						$this->redis->flushDB( (bool) constant( 'Redis::FLUSHDB_ASYNC' ) );
+					} else {
+						$this->redis->flushDB();
+					}
+				} else {
+					$this->redis->flushDB( $this->asyncFlush );
+				}
+			} finally {
+				// M9: always restore read timeout.
+				if ( $savedTimeout !== null && $this->redis !== null ) {
+					$this->redis->setOption( \Redis::OPT_READ_TIMEOUT, (string) $savedTimeout );
+				}
 			}
 			return true;
 		}
@@ -2379,15 +2669,65 @@ class WPMgr_Object_Cache
 	}
 
 	/**
-	 * Flush on failback: executed once per request after connection recovery.
+	 * H5: Persist an outage marker to wp-options immediately on first degradation.
+	 * This ensures the next healthy boot knows a flush is needed, even if the
+	 * current request's shutdown hook never runs.
 	 *
 	 * @return void
 	 */
-	private function executeFailbackFlush(): void
+	private function persistOutageMarker(): void
 	{
+		if ( ! function_exists( 'update_option' ) ) {
+			return;
+		}
+		// Best-effort; do not let a DB error surface.
+		try {
+			update_option( self::FAILBACK_MARKER_OPTION, (string) microtime( true ), false );
+		} catch ( \Throwable $e ) {
+			// Best-effort.
+		}
+	}
+
+	/**
+	 * H5: On healthy boot, check for a persisted outage marker.
+	 * If found, attempt a SET NX EX 300 lock — only the winner flushes.
+	 * Clears the marker after a successful flush.
+	 *
+	 * @return void
+	 */
+	private function maybeFailbackFlushOnBoot(): void
+	{
+		if ( ! $this->flushOnFailback ) {
+			return;
+		}
+		if ( ! function_exists( 'get_option' ) || ! function_exists( 'delete_option' ) ) {
+			return;
+		}
+		if ( $this->redis === null || $this->arrayMode ) {
+			return;
+		}
+
+		$marker = get_option( self::FAILBACK_MARKER_OPTION, false );
+		if ( $marker === false ) {
+			return; // No outage recorded.
+		}
+
+		// Attempt NX lock: only one request flushes.
+		$lockKey = $this->prefix . ':' . self::FAILBACK_LOCK_SUFFIX;
+		try {
+			$won = $this->redis->set( $lockKey, '1', [ 'nx', 'ex' => 300 ] );
+		} catch ( \Throwable $e ) {
+			return; // Redis still down; skip.
+		}
+
+		if ( $won !== true ) {
+			return; // Another request is already flushing.
+		}
+
 		$this->failbackFlushed = true;
 		try {
 			$this->executeFlush( 'all' );
+			delete_option( self::FAILBACK_MARKER_OPTION );
 		} catch ( \Throwable $e ) {
 			$this->journalError( 'failback_flush_failed', $e->getMessage() );
 		}
@@ -2423,31 +2763,55 @@ class WPMgr_Object_Cache
 
 		$metaKey = $this->metadataKey();
 
-		// Read metadata using a raw (no-serializer) client to survive format changes.
+		// Effective codecs: what the client actually applied (probed from the handle).
+		$effectiveSerializer  = $config['serializer'] ?? 'php';
+		$effectiveCompression = $config['compression'] ?? 'none';
+
+		// H4: always use try/finally to restore OPT_SERIALIZER.
+		$savedSerializer = $this->redis->getOption( \Redis::OPT_SERIALIZER );
+
 		try {
-			// Temporarily switch to no-serializer for the raw read.
-			$savedSerializer = $this->redis->getOption( \Redis::OPT_SERIALIZER );
+			// Switch to no-serializer for the raw read.
 			$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_NONE );
 
-			$stored = $this->redis->get( $metaKey );
-			$this->redis->setOption( \Redis::OPT_SERIALIZER, $savedSerializer );
+			// H4: 2 short retries on the metadata GET.
+			$stored = false;
+			for ( $attempt = 0; $attempt < 2; $attempt++ ) {
+				try {
+					$stored = $this->redis->get( $metaKey );
+					break;
+				} catch ( \Throwable $e ) {
+					if ( $attempt === 1 ) {
+						throw $e; // Re-throw after second failure.
+					}
+				}
+			}
 
 			if ( $stored !== false && is_string( $stored ) ) {
 				$meta = json_decode( $stored, true );
 				if ( is_array( $meta ) ) {
 					$riskyChanged = false;
-					if ( isset( $meta['serializer'] ) && $meta['serializer'] !== ( $config['serializer'] ?? 'php' ) ) {
+					// Treat absent old fields as unchanged (no false integrity flush on upgrade).
+					if ( isset( $meta['serializer'] ) && $meta['serializer'] !== $effectiveSerializer ) {
 						$riskyChanged = true;
 					}
-					if ( isset( $meta['compression'] ) && $meta['compression'] !== ( $config['compression'] ?? 'none' ) ) {
+					if ( isset( $meta['compression'] ) && $meta['compression'] !== $effectiveCompression ) {
 						$riskyChanged = true;
 					}
 					if ( isset( $meta['database'] ) && (int) $meta['database'] !== (int) ( $config['database'] ?? 0 ) ) {
 						$riskyChanged = true;
 					}
+					// M10: wp_version change triggers integrity flush.
+					$currentWpVer = isset( $GLOBALS['wp_version'] ) ? (string) $GLOBALS['wp_version'] : '';
+					if ( isset( $meta['wp_version'] ) && $currentWpVer !== '' && $meta['wp_version'] !== $currentWpVer ) {
+						$riskyChanged = true;
+					}
 					if ( $riskyChanged ) {
-						// Integrity flush: risky option changed.
+						// Restore serializer before flush (which may call Redis ops).
+						$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) $savedSerializer );
 						$this->executeFlush( 'all' );
+						// Switch back to NONE for the write below.
+						$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_NONE );
 						if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 							// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic
 							error_log( 'WPMgr Object Cache: integrity flush triggered by config change.' );
@@ -2457,20 +2821,26 @@ class WPMgr_Object_Cache
 			}
 
 			// Write/rewrite the metadata key (raw bytes, no TTL).
+			// H4: second NONE window — also protected by the outer try/finally.
 			$newMeta = (string) wp_json_encode( [
-				'database'    => (int) ( $config['database'] ?? 0 ),
-				'prefix'      => $this->prefix,
-				'serializer'  => $config['serializer'] ?? 'php',
-				'compression' => $config['compression'] ?? 'none',
-				'wp_version'  => isset( $GLOBALS['wp_version'] ) ? (string) $GLOBALS['wp_version'] : '',
+				'database'             => (int) ( $config['database'] ?? 0 ),
+				'prefix'               => $this->prefix,
+				'serializer'           => $effectiveSerializer,
+				'effective_serializer' => $effectiveSerializer,
+				'compression'          => $effectiveCompression,
+				'effective_compression' => $effectiveCompression,
+				'wp_version'           => isset( $GLOBALS['wp_version'] ) ? (string) $GLOBALS['wp_version'] : '',
 			] );
-			$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_NONE );
 			$this->redis->set( $metaKey, $newMeta ); // maxttl-exempt: no TTL.
-			$this->redis->setOption( \Redis::OPT_SERIALIZER, $savedSerializer );
 
 		} catch ( \Throwable $e ) {
 			// Tolerate metadata key failures gracefully.
 			$this->journalError( 'metadata_integrity_failed', $e->getMessage() );
+		} finally {
+			// H4: always restore OPT_SERIALIZER.
+			if ( $this->redis !== null ) {
+				$this->redis->setOption( \Redis::OPT_SERIALIZER, (string) $savedSerializer );
+			}
 		}
 	}
 
@@ -2564,6 +2934,16 @@ class WPMgr_Object_Cache
 			array_shift( $this->errorJournal );
 		}
 		$this->errorJournal[] = $class;
+
+		// LOW: append to $GLOBALS['wp_object_cache_errors'] for Core compatibility.
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- $wp_object_cache_errors is a WP core global, not plugin-defined
+		if ( ! isset( $GLOBALS['wp_object_cache_errors'] ) || ! is_array( $GLOBALS['wp_object_cache_errors'] ) ) {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- WP core global
+			$GLOBALS['wp_object_cache_errors'] = [];
+		}
+		// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedVariableFound -- WP core global
+		$GLOBALS['wp_object_cache_errors'][] = '[' . $class . '] ' . $message;
+
 		if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic
 			error_log( 'WPMgr Object Cache error [' . $class . ']: ' . $message );
@@ -2986,6 +3366,85 @@ function wp_cache_supports( $feature ): bool
 {
 	try {
 		return wpmgr_get_object_cache()->supports( (string) $feature );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_remember — get or compute-and-set.
+ *
+ * @param int|string $key      Cache key.
+ * @param mixed      $group    Cache group.
+ * @param int        $expire   TTL in seconds.
+ * @param callable   $callback Callback to compute the value on miss.
+ * @return mixed
+ */
+function wp_cache_remember( $key, $group, int $expire, callable $callback )
+{
+	try {
+		$found = false;
+		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
+		if ( $found ) {
+			return $value;
+		}
+		$value = $callback();
+		wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
+		return $value;
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_sear — get, or set+return if missing (never false).
+ *
+ * @param int|string $key      Cache key.
+ * @param mixed      $group    Cache group.
+ * @param int        $expire   TTL in seconds.
+ * @param callable   $callback Callback to compute the value on miss.
+ * @return mixed
+ */
+function wp_cache_sear( $key, $group, int $expire, callable $callback )
+{
+	try {
+		$found = false;
+		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
+		if ( $found ) {
+			return $value;
+		}
+		$value = $callback();
+		if ( $value !== false ) {
+			wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
+		}
+		return $value;
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_supports_group_flush — reports group-flush support.
+ *
+ * @return bool
+ */
+function wp_cache_supports_group_flush(): bool
+{
+	return wpmgr_get_object_cache()->supports( 'flush_group' );
+}
+
+/**
+ * LOW bridge: wp_cache_reset — resets the in-memory L1 cache (deprecated core alias).
+ *
+ * @return bool
+ */
+function wp_cache_reset(): bool
+{
+	try {
+		return wpmgr_get_object_cache()->flush_runtime();
 	} catch ( \Throwable $e ) {
 		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
 		return false;

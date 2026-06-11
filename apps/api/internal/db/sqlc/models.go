@@ -724,6 +724,7 @@ type SiteObjectCacheConfig struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 }

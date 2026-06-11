@@ -99,6 +99,9 @@ final class ObjectCacheHeartbeat
 		// ---------- Analytics delta metrics ----------------------------------
 		$analyticsOn = ! isset( $config['analytics_enabled'] ) || (bool) $config['analytics_enabled'];
 
+		// M11: include config_hash for CP drift detection.
+		$configHash = get_option( ObjectCacheConfig::OPTION_CONFIG_HASH, '' );
+
 		if ( ! $analyticsOn ) {
 			$block = [
 				'state'                => is_string( $liveStats['state'] ?? null ) ? $liveStats['state'] : 'disabled',
@@ -109,6 +112,7 @@ final class ObjectCacheHeartbeat
 				'engine_version'       => is_string( $liveStats['engine_version'] ?? null ) ? $liveStats['engine_version'] : '',
 				'php_version'          => $phpVersion,
 				'php_sapi'             => $phpSapi,
+				'config_hash'          => is_string( $configHash ) ? $configHash : '',
 			];
 			if ( $earlyDefiner !== '' ) {
 				$block['early_definer'] = substr( $earlyDefiner, 0, 64 );
@@ -148,6 +152,9 @@ final class ObjectCacheHeartbeat
 		] );
 		update_option( self::OPTION_STATS, $reset, false );
 
+		// M11: include config_hash for CP drift detection.
+		$configHash = get_option( ObjectCacheConfig::OPTION_CONFIG_HASH, '' );
+
 		$block = [
 			'state'                => is_string( $liveStats['state'] ?? null ) ? $liveStats['state'] : 'disabled',
 			'latency_ms'           => $liveStats['latency_ms'],
@@ -161,6 +168,7 @@ final class ObjectCacheHeartbeat
 			'avg_wait_ms'          => $avgWaitMs,
 			'php_version'          => $phpVersion,
 			'php_sapi'             => $phpSapi,
+			'config_hash'          => is_string( $configHash ) ? $configHash : '',
 		];
 		if ( $earlyDefiner !== '' ) {
 			$block['early_definer'] = substr( $earlyDefiner, 0, 64 );

@@ -102,14 +102,18 @@ type statsReportBody struct {
 // The fields mirror the agent's class-object-cache-heartbeat.php build() output.
 type agentObjectCacheBlock struct {
 	// Heartbeat fields (state pill).
-	State          string `json:"state"`
-	LatencyMs      float64 `json:"latency_ms"`
-	LastErrorClass string `json:"last_error_class,omitempty"`
-	HitRatioPct    float64 `json:"hit_ratio_window_pct"`
-	UsedMemoryBytes int64  `json:"used_memory_bytes"`
+	State           string  `json:"state"`
+	LatencyMs       float64 `json:"latency_ms"`
+	LastErrorClass  string  `json:"last_error_class,omitempty"`
+	HitRatioPct     float64 `json:"hit_ratio_window_pct"`
+	UsedMemoryBytes int64   `json:"used_memory_bytes"`
 	// EngineVersion is the agent-reported version of the object-cache engine
 	// code actually executing on the site (0.41.3+). Logged for observability.
 	EngineVersion string `json:"engine_version,omitempty"`
+	// ConfigHash is the sha256 hex of the config file the drop-in is reading
+	// (added in 0.42.0 per M11). Pre-0.42.0 agents omit this field; the drift
+	// check is skipped when absent or empty.
+	ConfigHash string `json:"config_hash,omitempty"`
 
 	// Stats delta fields (time-series history).
 	HitCount         int64   `json:"hit_count,omitempty"`
@@ -220,6 +224,12 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 		if len(engineVersion) > 32 {
 			engineVersion = engineVersion[:32]
 		}
+		// Bound the config_hash field: contract is 64-char sha256 hex but the
+		// field is attacker-controlled on a compromised site.
+		configHash := ocBlock.ConfigHash
+		if len(configHash) > 64 {
+			configHash = configHash[:64]
+		}
 
 		// Observability: one INFO line per received block so on-site engine
 		// behavior (which code runs, what state it reports) is visible in the
@@ -254,6 +264,7 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 				LastErrorClass:  lastErrorClass,
 				UsedMemoryBytes: usedMemoryBytes,
 				HitRatioPct:     hitRatioPct,
+				ConfigHash:      configHash,
 			}
 			if hbErr := h.ocSvc.IngestHeartbeat(c.Request.Context(), id.TenantID, id.SiteID, hbBlock); hbErr != nil {
 				slog.Warn("objectcache: heartbeat ingest error",

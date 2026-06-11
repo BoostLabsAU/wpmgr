@@ -134,6 +134,7 @@ func (r *Repo) UpsertConfig(ctx context.Context, tenantID uuid.UUID, cfg Config,
 			OcLastErrorClass:   cfg.OCLastErrorClass,
 			OcUsedMemoryBytes:  cfg.OCUsedMemoryBytes,
 			OcHitRatioPct:      hitRatioPct,
+			OcConfigDrift:      cfg.OCConfigDrift,
 		})
 		if qerr != nil {
 			return qerr
@@ -251,6 +252,19 @@ func (r *Repo) UpdateHeartbeatState(ctx context.Context, tenantID, siteID uuid.U
 	return configFromRow(out), nil
 }
 
+// UpdateDrift persists the oc_config_drift indicator for a site. Called from
+// IngestHeartbeat when the agent-reported config_hash is compared against the
+// CP-computed hash of the stored config. Runs under InAgentTx.
+func (r *Repo) UpdateDrift(ctx context.Context, tenantID, siteID uuid.UUID, drift bool) error {
+	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		return sqlc.New(tx).UpdateObjectCacheDrift(ctx, sqlc.UpdateObjectCacheDriftParams{
+			OcConfigDrift: drift,
+			SiteID:        siteID,
+			TenantID:      tenantID,
+		})
+	})
+}
+
 // InsertStatsHistory appends one stats data point.
 // ON CONFLICT DO NOTHING makes it idempotent within the same second.
 // Runs under InTenantTx (the perf service forwards tenant context).
@@ -359,6 +373,7 @@ func upsertRowToConfigRow(r sqlc.UpsertObjectCacheConfigRow) sqlc.GetObjectCache
 		LastTestedAt: r.LastTestedAt,
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
+		OcConfigDrift: r.OcConfigDrift,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		HasPassword: r.HasPassword,
 	}
@@ -379,6 +394,7 @@ func testResultRowToConfigRow(r sqlc.UpdateObjectCacheTestResultRow) sqlc.GetObj
 		LastTestedAt: r.LastTestedAt,
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
+		OcConfigDrift: r.OcConfigDrift,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		HasPassword: r.HasPassword,
 	}
@@ -399,6 +415,7 @@ func enabledRowToConfigRow(r sqlc.UpdateObjectCacheEnabledRow) sqlc.GetObjectCac
 		LastTestedAt: r.LastTestedAt,
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
+		OcConfigDrift: r.OcConfigDrift,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		HasPassword: r.HasPassword,
 	}
@@ -419,6 +436,7 @@ func heartbeatRowToConfigRow(r sqlc.UpdateObjectCacheHeartbeatStateRow) sqlc.Get
 		LastTestedAt: r.LastTestedAt,
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
+		OcConfigDrift: r.OcConfigDrift,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 		HasPassword: r.HasPassword,
 	}
@@ -453,12 +471,13 @@ func configFromRow(r sqlc.GetObjectCacheConfigRow) Config {
 		FlushOnFailback:  r.FlushOnFailback,
 		AnalyticsEnabled: r.AnalyticsEnabled,
 		LastTestResultJSON: r.LastTestResultJson,
-		OCState:          OCState(r.OcState),
-		OCLatencyMs:      int(r.OcLatencyMs),
-		OCLastErrorClass: r.OcLastErrorClass,
+		OCState:           OCState(r.OcState),
+		OCLatencyMs:       int(r.OcLatencyMs),
+		OCLastErrorClass:  r.OcLastErrorClass,
 		OCUsedMemoryBytes: r.OcUsedMemoryBytes,
-		CreatedAt:        r.CreatedAt,
-		UpdatedAt:        r.UpdatedAt,
+		OCConfigDrift:     r.OcConfigDrift,
+		CreatedAt:         r.CreatedAt,
+		UpdatedAt:         r.UpdatedAt,
 	}
 	if r.LastTestConfigHash != nil {
 		c.LastTestConfigHash = *r.LastTestConfigHash

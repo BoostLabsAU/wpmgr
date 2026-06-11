@@ -6,6 +6,22 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-06-12
+
+### Fixed
+
+- **Object cache: full behavioral parity audit against the category-leading implementation, with every accepted fix shipping alongside the test that proves it.** Headline corrections: the in-request cache layer is now keyed identically to Redis, eliminating a multisite scenario where switching blogs could serve one site's cached values as another's; counter operations on missing keys now return false exactly as WordPress core does instead of fabricating values; serializer and compression settings the server cannot honor now fail loudly into safe mode with a named cause instead of silently mixing storage formats; the post-outage cache flush is rebuilt around a persisted outage marker and a Redis lock so exactly one request flushes after a genuine recovery and never during normal traffic; and install-mode detection no longer suppresses cache writes during WordPress upgrades.
+- **Sixteen further contract corrections** covering delete-on-missing return values, force-refresh reads on memory-only groups, write-through ordering, key validation, batched-read result ordering, back-compat property access, version-aware flush flags, multisite transient cleanup, and a guard against a performance plugin disabling our drop-in.
+
+### Added
+
+- **Configuration drift detection.** The agent now reports the fingerprint of the configuration file it is actually reading, and the dashboard flags when it diverges from the saved settings, ending the class of silent mismatch between what the control plane believes and what the site runs. Failed configuration pushes to the site now surface as a visible warning instead of being discarded.
+- **Codec capability gate.** Saving a configuration that requests a serializer or compression codec the site's own connection test reported as unavailable is now rejected up front with a clear message.
+- **Named diagnosis for unreadable credentials files and honest cache-flush results in command-line contexts**, plus complete teardown on deactivation and uninstall.
+- **Four new integration-harness stages**: multisite isolation, install-mode writes, file-ownership drift from command-line sessions, and outage-recovery flushing exactly once.
+
+Migration m69 applies automatically on API boot. Agent 0.42.0 with drop-in 2.1.0; existing installs refresh automatically after the agent updates. Security reviewed (verdict ship, no findings).
+
 ## [0.41.6] - 2026-06-11
 
 ### Fixed

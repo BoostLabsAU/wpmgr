@@ -388,7 +388,7 @@ final class ObjectCacheFix415Test extends TestCase
 	}
 
 	/**
-	 * R8b: Artifact must be Version: 2.0.2 (bumped in 0.41.6 with booted flag + wasDegraded fix).
+	 * R8b: Artifact must be Version: 2.1.0 (bumped in 0.42.0 with H6 preamble update).
 	 */
 	public function test_artifact_is_version_202(): void
 	{
@@ -398,9 +398,9 @@ final class ObjectCacheFix415Test extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.0.2',
+			'Version: 2.1.0',
 			$first200,
-			'Artifact must be Version: 2.0.2 after the 0.41.6 fix'
+			'Artifact must be Version: 2.1.0 after the 0.42.0 H6 preamble update'
 		);
 	}
 

@@ -25,7 +25,7 @@ SELECT
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 FROM site_object_cache_config
@@ -64,6 +64,7 @@ type GetObjectCacheConfigRow struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	HasPassword        bool               `json:"has_password"`
@@ -116,6 +117,7 @@ func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (G
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.HasPassword,
@@ -124,7 +126,7 @@ func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (G
 }
 
 const getObjectCacheConfigWithSecret = `-- name: GetObjectCacheConfigWithSecret :one
-SELECT site_id, tenant_id, enabled, scheme, host, port, socket_path, database, username, password_encrypted, prefix, maxttl_seconds, queryttl_seconds, connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms, serializer, compression, async_flush, flush_strategy, shared, flush_on_failback, analytics_enabled, last_test_config_hash, last_test_result_json, last_tested_at, oc_state, oc_latency_ms, oc_last_error_class, oc_used_memory_bytes, oc_hit_ratio_pct, created_at, updated_at FROM site_object_cache_config
+SELECT site_id, tenant_id, enabled, scheme, host, port, socket_path, database, username, password_encrypted, prefix, maxttl_seconds, queryttl_seconds, connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms, serializer, compression, async_flush, flush_strategy, shared, flush_on_failback, analytics_enabled, last_test_config_hash, last_test_result_json, last_tested_at, oc_state, oc_latency_ms, oc_last_error_class, oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift, created_at, updated_at FROM site_object_cache_config
 WHERE site_id = $1
 `
 
@@ -166,6 +168,7 @@ func (q *Queries) GetObjectCacheConfigWithSecret(ctx context.Context, siteID uui
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -329,6 +332,26 @@ func (q *Queries) PruneObjectCacheStatsHistory(ctx context.Context, cutoff time.
 	return result.RowsAffected(), nil
 }
 
+const updateObjectCacheDrift = `-- name: UpdateObjectCacheDrift :exec
+UPDATE site_object_cache_config
+SET oc_config_drift = $1,
+    updated_at      = now()
+WHERE site_id = $2 AND tenant_id = $3
+`
+
+type UpdateObjectCacheDriftParams struct {
+	OcConfigDrift bool      `json:"oc_config_drift"`
+	SiteID        uuid.UUID `json:"site_id"`
+	TenantID      uuid.UUID `json:"tenant_id"`
+}
+
+// M69 -- set or clear the oc_config_drift indicator from a heartbeat ingest.
+// Runs under InAgentTx (agent path). tenant_id in WHERE is defence-in-depth.
+func (q *Queries) UpdateObjectCacheDrift(ctx context.Context, arg UpdateObjectCacheDriftParams) error {
+	_, err := q.db.Exec(ctx, updateObjectCacheDrift, arg.OcConfigDrift, arg.SiteID, arg.TenantID)
+	return err
+}
+
 const updateObjectCacheEnabled = `-- name: UpdateObjectCacheEnabled :one
 UPDATE site_object_cache_config
 SET enabled    = $1,
@@ -343,7 +366,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 `
@@ -386,6 +409,7 @@ type UpdateObjectCacheEnabledRow struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	HasPassword        bool               `json:"has_password"`
@@ -429,6 +453,7 @@ func (q *Queries) UpdateObjectCacheEnabled(ctx context.Context, arg UpdateObject
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.HasPassword,
@@ -454,7 +479,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 `
@@ -501,6 +526,7 @@ type UpdateObjectCacheHeartbeatStateRow struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	HasPassword        bool               `json:"has_password"`
@@ -554,6 +580,7 @@ func (q *Queries) UpdateObjectCacheHeartbeatState(ctx context.Context, arg Updat
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.HasPassword,
@@ -577,7 +604,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 `
@@ -622,6 +649,7 @@ type UpdateObjectCacheTestResultRow struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	HasPassword        bool               `json:"has_password"`
@@ -672,6 +700,7 @@ func (q *Queries) UpdateObjectCacheTestResult(ctx context.Context, arg UpdateObj
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.HasPassword,
@@ -689,7 +718,7 @@ INSERT INTO site_object_cache_config (
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     updated_at
 ) VALUES (
     $1, $2, $3, $4, $5, $6, $7,
@@ -700,7 +729,7 @@ INSERT INTO site_object_cache_config (
     $23, $24,
     $25, $26, $27,
     $28, $29, $30,
-    $31, $32,
+    $31, $32, $33,
     now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
@@ -737,6 +766,7 @@ ON CONFLICT (site_id) DO UPDATE SET
     oc_last_error_class   = EXCLUDED.oc_last_error_class,
     oc_used_memory_bytes  = EXCLUDED.oc_used_memory_bytes,
     oc_hit_ratio_pct      = EXCLUDED.oc_hit_ratio_pct,
+    oc_config_drift       = EXCLUDED.oc_config_drift,
     updated_at            = now()
 RETURNING
     site_id, tenant_id, enabled, scheme, host, port, socket_path,
@@ -747,7 +777,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 `
@@ -785,6 +815,7 @@ type UpsertObjectCacheConfigParams struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 }
 
 type UpsertObjectCacheConfigRow struct {
@@ -819,6 +850,7 @@ type UpsertObjectCacheConfigRow struct {
 	OcLastErrorClass   string             `json:"oc_last_error_class"`
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	OcConfigDrift      bool               `json:"oc_config_drift"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 	HasPassword        bool               `json:"has_password"`
@@ -864,6 +896,7 @@ func (q *Queries) UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectC
 		arg.OcLastErrorClass,
 		arg.OcUsedMemoryBytes,
 		arg.OcHitRatioPct,
+		arg.OcConfigDrift,
 	)
 	var i UpsertObjectCacheConfigRow
 	err := row.Scan(
@@ -898,6 +931,7 @@ func (q *Queries) UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectC
 		&i.OcLastErrorClass,
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
+		&i.OcConfigDrift,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.HasPassword,

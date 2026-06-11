@@ -50,7 +50,19 @@ final class ObjectcacheFlushCommand implements CommandInterface
 	{
 		$scope  = isset( $params['scope'] ) && is_string( $params['scope'] )
 			? sanitize_key( $params['scope'] ) : 'all';
-		if ( ! in_array( $scope, [ 'all', 'site', 'group' ], true ) ) {
+
+		// M15: reject scope 'site' — flushBlog does not exist yet; a flush button
+		// must not silently nuke the entire network keyspace.
+		if ( $scope === 'site' ) {
+			return [
+				'ok'           => false,
+				'detail'       => "scope 'site' is not supported; use 'all' or 'group'",
+				'strategy'     => '',
+				'keys_deleted' => 0,
+			];
+		}
+
+		if ( ! in_array( $scope, [ 'all', 'group' ], true ) ) {
 			$scope = 'all';
 		}
 

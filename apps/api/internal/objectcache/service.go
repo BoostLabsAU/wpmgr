@@ -56,6 +56,88 @@ func capDetail(s string) string {
 	return s
 }
 
+// capHash bounds a config_hash value before logging. The contract is 64 chars
+// (sha256 hex), but the field is agent-controlled so we cap defensively.
+func capHash(s string) string {
+	if len(s) > 64 {
+		return s[:64]
+	}
+	return s
+}
+
+// capabilitiesSnapshot holds the capability probe fields from an
+// ObjectCacheTestResult that are relevant to the codec pre-push gate.
+// Only the "capabilities" sub-object is decoded; the rest of the stored JSON
+// is ignored. This avoids an import of agentcmd from objectcache.
+type capabilitiesSnapshot struct {
+	Capabilities struct {
+		IgbinaryAvailable bool `json:"igbinary_available"`
+		LzfAvailable      bool `json:"lzf_available"`
+		Lz4Available      bool `json:"lz4_available"`
+		ZstdAvailable     bool `json:"zstd_available"`
+	}
+}
+
+// checkCodecCapability validates the requested serializer and compression
+// against the capability probes stored in the last test result JSON.
+// Returns a domain.Validation error naming the unavailable codec, or nil when
+// all requested codecs are available (or no capabilities data is present).
+//
+// The gate fires only when a test result with a "capabilities" key is present.
+// The stored default of "{}" (no test run) has no "capabilities" key, so the
+// gate is skipped and the agent itself fails loud with unsupported_codec on boot.
+func checkCodecCapability(lastTestResultJSON []byte, cfg Config) error {
+	if len(lastTestResultJSON) == 0 {
+		return nil
+	}
+	// Quick probe: does the JSON contain a "capabilities" key at all?
+	// A raw map decode is used so we can distinguish `{}` (no test)
+	// from `{"capabilities":{"igbinary_available":false,...}}` (test ran, codec missing).
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(lastTestResultJSON, &raw); err != nil {
+		// Malformed stored JSON: allow rather than block (conservative).
+		return nil
+	}
+	capRaw, hasCaps := raw["capabilities"]
+	if !hasCaps {
+		// No capabilities key: no test has been run; allow and let the agent enforce.
+		return nil
+	}
+
+	var snap capabilitiesSnapshot
+	if err := json.Unmarshal(capRaw, &snap.Capabilities); err != nil {
+		// Malformed capabilities object: allow conservatively.
+		return nil
+	}
+	caps := snap.Capabilities
+
+	// Serializer check.
+	if cfg.Serializer == "igbinary" && !caps.IgbinaryAvailable {
+		return domain.Validation("codec_unavailable",
+			"serializer igbinary is not available on this server per the last connection test")
+	}
+
+	// Compression checks.
+	switch cfg.Compression {
+	case "lzf":
+		if !caps.LzfAvailable {
+			return domain.Validation("codec_unavailable",
+				"compression lzf is not available on this server per the last connection test")
+		}
+	case "lz4":
+		if !caps.Lz4Available {
+			return domain.Validation("codec_unavailable",
+				"compression lz4 is not available on this server per the last connection test")
+		}
+	case "zstd":
+		if !caps.ZstdAvailable {
+			return domain.Validation("codec_unavailable",
+				"compression zstd is not available on this server per the last connection test")
+		}
+	}
+	return nil
+}
+
 // GetConfig returns the per-site object cache config (without the password).
 func (s *Service) GetConfig(ctx context.Context, tenantID, siteID uuid.UUID) (Config, error) {
 	cfg, err := s.repo.GetConfig(ctx, tenantID, siteID)
@@ -72,6 +154,10 @@ func (s *Service) GetConfig(ctx context.Context, tenantID, siteID uuid.UUID) (Co
 // non-empty it is encrypted with the cryptbox and stored; otherwise the stored
 // ciphertext is preserved (nil-sentinel). Connection-critical field changes
 // clear the test hash (enable gate resets). Returns the saved config.
+//
+// A non-nil error from the agent push (apply_config) is returned alongside a
+// valid saved config so the handler can surface it as a warning rather than a
+// failure (the save succeeded; only the live-push failed).
 func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, input UpdateConfigInput) (Config, error) {
 	if err := validateConfig(input); err != nil {
 		return Config{}, err
@@ -92,6 +178,18 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 	stored, _ := s.repo.GetConfig(ctx, tenantID, siteID)
 	clearTestHash := connectionChanged(stored, input.Config) || passwordEncrypted != nil
 
+	// Sanity-4 mitigation: reject configs that request a codec the agent has
+	// confirmed unavailable via the last test result capabilities. This catches
+	// operator mis-configuration before the drop-in attempts to use it and
+	// silently falls to array mode with an unsupported_codec cause.
+	// When no test result exists (first-time config), allow: the agent will
+	// fail loud if the codec is truly unavailable.
+	if len(stored.LastTestResultJSON) > 0 {
+		if err := checkCodecCapability(stored.LastTestResultJSON, input.Config); err != nil {
+			return Config{}, err
+		}
+	}
+
 	// If prefix is empty, derive a stable default from the site_id.
 	if input.Config.Prefix == "" {
 		h := sha256.Sum256(siteID[:])
@@ -108,6 +206,7 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 	cfg.OCLastErrorClass = stored.OCLastErrorClass
 	cfg.OCUsedMemoryBytes = stored.OCUsedMemoryBytes
 	cfg.OCHitRatioPct = stored.OCHitRatioPct
+	cfg.OCConfigDrift = stored.OCConfigDrift
 
 	// Preserve the test result unless the connection changed (in which case
 	// clearTestHash is true and the result is intentionally discarded because it
@@ -122,9 +221,16 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 		return Config{}, err
 	}
 
-	// Push the config to the agent (best-effort: a push failure is non-fatal
-	// and surfaced as a warning header by the handler).
-	_ = s.pushApplyConfig(ctx, tenantID, siteID, saved, "")
+	// Push the config to the agent (best-effort: a push failure is non-fatal).
+	// The error is returned alongside a valid saved config so the handler can
+	// surface an X-Agent-Push-Warning header without treating the request as failed.
+	if pushErr := s.pushApplyConfig(ctx, tenantID, siteID, saved, ""); pushErr != nil {
+		s.logger.Warn("objectcache: apply_config push failed after save",
+			slog.String("site_id", siteID.String()),
+			slog.String("error", capDetail(pushErr.Error())),
+		)
+		return saved, pushErr
+	}
 
 	return saved, nil
 }
@@ -357,10 +463,40 @@ func (s *Service) IngestStats(ctx context.Context, input IngestStatsInput) error
 // threaded through to the UPDATE WHERE clause to prevent cross-tenant writes.
 // If the state changed, publishes objectcache.status_changed immediately.
 // Publishes objectcache.stats_updated for non-transition updates (caller throttles).
+// When block.ConfigHash is non-empty (0.42.0+ agent), the hash is compared
+// against the CP-computed hash of the stored config; drift is persisted and
+// WARN-logged so the operator can be notified via the dashboard.
 func (s *Service) IngestHeartbeat(ctx context.Context, tenantID, siteID uuid.UUID, block *HeartbeatBlock) error {
 	if block == nil {
 		return nil
 	}
+
+	// M11 config_hash drift detection: compare the agent's live config hash
+	// against what the CP computed for the stored config. Pre-0.42.0 agents
+	// send an empty ConfigHash; the check is skipped in that case.
+	if block.ConfigHash != "" {
+		stored, storedErr := s.repo.GetConfig(ctx, tenantID, siteID)
+		if storedErr == nil {
+			cpHash := computeConfigHash(stored)
+			drift := block.ConfigHash != cpHash
+			if drift {
+				s.logger.Warn("objectcache: config_hash drift detected",
+					slog.String("site_id", siteID.String()),
+					slog.String("agent_hash", capHash(block.ConfigHash)),
+					slog.String("cp_hash", capHash(cpHash)),
+				)
+			}
+			// Persist the drift indicator (InAgentTx inside UpdateDrift).
+			// Best-effort: a DB error here must not fail the heartbeat response.
+			if driftErr := s.repo.UpdateDrift(ctx, tenantID, siteID, drift); driftErr != nil {
+				s.logger.Warn("objectcache: failed to persist drift indicator",
+					slog.String("site_id", siteID.String()),
+					slog.Any("error", driftErr),
+				)
+			}
+		}
+	}
+
 	hitRatioPct := block.HitRatioPct
 	updated, err := s.repo.UpdateHeartbeatState(ctx, tenantID, siteID, block.State, block.LatencyMs, block.LastErrorClass, block.UsedMemoryBytes, &hitRatioPct)
 	if err != nil {

@@ -386,6 +386,14 @@ final class Plugin
         // any boot once the heartbeat event is found missing.
         add_action('plugins_loaded', [$this, 'maybeRescheduleCron']);
 
+        // M14: Guard against Performance Lab disabling our object-cache drop-in.
+        // When the OC is configured (config file exists), register the filter so
+        // Performance Lab cannot suppress it.
+        $ocInstaller = new \WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller();
+        if ($ocInstaller->state() === \WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller::STATE_OURS_CURRENT) {
+            add_filter('perflab_disable_object_cache_dropin', '__return_true');
+        }
+
         add_action('rest_api_init', [$this->router, 'registerRoutes']);
         add_action('rest_api_init', [$this, 'registerAutologinRoute']);
         // Task #171 — unsigned self-HMAC loopback runner route for the preload
