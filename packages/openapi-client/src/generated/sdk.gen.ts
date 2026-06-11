@@ -167,17 +167,24 @@ import type {
   DeleteSiteShareResponses,
   DisableCacheData,
   DisableCacheResponses,
+  DisableObjectCacheData,
+  DisableObjectCacheResponses,
   DownloadPortalReportData,
   DownloadPortalReportErrors,
   DownloadPortalReportResponses,
   EnableCacheData,
   EnableCacheResponses,
+  EnableObjectCacheData,
+  EnableObjectCacheErrors,
+  EnableObjectCacheResponses,
   EnrollData,
   EnrollErrors,
   EnrollResponses,
   ExportSiteEmailLogData,
   ExportSiteEmailLogErrors,
   ExportSiteEmailLogResponses,
+  FlushObjectCacheData,
+  FlushObjectCacheResponses,
   ForgotPasswordData,
   ForgotPasswordResponses,
   GenerateClientReportData,
@@ -229,6 +236,10 @@ import type {
   GetMediaJobResponses,
   GetMeErrors,
   GetMeResponses,
+  GetObjectCacheConfigData,
+  GetObjectCacheConfigResponses,
+  GetObjectCacheStatsHistoryData,
+  GetObjectCacheStatsHistoryResponses,
   GetOrgEmailConfigData,
   GetOrgEmailConfigErrors,
   GetOrgEmailConfigResponses,
@@ -446,6 +457,9 @@ import type {
   PutEmailNotifySettingsData,
   PutEmailNotifySettingsErrors,
   PutEmailNotifySettingsResponses,
+  PutObjectCacheConfigData,
+  PutObjectCacheConfigErrors,
+  PutObjectCacheConfigResponses,
   PutOrgEmailConfigData,
   PutOrgEmailConfigErrors,
   PutOrgEmailConfigResponses,
@@ -537,6 +551,8 @@ import type {
   SyncSiteEmailConfigData,
   SyncSiteEmailConfigErrors,
   SyncSiteEmailConfigResponses,
+  TestObjectCacheData,
+  TestObjectCacheResponses,
   TestSiteDestinationData,
   TestSiteDestinationErrors,
   TestSiteDestinationResponses,
@@ -4177,6 +4193,164 @@ export const computeRucss = <ThrowOnError extends boolean = false>(
       },
     },
   );
+
+/**
+ * Get object cache configuration
+ *
+ * Returns the stored object cache configuration for the site. The password
+ * is never returned; `has_password` indicates whether one is stored.
+ * Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+ * heartbeat from the agent.
+ *
+ */
+export const getObjectCacheConfig = <ThrowOnError extends boolean = false>(
+  options: Options<GetObjectCacheConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetObjectCacheConfigResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/object-cache/config", ...options });
+
+/**
+ * Update object cache configuration
+ *
+ * Stores the object cache configuration. An empty `password` field
+ * preserves the stored password (nil-sentinel). If connection-critical
+ * fields change (host, port, scheme, database, username, prefix, or
+ * password), the stored test hash is cleared and a new test is required
+ * before re-enabling. The agent receives the new config via an
+ * `objectcache.apply_config` signed command (best-effort: a push failure
+ * returns 200 with an `X-Agent-Push-Warning` header). Requires
+ * `site.perf.config` permission.
+ *
+ */
+export const putObjectCacheConfig = <ThrowOnError extends boolean = false>(
+  options: Options<PutObjectCacheConfigData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    PutObjectCacheConfigResponses,
+    PutObjectCacheConfigErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/object-cache/config",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Test object cache connectivity
+ *
+ * Sends an `objectcache.test` command to the agent using the stored
+ * configuration. An optional `password` in the body overrides the stored
+ * password for this call only (useful for testing before saving). On
+ * success the control plane stores the config hash as the enable-gate
+ * token; on failure the hash is NOT updated. The result is also published
+ * as an `objectcache.test_completed` SSE event. Requires
+ * `site.cache.manage` permission.
+ *
+ */
+export const testObjectCache = <ThrowOnError extends boolean = false>(
+  options: Options<TestObjectCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    TestObjectCacheResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/object-cache/test",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Enable the object cache drop-in
+ *
+ * Installs the WP object-cache drop-in on the site. Rejected with 400
+ * `objectcache_test_required` when no passing test result exists for the
+ * current configuration (handshake gate). Sends an `objectcache.enable`
+ * signed command. Requires `site.cache.manage` permission.
+ *
+ */
+export const enableObjectCache = <ThrowOnError extends boolean = false>(
+  options: Options<EnableObjectCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    EnableObjectCacheResponses,
+    EnableObjectCacheErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/object-cache/enable", ...options });
+
+/**
+ * Disable the object cache drop-in
+ *
+ * Removes the WP object-cache drop-in and flushes. Sends an
+ * `objectcache.disable` signed command. Requires `site.cache.manage`
+ * permission.
+ *
+ */
+export const disableObjectCache = <ThrowOnError extends boolean = false>(
+  options: Options<DisableObjectCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    DisableObjectCacheResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/object-cache/disable", ...options });
+
+/**
+ * Flush the object cache
+ *
+ * Flushes the Redis/cache store for this site. The `scope` field
+ * controls what is flushed: `all` (default), `site` (prefix-scoped),
+ * or `group` (requires `group` field). Sends an `objectcache.flush`
+ * command and publishes an `objectcache.flushed` SSE event. Requires
+ * `site.cache.purge` permission.
+ *
+ */
+export const flushObjectCache = <ThrowOnError extends boolean = false>(
+  options: Options<FlushObjectCacheData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    FlushObjectCacheResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/object-cache/flush",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Get object cache stats history
+ *
+ * Returns daily-aggregated object cache stats (hit/miss ratio, memory
+ * usage, eviction count) for up to 365 days. Default window is 90 days.
+ * Requires `site.read` permission.
+ *
+ */
+export const getObjectCacheStatsHistory = <
+  ThrowOnError extends boolean = false,
+>(
+  options: Options<GetObjectCacheStatsHistoryData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetObjectCacheStatsHistoryResponses,
+    unknown,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/perf/object-cache/stats-history",
+    ...options,
+  });
 
 /**
  * Purge the page cache across many sites

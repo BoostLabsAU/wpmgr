@@ -71,6 +71,14 @@ func (s *ClientReportSectionFlags) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *FlushObjectCacheReq) setDefaults() {
+	{
+		val := FlushObjectCacheReqScope("all")
+		s.Scope.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *GenerateClientReportRequest) setDefaults() {
 	{
 		val := bool(false)

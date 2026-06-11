@@ -419,6 +419,26 @@ type Querier interface {
 	// configured (service returns defaults; GET NEVER 404s — 0.35.1 lesson).
 	// Runs under InTenantTx.
 	GetNotifySettings(ctx context.Context, tenantID uuid.UUID) (EmailNotifySetting, error)
+	// M68 Object Cache queries. Every statement is tenant-scoped both explicitly
+	// (tenant_id in WHERE/VALUES) and by RLS (the app.tenant_id / app.agent policy).
+	// The repo wraps each call in InTenantTx or InAgentTx -- these queries never
+	// set GUCs themselves. updated_at is set here via now().
+	// password_encrypted is NEVER included in the base SELECT: the callers that need
+	// the ciphertext for signed-command rendering use GetObjectCacheConfigWithSecret.
+	// ---------------------------------------------------------------------------
+	// site_object_cache_config
+	// ---------------------------------------------------------------------------
+	// Operator read path (InTenantTx). Excludes password_encrypted column; callers
+	// that need the ciphertext use GetObjectCacheConfigWithSecret.
+	GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (GetObjectCacheConfigRow, error)
+	// Service-internal path: used ONLY when rendering a signed agent command
+	// (apply_config / test). Never called from a handler directly.
+	GetObjectCacheConfigWithSecret(ctx context.Context, siteID uuid.UUID) (SiteObjectCacheConfig, error)
+	// Returns up to 366 daily-aggregated data points for the trend chart since
+	// @since, ordered oldest-first. Each point is one calendar day (UTC) of data.
+	// Daily downsampling matches the cache-hit-ratio precedent.
+	// Tenant-scoped via RLS (InTenantTx sets app.tenant_id).
+	GetObjectCacheStatsHistory(ctx context.Context, arg GetObjectCacheStatsHistoryParams) ([]GetObjectCacheStatsHistoryRow, error)
 	// Returns the org-wide default config row (site_id IS NULL) for a tenant.
 	GetOrgEmailConfig(ctx context.Context, tenantID uuid.UUID) (SiteEmailConfig, error)
 	// Enroll path (app.enroll GUC): resolve a presented code by its hash before the
@@ -611,6 +631,14 @@ type Querier interface {
 	InsertEmailLog(ctx context.Context, arg InsertEmailLogParams) (EmailLog, error)
 	// Run under Pool.InAgentTx (app.agent='on').
 	InsertEmailVerificationToken(ctx context.Context, arg InsertEmailVerificationTokenParams) (EmailVerificationToken, error)
+	// ---------------------------------------------------------------------------
+	// site_object_cache_stats_history
+	// ---------------------------------------------------------------------------
+	// Appends one stats data point. ON CONFLICT DO NOTHING on (site_id, sampled_at)
+	// makes it idempotent within the same second (mirrors InsertCacheHitRatioHistory).
+	// Runs under InTenantTx (agent stats-report path forwards tenant context via
+	// the perf service; the optional object_cache block is ingested in the same tx).
+	InsertObjectCacheStatsHistory(ctx context.Context, arg InsertObjectCacheStatsHistoryParams) (SiteObjectCacheStatsHistory, error)
 	// Record a new reset token. Run under Pool.InAgentTx (app.agent='on').
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
 	// ---------------------------------------------------------------------------
@@ -944,6 +972,9 @@ type Querier interface {
 	// LIMIT 2000 keeps each GC transaction short; the periodic job runs daily so
 	// at typical scan frequency the cap is never hit in practice.
 	PruneDBSizeHistory(ctx context.Context, cutoff time.Time) (int64, error)
+	// Deletes rows older than the cutoff across ALL tenants (InAgentTx / app.agent).
+	// LIMIT 2000 keeps each GC transaction short. Mirrors PruneCacheHitRatioHistory.
+	PruneObjectCacheStatsHistory(ctx context.Context, cutoff time.Time) (int64, error)
 	// Ring-buffer prune: drop events older than the replay window (cross-tenant,
 	// app.agent GUC). Bounds table growth.
 	PruneSiteEvents(ctx context.Context, createdAt time.Time) (int64, error)
@@ -1047,6 +1078,19 @@ type Querier interface {
 	// Advance the next_db_clean_at timestamp after a clean job is dispatched.
 	// Runs under app.agent (the scheduled-dispatch path is cross-tenant).
 	UpdateNextDBCleanAt(ctx context.Context, arg UpdateNextDBCleanAtParams) error
+	// Enable/disable the object cache feature flag. enable=true is handshake-gated
+	// in the service layer (requires a non-NULL last_test_config_hash matching the
+	// current config). Runs under InTenantTx (operator path).
+	UpdateObjectCacheEnabled(ctx context.Context, arg UpdateObjectCacheEnabledParams) (UpdateObjectCacheEnabledRow, error)
+	// Heartbeat ingest path: update the live status fields and return the previous
+	// values so the service can detect state transitions (for SSE publishing).
+	// Runs under InAgentTx (cross-tenant heartbeat path).
+	UpdateObjectCacheHeartbeatState(ctx context.Context, arg UpdateObjectCacheHeartbeatStateParams) (UpdateObjectCacheHeartbeatStateRow, error)
+	// Record the outcome of an objectcache.test command. Stores the result JSON and
+	// the config hash that was tested. When the test passed, last_tested_at is set;
+	// the service passes NULL for a failed test to avoid advancing the timestamp.
+	// Runs under InTenantTx (operator path -- the operator triggered the test).
+	UpdateObjectCacheTestResult(ctx context.Context, arg UpdateObjectCacheTestResultParams) (UpdateObjectCacheTestResultRow, error)
 	// The agent reports the server/install state it observed when applying config.
 	// Kept separate from UpsertPerfConfig so an operator's config save never
 	// overwrites agent-reported facts (and vice-versa). Runs under app.agent.
@@ -1125,6 +1169,13 @@ type Querier interface {
 	// service (time.LoadLocation + nextDigestAt helper) and passed here.
 	// Runs under InTenantTx.
 	UpsertNotifySettings(ctx context.Context, arg UpsertNotifySettingsParams) (EmailNotifySetting, error)
+	// Insert-or-update the per-site object cache config. password_encrypted uses
+	// nil-sentinel: when @password_encrypted is NULL the stored ciphertext is
+	// preserved (COALESCE(EXCLUDED.password_encrypted, site_object_cache_config.password_encrypted)).
+	// Clears last_test_config_hash whenever connection-critical fields change
+	// (enforced by passing @clear_test_hash=true from the service layer).
+	// updated_at is set via now() (no trigger, project convention).
+	UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectCacheConfigParams) (UpsertObjectCacheConfigRow, error)
 	// Upsert the org-wide default row (site_id IS NULL).
 	UpsertOrgEmailConfig(ctx context.Context, arg UpsertOrgEmailConfigParams) (SiteEmailConfig, error)
 	// Tenant-create helper: insert an owner membership for the creator; on conflict

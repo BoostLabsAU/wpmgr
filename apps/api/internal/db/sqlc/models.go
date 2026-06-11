@@ -691,6 +691,59 @@ type SiteEvent struct {
 	CreatedAt time.Time   `json:"created_at"`
 }
 
+type SiteObjectCacheConfig struct {
+	SiteID             uuid.UUID          `json:"site_id"`
+	TenantID           uuid.UUID          `json:"tenant_id"`
+	Enabled            bool               `json:"enabled"`
+	Scheme             string             `json:"scheme"`
+	Host               string             `json:"host"`
+	Port               int32              `json:"port"`
+	SocketPath         string             `json:"socket_path"`
+	Database           int32              `json:"database"`
+	Username           string             `json:"username"`
+	PasswordEncrypted  []byte             `json:"password_encrypted"`
+	Prefix             string             `json:"prefix"`
+	MaxttlSeconds      int32              `json:"maxttl_seconds"`
+	QueryttlSeconds    int32              `json:"queryttl_seconds"`
+	ConnectTimeoutMs   int32              `json:"connect_timeout_ms"`
+	ReadTimeoutMs      int32              `json:"read_timeout_ms"`
+	RetryCount         int32              `json:"retry_count"`
+	RetryIntervalMs    int32              `json:"retry_interval_ms"`
+	Serializer         string             `json:"serializer"`
+	Compression        string             `json:"compression"`
+	AsyncFlush         bool               `json:"async_flush"`
+	FlushStrategy      string             `json:"flush_strategy"`
+	Shared             bool               `json:"shared"`
+	FlushOnFailback    bool               `json:"flush_on_failback"`
+	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	LastTestConfigHash *string            `json:"last_test_config_hash"`
+	LastTestResultJson []byte             `json:"last_test_result_json"`
+	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
+	OcState            string             `json:"oc_state"`
+	OcLatencyMs        int32              `json:"oc_latency_ms"`
+	OcLastErrorClass   string             `json:"oc_last_error_class"`
+	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
+	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
+	CreatedAt          time.Time          `json:"created_at"`
+	UpdatedAt          time.Time          `json:"updated_at"`
+}
+
+type SiteObjectCacheStatsHistory struct {
+	ID               uuid.UUID      `json:"id"`
+	SiteID           uuid.UUID      `json:"site_id"`
+	TenantID         uuid.UUID      `json:"tenant_id"`
+	HitCount         int64          `json:"hit_count"`
+	MissCount        int64          `json:"miss_count"`
+	RatioPct         pgtype.Numeric `json:"ratio_pct"`
+	UsedMemoryBytes  int64          `json:"used_memory_bytes"`
+	AvgWaitMs        pgtype.Numeric `json:"avg_wait_ms"`
+	OpsPerSec        int32          `json:"ops_per_sec"`
+	EvictedKeysDelta int64          `json:"evicted_keys_delta"`
+	ConnectedClients int32          `json:"connected_clients"`
+	SampledAt        time.Time      `json:"sampled_at"`
+	CreatedAt        time.Time      `json:"created_at"`
+}
+
 type SitePerfConfig struct {
 	SiteID                     uuid.UUID          `json:"site_id"`
 	TenantID                   uuid.UUID          `json:"tenant_id"`

@@ -26,6 +26,7 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/activity"
 	"github.com/mosamlife/wpmgr/apps/api/internal/admin"
+	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/apikey"
@@ -971,6 +972,21 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// Always wired (no signing key required).
 	cacheHitRatioHistoryGCWorker := perf.NewCacheHitRatioHistoryGCWorker(perfRepo, logger)
 
+	// m68 — Object Cache (P0+P1). Shares the same age identity as the
+	// Performance Suite (siteDestAgeID). The agent command client is wired only
+	// when the CP signing key is available (same guard as every other domain that
+	// pushes signed commands). A nil cmdClient causes the service to return an
+	// error on any command attempt — the handler surfaces it as a warning header
+	// (non-domain error path) consistent with other perf commands.
+	ocRepo := objectcache.NewRepo(pool)
+	var ocCmdClient *agentcmd.Client
+	if cmdSigner != nil {
+		ocCmdClient = agentcmd.NewClient(ssrfClient, cmdSigner)
+	}
+	ocSvc := objectcache.NewService(ocRepo, siteDestAgeID, ocCmdClient, perfSiteAdapterImpl, siteEventsPub)
+	ocH := objectcache.NewHandler(ocSvc, auditRec)
+	ocGCWorker := objectcache.NewObjectCacheStatsHistoryGCWorker(ocRepo, logger)
+
 	// M56 — Real User Monitoring (RUM).
 	// The Postgres store is always wired; ClickHouse is a Phase 2+ opt-in
 	// (mirroring the internal/metrics dual-backend pattern).
@@ -1098,6 +1114,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		dbSizeHistoryGCWorker: dbSizeHistoryGCWorker,
 		// M52 / #162 — cache hit-ratio history GC (always wired).
 		cacheHitRatioHistoryGCWorker: cacheHitRatioHistoryGCWorker,
+		// m68 — Object Cache stats history GC (always wired; 7-day raw retention).
+		ocStatsHistoryGCWorker: ocGCWorker,
 		// M56 — RUM GC + rollup workers (always wired).
 		rumGCWorker:     rumGCWorker,
 		rumRollupWorker: rumRollupWorker,
@@ -1603,6 +1621,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		PerfH:             perfH,
 		PerfAgentH:        perfAgentH,
 		FontResultsAgentH: fontResultsAgentH,
+		// m68 — Object Cache operator routes.
+		ObjectCacheH: ocH,
 		// m59 — per-site email management + Phase 3 log ingest.
 		EmailH:           emailH,
 		EmailAgentH:      emailAgentH,
@@ -1942,6 +1962,8 @@ type riverDeps struct {
 	dbSizeHistoryGCWorker *perf.DBSizeHistoryGCWorker
 	// M52 / #162 — cache hit-ratio history GC (always wired).
 	cacheHitRatioHistoryGCWorker *perf.CacheHitRatioHistoryGCWorker
+	// m68 — Object Cache stats history GC (always wired; 7-day raw retention).
+	ocStatsHistoryGCWorker *objectcache.ObjectCacheStatsHistoryGCWorker
 	// M56 — RUM retention-GC + rollup workers (always wired).
 	rumGCWorker     *rum.RumGCWorker
 	rumRollupWorker *rum.RumRollupWorker
@@ -2220,6 +2242,21 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 			river.PeriodicInterval(24*time.Hour),
 			func() (river.JobArgs, *river.InsertOpts) {
 				return perf.CacheHitRatioHistoryGCArgs{}, nil
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// m68 — Object Cache stats history GC: prune
+	// site_object_cache_stats_history rows older than 7 days (raw retention D4).
+	// Always registered; runs once per day cross-tenant (InAgentTx).
+	// RunOnStart: false — table is empty on a fresh deploy.
+	if d.ocStatsHistoryGCWorker != nil {
+		river.AddWorker(workers, d.ocStatsHistoryGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return objectcache.ObjectCacheStatsHistoryGCArgs{}, nil
 			},
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))

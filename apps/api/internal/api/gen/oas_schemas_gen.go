@@ -7855,6 +7855,7 @@ func (*Error) createRestoreRes()                  {}
 func (*Error) createSiteRes()                     {}
 func (*Error) createUpdateRunRes()                {}
 func (*Error) deleteSiteRes()                     {}
+func (*Error) enableObjectCacheRes()              {}
 func (*Error) getBackupRes()                      {}
 func (*Error) getBackupScheduleRes()              {}
 func (*Error) getBackupSettingsContentsRes()      {}
@@ -7878,6 +7879,7 @@ func (*Error) putAlertConfigRes()                 {}
 func (*Error) putBackupScheduleRes()              {}
 func (*Error) putBackupSettingsContentsRes()      {}
 func (*Error) putBackupSettingsNotificationsRes() {}
+func (*Error) putObjectCacheConfigRes()           {}
 func (*Error) putPerfConfigRes()                  {}
 func (*Error) putSiteLoginBrandRes()              {}
 func (*Error) putSiteLoginProtectionRes()         {}
@@ -7964,6 +7966,80 @@ func (*ExportSiteEmailLogOKTextCsv) exportSiteEmailLogRes() {}
 type ExportSiteEmailLogUnauthorized Error
 
 func (*ExportSiteEmailLogUnauthorized) exportSiteEmailLogRes() {}
+
+type FlushObjectCacheReq struct {
+	Scope OptFlushObjectCacheReqScope `json:"scope"`
+	// Required when scope is "group".
+	Group OptString `json:"group"`
+}
+
+// GetScope returns the value of Scope.
+func (s *FlushObjectCacheReq) GetScope() OptFlushObjectCacheReqScope {
+	return s.Scope
+}
+
+// GetGroup returns the value of Group.
+func (s *FlushObjectCacheReq) GetGroup() OptString {
+	return s.Group
+}
+
+// SetScope sets the value of Scope.
+func (s *FlushObjectCacheReq) SetScope(val OptFlushObjectCacheReqScope) {
+	s.Scope = val
+}
+
+// SetGroup sets the value of Group.
+func (s *FlushObjectCacheReq) SetGroup(val OptString) {
+	s.Group = val
+}
+
+type FlushObjectCacheReqScope string
+
+const (
+	FlushObjectCacheReqScopeAll   FlushObjectCacheReqScope = "all"
+	FlushObjectCacheReqScopeSite  FlushObjectCacheReqScope = "site"
+	FlushObjectCacheReqScopeGroup FlushObjectCacheReqScope = "group"
+)
+
+// AllValues returns all FlushObjectCacheReqScope values.
+func (FlushObjectCacheReqScope) AllValues() []FlushObjectCacheReqScope {
+	return []FlushObjectCacheReqScope{
+		FlushObjectCacheReqScopeAll,
+		FlushObjectCacheReqScopeSite,
+		FlushObjectCacheReqScopeGroup,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FlushObjectCacheReqScope) MarshalText() ([]byte, error) {
+	switch s {
+	case FlushObjectCacheReqScopeAll:
+		return []byte(s), nil
+	case FlushObjectCacheReqScopeSite:
+		return []byte(s), nil
+	case FlushObjectCacheReqScopeGroup:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FlushObjectCacheReqScope) UnmarshalText(data []byte) error {
+	switch FlushObjectCacheReqScope(data) {
+	case FlushObjectCacheReqScopeAll:
+		*s = FlushObjectCacheReqScopeAll
+		return nil
+	case FlushObjectCacheReqScopeSite:
+		*s = FlushObjectCacheReqScopeSite
+		return nil
+	case FlushObjectCacheReqScopeGroup:
+		*s = FlushObjectCacheReqScopeGroup
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 // One font_results catalog row — the dashboard view of a processed self-hosted font.
 // Ref: #/components/schemas/FontResult
@@ -11875,6 +11951,1185 @@ func (s *MembershipList) SetItems(val []Membership) {
 
 func (*MembershipList) listMembersRes() {}
 
+// Per-site object cache configuration and live status.
+// Ref: #/components/schemas/ObjectCacheConfig
+type ObjectCacheConfig struct {
+	Enabled    bool                    `json:"enabled"`
+	Scheme     ObjectCacheConfigScheme `json:"scheme"`
+	Host       string                  `json:"host"`
+	Port       int                     `json:"port"`
+	SocketPath OptString               `json:"socket_path"`
+	Database   int                     `json:"database"`
+	Username   OptString               `json:"username"`
+	// True when an encrypted password is stored. The password itself is never returned.
+	HasPassword      bool                           `json:"has_password"`
+	Prefix           string                         `json:"prefix"`
+	MaxttlSeconds    int                            `json:"maxttl_seconds"`
+	QueryttlSeconds  int                            `json:"queryttl_seconds"`
+	ConnectTimeoutMs int                            `json:"connect_timeout_ms"`
+	ReadTimeoutMs    int                            `json:"read_timeout_ms"`
+	RetryCount       int                            `json:"retry_count"`
+	RetryIntervalMs  int                            `json:"retry_interval_ms"`
+	Serializer       ObjectCacheConfigSerializer    `json:"serializer"`
+	Compression      ObjectCacheConfigCompression   `json:"compression"`
+	AsyncFlush       bool                           `json:"async_flush"`
+	FlushStrategy    ObjectCacheConfigFlushStrategy `json:"flush_strategy"`
+	// True when the Redis instance is shared with other sites (prefix isolation).
+	Shared bool `json:"shared"`
+	// Flush all keys when the object cache recovers from a down state.
+	FlushOnFailback  bool `json:"flush_on_failback"`
+	AnalyticsEnabled bool `json:"analytics_enabled"`
+	// Non-empty after a passing test; cleared when connection fields change.
+	LastTestConfigHash OptNilString   `json:"last_test_config_hash"`
+	LastTestedAt       OptNilDateTime `json:"last_tested_at"`
+	// Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
+	OcState           string        `json:"oc_state"`
+	OcLatencyMs       int           `json:"oc_latency_ms"`
+	OcLastErrorClass  OptNilString  `json:"oc_last_error_class"`
+	OcUsedMemoryBytes int64         `json:"oc_used_memory_bytes"`
+	OcHitRatioPct     OptNilFloat64 `json:"oc_hit_ratio_pct"`
+	CreatedAt         OptDateTime   `json:"created_at"`
+	UpdatedAt         OptDateTime   `json:"updated_at"`
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *ObjectCacheConfig) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetScheme returns the value of Scheme.
+func (s *ObjectCacheConfig) GetScheme() ObjectCacheConfigScheme {
+	return s.Scheme
+}
+
+// GetHost returns the value of Host.
+func (s *ObjectCacheConfig) GetHost() string {
+	return s.Host
+}
+
+// GetPort returns the value of Port.
+func (s *ObjectCacheConfig) GetPort() int {
+	return s.Port
+}
+
+// GetSocketPath returns the value of SocketPath.
+func (s *ObjectCacheConfig) GetSocketPath() OptString {
+	return s.SocketPath
+}
+
+// GetDatabase returns the value of Database.
+func (s *ObjectCacheConfig) GetDatabase() int {
+	return s.Database
+}
+
+// GetUsername returns the value of Username.
+func (s *ObjectCacheConfig) GetUsername() OptString {
+	return s.Username
+}
+
+// GetHasPassword returns the value of HasPassword.
+func (s *ObjectCacheConfig) GetHasPassword() bool {
+	return s.HasPassword
+}
+
+// GetPrefix returns the value of Prefix.
+func (s *ObjectCacheConfig) GetPrefix() string {
+	return s.Prefix
+}
+
+// GetMaxttlSeconds returns the value of MaxttlSeconds.
+func (s *ObjectCacheConfig) GetMaxttlSeconds() int {
+	return s.MaxttlSeconds
+}
+
+// GetQueryttlSeconds returns the value of QueryttlSeconds.
+func (s *ObjectCacheConfig) GetQueryttlSeconds() int {
+	return s.QueryttlSeconds
+}
+
+// GetConnectTimeoutMs returns the value of ConnectTimeoutMs.
+func (s *ObjectCacheConfig) GetConnectTimeoutMs() int {
+	return s.ConnectTimeoutMs
+}
+
+// GetReadTimeoutMs returns the value of ReadTimeoutMs.
+func (s *ObjectCacheConfig) GetReadTimeoutMs() int {
+	return s.ReadTimeoutMs
+}
+
+// GetRetryCount returns the value of RetryCount.
+func (s *ObjectCacheConfig) GetRetryCount() int {
+	return s.RetryCount
+}
+
+// GetRetryIntervalMs returns the value of RetryIntervalMs.
+func (s *ObjectCacheConfig) GetRetryIntervalMs() int {
+	return s.RetryIntervalMs
+}
+
+// GetSerializer returns the value of Serializer.
+func (s *ObjectCacheConfig) GetSerializer() ObjectCacheConfigSerializer {
+	return s.Serializer
+}
+
+// GetCompression returns the value of Compression.
+func (s *ObjectCacheConfig) GetCompression() ObjectCacheConfigCompression {
+	return s.Compression
+}
+
+// GetAsyncFlush returns the value of AsyncFlush.
+func (s *ObjectCacheConfig) GetAsyncFlush() bool {
+	return s.AsyncFlush
+}
+
+// GetFlushStrategy returns the value of FlushStrategy.
+func (s *ObjectCacheConfig) GetFlushStrategy() ObjectCacheConfigFlushStrategy {
+	return s.FlushStrategy
+}
+
+// GetShared returns the value of Shared.
+func (s *ObjectCacheConfig) GetShared() bool {
+	return s.Shared
+}
+
+// GetFlushOnFailback returns the value of FlushOnFailback.
+func (s *ObjectCacheConfig) GetFlushOnFailback() bool {
+	return s.FlushOnFailback
+}
+
+// GetAnalyticsEnabled returns the value of AnalyticsEnabled.
+func (s *ObjectCacheConfig) GetAnalyticsEnabled() bool {
+	return s.AnalyticsEnabled
+}
+
+// GetLastTestConfigHash returns the value of LastTestConfigHash.
+func (s *ObjectCacheConfig) GetLastTestConfigHash() OptNilString {
+	return s.LastTestConfigHash
+}
+
+// GetLastTestedAt returns the value of LastTestedAt.
+func (s *ObjectCacheConfig) GetLastTestedAt() OptNilDateTime {
+	return s.LastTestedAt
+}
+
+// GetOcState returns the value of OcState.
+func (s *ObjectCacheConfig) GetOcState() string {
+	return s.OcState
+}
+
+// GetOcLatencyMs returns the value of OcLatencyMs.
+func (s *ObjectCacheConfig) GetOcLatencyMs() int {
+	return s.OcLatencyMs
+}
+
+// GetOcLastErrorClass returns the value of OcLastErrorClass.
+func (s *ObjectCacheConfig) GetOcLastErrorClass() OptNilString {
+	return s.OcLastErrorClass
+}
+
+// GetOcUsedMemoryBytes returns the value of OcUsedMemoryBytes.
+func (s *ObjectCacheConfig) GetOcUsedMemoryBytes() int64 {
+	return s.OcUsedMemoryBytes
+}
+
+// GetOcHitRatioPct returns the value of OcHitRatioPct.
+func (s *ObjectCacheConfig) GetOcHitRatioPct() OptNilFloat64 {
+	return s.OcHitRatioPct
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *ObjectCacheConfig) GetCreatedAt() OptDateTime {
+	return s.CreatedAt
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *ObjectCacheConfig) GetUpdatedAt() OptDateTime {
+	return s.UpdatedAt
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *ObjectCacheConfig) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetScheme sets the value of Scheme.
+func (s *ObjectCacheConfig) SetScheme(val ObjectCacheConfigScheme) {
+	s.Scheme = val
+}
+
+// SetHost sets the value of Host.
+func (s *ObjectCacheConfig) SetHost(val string) {
+	s.Host = val
+}
+
+// SetPort sets the value of Port.
+func (s *ObjectCacheConfig) SetPort(val int) {
+	s.Port = val
+}
+
+// SetSocketPath sets the value of SocketPath.
+func (s *ObjectCacheConfig) SetSocketPath(val OptString) {
+	s.SocketPath = val
+}
+
+// SetDatabase sets the value of Database.
+func (s *ObjectCacheConfig) SetDatabase(val int) {
+	s.Database = val
+}
+
+// SetUsername sets the value of Username.
+func (s *ObjectCacheConfig) SetUsername(val OptString) {
+	s.Username = val
+}
+
+// SetHasPassword sets the value of HasPassword.
+func (s *ObjectCacheConfig) SetHasPassword(val bool) {
+	s.HasPassword = val
+}
+
+// SetPrefix sets the value of Prefix.
+func (s *ObjectCacheConfig) SetPrefix(val string) {
+	s.Prefix = val
+}
+
+// SetMaxttlSeconds sets the value of MaxttlSeconds.
+func (s *ObjectCacheConfig) SetMaxttlSeconds(val int) {
+	s.MaxttlSeconds = val
+}
+
+// SetQueryttlSeconds sets the value of QueryttlSeconds.
+func (s *ObjectCacheConfig) SetQueryttlSeconds(val int) {
+	s.QueryttlSeconds = val
+}
+
+// SetConnectTimeoutMs sets the value of ConnectTimeoutMs.
+func (s *ObjectCacheConfig) SetConnectTimeoutMs(val int) {
+	s.ConnectTimeoutMs = val
+}
+
+// SetReadTimeoutMs sets the value of ReadTimeoutMs.
+func (s *ObjectCacheConfig) SetReadTimeoutMs(val int) {
+	s.ReadTimeoutMs = val
+}
+
+// SetRetryCount sets the value of RetryCount.
+func (s *ObjectCacheConfig) SetRetryCount(val int) {
+	s.RetryCount = val
+}
+
+// SetRetryIntervalMs sets the value of RetryIntervalMs.
+func (s *ObjectCacheConfig) SetRetryIntervalMs(val int) {
+	s.RetryIntervalMs = val
+}
+
+// SetSerializer sets the value of Serializer.
+func (s *ObjectCacheConfig) SetSerializer(val ObjectCacheConfigSerializer) {
+	s.Serializer = val
+}
+
+// SetCompression sets the value of Compression.
+func (s *ObjectCacheConfig) SetCompression(val ObjectCacheConfigCompression) {
+	s.Compression = val
+}
+
+// SetAsyncFlush sets the value of AsyncFlush.
+func (s *ObjectCacheConfig) SetAsyncFlush(val bool) {
+	s.AsyncFlush = val
+}
+
+// SetFlushStrategy sets the value of FlushStrategy.
+func (s *ObjectCacheConfig) SetFlushStrategy(val ObjectCacheConfigFlushStrategy) {
+	s.FlushStrategy = val
+}
+
+// SetShared sets the value of Shared.
+func (s *ObjectCacheConfig) SetShared(val bool) {
+	s.Shared = val
+}
+
+// SetFlushOnFailback sets the value of FlushOnFailback.
+func (s *ObjectCacheConfig) SetFlushOnFailback(val bool) {
+	s.FlushOnFailback = val
+}
+
+// SetAnalyticsEnabled sets the value of AnalyticsEnabled.
+func (s *ObjectCacheConfig) SetAnalyticsEnabled(val bool) {
+	s.AnalyticsEnabled = val
+}
+
+// SetLastTestConfigHash sets the value of LastTestConfigHash.
+func (s *ObjectCacheConfig) SetLastTestConfigHash(val OptNilString) {
+	s.LastTestConfigHash = val
+}
+
+// SetLastTestedAt sets the value of LastTestedAt.
+func (s *ObjectCacheConfig) SetLastTestedAt(val OptNilDateTime) {
+	s.LastTestedAt = val
+}
+
+// SetOcState sets the value of OcState.
+func (s *ObjectCacheConfig) SetOcState(val string) {
+	s.OcState = val
+}
+
+// SetOcLatencyMs sets the value of OcLatencyMs.
+func (s *ObjectCacheConfig) SetOcLatencyMs(val int) {
+	s.OcLatencyMs = val
+}
+
+// SetOcLastErrorClass sets the value of OcLastErrorClass.
+func (s *ObjectCacheConfig) SetOcLastErrorClass(val OptNilString) {
+	s.OcLastErrorClass = val
+}
+
+// SetOcUsedMemoryBytes sets the value of OcUsedMemoryBytes.
+func (s *ObjectCacheConfig) SetOcUsedMemoryBytes(val int64) {
+	s.OcUsedMemoryBytes = val
+}
+
+// SetOcHitRatioPct sets the value of OcHitRatioPct.
+func (s *ObjectCacheConfig) SetOcHitRatioPct(val OptNilFloat64) {
+	s.OcHitRatioPct = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *ObjectCacheConfig) SetCreatedAt(val OptDateTime) {
+	s.CreatedAt = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *ObjectCacheConfig) SetUpdatedAt(val OptDateTime) {
+	s.UpdatedAt = val
+}
+
+func (*ObjectCacheConfig) putObjectCacheConfigRes() {}
+
+type ObjectCacheConfigCompression string
+
+const (
+	ObjectCacheConfigCompressionNone ObjectCacheConfigCompression = "none"
+	ObjectCacheConfigCompressionLzf  ObjectCacheConfigCompression = "lzf"
+	ObjectCacheConfigCompressionLz4  ObjectCacheConfigCompression = "lz4"
+	ObjectCacheConfigCompressionZstd ObjectCacheConfigCompression = "zstd"
+)
+
+// AllValues returns all ObjectCacheConfigCompression values.
+func (ObjectCacheConfigCompression) AllValues() []ObjectCacheConfigCompression {
+	return []ObjectCacheConfigCompression{
+		ObjectCacheConfigCompressionNone,
+		ObjectCacheConfigCompressionLzf,
+		ObjectCacheConfigCompressionLz4,
+		ObjectCacheConfigCompressionZstd,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigCompression) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigCompressionNone:
+		return []byte(s), nil
+	case ObjectCacheConfigCompressionLzf:
+		return []byte(s), nil
+	case ObjectCacheConfigCompressionLz4:
+		return []byte(s), nil
+	case ObjectCacheConfigCompressionZstd:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigCompression) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigCompression(data) {
+	case ObjectCacheConfigCompressionNone:
+		*s = ObjectCacheConfigCompressionNone
+		return nil
+	case ObjectCacheConfigCompressionLzf:
+		*s = ObjectCacheConfigCompressionLzf
+		return nil
+	case ObjectCacheConfigCompressionLz4:
+		*s = ObjectCacheConfigCompressionLz4
+		return nil
+	case ObjectCacheConfigCompressionZstd:
+		*s = ObjectCacheConfigCompressionZstd
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigFlushStrategy string
+
+const (
+	ObjectCacheConfigFlushStrategyAuto    ObjectCacheConfigFlushStrategy = "auto"
+	ObjectCacheConfigFlushStrategyFlushdb ObjectCacheConfigFlushStrategy = "flushdb"
+	ObjectCacheConfigFlushStrategyScan    ObjectCacheConfigFlushStrategy = "scan"
+)
+
+// AllValues returns all ObjectCacheConfigFlushStrategy values.
+func (ObjectCacheConfigFlushStrategy) AllValues() []ObjectCacheConfigFlushStrategy {
+	return []ObjectCacheConfigFlushStrategy{
+		ObjectCacheConfigFlushStrategyAuto,
+		ObjectCacheConfigFlushStrategyFlushdb,
+		ObjectCacheConfigFlushStrategyScan,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigFlushStrategy) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigFlushStrategyAuto:
+		return []byte(s), nil
+	case ObjectCacheConfigFlushStrategyFlushdb:
+		return []byte(s), nil
+	case ObjectCacheConfigFlushStrategyScan:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigFlushStrategy) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigFlushStrategy(data) {
+	case ObjectCacheConfigFlushStrategyAuto:
+		*s = ObjectCacheConfigFlushStrategyAuto
+		return nil
+	case ObjectCacheConfigFlushStrategyFlushdb:
+		*s = ObjectCacheConfigFlushStrategyFlushdb
+		return nil
+	case ObjectCacheConfigFlushStrategyScan:
+		*s = ObjectCacheConfigFlushStrategyScan
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Fields accepted by PUT /perf/object-cache/config. All fields are optional; omitted fields are
+// unchanged. An empty password preserves the stored password.
+// Ref: #/components/schemas/ObjectCacheConfigPut
+type ObjectCacheConfigPut struct {
+	Enabled    OptBool                       `json:"enabled"`
+	Scheme     OptObjectCacheConfigPutScheme `json:"scheme"`
+	Host       OptString                     `json:"host"`
+	Port       OptInt                        `json:"port"`
+	SocketPath OptString                     `json:"socket_path"`
+	Database   OptInt                        `json:"database"`
+	Username   OptString                     `json:"username"`
+	// Write-only. Empty string means "keep stored password".
+	Password         OptString                            `json:"password"`
+	Prefix           OptString                            `json:"prefix"`
+	MaxttlSeconds    OptInt                               `json:"maxttl_seconds"`
+	QueryttlSeconds  OptInt                               `json:"queryttl_seconds"`
+	ConnectTimeoutMs OptInt                               `json:"connect_timeout_ms"`
+	ReadTimeoutMs    OptInt                               `json:"read_timeout_ms"`
+	RetryCount       OptInt                               `json:"retry_count"`
+	RetryIntervalMs  OptInt                               `json:"retry_interval_ms"`
+	Serializer       OptObjectCacheConfigPutSerializer    `json:"serializer"`
+	Compression      OptObjectCacheConfigPutCompression   `json:"compression"`
+	AsyncFlush       OptBool                              `json:"async_flush"`
+	FlushStrategy    OptObjectCacheConfigPutFlushStrategy `json:"flush_strategy"`
+	Shared           OptBool                              `json:"shared"`
+	FlushOnFailback  OptBool                              `json:"flush_on_failback"`
+	AnalyticsEnabled OptBool                              `json:"analytics_enabled"`
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *ObjectCacheConfigPut) GetEnabled() OptBool {
+	return s.Enabled
+}
+
+// GetScheme returns the value of Scheme.
+func (s *ObjectCacheConfigPut) GetScheme() OptObjectCacheConfigPutScheme {
+	return s.Scheme
+}
+
+// GetHost returns the value of Host.
+func (s *ObjectCacheConfigPut) GetHost() OptString {
+	return s.Host
+}
+
+// GetPort returns the value of Port.
+func (s *ObjectCacheConfigPut) GetPort() OptInt {
+	return s.Port
+}
+
+// GetSocketPath returns the value of SocketPath.
+func (s *ObjectCacheConfigPut) GetSocketPath() OptString {
+	return s.SocketPath
+}
+
+// GetDatabase returns the value of Database.
+func (s *ObjectCacheConfigPut) GetDatabase() OptInt {
+	return s.Database
+}
+
+// GetUsername returns the value of Username.
+func (s *ObjectCacheConfigPut) GetUsername() OptString {
+	return s.Username
+}
+
+// GetPassword returns the value of Password.
+func (s *ObjectCacheConfigPut) GetPassword() OptString {
+	return s.Password
+}
+
+// GetPrefix returns the value of Prefix.
+func (s *ObjectCacheConfigPut) GetPrefix() OptString {
+	return s.Prefix
+}
+
+// GetMaxttlSeconds returns the value of MaxttlSeconds.
+func (s *ObjectCacheConfigPut) GetMaxttlSeconds() OptInt {
+	return s.MaxttlSeconds
+}
+
+// GetQueryttlSeconds returns the value of QueryttlSeconds.
+func (s *ObjectCacheConfigPut) GetQueryttlSeconds() OptInt {
+	return s.QueryttlSeconds
+}
+
+// GetConnectTimeoutMs returns the value of ConnectTimeoutMs.
+func (s *ObjectCacheConfigPut) GetConnectTimeoutMs() OptInt {
+	return s.ConnectTimeoutMs
+}
+
+// GetReadTimeoutMs returns the value of ReadTimeoutMs.
+func (s *ObjectCacheConfigPut) GetReadTimeoutMs() OptInt {
+	return s.ReadTimeoutMs
+}
+
+// GetRetryCount returns the value of RetryCount.
+func (s *ObjectCacheConfigPut) GetRetryCount() OptInt {
+	return s.RetryCount
+}
+
+// GetRetryIntervalMs returns the value of RetryIntervalMs.
+func (s *ObjectCacheConfigPut) GetRetryIntervalMs() OptInt {
+	return s.RetryIntervalMs
+}
+
+// GetSerializer returns the value of Serializer.
+func (s *ObjectCacheConfigPut) GetSerializer() OptObjectCacheConfigPutSerializer {
+	return s.Serializer
+}
+
+// GetCompression returns the value of Compression.
+func (s *ObjectCacheConfigPut) GetCompression() OptObjectCacheConfigPutCompression {
+	return s.Compression
+}
+
+// GetAsyncFlush returns the value of AsyncFlush.
+func (s *ObjectCacheConfigPut) GetAsyncFlush() OptBool {
+	return s.AsyncFlush
+}
+
+// GetFlushStrategy returns the value of FlushStrategy.
+func (s *ObjectCacheConfigPut) GetFlushStrategy() OptObjectCacheConfigPutFlushStrategy {
+	return s.FlushStrategy
+}
+
+// GetShared returns the value of Shared.
+func (s *ObjectCacheConfigPut) GetShared() OptBool {
+	return s.Shared
+}
+
+// GetFlushOnFailback returns the value of FlushOnFailback.
+func (s *ObjectCacheConfigPut) GetFlushOnFailback() OptBool {
+	return s.FlushOnFailback
+}
+
+// GetAnalyticsEnabled returns the value of AnalyticsEnabled.
+func (s *ObjectCacheConfigPut) GetAnalyticsEnabled() OptBool {
+	return s.AnalyticsEnabled
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *ObjectCacheConfigPut) SetEnabled(val OptBool) {
+	s.Enabled = val
+}
+
+// SetScheme sets the value of Scheme.
+func (s *ObjectCacheConfigPut) SetScheme(val OptObjectCacheConfigPutScheme) {
+	s.Scheme = val
+}
+
+// SetHost sets the value of Host.
+func (s *ObjectCacheConfigPut) SetHost(val OptString) {
+	s.Host = val
+}
+
+// SetPort sets the value of Port.
+func (s *ObjectCacheConfigPut) SetPort(val OptInt) {
+	s.Port = val
+}
+
+// SetSocketPath sets the value of SocketPath.
+func (s *ObjectCacheConfigPut) SetSocketPath(val OptString) {
+	s.SocketPath = val
+}
+
+// SetDatabase sets the value of Database.
+func (s *ObjectCacheConfigPut) SetDatabase(val OptInt) {
+	s.Database = val
+}
+
+// SetUsername sets the value of Username.
+func (s *ObjectCacheConfigPut) SetUsername(val OptString) {
+	s.Username = val
+}
+
+// SetPassword sets the value of Password.
+func (s *ObjectCacheConfigPut) SetPassword(val OptString) {
+	s.Password = val
+}
+
+// SetPrefix sets the value of Prefix.
+func (s *ObjectCacheConfigPut) SetPrefix(val OptString) {
+	s.Prefix = val
+}
+
+// SetMaxttlSeconds sets the value of MaxttlSeconds.
+func (s *ObjectCacheConfigPut) SetMaxttlSeconds(val OptInt) {
+	s.MaxttlSeconds = val
+}
+
+// SetQueryttlSeconds sets the value of QueryttlSeconds.
+func (s *ObjectCacheConfigPut) SetQueryttlSeconds(val OptInt) {
+	s.QueryttlSeconds = val
+}
+
+// SetConnectTimeoutMs sets the value of ConnectTimeoutMs.
+func (s *ObjectCacheConfigPut) SetConnectTimeoutMs(val OptInt) {
+	s.ConnectTimeoutMs = val
+}
+
+// SetReadTimeoutMs sets the value of ReadTimeoutMs.
+func (s *ObjectCacheConfigPut) SetReadTimeoutMs(val OptInt) {
+	s.ReadTimeoutMs = val
+}
+
+// SetRetryCount sets the value of RetryCount.
+func (s *ObjectCacheConfigPut) SetRetryCount(val OptInt) {
+	s.RetryCount = val
+}
+
+// SetRetryIntervalMs sets the value of RetryIntervalMs.
+func (s *ObjectCacheConfigPut) SetRetryIntervalMs(val OptInt) {
+	s.RetryIntervalMs = val
+}
+
+// SetSerializer sets the value of Serializer.
+func (s *ObjectCacheConfigPut) SetSerializer(val OptObjectCacheConfigPutSerializer) {
+	s.Serializer = val
+}
+
+// SetCompression sets the value of Compression.
+func (s *ObjectCacheConfigPut) SetCompression(val OptObjectCacheConfigPutCompression) {
+	s.Compression = val
+}
+
+// SetAsyncFlush sets the value of AsyncFlush.
+func (s *ObjectCacheConfigPut) SetAsyncFlush(val OptBool) {
+	s.AsyncFlush = val
+}
+
+// SetFlushStrategy sets the value of FlushStrategy.
+func (s *ObjectCacheConfigPut) SetFlushStrategy(val OptObjectCacheConfigPutFlushStrategy) {
+	s.FlushStrategy = val
+}
+
+// SetShared sets the value of Shared.
+func (s *ObjectCacheConfigPut) SetShared(val OptBool) {
+	s.Shared = val
+}
+
+// SetFlushOnFailback sets the value of FlushOnFailback.
+func (s *ObjectCacheConfigPut) SetFlushOnFailback(val OptBool) {
+	s.FlushOnFailback = val
+}
+
+// SetAnalyticsEnabled sets the value of AnalyticsEnabled.
+func (s *ObjectCacheConfigPut) SetAnalyticsEnabled(val OptBool) {
+	s.AnalyticsEnabled = val
+}
+
+type ObjectCacheConfigPutCompression string
+
+const (
+	ObjectCacheConfigPutCompressionNone ObjectCacheConfigPutCompression = "none"
+	ObjectCacheConfigPutCompressionLzf  ObjectCacheConfigPutCompression = "lzf"
+	ObjectCacheConfigPutCompressionLz4  ObjectCacheConfigPutCompression = "lz4"
+	ObjectCacheConfigPutCompressionZstd ObjectCacheConfigPutCompression = "zstd"
+)
+
+// AllValues returns all ObjectCacheConfigPutCompression values.
+func (ObjectCacheConfigPutCompression) AllValues() []ObjectCacheConfigPutCompression {
+	return []ObjectCacheConfigPutCompression{
+		ObjectCacheConfigPutCompressionNone,
+		ObjectCacheConfigPutCompressionLzf,
+		ObjectCacheConfigPutCompressionLz4,
+		ObjectCacheConfigPutCompressionZstd,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigPutCompression) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigPutCompressionNone:
+		return []byte(s), nil
+	case ObjectCacheConfigPutCompressionLzf:
+		return []byte(s), nil
+	case ObjectCacheConfigPutCompressionLz4:
+		return []byte(s), nil
+	case ObjectCacheConfigPutCompressionZstd:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigPutCompression) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigPutCompression(data) {
+	case ObjectCacheConfigPutCompressionNone:
+		*s = ObjectCacheConfigPutCompressionNone
+		return nil
+	case ObjectCacheConfigPutCompressionLzf:
+		*s = ObjectCacheConfigPutCompressionLzf
+		return nil
+	case ObjectCacheConfigPutCompressionLz4:
+		*s = ObjectCacheConfigPutCompressionLz4
+		return nil
+	case ObjectCacheConfigPutCompressionZstd:
+		*s = ObjectCacheConfigPutCompressionZstd
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigPutFlushStrategy string
+
+const (
+	ObjectCacheConfigPutFlushStrategyAuto    ObjectCacheConfigPutFlushStrategy = "auto"
+	ObjectCacheConfigPutFlushStrategyFlushdb ObjectCacheConfigPutFlushStrategy = "flushdb"
+	ObjectCacheConfigPutFlushStrategyScan    ObjectCacheConfigPutFlushStrategy = "scan"
+)
+
+// AllValues returns all ObjectCacheConfigPutFlushStrategy values.
+func (ObjectCacheConfigPutFlushStrategy) AllValues() []ObjectCacheConfigPutFlushStrategy {
+	return []ObjectCacheConfigPutFlushStrategy{
+		ObjectCacheConfigPutFlushStrategyAuto,
+		ObjectCacheConfigPutFlushStrategyFlushdb,
+		ObjectCacheConfigPutFlushStrategyScan,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigPutFlushStrategy) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigPutFlushStrategyAuto:
+		return []byte(s), nil
+	case ObjectCacheConfigPutFlushStrategyFlushdb:
+		return []byte(s), nil
+	case ObjectCacheConfigPutFlushStrategyScan:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigPutFlushStrategy) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigPutFlushStrategy(data) {
+	case ObjectCacheConfigPutFlushStrategyAuto:
+		*s = ObjectCacheConfigPutFlushStrategyAuto
+		return nil
+	case ObjectCacheConfigPutFlushStrategyFlushdb:
+		*s = ObjectCacheConfigPutFlushStrategyFlushdb
+		return nil
+	case ObjectCacheConfigPutFlushStrategyScan:
+		*s = ObjectCacheConfigPutFlushStrategyScan
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigPutScheme string
+
+const (
+	ObjectCacheConfigPutSchemeTCP  ObjectCacheConfigPutScheme = "tcp"
+	ObjectCacheConfigPutSchemeUnix ObjectCacheConfigPutScheme = "unix"
+	ObjectCacheConfigPutSchemeTLS  ObjectCacheConfigPutScheme = "tls"
+)
+
+// AllValues returns all ObjectCacheConfigPutScheme values.
+func (ObjectCacheConfigPutScheme) AllValues() []ObjectCacheConfigPutScheme {
+	return []ObjectCacheConfigPutScheme{
+		ObjectCacheConfigPutSchemeTCP,
+		ObjectCacheConfigPutSchemeUnix,
+		ObjectCacheConfigPutSchemeTLS,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigPutScheme) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigPutSchemeTCP:
+		return []byte(s), nil
+	case ObjectCacheConfigPutSchemeUnix:
+		return []byte(s), nil
+	case ObjectCacheConfigPutSchemeTLS:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigPutScheme) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigPutScheme(data) {
+	case ObjectCacheConfigPutSchemeTCP:
+		*s = ObjectCacheConfigPutSchemeTCP
+		return nil
+	case ObjectCacheConfigPutSchemeUnix:
+		*s = ObjectCacheConfigPutSchemeUnix
+		return nil
+	case ObjectCacheConfigPutSchemeTLS:
+		*s = ObjectCacheConfigPutSchemeTLS
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigPutSerializer string
+
+const (
+	ObjectCacheConfigPutSerializerPhp      ObjectCacheConfigPutSerializer = "php"
+	ObjectCacheConfigPutSerializerIgbinary ObjectCacheConfigPutSerializer = "igbinary"
+)
+
+// AllValues returns all ObjectCacheConfigPutSerializer values.
+func (ObjectCacheConfigPutSerializer) AllValues() []ObjectCacheConfigPutSerializer {
+	return []ObjectCacheConfigPutSerializer{
+		ObjectCacheConfigPutSerializerPhp,
+		ObjectCacheConfigPutSerializerIgbinary,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigPutSerializer) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigPutSerializerPhp:
+		return []byte(s), nil
+	case ObjectCacheConfigPutSerializerIgbinary:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigPutSerializer) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigPutSerializer(data) {
+	case ObjectCacheConfigPutSerializerPhp:
+		*s = ObjectCacheConfigPutSerializerPhp
+		return nil
+	case ObjectCacheConfigPutSerializerIgbinary:
+		*s = ObjectCacheConfigPutSerializerIgbinary
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigScheme string
+
+const (
+	ObjectCacheConfigSchemeTCP  ObjectCacheConfigScheme = "tcp"
+	ObjectCacheConfigSchemeUnix ObjectCacheConfigScheme = "unix"
+	ObjectCacheConfigSchemeTLS  ObjectCacheConfigScheme = "tls"
+)
+
+// AllValues returns all ObjectCacheConfigScheme values.
+func (ObjectCacheConfigScheme) AllValues() []ObjectCacheConfigScheme {
+	return []ObjectCacheConfigScheme{
+		ObjectCacheConfigSchemeTCP,
+		ObjectCacheConfigSchemeUnix,
+		ObjectCacheConfigSchemeTLS,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigScheme) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigSchemeTCP:
+		return []byte(s), nil
+	case ObjectCacheConfigSchemeUnix:
+		return []byte(s), nil
+	case ObjectCacheConfigSchemeTLS:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigScheme) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigScheme(data) {
+	case ObjectCacheConfigSchemeTCP:
+		*s = ObjectCacheConfigSchemeTCP
+		return nil
+	case ObjectCacheConfigSchemeUnix:
+		*s = ObjectCacheConfigSchemeUnix
+		return nil
+	case ObjectCacheConfigSchemeTLS:
+		*s = ObjectCacheConfigSchemeTLS
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type ObjectCacheConfigSerializer string
+
+const (
+	ObjectCacheConfigSerializerPhp      ObjectCacheConfigSerializer = "php"
+	ObjectCacheConfigSerializerIgbinary ObjectCacheConfigSerializer = "igbinary"
+)
+
+// AllValues returns all ObjectCacheConfigSerializer values.
+func (ObjectCacheConfigSerializer) AllValues() []ObjectCacheConfigSerializer {
+	return []ObjectCacheConfigSerializer{
+		ObjectCacheConfigSerializerPhp,
+		ObjectCacheConfigSerializerIgbinary,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ObjectCacheConfigSerializer) MarshalText() ([]byte, error) {
+	switch s {
+	case ObjectCacheConfigSerializerPhp:
+		return []byte(s), nil
+	case ObjectCacheConfigSerializerIgbinary:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ObjectCacheConfigSerializer) UnmarshalText(data []byte) error {
+	switch ObjectCacheConfigSerializer(data) {
+	case ObjectCacheConfigSerializerPhp:
+		*s = ObjectCacheConfigSerializerPhp
+		return nil
+	case ObjectCacheConfigSerializerIgbinary:
+		*s = ObjectCacheConfigSerializerIgbinary
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Daily-aggregated object cache stats history for trend charts.
+// Ref: #/components/schemas/ObjectCacheStatsHistory
+type ObjectCacheStatsHistory struct {
+	Points []ObjectCacheStatsHistoryPoint `json:"points"`
+	// Average hit ratio across all data points in the window.
+	AvgRatioPct float64 `json:"avg_ratio_pct"`
+}
+
+// GetPoints returns the value of Points.
+func (s *ObjectCacheStatsHistory) GetPoints() []ObjectCacheStatsHistoryPoint {
+	return s.Points
+}
+
+// GetAvgRatioPct returns the value of AvgRatioPct.
+func (s *ObjectCacheStatsHistory) GetAvgRatioPct() float64 {
+	return s.AvgRatioPct
+}
+
+// SetPoints sets the value of Points.
+func (s *ObjectCacheStatsHistory) SetPoints(val []ObjectCacheStatsHistoryPoint) {
+	s.Points = val
+}
+
+// SetAvgRatioPct sets the value of AvgRatioPct.
+func (s *ObjectCacheStatsHistory) SetAvgRatioPct(val float64) {
+	s.AvgRatioPct = val
+}
+
+// One daily-aggregated data point in the stats history.
+// Ref: #/components/schemas/ObjectCacheStatsHistoryPoint
+type ObjectCacheStatsHistoryPoint struct {
+	SampledAt time.Time `json:"sampled_at"`
+	// Hit ratio as a percentage (0–100). Null when no data.
+	RatioPct         OptNilFloat64 `json:"ratio_pct"`
+	HitCount         int64         `json:"hit_count"`
+	MissCount        int64         `json:"miss_count"`
+	UsedMemoryBytes  int64         `json:"used_memory_bytes"`
+	AvgWaitMs        OptFloat64    `json:"avg_wait_ms"`
+	OpsPerSec        int           `json:"ops_per_sec"`
+	EvictedKeysDelta int64         `json:"evicted_keys_delta"`
+}
+
+// GetSampledAt returns the value of SampledAt.
+func (s *ObjectCacheStatsHistoryPoint) GetSampledAt() time.Time {
+	return s.SampledAt
+}
+
+// GetRatioPct returns the value of RatioPct.
+func (s *ObjectCacheStatsHistoryPoint) GetRatioPct() OptNilFloat64 {
+	return s.RatioPct
+}
+
+// GetHitCount returns the value of HitCount.
+func (s *ObjectCacheStatsHistoryPoint) GetHitCount() int64 {
+	return s.HitCount
+}
+
+// GetMissCount returns the value of MissCount.
+func (s *ObjectCacheStatsHistoryPoint) GetMissCount() int64 {
+	return s.MissCount
+}
+
+// GetUsedMemoryBytes returns the value of UsedMemoryBytes.
+func (s *ObjectCacheStatsHistoryPoint) GetUsedMemoryBytes() int64 {
+	return s.UsedMemoryBytes
+}
+
+// GetAvgWaitMs returns the value of AvgWaitMs.
+func (s *ObjectCacheStatsHistoryPoint) GetAvgWaitMs() OptFloat64 {
+	return s.AvgWaitMs
+}
+
+// GetOpsPerSec returns the value of OpsPerSec.
+func (s *ObjectCacheStatsHistoryPoint) GetOpsPerSec() int {
+	return s.OpsPerSec
+}
+
+// GetEvictedKeysDelta returns the value of EvictedKeysDelta.
+func (s *ObjectCacheStatsHistoryPoint) GetEvictedKeysDelta() int64 {
+	return s.EvictedKeysDelta
+}
+
+// SetSampledAt sets the value of SampledAt.
+func (s *ObjectCacheStatsHistoryPoint) SetSampledAt(val time.Time) {
+	s.SampledAt = val
+}
+
+// SetRatioPct sets the value of RatioPct.
+func (s *ObjectCacheStatsHistoryPoint) SetRatioPct(val OptNilFloat64) {
+	s.RatioPct = val
+}
+
+// SetHitCount sets the value of HitCount.
+func (s *ObjectCacheStatsHistoryPoint) SetHitCount(val int64) {
+	s.HitCount = val
+}
+
+// SetMissCount sets the value of MissCount.
+func (s *ObjectCacheStatsHistoryPoint) SetMissCount(val int64) {
+	s.MissCount = val
+}
+
+// SetUsedMemoryBytes sets the value of UsedMemoryBytes.
+func (s *ObjectCacheStatsHistoryPoint) SetUsedMemoryBytes(val int64) {
+	s.UsedMemoryBytes = val
+}
+
+// SetAvgWaitMs sets the value of AvgWaitMs.
+func (s *ObjectCacheStatsHistoryPoint) SetAvgWaitMs(val OptFloat64) {
+	s.AvgWaitMs = val
+}
+
+// SetOpsPerSec sets the value of OpsPerSec.
+func (s *ObjectCacheStatsHistoryPoint) SetOpsPerSec(val int) {
+	s.OpsPerSec = val
+}
+
+// SetEvictedKeysDelta sets the value of EvictedKeysDelta.
+func (s *ObjectCacheStatsHistoryPoint) SetEvictedKeysDelta(val int64) {
+	s.EvictedKeysDelta = val
+}
+
+// Result of an objectcache.test command.
+// Ref: #/components/schemas/ObjectCacheTestResult
+type ObjectCacheTestResult struct {
+	Ok             bool         `json:"ok"`
+	Detail         OptNilString `json:"detail"`
+	LatencyMs      OptInt       `json:"latency_ms"`
+	ServerVersion  OptNilString `json:"server_version"`
+	EvictionPolicy OptNilString `json:"eviction_policy"`
+	ConfigHash     OptNilString `json:"config_hash"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ObjectCacheTestResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetDetail returns the value of Detail.
+func (s *ObjectCacheTestResult) GetDetail() OptNilString {
+	return s.Detail
+}
+
+// GetLatencyMs returns the value of LatencyMs.
+func (s *ObjectCacheTestResult) GetLatencyMs() OptInt {
+	return s.LatencyMs
+}
+
+// GetServerVersion returns the value of ServerVersion.
+func (s *ObjectCacheTestResult) GetServerVersion() OptNilString {
+	return s.ServerVersion
+}
+
+// GetEvictionPolicy returns the value of EvictionPolicy.
+func (s *ObjectCacheTestResult) GetEvictionPolicy() OptNilString {
+	return s.EvictionPolicy
+}
+
+// GetConfigHash returns the value of ConfigHash.
+func (s *ObjectCacheTestResult) GetConfigHash() OptNilString {
+	return s.ConfigHash
+}
+
+// SetOk sets the value of Ok.
+func (s *ObjectCacheTestResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetDetail sets the value of Detail.
+func (s *ObjectCacheTestResult) SetDetail(val OptNilString) {
+	s.Detail = val
+}
+
+// SetLatencyMs sets the value of LatencyMs.
+func (s *ObjectCacheTestResult) SetLatencyMs(val OptInt) {
+	s.LatencyMs = val
+}
+
+// SetServerVersion sets the value of ServerVersion.
+func (s *ObjectCacheTestResult) SetServerVersion(val OptNilString) {
+	s.ServerVersion = val
+}
+
+// SetEvictionPolicy sets the value of EvictionPolicy.
+func (s *ObjectCacheTestResult) SetEvictionPolicy(val OptNilString) {
+	s.EvictionPolicy = val
+}
+
+// SetConfigHash sets the value of ConfigHash.
+func (s *ObjectCacheTestResult) SetConfigHash(val OptNilString) {
+	s.ConfigHash = val
+}
+
 type OidcCallbackNotImplemented Error
 
 func (*OidcCallbackNotImplemented) oidcCallbackRes() {}
@@ -13170,6 +14425,98 @@ func (o OptFloat64) Get() (v float64, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptFloat64) Or(d float64) float64 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptFlushObjectCacheReq returns new OptFlushObjectCacheReq with value set to v.
+func NewOptFlushObjectCacheReq(v FlushObjectCacheReq) OptFlushObjectCacheReq {
+	return OptFlushObjectCacheReq{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFlushObjectCacheReq is optional FlushObjectCacheReq.
+type OptFlushObjectCacheReq struct {
+	Value FlushObjectCacheReq
+	Set   bool
+}
+
+// IsSet returns true if OptFlushObjectCacheReq was set.
+func (o OptFlushObjectCacheReq) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFlushObjectCacheReq) Reset() {
+	var v FlushObjectCacheReq
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFlushObjectCacheReq) SetTo(v FlushObjectCacheReq) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFlushObjectCacheReq) Get() (v FlushObjectCacheReq, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFlushObjectCacheReq) Or(d FlushObjectCacheReq) FlushObjectCacheReq {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptFlushObjectCacheReqScope returns new OptFlushObjectCacheReqScope with value set to v.
+func NewOptFlushObjectCacheReqScope(v FlushObjectCacheReqScope) OptFlushObjectCacheReqScope {
+	return OptFlushObjectCacheReqScope{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFlushObjectCacheReqScope is optional FlushObjectCacheReqScope.
+type OptFlushObjectCacheReqScope struct {
+	Value FlushObjectCacheReqScope
+	Set   bool
+}
+
+// IsSet returns true if OptFlushObjectCacheReqScope was set.
+func (o OptFlushObjectCacheReqScope) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFlushObjectCacheReqScope) Reset() {
+	var v FlushObjectCacheReqScope
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFlushObjectCacheReqScope) SetTo(v FlushObjectCacheReqScope) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFlushObjectCacheReqScope) Get() (v FlushObjectCacheReqScope, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFlushObjectCacheReqScope) Or(d FlushObjectCacheReqScope) FlushObjectCacheReqScope {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -14745,6 +16092,69 @@ func (o OptNilFloat32) Or(d float32) float32 {
 	return d
 }
 
+// NewOptNilFloat64 returns new OptNilFloat64 with value set to v.
+func NewOptNilFloat64(v float64) OptNilFloat64 {
+	return OptNilFloat64{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilFloat64 is optional nullable float64.
+type OptNilFloat64 struct {
+	Value float64
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilFloat64 was set.
+func (o OptNilFloat64) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilFloat64) Reset() {
+	var v float64
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilFloat64) SetTo(v float64) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilFloat64) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilFloat64) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v float64
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilFloat64) Get() (v float64, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilFloat64) Or(d float64) float64 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptNilInt returns new OptNilInt with value set to v.
 func NewOptNilInt(v int) OptNilInt {
 	return OptNilInt{
@@ -15621,6 +17031,190 @@ func (o OptNilUUID) Get() (v uuid.UUID, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptNilUUID) Or(d uuid.UUID) uuid.UUID {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptObjectCacheConfigPutCompression returns new OptObjectCacheConfigPutCompression with value set to v.
+func NewOptObjectCacheConfigPutCompression(v ObjectCacheConfigPutCompression) OptObjectCacheConfigPutCompression {
+	return OptObjectCacheConfigPutCompression{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptObjectCacheConfigPutCompression is optional ObjectCacheConfigPutCompression.
+type OptObjectCacheConfigPutCompression struct {
+	Value ObjectCacheConfigPutCompression
+	Set   bool
+}
+
+// IsSet returns true if OptObjectCacheConfigPutCompression was set.
+func (o OptObjectCacheConfigPutCompression) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptObjectCacheConfigPutCompression) Reset() {
+	var v ObjectCacheConfigPutCompression
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptObjectCacheConfigPutCompression) SetTo(v ObjectCacheConfigPutCompression) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptObjectCacheConfigPutCompression) Get() (v ObjectCacheConfigPutCompression, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptObjectCacheConfigPutCompression) Or(d ObjectCacheConfigPutCompression) ObjectCacheConfigPutCompression {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptObjectCacheConfigPutFlushStrategy returns new OptObjectCacheConfigPutFlushStrategy with value set to v.
+func NewOptObjectCacheConfigPutFlushStrategy(v ObjectCacheConfigPutFlushStrategy) OptObjectCacheConfigPutFlushStrategy {
+	return OptObjectCacheConfigPutFlushStrategy{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptObjectCacheConfigPutFlushStrategy is optional ObjectCacheConfigPutFlushStrategy.
+type OptObjectCacheConfigPutFlushStrategy struct {
+	Value ObjectCacheConfigPutFlushStrategy
+	Set   bool
+}
+
+// IsSet returns true if OptObjectCacheConfigPutFlushStrategy was set.
+func (o OptObjectCacheConfigPutFlushStrategy) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptObjectCacheConfigPutFlushStrategy) Reset() {
+	var v ObjectCacheConfigPutFlushStrategy
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptObjectCacheConfigPutFlushStrategy) SetTo(v ObjectCacheConfigPutFlushStrategy) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptObjectCacheConfigPutFlushStrategy) Get() (v ObjectCacheConfigPutFlushStrategy, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptObjectCacheConfigPutFlushStrategy) Or(d ObjectCacheConfigPutFlushStrategy) ObjectCacheConfigPutFlushStrategy {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptObjectCacheConfigPutScheme returns new OptObjectCacheConfigPutScheme with value set to v.
+func NewOptObjectCacheConfigPutScheme(v ObjectCacheConfigPutScheme) OptObjectCacheConfigPutScheme {
+	return OptObjectCacheConfigPutScheme{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptObjectCacheConfigPutScheme is optional ObjectCacheConfigPutScheme.
+type OptObjectCacheConfigPutScheme struct {
+	Value ObjectCacheConfigPutScheme
+	Set   bool
+}
+
+// IsSet returns true if OptObjectCacheConfigPutScheme was set.
+func (o OptObjectCacheConfigPutScheme) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptObjectCacheConfigPutScheme) Reset() {
+	var v ObjectCacheConfigPutScheme
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptObjectCacheConfigPutScheme) SetTo(v ObjectCacheConfigPutScheme) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptObjectCacheConfigPutScheme) Get() (v ObjectCacheConfigPutScheme, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptObjectCacheConfigPutScheme) Or(d ObjectCacheConfigPutScheme) ObjectCacheConfigPutScheme {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptObjectCacheConfigPutSerializer returns new OptObjectCacheConfigPutSerializer with value set to v.
+func NewOptObjectCacheConfigPutSerializer(v ObjectCacheConfigPutSerializer) OptObjectCacheConfigPutSerializer {
+	return OptObjectCacheConfigPutSerializer{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptObjectCacheConfigPutSerializer is optional ObjectCacheConfigPutSerializer.
+type OptObjectCacheConfigPutSerializer struct {
+	Value ObjectCacheConfigPutSerializer
+	Set   bool
+}
+
+// IsSet returns true if OptObjectCacheConfigPutSerializer was set.
+func (o OptObjectCacheConfigPutSerializer) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptObjectCacheConfigPutSerializer) Reset() {
+	var v ObjectCacheConfigPutSerializer
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptObjectCacheConfigPutSerializer) SetTo(v ObjectCacheConfigPutSerializer) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptObjectCacheConfigPutSerializer) Get() (v ObjectCacheConfigPutSerializer, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptObjectCacheConfigPutSerializer) Or(d ObjectCacheConfigPutSerializer) ObjectCacheConfigPutSerializer {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -16685,6 +18279,52 @@ func (o OptString) Or(d string) string {
 	return d
 }
 
+// NewOptTestObjectCacheReq returns new OptTestObjectCacheReq with value set to v.
+func NewOptTestObjectCacheReq(v TestObjectCacheReq) OptTestObjectCacheReq {
+	return OptTestObjectCacheReq{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptTestObjectCacheReq is optional TestObjectCacheReq.
+type OptTestObjectCacheReq struct {
+	Value TestObjectCacheReq
+	Set   bool
+}
+
+// IsSet returns true if OptTestObjectCacheReq was set.
+func (o OptTestObjectCacheReq) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptTestObjectCacheReq) Reset() {
+	var v TestObjectCacheReq
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptTestObjectCacheReq) SetTo(v TestObjectCacheReq) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptTestObjectCacheReq) Get() (v TestObjectCacheReq, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptTestObjectCacheReq) Or(d TestObjectCacheReq) TestObjectCacheReq {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptTriggerDbScanReq returns new OptTriggerDbScanReq with value set to v.
 func NewOptTriggerDbScanReq(v TriggerDbScanReq) OptTriggerDbScanReq {
 	return OptTriggerDbScanReq{
@@ -17287,7 +18927,8 @@ func (s *PerfActionResult) SetPurgeID(val OptUUID) {
 	s.PurgeID = val
 }
 
-func (*PerfActionResult) purgeCacheRes() {}
+func (*PerfActionResult) enableObjectCacheRes() {}
+func (*PerfActionResult) purgeCacheRes()        {}
 
 // The full per-site performance configuration. `cdn_credentials` is
 // write-only (see CdnCredentials); `cdn_has_credentials` and the
@@ -27084,6 +28725,21 @@ func (s *TenantList) GetItems() []Tenant {
 // SetItems sets the value of Items.
 func (s *TenantList) SetItems(val []Tenant) {
 	s.Items = val
+}
+
+type TestObjectCacheReq struct {
+	// Override the stored password for this test only.
+	Password OptString `json:"password"`
+}
+
+// GetPassword returns the value of Password.
+func (s *TestObjectCacheReq) GetPassword() OptString {
+	return s.Password
+}
+
+// SetPassword sets the value of Password.
+func (s *TestObjectCacheReq) SetPassword(val OptString) {
+	s.Password = val
 }
 
 type TestSiteDestinationForbidden Error

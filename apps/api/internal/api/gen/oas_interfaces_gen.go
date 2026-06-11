@@ -197,6 +197,10 @@ type DownloadPortalReportRes interface {
 	downloadPortalReportRes()
 }
 
+type EnableObjectCacheRes interface {
+	enableObjectCacheRes()
+}
+
 type EnrollRes interface {
 	enrollRes()
 }
@@ -487,6 +491,10 @@ type PutEmailConnectionRes interface {
 
 type PutEmailNotifySettingsRes interface {
 	putEmailNotifySettingsRes()
+}
+
+type PutObjectCacheConfigRes interface {
+	putObjectCacheConfigRes()
 }
 
 type PutOrgEmailConfigRes interface {

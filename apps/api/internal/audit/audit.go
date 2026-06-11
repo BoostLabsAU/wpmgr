@@ -180,6 +180,21 @@ const (
 	ActionClientReportScheduleUpdated = "client.report_schedule.updated"
 	ActionClientReportGenerated       = "client.report.generated"
 	ActionClientReportDeleted         = "client.report.deleted"
+
+	// Object Cache management (M68). Recorded on config save, enable, disable,
+	// flush, and test.
+	//
+	// ActionObjectCacheConfigUpdated: metadata: has_password (bool), scheme,
+	//   analytics_enabled, serializer, compression.
+	ActionObjectCacheConfigUpdated = "site.objectcache.config.updated"
+	// ActionObjectCacheEnabled: metadata: config_hash (the passing test hash).
+	ActionObjectCacheEnabled = "site.objectcache.enabled"
+	// ActionObjectCacheDisabled: metadata: flushed (bool).
+	ActionObjectCacheDisabled = "site.objectcache.disabled"
+	// ActionObjectCacheFlushed: metadata: scope, strategy, keys_deleted.
+	ActionObjectCacheFlushed = "site.objectcache.flushed"
+	// ActionObjectCacheTested: metadata: ok (bool), config_hash.
+	ActionObjectCacheTested = "site.objectcache.tested"
 )
 
 // Entry is one audit record.

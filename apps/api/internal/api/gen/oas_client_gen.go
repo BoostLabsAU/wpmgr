@@ -588,6 +588,14 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/disable
 	DisableCache(ctx context.Context, params DisableCacheParams) (*PerfActionResult, error)
+	// DisableObjectCache invokes disableObjectCache operation.
+	//
+	// Removes the WP object-cache drop-in and flushes. Sends an
+	// `objectcache.disable` signed command. Requires `site.cache.manage`
+	// permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/disable
+	DisableObjectCache(ctx context.Context, params DisableObjectCacheParams) (*PerfActionResult, error)
 	// DownloadPortalReport invokes downloadPortalReport operation.
 	//
 	// Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
@@ -604,6 +612,15 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/enable
 	EnableCache(ctx context.Context, params EnableCacheParams) (*PerfActionResult, error)
+	// EnableObjectCache invokes enableObjectCache operation.
+	//
+	// Installs the WP object-cache drop-in on the site. Rejected with 400
+	// `objectcache_test_required` when no passing test result exists for the
+	// current configuration (handshake gate). Sends an `objectcache.enable`
+	// signed command. Requires `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/enable
+	EnableObjectCache(ctx context.Context, params EnableObjectCacheParams) (EnableObjectCacheRes, error)
 	// Enroll invokes enroll operation.
 	//
 	// Called by an agent (NOT an authenticated control-plane user) to enroll a
@@ -624,6 +641,16 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/log/export
 	ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (ExportSiteEmailLogRes, error)
+	// FlushObjectCache invokes flushObjectCache operation.
+	//
+	// Flushes the Redis/cache store for this site. The `scope` field
+	// controls what is flushed: `all` (default), `site` (prefix-scoped),
+	// or `group` (requires `group` field). Sends an `objectcache.flush`
+	// command and publishes an `objectcache.flushed` SSE event. Requires
+	// `site.cache.purge` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/flush
+	FlushObjectCache(ctx context.Context, request OptFlushObjectCacheReq, params FlushObjectCacheParams) (*PerfActionResult, error)
 	// ForgotPassword invokes forgotPassword operation.
 	//
 	// Always returns 200 {ok: true} whether or not the email maps to an
@@ -773,6 +800,23 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/jobs/{jobId}
 	GetMediaJob(ctx context.Context, params GetMediaJobParams) (*MediaJobDetail, error)
+	// GetObjectCacheConfig invokes getObjectCacheConfig operation.
+	//
+	// Returns the stored object cache configuration for the site. The password
+	// is never returned; `has_password` indicates whether one is stored.
+	// Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+	// heartbeat from the agent.
+	//
+	// GET /api/v1/sites/{siteId}/perf/object-cache/config
+	GetObjectCacheConfig(ctx context.Context, params GetObjectCacheConfigParams) (*ObjectCacheConfig, error)
+	// GetObjectCacheStatsHistory invokes getObjectCacheStatsHistory operation.
+	//
+	// Returns daily-aggregated object cache stats (hit/miss ratio, memory
+	// usage, eviction count) for up to 365 days. Default window is 90 days.
+	// Requires `site.read` permission.
+	//
+	// GET /api/v1/sites/{siteId}/perf/object-cache/stats-history
+	GetObjectCacheStatsHistory(ctx context.Context, params GetObjectCacheStatsHistoryParams) (*ObjectCacheStatsHistory, error)
 	// GetOrgEmailConfig invokes getOrgEmailConfig operation.
 	//
 	// Returns the org-wide default email configuration. Sites with no per-site
@@ -1424,6 +1468,19 @@ type Invoker interface {
 	//
 	// PUT /api/v1/email/notify-settings
 	PutEmailNotifySettings(ctx context.Context, request *PutEmailNotifySettingsRequest) (PutEmailNotifySettingsRes, error)
+	// PutObjectCacheConfig invokes putObjectCacheConfig operation.
+	//
+	// Stores the object cache configuration. An empty `password` field
+	// preserves the stored password (nil-sentinel). If connection-critical
+	// fields change (host, port, scheme, database, username, prefix, or
+	// password), the stored test hash is cleared and a new test is required
+	// before re-enabling. The agent receives the new config via an
+	// `objectcache.apply_config` signed command (best-effort: a push failure
+	// returns 200 with an `X-Agent-Push-Warning` header). Requires
+	// `site.perf.config` permission.
+	//
+	// PUT /api/v1/sites/{siteId}/perf/object-cache/config
+	PutObjectCacheConfig(ctx context.Context, request *ObjectCacheConfigPut, params PutObjectCacheConfigParams) (PutObjectCacheConfigRes, error)
 	// PutOrgEmailConfig invokes putOrgEmailConfig operation.
 	//
 	// Creates or updates the org-wide default email configuration. This row is
@@ -1729,6 +1786,18 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/email/sync
 	SyncSiteEmailConfig(ctx context.Context, params SyncSiteEmailConfigParams) (SyncSiteEmailConfigRes, error)
+	// TestObjectCache invokes testObjectCache operation.
+	//
+	// Sends an `objectcache.test` command to the agent using the stored
+	// configuration. An optional `password` in the body overrides the stored
+	// password for this call only (useful for testing before saving). On
+	// success the control plane stores the config hash as the enable-gate
+	// token; on failure the hash is NOT updated. The result is also published
+	// as an `objectcache.test_completed` SSE event. Requires
+	// `site.cache.manage` permission.
+	//
+	// POST /api/v1/sites/{siteId}/perf/object-cache/test
+	TestObjectCache(ctx context.Context, request OptTestObjectCacheReq, params TestObjectCacheParams) (*ObjectCacheTestResult, error)
 	// TestSiteDestination invokes testSiteDestination operation.
 	//
 	// Returns 200 with `{ok, message}` regardless of success/failure so the
@@ -7624,6 +7693,101 @@ func (c *Client) sendDisableCache(ctx context.Context, params DisableCacheParams
 	return result, nil
 }
 
+// DisableObjectCache invokes disableObjectCache operation.
+//
+// Removes the WP object-cache drop-in and flushes. Sends an
+// `objectcache.disable` signed command. Requires `site.cache.manage`
+// permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/disable
+func (c *Client) DisableObjectCache(ctx context.Context, params DisableObjectCacheParams) (*PerfActionResult, error) {
+	res, err := c.sendDisableObjectCache(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendDisableObjectCache(ctx context.Context, params DisableObjectCacheParams) (res *PerfActionResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("disableObjectCache"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/disable"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, DisableObjectCacheOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/disable"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeDisableObjectCacheResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // DownloadPortalReport invokes downloadPortalReport operation.
 //
 // Returns a presigned URL for the HTML or PDF version of a completed report. The report must belong
@@ -7825,6 +7989,102 @@ func (c *Client) sendEnableCache(ctx context.Context, params EnableCacheParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeEnableCacheResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// EnableObjectCache invokes enableObjectCache operation.
+//
+// Installs the WP object-cache drop-in on the site. Rejected with 400
+// `objectcache_test_required` when no passing test result exists for the
+// current configuration (handshake gate). Sends an `objectcache.enable`
+// signed command. Requires `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/enable
+func (c *Client) EnableObjectCache(ctx context.Context, params EnableObjectCacheParams) (EnableObjectCacheRes, error) {
+	res, err := c.sendEnableObjectCache(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendEnableObjectCache(ctx context.Context, params EnableObjectCacheParams) (res EnableObjectCacheRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("enableObjectCache"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/enable"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, EnableObjectCacheOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/enable"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeEnableObjectCacheResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -8092,6 +8352,106 @@ func (c *Client) sendExportSiteEmailLog(ctx context.Context, params ExportSiteEm
 
 	stage = "DecodeResponse"
 	result, err := decodeExportSiteEmailLogResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// FlushObjectCache invokes flushObjectCache operation.
+//
+// Flushes the Redis/cache store for this site. The `scope` field
+// controls what is flushed: `all` (default), `site` (prefix-scoped),
+// or `group` (requires `group` field). Sends an `objectcache.flush`
+// command and publishes an `objectcache.flushed` SSE event. Requires
+// `site.cache.purge` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/flush
+func (c *Client) FlushObjectCache(ctx context.Context, request OptFlushObjectCacheReq, params FlushObjectCacheParams) (*PerfActionResult, error) {
+	res, err := c.sendFlushObjectCache(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendFlushObjectCache(ctx context.Context, request OptFlushObjectCacheReq, params FlushObjectCacheParams) (res *PerfActionResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("flushObjectCache"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/flush"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, FlushObjectCacheOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/flush"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeFlushObjectCacheRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeFlushObjectCacheResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -9858,6 +10218,218 @@ func (c *Client) sendGetMediaJob(ctx context.Context, params GetMediaJobParams) 
 
 	stage = "DecodeResponse"
 	result, err := decodeGetMediaJobResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetObjectCacheConfig invokes getObjectCacheConfig operation.
+//
+// Returns the stored object cache configuration for the site. The password
+// is never returned; `has_password` indicates whether one is stored.
+// Live status fields (`oc_state`, `oc_latency_ms`, etc.) reflect the last
+// heartbeat from the agent.
+//
+// GET /api/v1/sites/{siteId}/perf/object-cache/config
+func (c *Client) GetObjectCacheConfig(ctx context.Context, params GetObjectCacheConfigParams) (*ObjectCacheConfig, error) {
+	res, err := c.sendGetObjectCacheConfig(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetObjectCacheConfig(ctx context.Context, params GetObjectCacheConfigParams) (res *ObjectCacheConfig, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getObjectCacheConfig"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetObjectCacheConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetObjectCacheConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetObjectCacheStatsHistory invokes getObjectCacheStatsHistory operation.
+//
+// Returns daily-aggregated object cache stats (hit/miss ratio, memory
+// usage, eviction count) for up to 365 days. Default window is 90 days.
+// Requires `site.read` permission.
+//
+// GET /api/v1/sites/{siteId}/perf/object-cache/stats-history
+func (c *Client) GetObjectCacheStatsHistory(ctx context.Context, params GetObjectCacheStatsHistoryParams) (*ObjectCacheStatsHistory, error) {
+	res, err := c.sendGetObjectCacheStatsHistory(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetObjectCacheStatsHistory(ctx context.Context, params GetObjectCacheStatsHistoryParams) (res *ObjectCacheStatsHistory, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getObjectCacheStatsHistory"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/stats-history"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetObjectCacheStatsHistoryOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/stats-history"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "days" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "days",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Days.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetObjectCacheStatsHistoryResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -18634,6 +19206,109 @@ func (c *Client) sendPutEmailNotifySettings(ctx context.Context, request *PutEma
 	return result, nil
 }
 
+// PutObjectCacheConfig invokes putObjectCacheConfig operation.
+//
+// Stores the object cache configuration. An empty `password` field
+// preserves the stored password (nil-sentinel). If connection-critical
+// fields change (host, port, scheme, database, username, prefix, or
+// password), the stored test hash is cleared and a new test is required
+// before re-enabling. The agent receives the new config via an
+// `objectcache.apply_config` signed command (best-effort: a push failure
+// returns 200 with an `X-Agent-Push-Warning` header). Requires
+// `site.perf.config` permission.
+//
+// PUT /api/v1/sites/{siteId}/perf/object-cache/config
+func (c *Client) PutObjectCacheConfig(ctx context.Context, request *ObjectCacheConfigPut, params PutObjectCacheConfigParams) (PutObjectCacheConfigRes, error) {
+	res, err := c.sendPutObjectCacheConfig(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPutObjectCacheConfig(ctx context.Context, request *ObjectCacheConfigPut, params PutObjectCacheConfigParams) (res PutObjectCacheConfigRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("putObjectCacheConfig"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/config"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PutObjectCacheConfigOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/config"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePutObjectCacheConfigRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePutObjectCacheConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // PutOrgEmailConfig invokes putOrgEmailConfig operation.
 //
 // Creates or updates the org-wide default email configuration. This row is
@@ -21652,6 +22327,108 @@ func (c *Client) sendSyncSiteEmailConfig(ctx context.Context, params SyncSiteEma
 
 	stage = "DecodeResponse"
 	result, err := decodeSyncSiteEmailConfigResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// TestObjectCache invokes testObjectCache operation.
+//
+// Sends an `objectcache.test` command to the agent using the stored
+// configuration. An optional `password` in the body overrides the stored
+// password for this call only (useful for testing before saving). On
+// success the control plane stores the config hash as the enable-gate
+// token; on failure the hash is NOT updated. The result is also published
+// as an `objectcache.test_completed` SSE event. Requires
+// `site.cache.manage` permission.
+//
+// POST /api/v1/sites/{siteId}/perf/object-cache/test
+func (c *Client) TestObjectCache(ctx context.Context, request OptTestObjectCacheReq, params TestObjectCacheParams) (*ObjectCacheTestResult, error) {
+	res, err := c.sendTestObjectCache(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendTestObjectCache(ctx context.Context, request OptTestObjectCacheReq, params TestObjectCacheParams) (res *ObjectCacheTestResult, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("testObjectCache"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/object-cache/test"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, TestObjectCacheOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/object-cache/test"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeTestObjectCacheRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeTestObjectCacheResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
