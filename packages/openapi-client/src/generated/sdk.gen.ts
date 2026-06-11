@@ -243,6 +243,9 @@ import type {
   GetPortalSiteVitalsData,
   GetPortalSiteVitalsErrors,
   GetPortalSiteVitalsResponses,
+  GetPortalSummaryData,
+  GetPortalSummaryErrors,
+  GetPortalSummaryResponses,
   GetReadyzData,
   GetReadyzErrors,
   GetReadyzResponses,
@@ -4604,6 +4607,21 @@ export const getPortalSiteVitals = <ThrowOnError extends boolean = false>(
     GetPortalSiteVitalsErrors,
     ThrowOnError
   >({ url: "/api/v1/portal/sites/{siteId}/vitals", ...options });
+
+/**
+ * Portal dashboard summary (rolling window)
+ *
+ * Returns the full portal dashboard payload: KPI totals, per-site uptime and vitals, recent work feed, and latest report reference. Data is derived from report.BuildReportData with the email source disabled. Only sites in the principal's AllowedSiteIDs are returned. The ?range parameter accepts 7d, 30d, or 90d; other values are clamped to 30d. In v2 only 30d is fully supported.
+ *
+ */
+export const getPortalSummary = <ThrowOnError extends boolean = false>(
+  options?: Options<GetPortalSummaryData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetPortalSummaryResponses,
+    GetPortalSummaryErrors,
+    ThrowOnError
+  >({ url: "/api/v1/portal/summary", ...options });
 
 /**
  * List completed reports for the portal principal

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -36,6 +37,10 @@ type Mailer interface {
 // plaintext Mailer for org invitations.
 type InviteEnqueuer interface {
 	Enqueue(ctx context.Context, tenantID uuid.UUID, recipients []string, template string, data map[string]any) error
+	// Enabled reports whether SMTP is currently configured. When false,
+	// Enqueue may still succeed (the job is queued) but delivery will be
+	// skipped, so callers should surface email_sent=false to the client.
+	Enabled(ctx context.Context) bool
 }
 
 // SessionStarter establishes a session for a newly accepted invitation.
@@ -394,17 +399,20 @@ func (s *Service) incrementAttempts(ctx context.Context, tenantID, invID uuid.UU
 
 // CreateClientInvitation creates a scope='client' invitation token and sends a
 // portal-invite email. Returns the raw accept link (always; copyable-link
-// fallback for unconfigured SMTP), the invitation ID, and the expiry time.
-// This satisfies client.InviteService.
-func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID, actorID uuid.UUID, email string) (acceptLink string, invitationID uuid.UUID, expiresAt time.Time, err error) {
-	rawToken, tokenHash, err := generateSecureToken()
-	if err != nil {
-		return "", uuid.Nil, time.Time{}, domain.Internal("token_gen_failed", "failed to generate invitation token").WithCause(err)
+// fallback for unconfigured SMTP), the invitation ID, the expiry time, and a
+// boolean indicating whether the invitation email was successfully enqueued.
+// emailSent is false when SMTP is unconfigured, the enqueuer is nil, or
+// enqueue fails — but in all those cases the accept link is still returned and
+// invitation creation is never aborted. This satisfies client.InviteService.
+func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID, actorID uuid.UUID, email string) (acceptLink string, invitationID uuid.UUID, expiresAt time.Time, emailSent bool, err error) {
+	rawToken, tokenHash, genErr := generateSecureToken()
+	if genErr != nil {
+		return "", uuid.Nil, time.Time{}, false, domain.Internal("token_gen_failed", "failed to generate invitation token").WithCause(genErr)
 	}
 
 	expiry := time.Now().UTC().Add(7 * 24 * time.Hour)
 	var inv sqlc.Invitation
-	err = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+	txErr := s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row, qerr := sqlc.New(tx).CreateInvitation(ctx, sqlc.CreateInvitationParams{
 			TenantID:  tenantID,
 			Email:     email,
@@ -422,8 +430,8 @@ func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID
 		inv = row
 		return nil
 	})
-	if err != nil {
-		return "", uuid.Nil, time.Time{}, err
+	if txErr != nil {
+		return "", uuid.Nil, time.Time{}, false, txErr
 	}
 
 	link := s.baseURL + "/accept?token=" + rawToken
@@ -448,19 +456,7 @@ func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID
 		}
 	}
 
-	if s.enqueuer != nil {
-		_ = s.enqueuer.Enqueue(ctx, uuid.Nil, []string{email}, "client_portal_invite", map[string]any{
-			"Name":         "there",
-			"InviterName":  inviterName,
-			"ClientName":   clientName,
-			"AgencyName":   agencyName,
-			"AcceptURL":    link,
-			"ExpiresHours": "168",
-		})
-	} else if s.mailer != nil {
-		body := "You have been invited to access the " + clientName + " portal, managed by " + agencyName + ".\n\nAccept your invitation here:\n" + link + "\n\nThis link expires in 7 days and is single-use."
-		_ = s.mailer.Send(ctx, []string{email}, "You have been invited to a client portal", body)
-	}
+	emailSent = sendClientPortalInvite(ctx, s.enqueuer, s.mailer, email, link, inviterName, clientName, agencyName)
 
 	_, _ = s.audit.Record(ctx, audit.Event{
 		TenantID:   tenantID,
@@ -472,5 +468,47 @@ func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID
 		Metadata:   map[string]any{"email": email, "invitation_id": inv.ID.String(), "client_id": clientID.String()},
 	})
 
-	return link, inv.ID, expiry, nil
+	return link, inv.ID, expiry, emailSent, nil
+}
+
+// sendClientPortalInvite dispatches the portal invite email and returns whether
+// the email was successfully enqueued with SMTP configured. It is extracted so
+// the dispatch logic can be unit-tested without a live DB connection.
+//
+// Rules (per contract §1.3 / §1.4):
+//   - emailSent=true only when enqueuer.Enabled()==true AND Enqueue returns nil.
+//   - An enqueue failure logs a warning but NEVER aborts invitation creation.
+//   - When Enabled()==false, enqueue is still attempted (so the email_log row is
+//     created and Deliver marks it "smtp not configured"), but emailSent=false.
+//   - A nil enqueuer falls back to the legacy Mailer (emailSent = Send==nil).
+//   - A nil enqueuer AND nil mailer: emailSent=false, no side-effects.
+func sendClientPortalInvite(ctx context.Context, enq InviteEnqueuer, mailer Mailer,
+	email, link, inviterName, clientName, agencyName string) bool {
+	data := map[string]any{
+		"Name":         "there",
+		"InviterName":  inviterName,
+		"ClientName":   clientName,
+		"AgencyName":   agencyName,
+		"AcceptURL":    link,
+		"ExpiresHours": "168",
+	}
+	if enq != nil {
+		if enq.Enabled(ctx) {
+			if err := enq.Enqueue(ctx, uuid.Nil, []string{email}, "client_portal_invite", data); err != nil {
+				slog.Warn("client portal invite: enqueue failed; invitation still created",
+					slog.String("email", email), slog.Any("error", err))
+				return false
+			}
+			return true
+		}
+		// SMTP unconfigured: still enqueue so the log row is created and Deliver
+		// marks it "smtp not configured" — but email_sent is false.
+		_ = enq.Enqueue(ctx, uuid.Nil, []string{email}, "client_portal_invite", data)
+		return false
+	}
+	if mailer != nil {
+		body := "You have been invited to access the " + clientName + " portal, managed by " + agencyName + ".\n\nAccept your invitation here:\n" + link + "\n\nThis link expires in 7 days and is single-use."
+		return mailer.Send(ctx, []string{email}, "You have been invited to a client portal", body) == nil
+	}
+	return false
 }

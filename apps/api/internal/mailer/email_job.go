@@ -63,6 +63,14 @@ func NewEnqueuer(svc *Service, client *river.Client[pgx.Tx]) *Enqueuer {
 	return &Enqueuer{svc: svc, client: client}
 }
 
+// Enabled delegates to the underlying Service.Enabled, reporting whether a
+// usable SMTP transport is currently configured. When false, a queued job will
+// be delivered as a no-op (the log row marked "smtp not configured"), so
+// callers surface email_sent=false to their clients.
+func (e *Enqueuer) Enabled(ctx context.Context) bool {
+	return e.svc.Enabled(ctx)
+}
+
 // Enqueue logs + schedules an email. The subject is resolved from the template's
 // static subject map.
 func (e *Enqueuer) Enqueue(ctx context.Context, tenantID uuid.UUID, recipients []string, template string, data map[string]any) error {

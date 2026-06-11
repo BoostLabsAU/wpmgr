@@ -92,6 +92,7 @@ const (
 	GetPortalOverviewOperation              OperationName = "GetPortalOverview"
 	GetPortalSiteUptimeOperation            OperationName = "GetPortalSiteUptime"
 	GetPortalSiteVitalsOperation            OperationName = "GetPortalSiteVitals"
+	GetPortalSummaryOperation               OperationName = "GetPortalSummary"
 	GetReadyzOperation                      OperationName = "GetReadyz"
 	GetRestoreRunOperation                  OperationName = "GetRestoreRun"
 	GetRumSummaryOperation                  OperationName = "GetRumSummary"

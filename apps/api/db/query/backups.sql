@@ -104,6 +104,20 @@ FROM backup_snapshots
 WHERE tenant_id = $1 AND site_id = $2 AND status = 'completed'
 ORDER BY created_at DESC;
 
+-- name: ListRecentCompletedSnapshotsForSites :many
+-- Returns recently completed snapshots across a set of sites, ordered newest
+-- first. Used by the portal /summary recent_work feed. The site_ids param is
+-- always p.AllowedSiteIDs (RLS double-gate via app.site_scope on
+-- backup_snapshots). `, id` tiebreaker follows the project ORDER BY convention.
+SELECT site_id, kind, total_size, finished_at
+FROM backup_snapshots
+WHERE tenant_id  = @tenant_id
+  AND site_id    = ANY(@site_ids::uuid[])
+  AND status     = 'completed'
+  AND finished_at >= @since
+ORDER BY finished_at DESC, id DESC
+LIMIT @row_limit;
+
 -- name: ListInFlightSnapshotFloor :one
 -- ADR-050 mark-and-sweep grace floor: the oldest created_at among snapshots
 -- that are still pending or running for the tenant. A chunk created before this

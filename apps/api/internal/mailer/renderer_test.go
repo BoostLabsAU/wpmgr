@@ -1,6 +1,7 @@
 package mailer
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,13 @@ func sampleData(name string) map[string]any {
 			{"Subject": "Order receipt", "To": "buyer@example.com", "Error": "550 mailbox unavailable"},
 			{"Subject": "Password reset", "To": "user@example.com", "Error": "timeout connecting to provider"},
 		}
+	case "client_portal_invite":
+		common["Name"] = "there"
+		common["InviterName"] = "Alex Agency"
+		common["ClientName"] = "Acme Corp"
+		common["AgencyName"] = "Alex Agency"
+		common["AcceptURL"] = "https://manage.wpmgr.app/accept?token=portal123"
+		common["ExpiresHours"] = "168"
 	case "email_digest":
 		// Mirrors the production shape built in email/notify.go buildDigestData:
 		// aggregate counts are int64, per-site rows carry int64 counts.
@@ -120,9 +128,10 @@ func TestPlaintextContainsActionURL(t *testing.T) {
 		t.Fatalf("NewTemplateRenderer: %v", err)
 	}
 	cases := map[string]string{
-		"password_reset": "https://manage.wpmgr.app/reset-password?token=abc123",
-		"verify_email":   "https://manage.wpmgr.app/verify-email?token=def456",
-		"invite":         "https://manage.wpmgr.app/accept?token=ghi789",
+		"password_reset":       "https://manage.wpmgr.app/reset-password?token=abc123",
+		"verify_email":         "https://manage.wpmgr.app/verify-email?token=def456",
+		"invite":               "https://manage.wpmgr.app/accept?token=ghi789",
+		"client_portal_invite": "https://manage.wpmgr.app/accept?token=portal123",
 	}
 	for name, url := range cases {
 		em, err := r.Render(name, sampleData(name))
@@ -131,6 +140,58 @@ func TestPlaintextContainsActionURL(t *testing.T) {
 		}
 		if !strings.Contains(em.Text, url) {
 			t.Errorf("plaintext for %s must contain the action URL %q", name, url)
+		}
+	}
+}
+
+// TestSubjectsTemplatesCompleteness is the regression lock: every embedded
+// template file must have a subjects entry AND a matching .txt.tmpl file, and
+// every subjects key must have both .html.tmpl and .txt.tmpl files. A mismatch
+// between the subjects map and the templates directory is what caused the
+// client_portal_invite bug (template existed, subjects entry was absent) to
+// ship undetected — TestRenderAllTemplates only iterates the subjects map keys,
+// so a missing entry silently skips the template.
+func TestSubjectsTemplatesCompleteness(t *testing.T) {
+	// Gather all HTML template base names from the embedded FS (skip _partials).
+	htmlFiles, err := templateFS.ReadDir("templates")
+	if err != nil {
+		t.Fatalf("read templates dir: %v", err)
+	}
+
+	fromFiles := make(map[string]bool) // base names present as HTML files
+	for _, f := range htmlFiles {
+		name := f.Name()
+		if strings.HasPrefix(name, "_") {
+			continue // skip _partials
+		}
+		if !strings.HasSuffix(name, ".html.tmpl") {
+			continue
+		}
+		base := strings.TrimSuffix(name, ".html.tmpl")
+		fromFiles[base] = true
+	}
+
+	// Every HTML template file must have a subjects entry.
+	for base := range fromFiles {
+		if _, ok := subjects[base]; !ok {
+			t.Errorf("template file %q exists but subjects map has no entry for it", base)
+		}
+		// Also verify the matching .txt.tmpl file exists.
+		txtName := "templates/" + base + ".txt.tmpl"
+		if _, ferr := templateFS.Open(txtName); ferr != nil {
+			t.Errorf("template %q has no matching %q", base+".html.tmpl", txtName)
+		}
+	}
+
+	// Every subjects entry must have both template files.
+	for key := range subjects {
+		htmlName := filepath.Join("templates", key+".html.tmpl")
+		if _, ferr := templateFS.Open(htmlName); ferr != nil {
+			t.Errorf("subjects entry %q has no %q file", key, htmlName)
+		}
+		txtName := filepath.Join("templates", key+".txt.tmpl")
+		if _, ferr := templateFS.Open(txtName); ferr != nil {
+			t.Errorf("subjects entry %q has no %q file", key, txtName)
 		}
 	}
 }

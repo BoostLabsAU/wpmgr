@@ -273,6 +273,10 @@ type GetPortalSiteVitalsRes interface {
 	getPortalSiteVitalsRes()
 }
 
+type GetPortalSummaryRes interface {
+	getPortalSummaryRes()
+}
+
 type GetReadyzRes interface {
 	getReadyzRes()
 }

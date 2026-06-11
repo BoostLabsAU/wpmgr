@@ -310,6 +310,69 @@ func (q *Queries) ListAppliedTasksForSite(ctx context.Context, arg ListAppliedTa
 	return items, nil
 }
 
+const listAppliedTasksForSites = `-- name: ListAppliedTasksForSites :many
+SELECT site_id, target_type, target_slug, from_version, to_version, finished_at
+FROM update_tasks
+WHERE tenant_id  = $1
+  AND site_id    = ANY($2::uuid[])
+  AND status     = 'succeeded'
+  AND finished_at >= $3
+ORDER BY finished_at DESC, id DESC
+LIMIT $4
+`
+
+type ListAppliedTasksForSitesParams struct {
+	TenantID uuid.UUID          `json:"tenant_id"`
+	SiteIds  []uuid.UUID        `json:"site_ids"`
+	Since    pgtype.Timestamptz `json:"since"`
+	RowLimit int32              `json:"row_limit"`
+}
+
+type ListAppliedTasksForSitesRow struct {
+	SiteID      uuid.UUID          `json:"site_id"`
+	TargetType  string             `json:"target_type"`
+	TargetSlug  string             `json:"target_slug"`
+	FromVersion string             `json:"from_version"`
+	ToVersion   string             `json:"to_version"`
+	FinishedAt  pgtype.Timestamptz `json:"finished_at"`
+}
+
+// Returns recently succeeded update tasks across a set of sites, ordered newest
+// first. Used by the portal /summary recent_work feed. The site_ids param is
+// always p.AllowedSiteIDs (RLS double-gate via app.site_scope on update_tasks).
+// `, id` tiebreaker follows the project ORDER BY convention.
+func (q *Queries) ListAppliedTasksForSites(ctx context.Context, arg ListAppliedTasksForSitesParams) ([]ListAppliedTasksForSitesRow, error) {
+	rows, err := q.db.Query(ctx, listAppliedTasksForSites,
+		arg.TenantID,
+		arg.SiteIds,
+		arg.Since,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAppliedTasksForSitesRow
+	for rows.Next() {
+		var i ListAppliedTasksForSitesRow
+		if err := rows.Scan(
+			&i.SiteID,
+			&i.TargetType,
+			&i.TargetSlug,
+			&i.FromVersion,
+			&i.ToVersion,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUpdateRuns = `-- name: ListUpdateRuns :many
 SELECT id, tenant_id, created_by, status, dry_run, scheduled_at, created_at, updated_at FROM update_runs
 WHERE tenant_id = $1

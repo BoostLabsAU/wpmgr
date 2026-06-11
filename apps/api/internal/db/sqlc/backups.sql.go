@@ -966,6 +966,65 @@ func (q *Queries) ListManifestEntries(ctx context.Context, arg ListManifestEntri
 	return items, nil
 }
 
+const listRecentCompletedSnapshotsForSites = `-- name: ListRecentCompletedSnapshotsForSites :many
+SELECT site_id, kind, total_size, finished_at
+FROM backup_snapshots
+WHERE tenant_id  = $1
+  AND site_id    = ANY($2::uuid[])
+  AND status     = 'completed'
+  AND finished_at >= $3
+ORDER BY finished_at DESC, id DESC
+LIMIT $4
+`
+
+type ListRecentCompletedSnapshotsForSitesParams struct {
+	TenantID uuid.UUID          `json:"tenant_id"`
+	SiteIds  []uuid.UUID        `json:"site_ids"`
+	Since    pgtype.Timestamptz `json:"since"`
+	RowLimit int32              `json:"row_limit"`
+}
+
+type ListRecentCompletedSnapshotsForSitesRow struct {
+	SiteID     uuid.UUID          `json:"site_id"`
+	Kind       string             `json:"kind"`
+	TotalSize  int64              `json:"total_size"`
+	FinishedAt pgtype.Timestamptz `json:"finished_at"`
+}
+
+// Returns recently completed snapshots across a set of sites, ordered newest
+// first. Used by the portal /summary recent_work feed. The site_ids param is
+// always p.AllowedSiteIDs (RLS double-gate via app.site_scope on
+// backup_snapshots). `, id` tiebreaker follows the project ORDER BY convention.
+func (q *Queries) ListRecentCompletedSnapshotsForSites(ctx context.Context, arg ListRecentCompletedSnapshotsForSitesParams) ([]ListRecentCompletedSnapshotsForSitesRow, error) {
+	rows, err := q.db.Query(ctx, listRecentCompletedSnapshotsForSites,
+		arg.TenantID,
+		arg.SiteIds,
+		arg.Since,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRecentCompletedSnapshotsForSitesRow
+	for rows.Next() {
+		var i ListRecentCompletedSnapshotsForSitesRow
+		if err := rows.Scan(
+			&i.SiteID,
+			&i.Kind,
+			&i.TotalSize,
+			&i.FinishedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listStalledRunningSnapshots = `-- name: ListStalledRunningSnapshots :many
 SELECT id, tenant_id, site_id, created_at, started_at, progress_updated_at
 FROM backup_snapshots

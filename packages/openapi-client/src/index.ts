@@ -187,6 +187,8 @@ export {
   getPortalSiteVitals,
   listPortalReports,
   downloadPortalReport,
+  // portal summary (m66 Phase 2 dashboard)
+  getPortalSummary,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -645,4 +647,15 @@ export type {
   ListPortalReportsResponse,
   DownloadPortalReportData,
   DownloadPortalReportResponse,
+  // portal summary (m66 Phase 2 dashboard)
+  PortalSummary,
+  PortalSummaryTotals,
+  PortalSummarySite,
+  PortalSummaryLatestReport,
+  PortalRecentWorkItem,
+  PortalUptimeDay,
+  PortalVitalsDistribution,
+  PortalVitalsRatingCount,
+  GetPortalSummaryData,
+  GetPortalSummaryResponse,
 } from "./generated/types.gen";

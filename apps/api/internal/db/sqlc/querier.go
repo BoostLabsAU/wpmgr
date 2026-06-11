@@ -654,6 +654,11 @@ type Querier interface {
 	// RLS AND the explicit (site_id, tenant_id) filter together prevent cross-site
 	// leakage.
 	ListAppliedTasksForSite(ctx context.Context, arg ListAppliedTasksForSiteParams) ([]ListAppliedTasksForSiteRow, error)
+	// Returns recently succeeded update tasks across a set of sites, ordered newest
+	// first. Used by the portal /summary recent_work feed. The site_ids param is
+	// always p.AllowedSiteIDs (RLS double-gate via app.site_scope on update_tasks).
+	// `, id` tiebreaker follows the project ORDER BY convention.
+	ListAppliedTasksForSites(ctx context.Context, arg ListAppliedTasksForSitesParams) ([]ListAppliedTasksForSitesRow, error)
 	ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error)
 	ListAuditEntriesForVerify(ctx context.Context, tenantID uuid.UUID) ([]AuditLog, error)
 	// Returns the tenant's already-stored chunks among the given hashes (dedup: the
@@ -794,6 +799,11 @@ type Querier interface {
 	// List pending (not yet accepted, not expired, not revoked) invitations for the
 	// current tenant.
 	ListPendingInvitations(ctx context.Context, tenantID uuid.UUID) ([]Invitation, error)
+	// Returns recently completed snapshots across a set of sites, ordered newest
+	// first. Used by the portal /summary recent_work feed. The site_ids param is
+	// always p.AllowedSiteIDs (RLS double-gate via app.site_scope on
+	// backup_snapshots). `, id` tiebreaker follows the project ORDER BY convention.
+	ListRecentCompletedSnapshotsForSites(ctx context.Context, arg ListRecentCompletedSnapshotsForSitesParams) ([]ListRecentCompletedSnapshotsForSitesRow, error)
 	// Keyset cursor pagination: composite predicate (created_at, id) < (cursor_at, cursor_id)
 	// because batch inserts can share created_at and a bare compare skips co-timestamped rows
 	// (standing keyset-cursor-composite rule).

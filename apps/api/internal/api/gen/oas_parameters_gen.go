@@ -4410,6 +4410,90 @@ func decodeGetPortalSiteVitalsParams(args [1]string, argsEscaped bool, r *http.R
 	return params, nil
 }
 
+// GetPortalSummaryParams is parameters of getPortalSummary operation.
+type GetPortalSummaryParams struct {
+	Range OptGetPortalSummaryRange `json:",omitempty,omitzero"`
+}
+
+func unpackGetPortalSummaryParams(packed middleware.Parameters) (params GetPortalSummaryParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "range",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Range = v.(OptGetPortalSummaryRange)
+		}
+	}
+	return params
+}
+
+func decodeGetPortalSummaryParams(args [0]string, argsEscaped bool, r *http.Request) (params GetPortalSummaryParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Set default value for query: range.
+	{
+		val := GetPortalSummaryRange("30d")
+		params.Range.SetTo(val)
+	}
+	// Decode query: range.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "range",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotRangeVal GetPortalSummaryRange
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotRangeVal = GetPortalSummaryRange(c)
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Range.SetTo(paramsDotRangeVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if value, ok := params.Range.Get(); ok {
+					if err := func() error {
+						if err := value.Validate(); err != nil {
+							return err
+						}
+						return nil
+					}(); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "range",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // GetRestoreRunParams is parameters of getRestoreRun operation.
 type GetRestoreRunParams struct {
 	RestoreId uuid.UUID

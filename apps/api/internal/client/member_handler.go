@@ -41,10 +41,9 @@ type AuthIdentityService interface {
 }
 
 // InviteService creates tokenized client-portal invitations.
-// invitation.Service satisfies this interface after CreateClientInvitation is
-// added in invitation/service.go.
+// invitation.Service satisfies this interface.
 type InviteService interface {
-	CreateClientInvitation(ctx context.Context, tenantID, clientID, actorID uuid.UUID, email string) (acceptLink string, invitationID uuid.UUID, expiresAt time.Time, err error)
+	CreateClientInvitation(ctx context.Context, tenantID, clientID, actorID uuid.UUID, email string) (acceptLink string, invitationID uuid.UUID, expiresAt time.Time, emailSent bool, err error)
 }
 
 // MemberHandler is wired into the client Handler via RegisterMembers. It keeps
@@ -70,6 +69,7 @@ type memberDTO struct {
 type inviteResultDTO struct {
 	Email        string  `json:"email"`
 	Invited      bool    `json:"invited"`
+	EmailSent    bool    `json:"email_sent"`
 	UserID       *string `json:"user_id,omitempty"`
 	CreatedAt    *string `json:"created_at,omitempty"`
 	AcceptLink   string  `json:"accept_link"`
@@ -253,6 +253,7 @@ func (mh *MemberHandler) addMember(c *gin.Context) {
 		c.JSON(http.StatusCreated, inviteResultDTO{
 			Email:      existing.Email,
 			Invited:    false,
+			EmailSent:  false, // no email sent for an existing user added directly
 			UserID:     &uid,
 			CreatedAt:  &cat,
 			AcceptLink: mh.baseURL + "/portal",
@@ -265,7 +266,7 @@ func (mh *MemberHandler) addMember(c *gin.Context) {
 		httpx.Error(c, domain.Unavailable("invitation_unavailable", "invitation service is not configured"))
 		return
 	}
-	link, invID, expiresAt, invErr := mh.invSvc.CreateClientInvitation(c.Request.Context(), p.TenantID, clientID, p.UserID, body.Email)
+	link, invID, expiresAt, emailSent, invErr := mh.invSvc.CreateClientInvitation(c.Request.Context(), p.TenantID, clientID, p.UserID, body.Email)
 	if invErr != nil {
 		httpx.Error(c, invErr)
 		return
@@ -277,6 +278,7 @@ func (mh *MemberHandler) addMember(c *gin.Context) {
 	c.JSON(http.StatusCreated, inviteResultDTO{
 		Email:        body.Email,
 		Invited:      true,
+		EmailSent:    emailSent,
 		AcceptLink:   link,
 		InvitationID: &invIDStr,
 		ExpiresAt:    &expStr,
