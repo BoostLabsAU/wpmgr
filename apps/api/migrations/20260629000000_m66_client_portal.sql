@@ -15,6 +15,22 @@
 -- portal access is revoked instantly (locked decision).
 
 -- ---------------------------------------------------------------------------
+-- [0] Repair sites_client_tenant_fkey (m63 latent bug)
+-- ---------------------------------------------------------------------------
+-- m63 declared the composite FK with a bare ON DELETE SET NULL. On a
+-- composite FK Postgres nulls EVERY referencing column, including the
+-- NOT NULL sites.tenant_id, so deleting a client with assigned sites failed
+-- with 23502 instead of unassigning them. The column-limited form (PG15+;
+-- prod and the compose stack run PG16) nulls only client_id.
+
+ALTER TABLE "public"."sites" DROP CONSTRAINT IF EXISTS "sites_client_tenant_fkey";
+ALTER TABLE "public"."sites"
+    ADD CONSTRAINT "sites_client_tenant_fkey"
+    FOREIGN KEY ("client_id", "tenant_id")
+    REFERENCES "public"."clients" ("id", "tenant_id")
+    ON DELETE SET NULL ("client_id");
+
+-- ---------------------------------------------------------------------------
 -- [1] client_members
 -- ---------------------------------------------------------------------------
 
@@ -120,6 +136,34 @@ BEGIN
 END;
 $$;
 
+-- Member-read on clients: tables referenced INSIDE a policy expression are
+-- subject to their own RLS. sites_client_read below JOINs clients, and under
+-- InUserTx (no app.tenant_id) clients_tenant_isolation hides every clients
+-- row, which would make that JOIN match nothing and leave every portal
+-- principal with zero sites (verified empirically against Postgres 16 as a
+-- non-superuser role). This SELECT-only policy admits exactly the clients
+-- rows of the caller's own memberships. No recursion: clients ->
+-- client_members -> (self_read references no further table).
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_policies
+        WHERE schemaname = 'public' AND tablename = 'clients'
+          AND policyname = 'clients_member_read'
+    ) THEN
+        CREATE POLICY "clients_member_read"
+            ON "public"."clients"
+            FOR SELECT
+            USING (EXISTS (
+                SELECT 1 FROM client_members cm
+                WHERE cm.client_id = clients.id
+                  AND cm.tenant_id = clients.tenant_id
+                  AND cm.user_id   = nullif(current_setting('app.user_id', true), '')::uuid
+            ));
+    END IF;
+END;
+$$;
+
 -- ---------------------------------------------------------------------------
 -- [2] sites_client_read — PERMISSIVE SELECT-only policy on sites
 -- ---------------------------------------------------------------------------
@@ -129,9 +173,10 @@ $$;
 -- It is OR-combined with the permissive policies but AND-gated by the
 -- RESTRICTIVE sites_site_scope policy (m19), so it cannot widen a site-scoped
 -- read. archived_at gate: members of an archived client lose access instantly.
--- NOTE: the EXISTS subquery against client_members is itself subject to that
--- table's RLS; client_members_self_read (user_id = app.user_id) is exactly
--- what admits the needed rows.
+-- NOTE: the EXISTS subquery against client_members and clients is itself
+-- subject to those tables' RLS; client_members_self_read (user_id =
+-- app.user_id) and clients_member_read above are exactly what admit the
+-- needed rows.
 
 DO $$
 BEGIN

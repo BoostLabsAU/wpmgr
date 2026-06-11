@@ -2317,12 +2317,15 @@ CREATE INDEX clients_tenant_idx ON clients (tenant_id);
 
 -- Composite FK from sites.client_id (declared in the sites table above):
 -- cross-tenant-proof because (client_id, tenant_id) must exist in clients.
--- ON DELETE SET NULL — deleting a client unassigns its sites.
+-- Deleting a client unassigns its sites. The SET NULL column list is
+-- load-bearing (m66 repair): a bare SET NULL on a composite FK nulls every
+-- referencing column including the NOT NULL tenant_id, breaking client
+-- deletion for any client with assigned sites.
 ALTER TABLE sites
     ADD CONSTRAINT sites_client_tenant_fkey
     FOREIGN KEY (client_id, tenant_id)
     REFERENCES clients (id, tenant_id)
-    ON DELETE SET NULL;
+    ON DELETE SET NULL (client_id);
 
 -- Partial index: only rows that have a client assigned benefit.
 CREATE INDEX sites_client_idx ON sites (client_id)
@@ -2341,6 +2344,20 @@ CREATE POLICY clients_tenant_isolation ON clients
 CREATE POLICY clients_agent ON clients
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- m66 clients_member_read — tables referenced INSIDE a policy expression are
+-- subject to their own RLS. sites_client_read JOINs clients, and under
+-- InUserTx (no app.tenant_id) clients_tenant_isolation hides every row, which
+-- would leave portal principals with zero sites. SELECT-only; admits exactly
+-- the clients rows of the caller's own memberships.
+CREATE POLICY clients_member_read ON clients
+    FOR SELECT
+    USING (EXISTS (
+        SELECT 1 FROM client_members cm
+        WHERE cm.client_id = clients.id
+          AND cm.tenant_id = clients.tenant_id
+          AND cm.user_id   = nullif(current_setting('app.user_id', true), '')::uuid
+    ));
 
 -- m64: client-level timezone governs report send-time (decision 6).
 -- IANA names validated app-side (time.LoadLocation → UTC fallback on failure).

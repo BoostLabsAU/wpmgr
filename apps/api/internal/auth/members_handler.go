@@ -141,6 +141,12 @@ func (h *MembersHandler) invite(c *gin.Context) {
 		return
 	}
 
+	// RoleClient is portal-only; the legacy path must reject it too (the DB
+	// memberships_role_check would refuse it anyway, but as a 500, not a 400).
+	if roleOrDefault(body.Role) == authz.RoleClient {
+		httpx.Error(c, domain.Validation("role_invalid", "client role cannot be assigned via org invitation"))
+		return
+	}
 	_, m, err := h.svc.Invite(c.Request.Context(), p.TenantID, p.UserID, authz.Role(p.Role), InviteInput{
 		Email:    body.Email,
 		Password: body.Password,

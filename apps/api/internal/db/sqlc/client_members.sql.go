@@ -69,13 +69,20 @@ func (q *Queries) DeleteClientMember(ctx context.Context, arg DeleteClientMember
 }
 
 const firstClientMemberTenant = `-- name: FirstClientMemberTenant :one
-SELECT tenant_id FROM client_members
-WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1
+SELECT cm.tenant_id
+FROM client_members cm
+JOIN clients cl
+  ON cl.id = cm.client_id AND cl.tenant_id = cm.tenant_id
+ AND cl.archived_at IS NULL
+WHERE cm.user_id = $1
+ORDER BY cm.created_at ASC LIMIT 1
 `
 
-// Runs under InUserTx. Returns the tenant of the user's earliest client
-// membership, used at login to resolve an active tenant for portal-only users
-// (mirrors FirstActiveShareTenant in auth/repo.go).
+// Runs under InUserTx. Returns the tenant of the user's earliest ACTIVE
+// client membership, used at login to resolve an active tenant for
+// portal-only users (mirrors FirstActiveShareTenant in auth/repo.go).
+// Archived clients are excluded so a stale earliest membership cannot
+// shadow a live one in another tenant.
 func (q *Queries) FirstClientMemberTenant(ctx context.Context, userID uuid.UUID) (uuid.UUID, error) {
 	row := q.db.QueryRow(ctx, firstClientMemberTenant, userID)
 	var tenant_id uuid.UUID
@@ -87,6 +94,9 @@ const getClientAccessForUserTenant = `-- name: GetClientAccessForUserTenant :man
 
 SELECT cm.client_id, s.id AS site_id
 FROM client_members cm
+JOIN clients cl
+  ON cl.id = cm.client_id AND cl.tenant_id = cm.tenant_id
+ AND cl.archived_at IS NULL
 LEFT JOIN sites s
   ON s.client_id = cm.client_id AND s.tenant_id = cm.tenant_id
 WHERE cm.user_id = $1 AND cm.tenant_id = $2
@@ -105,9 +115,12 @@ type GetClientAccessForUserTenantRow struct {
 // Client portal member queries (m66). Auth-time and agency roster operations.
 // GetClientAccessForUserTenant and FirstClientMemberTenant run under InUserTx
 // (app.user_id only); all other queries run under InTenantTx.
-// Runs under InUserTx (app.user_id). LEFT JOIN: a zero-site client still
-// yields a row (NULL site_id) so the principal gets portal access + branding
-// even when the client has no sites assigned yet.
+// Runs under InUserTx (app.user_id; clients rows visible via
+// clients_member_read). The INNER JOIN to clients excludes ARCHIVED clients
+// at the auth chokepoint, so ClientIDs itself never carries an archived
+// client and reports/branding/overview access drops with the sites. LEFT
+// JOIN sites: a zero-site active client still yields a row (NULL site_id) so
+// the principal gets portal access + branding before sites are assigned.
 func (q *Queries) GetClientAccessForUserTenant(ctx context.Context, arg GetClientAccessForUserTenantParams) ([]GetClientAccessForUserTenantRow, error) {
 	rows, err := q.db.Query(ctx, getClientAccessForUserTenant, arg.UserID, arg.TenantID)
 	if err != nil {
