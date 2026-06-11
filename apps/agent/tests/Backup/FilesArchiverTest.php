@@ -11,6 +11,8 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Tests\Backup;
 
+use Brain\Monkey;
+use Brain\Monkey\Functions;
 use WPMgr\Agent\Backup\FilesArchiver;
 use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
@@ -26,6 +28,11 @@ final class FilesArchiverTest extends TestCase
     protected function set_up(): void
     {
         parent::set_up();
+        Monkey\setUp();
+        // Brain Monkey defines this when absent; the archiver's exception
+        // messages pass paths through esc_html(). A bootstrap.php definition
+        // would break Patchwork redefinition for tests that mock it.
+        Functions\when('esc_html')->returnArg();
         $base            = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'wpmgr-files-archiver-' . bin2hex(random_bytes(4));
         $this->sourceDir = $base . DIRECTORY_SEPARATOR . 'src';
         $this->outDir    = $base . DIRECTORY_SEPARATOR . 'out';
@@ -35,6 +42,7 @@ final class FilesArchiverTest extends TestCase
 
     protected function tear_down(): void
     {
+        Monkey\tearDown();
         if ($this->sourceDir !== '' && is_dir($this->sourceDir)) {
             $this->rrmdir(dirname($this->sourceDir));
         }
