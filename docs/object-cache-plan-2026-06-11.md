@@ -459,3 +459,8 @@ Everything else in this plan proceeds on the stated defaults unless overridden.
 - v1 (one release line, agent + api + web together): Phases 0 to 4. Suggested next minor after current head.
 - v2: Phase 5 items, split across one or two minors (prefetch + alloptions first, tooling surfaces second).
 - The agent self-updater only bumps when the agent layer changes (standing practice); v1 bumps all three layers.
+
+## Decisions locked by the user (2026-06-11)
+
+All six recommended defaults accepted as-is:
+D1 v1 topology = single instance + unix socket + TLS (Sentinel in v2, Cluster later). D2 site-side credential persistence = dedicated 0600 PHP config file in wp-content (atomic write, backup-excluded). D3 shared Redis = supported via per-site prefix isolation + SCAN-based selective flush + generated ACL guidance. D4 analytics retention = 7 days raw + 90 days daily downsample. D5 flush-on-failback after a Redis outage = ON by default with a per-site toggle. D6 default maxttl = 7 days.
