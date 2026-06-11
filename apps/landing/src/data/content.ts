@@ -21,7 +21,8 @@ export const NAV = {
     { label: "Performance", href: "#performance" },
     { label: "RUM", href: "#rum" },
     { label: "Media", href: "#media" },
-    { label: "DB Cleaner", href: "#features" },
+    { label: "DB Cleaner", href: "#platform-clean" },
+    { label: "Clients", href: "#platform-clients" },
     { label: "How it works", href: "#how-it-works" },
     { label: "Stack", href: "#stack" },
     { label: "Contribute", href: "#open-source" },
@@ -68,115 +69,303 @@ export const TRUST = {
   cta: { label: "Read the code on GitHub", href: SITE.github, icon: "ArrowRight" },
 };
 
-export const FEATURES = {
+// ---------------------------------------------------------------------------
+// PLATFORM INDEX. HARD COPY BUDGETS, enforced by scripts/check-copy.mjs
+// (build-failing). Formatting contract for the budget parser: every budgeted
+// field below is a single-line, double-quoted string literal.
+//
+//   cluster.name      <= 16 chars. Clusters: min 4, max 6.
+//   cluster.tagline   <= 90 chars, exactly one sentence.
+//   feature.title     <= 26 chars, no terminal period.
+//   feature.summary   <= 120 chars, exactly one sentence.
+//   feature.bullets   2 to 4 items, each <= 64 chars, no terminal period.
+//   features/cluster  <= 6. At 7 you split the cluster or promote a feature
+//                     to a deep-dive section.
+//   feature.link      optional; href MUST start with "#". The rendered label
+//                     is always "See it in depth" (not in the data).
+//   feature.visual    optional; ONLY allowed when link is present. Must be a
+//                     key of VISUALS in components/feature-visuals.tsx.
+//
+// PROMOTION RULE: the grid is the index. A feature that deserves more than
+// 4 bullets of story gets its own deep-dive Section (the Performance/RUM/
+// Media pattern) and its card gains a link. The card itself never grows.
+// ---------------------------------------------------------------------------
+
+export type FeatureVisual = "cache-trend" | "rum-distribution" | "media-compare";
+
+export type ClusterFeature = {
+  icon: string;
+  title: string;
+  summary: string;
+  bullets: string[];
+  link?: { href: `#${string}` };
+  visual?: FeatureVisual;
+};
+
+export type FeatureCluster = {
+  id: `platform-${string}`;
+  icon: string;
+  name: string;
+  tagline: string;
+  features: ClusterFeature[];
+};
+
+export const FEATURES: {
+  eyebrow: string;
+  heading: string;
+  subhead: string;
+  clusters: FeatureCluster[];
+} = {
   eyebrow: "The platform",
   heading: "Everything you need to run a fleet, all in the open release",
-  subhead:
-    "Connect sites, back them up, update them safely, watch their health, optimize images, and clean the database. One dashboard, no add-on sprawl, every line of code available to read and extend.",
-  body:
-    "Each capability ships in the open release. Turn on what you need, leave the rest off, and manage one site or hundreds from the same screen.",
-  cards: [
+  subhead: "One dashboard, no add-on sprawl. Five capability areas, every line of code open to read and extend.",
+  clusters: [
     {
-      icon: "Network",
-      title: "Fleet connection",
-      desc:
-        "Add a site by URL, paste a one-time code into the plugin, and it goes live with no refresh. One-click login into wp-admin uses a signed, single-use token so you are never stopped by a login form or a second-factor prompt, with no shared passwords. The connection badge debounces transient heartbeat gaps so low-traffic sites show a stable status, and a Re-check button forces an immediate liveness refresh whenever you need it. An uptime pill next to the badge makes clear at a glance whether the agent is quiet or the site is actually down.",
+      id: "platform-operate",
+      icon: "ServerCog",
+      name: "Operate",
+      tagline: "Connect a site in under a minute, then run the whole fleet from one screen.",
+      features: [
+        {
+          icon: "Network",
+          title: "Fleet connection",
+          summary: "Sites enroll with a one-time code and stay verifiably connected.",
+          bullets: [
+            "Live flip from Awaiting to Connected, no refresh",
+            "One-click wp-admin login, no shared passwords",
+            "Stable status badges plus a manual Re-check",
+          ],
+        },
+        {
+          icon: "DatabaseBackup",
+          title: "Backups and restore",
+          summary: "Scheduled full and incremental backups with point-in-time restore.",
+          bullets: [
+            "Increments pack only files that changed",
+            "Base plus increments in one expandable chain",
+            "Restore to any snapshot, site stays online",
+          ],
+        },
+        {
+          icon: "RefreshCw",
+          title: "Fleet updates",
+          summary: "Preview version changes, then update with an automatic safety net.",
+          bullets: [
+            "Snapshot first, auto-revert on failed health check",
+            "Bulk runs by group or tag",
+            "Live per-site progress",
+          ],
+        },
+        {
+          icon: "Activity",
+          title: "Monitoring and health",
+          summary: "Uptime, response time, and fleet-wide status at a glance.",
+          bullets: [
+            "7, 30, and 90 day charts",
+            "Down and recovery alerts by email or webhook",
+            "TLS expiry warnings and PHP fatal tracking",
+          ],
+        },
+      ],
     },
     {
-      icon: "DatabaseBackup",
-      title: "Backups and restore",
-      desc:
-        "Schedule full or incremental backups of your database and files. Increments pack only files that changed since the last backup, so each one is small and fast. Incremental backups group as a base plus its increments in a single expandable chain. Pick the exact point in time to roll back to: files and database both restore to the chosen snapshot, with the site staying online throughout.",
+      id: "platform-accelerate",
+      icon: "Gauge",
+      name: "Accelerate",
+      tagline: "Make every page faster, then prove it with real-visitor data.",
+      features: [
+        {
+          icon: "Zap",
+          title: "Performance and caching",
+          summary: "Full-page caching and asset optimization, per site or fleet-wide.",
+          bullets: [
+            "Pre-gzipped pages served straight from disk",
+            "Unused CSS removal, minify, defer, lazy-load",
+            "WOFF2 font transcoding and subsetting",
+            "WooCommerce cart-session caching",
+          ],
+          link: { href: "#performance" },
+          visual: "cache-trend",
+        },
+        {
+          icon: "BarChart2",
+          title: "Real User Monitoring",
+          summary: "Core Web Vitals from real visitors at the p75 Google uses.",
+          bullets: [
+            "LCP, INP, CLS, FCP, TTFB distributions",
+            "28-day trends with threshold lines drawn on",
+            "Per-URL and per-device breakdowns",
+            "Anonymous, off by default, no cookies",
+          ],
+          link: { href: "#rum" },
+          visual: "rum-distribution",
+        },
+        {
+          icon: "ImageDown",
+          title: "Media Optimizer",
+          summary: "Re-encode the media library to AVIF and WebP, fully reversible.",
+          bullets: [
+            "Originals archived on the site",
+            "Right format per browser, automatic fallback",
+            "No image bytes touch the control plane",
+          ],
+          link: { href: "#media" },
+          visual: "media-compare",
+        },
+      ],
     },
     {
-      icon: "RefreshCw",
-      title: "Fleet updates",
-      desc:
-        "Preview exactly which versions will change before anything updates. A snapshot is taken before each update and reverted automatically if the site fails its health check. Push to a group or a tag in one bulk run with live per-site progress.",
+      id: "platform-clean",
+      icon: "Eraser",
+      name: "Clean up",
+      tagline: "Database and media hygiene that previews first and reverses cleanly.",
+      features: [
+        {
+          icon: "DatabaseZap",
+          title: "Database Cleaner",
+          summary: "Scan first, then clean revisions, transients, and orphans in batches.",
+          bullets: [
+            "Per-table inventory with owner labels",
+            "Orphans classified against a signature corpus",
+            "90-day health trend and a fleet-wide view",
+          ],
+        },
+        {
+          icon: "RotateCcw",
+          title: "Database Snapshots",
+          summary: "A quick local snapshot before a risky change, instant revert after.",
+          bullets: [
+            "Faster and lighter than a full backup",
+            "No remote storage required",
+          ],
+        },
+        {
+          icon: "Replace",
+          title: "Search and Replace",
+          summary: "Serialization-safe find and replace across the whole database.",
+          bullets: [
+            "PHP-serialized data survives intact",
+            "Preview matches before committing",
+          ],
+        },
+        {
+          icon: "ImageOff",
+          title: "Unused Image Cleaner",
+          summary: "Finds media nothing references, with proof of where used images appear.",
+          bullets: [
+            "Reversible quarantine before any delete",
+            "Ambiguous references count as in-use",
+            "Per-image usage report",
+          ],
+        },
+      ],
     },
     {
-      icon: "Activity",
-      title: "Monitoring and health",
-      desc:
-        "Uptime and response-time charts over 7, 30, and 90 days, plus a fleet-wide status overview. One alert when a site goes down and one when it recovers, by email or webhook, with TLS expiry warnings and PHP fatal-error tracking.",
+      id: "platform-clients",
+      icon: "Handshake",
+      name: "Serve clients",
+      tagline: "Group sites by customer and put your brand on everything they see.",
+      features: [
+        {
+          icon: "Briefcase",
+          title: "Client management",
+          summary: "Group any number of sites under named client records.",
+          bullets: [
+            "Brand color, logo, contacts, and notes",
+            "Bulk-assign sites from the fleet view",
+            "Filter the fleet or jump to a client page",
+          ],
+        },
+        {
+          icon: "ScrollText",
+          title: "White-label reports",
+          summary: "Branded maintenance reports on a schedule or on demand.",
+          bullets: [
+            "Uptime, backups, updates, vitals, email health",
+            "HTML email, print page, and vector-chart PDF",
+            "Per-section toggles, custom intro and closing",
+            "Powered-by footer removable on any plan",
+          ],
+        },
+        {
+          icon: "LayoutDashboard",
+          title: "Client portal",
+          summary: "A read-only branded portal where clients see their own sites.",
+          bullets: [
+            "Email invites on the same login page",
+            "Uptime, backups, vitals, report downloads",
+            "Access revoked instantly on removal",
+          ],
+        },
+        {
+          icon: "MailCheck",
+          title: "Per-site email and log",
+          summary: "Per-site outgoing email with a central, searchable delivery log.",
+          bullets: [
+            "SES, SendGrid, Mailgun, Postmark, any SMTP",
+            "Named connections with automatic failover",
+            "Webhook bounce and complaint suppression",
+            "Fleet-wide deliverability view and digests",
+          ],
+        },
+      ],
     },
     {
-      icon: "ShieldCheck",
-      title: "Security",
-      desc:
-        "Scan core files against the official WordPress checksums and flag anything modified, missing, or injected. Block brute-force logins in escalating steps without locking out real admins, allow or deny by IP with a safety rail for your own IP, and whitelabel the login page.",
-    },
-    {
-      icon: "Zap",
-      title: "Performance and caching",
-      desc:
-          "Turn on full-page caching and asset optimization per site or across your whole portfolio. Serve anonymous pages from disk, minify and defer CSS and JS, strip unused CSS, lazy-load images, and clean the database, with a server fast-path on Apache and a paste-in snippet for nginx. Self-hosted fonts are transcoded to WOFF2 and optionally subsetted to the latin-ext range for a further 60 to 90 percent reduction on top of WOFF2 savings. A per-font processing table shows each font's original size, WOFF2 size, subset size, and state so you can see exactly what shipped and what was skipped. See cache hit-ratio trends over 7, 30, and 90 day windows so you know whether caching is working across your fleet. On WooCommerce stores, opt-in cart-session caching serves catalog pages from the cache even for shoppers who have items in their cart, while cart totals stay live via cart fragments. A failed optimization never breaks the page.",
-    },
-    {
-      icon: "BarChart2",
-      title: "Real User Monitoring",
-      desc:
-        "See real visitors' Core Web Vitals (LCP, INP, CLS, FCP, TTFB) at the p75 percentile. Each metric shows a PageSpeed Insights-style distribution bar (good, needs improvement, poor) built from the same histogram buckets Google uses, plus a 28-day p75 trend with the passing threshold lines drawn on it so you can see at a glance whether a change moved the needle. Per-URL and per-device breakdowns, live over SSE, and a minimum-sample floor so you never see a confident number built on a handful of beacons. Off by default, anonymous, no cookies, no cross-site identifier, and no stored IP. On a self-hosted control plane, every measurement stays on your own infrastructure.",
-    },
-    {
-      icon: "ImageOff",
-      title: "Unused Image Cleaner",
-      desc:
-        "Scan the WordPress media library for attachments that are not referenced anywhere, with a report showing exactly where each in-use image appears. Move unused images to a reversible quarantine and delete permanently only when you confirm. Conservative by design: ambiguous references are treated as in-use, so a genuinely used image is never flagged.",
-    },
-    {
-      icon: "Replace",
-      title: "Search and Replace",
-      desc:
-        "Run a serialization-safe find-and-replace across the entire WordPress database. Handles PHP-serialized data correctly so URLs and structured values survive the replacement without corruption. Preview matches before committing.",
-    },
-    {
-      icon: "DatabaseBackup",
-      title: "Database Snapshots",
-      desc:
-        "Take a quick local database snapshot before a risky change and revert to it instantly if something goes wrong. Faster and lighter than a full backup for local safety nets; no remote storage required.",
-    },
-    {
-      icon: "DatabaseZap",
-      title: "Database Cleaner",
-      desc:
-        "Scan the database before touching it: see row counts and space savings per category, a full per-table inventory with engine and overhead, and which tables belong to core, an active plugin, or a leftover orphan. Clean revisions, transients, metadata, and more in batches that never lock a busy site. Orphaned options and cron events are classified against a corpus of plugin signatures so you know what is safe to remove. A 90-day health trend shows whether cleanups are keeping pace with growth, and a fleet view lets you act on the worst databases across all your sites in one place.",
-    },
-    {
-      icon: "Users",
-      title: "Team and access",
-      desc:
-        "Four roles from owner to viewer, so each person gets exactly the access they need. Share one site with a collaborator who can never see the rest of your fleet, sign in with email, or with your company's single sign-on (OIDC), and keep a tamper-evident audit log of every action.",
-    },
-    {
-      icon: "Briefcase",
-      title: "Clients, white-label reports, and client portal",
-      desc:
-        "Organize your fleet by customer and send branded maintenance reports on a schedule or on demand. Group any number of sites under a named client record (name, company, contact email, phone, brand color, logo URL, and notes), bulk-assign sites from the fleet view, and filter or jump straight to a client's dedicated page. From the Reports tab, enable a monthly or weekly schedule in the client's own timezone or generate a report instantly for any period up to 92 days. Each report covers uptime and response time, backups completed, updates applied, Core Web Vitals real-user p75, and email deliverability, with per-section on/off toggles and custom intro and closing text. Reports deliver as a branded HTML email digest, a print-optimized page, and a downloadable PDF with vector charts and full Unicode support. The client's brand color and logo appear throughout; the powered-by footer is free to remove on any plan. Delivery uses the instance mailer and falls back to download-only when email is not configured. Invite client users by email from the Portal access tab on any client record. Invited users sign in on the same login page and land in a branded portal showing the client's logo, brand color, and an agency attribution footer. The portal is read-only with no agency screens visible: a sites overview with softened status wording, per-site uptime and incident history, backup inventory, applied updates, Core Web Vitals field data, and completed report downloads (HTML and PDF). Portal access is revoked instantly when a member is removed, the client is archived, or the client is deleted. The invite link is always copyable as a fallback when instance email is not configured. Clients are tenant-isolated; site-scoped collaborators cannot see the client roster.",
-    },
-    {
-      icon: "Mail",
-      title: "Email in minutes",
-      desc:
-        "Configure your own SMTP server in Settings and send a test message before saving. Credentials are encrypted at rest so the control plane never stores a plain-text password. All transactional email flows, including password resets and verification codes, route through the server you choose.",
-    },
-    {
-      icon: "MailCheck",
-      title: "Per-site email delivery and log",
-      desc:
-        "Configure each managed site's outgoing email from the dashboard. Connect Amazon SES, SendGrid, Mailgun, Postmark, or any SMTP server per site, or set an org-wide default that saves once and pushes to every inheriting site automatically. Define multiple named connections per site and map FROM addresses to a specific connection; a fallback connection retries automatically when the primary fails. Provider credentials are encrypted at rest and never returned by the API. Every email is logged centrally with full detail including attachment names and sizes, searchable and filterable, with CSV/JSON export and per-site deliverability charts. A fleet-wide cross-site view shows sent, failed, bounced, and complained counts across every client site at once. Connect a provider webhook and hard bounces and complaints are suppressed automatically, per-site or fleet-wide. Opt in to failure alerts and a weekly or monthly deliverability digest sent to the addresses you choose. Email bodies are not stored by default; logs prune after 14 days. Live updates over SSE.",
-    },
-    {
-      icon: "KeyRound",
-      title: "Self-serve account recovery",
-      desc:
-        "Users reset a forgotten password or change an existing one without opening a support ticket. A change immediately signs out every other active session so a compromised credential cannot be quietly reused. The full flow works from any device with no admin involvement.",
-    },
-    {
-      icon: "UserPlus",
-      title: "Open sign up with verification",
-      desc:
-        "New users register with their email address and receive a verification link before gaining access. No manual account provisioning by an admin. The sign-up gate is configurable so you can keep it open for team growth or lock it down when you are done onboarding.",
+      id: "platform-protect",
+      icon: "LockKeyhole",
+      name: "Protect",
+      tagline: "Hardening, access control, and account flows that cannot lock you out.",
+      features: [
+        {
+          icon: "ShieldCheck",
+          title: "Security",
+          summary: "Integrity scanning, brute-force protection, and an IP firewall.",
+          bullets: [
+            "Core files checked against official checksums",
+            "Escalating login blocks, admins never locked out",
+            "IP rules with a safety rail for your own IP",
+          ],
+        },
+        {
+          icon: "Users",
+          title: "Team and access",
+          summary: "Four roles, per-site sharing, SSO, and a tamper-evident audit log.",
+          bullets: [
+            "Owner to viewer, least privilege by default",
+            "Share one site without exposing the fleet",
+            "Email sign-in or company OIDC",
+          ],
+        },
+        {
+          icon: "Mail",
+          title: "Email in minutes",
+          summary: "Point the control plane at your own SMTP server in Settings.",
+          bullets: [
+            "Send a test message before saving",
+            "Credentials encrypted at rest",
+            "All transactional mail routes through it",
+          ],
+        },
+        {
+          icon: "KeyRound",
+          title: "Account recovery",
+          summary: "Self-serve password reset and change, no support ticket.",
+          bullets: [
+            "Works from any device, no admin involved",
+            "A change signs out every other session",
+          ],
+        },
+        {
+          icon: "UserPlus",
+          title: "Open sign up",
+          summary: "Email-verified self-registration with a configurable gate.",
+          bullets: [
+            "Verification link before any access",
+            "No manual provisioning",
+            "Lock it down when onboarding is done",
+          ],
+        },
+      ],
     },
   ],
 };
@@ -531,6 +720,14 @@ export const FAQ = {
     {
       q: "How do backups work?",
       a: "You set a schedule (hourly, daily, weekly, or monthly) and choose full or incremental. A full backup streams a database dump and file archive, encrypts each chunk client-side, and uploads only what is not already stored. An incremental backup compares the live file tree against the previous snapshot by size and modified time, packs only the files that changed, and records deletions as tombstones. The database is dumped in full on every run. Restore the whole site or a single plugin, theme, upload, or table to any point in the incremental chain, while the site stays online.",
+    },
+    {
+      q: "What do client reports and the portal include?",
+      a: "Each report covers uptime and response time, backups completed, updates applied, Core Web Vitals real-user p75, and email deliverability. Per-section on/off toggles and custom intro and closing text let you tailor every report. Delivery formats are a branded HTML email digest, a print-optimized page, and a downloadable PDF with vector charts. The client brand color and logo appear throughout; the powered-by footer is removable on any plan. The portal is read-only: a sites overview with softened status wording, per-site uptime and incident history, backup inventory, applied updates, Core Web Vitals field data, and completed report downloads. Portal access is revoked instantly when a member is removed, the client is archived, or the client is deleted. Clients are tenant-isolated; site-scoped collaborators cannot see the client roster.",
+    },
+    {
+      q: "How does per-site email work?",
+      a: "Connect Amazon SES, SendGrid, Mailgun, Postmark, or any SMTP server per site, or set an org-wide default that saves once and propagates to every inheriting site automatically. Define multiple named connections per site and map FROM addresses to a specific connection; a fallback connection retries automatically when the primary fails. Provider credentials are encrypted at rest and never returned by the API. Every email is logged centrally with full header detail and attachment metadata, searchable and filterable, with CSV and JSON export. Connect a provider webhook and hard bounces and complaints are suppressed automatically, per-site or fleet-wide. Email bodies are not stored by default; logs prune after 14 days.",
     },
   ],
 };
