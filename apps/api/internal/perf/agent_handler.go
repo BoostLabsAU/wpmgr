@@ -107,6 +107,9 @@ type agentObjectCacheBlock struct {
 	LastErrorClass string `json:"last_error_class,omitempty"`
 	HitRatioPct    float64 `json:"hit_ratio_window_pct"`
 	UsedMemoryBytes int64  `json:"used_memory_bytes"`
+	// EngineVersion is the agent-reported version of the object-cache engine
+	// code actually executing on the site (0.41.3+). Logged for observability.
+	EngineVersion string `json:"engine_version,omitempty"`
 
 	// Stats delta fields (time-series history).
 	HitCount         int64   `json:"hit_count,omitempty"`
@@ -213,6 +216,22 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 		if len(lastErrorClass) > 128 {
 			lastErrorClass = lastErrorClass[:128]
 		}
+		engineVersion := ocBlock.EngineVersion
+		if len(engineVersion) > 32 {
+			engineVersion = engineVersion[:32]
+		}
+
+		// Observability: one INFO line per received block so on-site engine
+		// behavior (which code runs, what state it reports) is visible in the
+		// CP logs without DB access. All values are clamped above.
+		slog.Info("objectcache: block received",
+			slog.String("site_id", id.SiteID.String()),
+			slog.String("state", state),
+			slog.String("engine_version", engineVersion),
+			slog.String("last_error_class", lastErrorClass),
+			slog.Int64("hit_count", max(int64(0), ocBlock.HitCount)),
+			slog.Int64("miss_count", max(int64(0), ocBlock.MissCount)),
+		)
 
 		// IngestHeartbeat: updates the live status pill and emits SSE.
 		// tenantID and siteID come from the verified agent identity.
