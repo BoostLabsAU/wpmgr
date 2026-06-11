@@ -320,13 +320,17 @@ final class ObjectCacheBugFixTest extends TestCase
 
 			/**
 			 * phpredis-compatible SCAN: first argument must be ?int (by-ref).
+			 * The signature mirrors the native phpredis 6 declaration exactly so
+			 * this class stays loadable when ext-redis is present (CI runners) and
+			 * when only the constants-only test stub exists (local).
 			 *
-			 * @param ?int   $it      By-ref iterator (null or int only).
+			 * @param ?int    $it      By-ref iterator (null or int only).
 			 * @param ?string $pattern Key pattern.
-			 * @param int    $count   Hint count.
+			 * @param int     $count   Hint count.
+			 * @param ?string $type    Key type filter (unused by the fake).
 			 * @return array<string>|false
 			 */
-			public function scan( ?int &$it, ?string $pattern = null, int $count = 0 ): array|false
+			public function scan( ?int &$it, ?string $pattern = null, int $count = 0, ?string $type = null ): array|false
 			{
 				if ( $this->pos >= count( $this->store ) ) {
 					$it = 0;
@@ -345,21 +349,32 @@ final class ObjectCacheBugFixTest extends TestCase
 				return $slice;
 			}
 
-			/** @param string ...$keys */
-			public function del( string ...$keys ): int
+			/**
+			 * Mirrors the native phpredis signature (key-or-array first arg)
+			 * so the override stays compatible when ext-redis is loaded.
+			 *
+			 * @param array<string>|string $key        First key or array of keys.
+			 * @param string               ...$other_keys Additional keys.
+			 */
+			public function del( array|string $key, string ...$other_keys ): int
 			{
-				$this->deleted = array_merge( $this->deleted, array_values( $keys ) );
+				$keys          = array_merge( is_array( $key ) ? array_values( $key ) : [ $key ], array_values( $other_keys ) );
+				$this->deleted = array_merge( $this->deleted, $keys );
 				return count( $keys );
 			}
 
-			/** @param string ...$keys */
-			public function unlink( string ...$keys ): int
+			/**
+			 * @param array<string>|string $key        First key or array of keys.
+			 * @param string               ...$other_keys Additional keys.
+			 */
+			public function unlink( array|string $key, string ...$other_keys ): int
 			{
-				$this->deleted = array_merge( $this->deleted, array_values( $keys ) );
+				$keys          = array_merge( is_array( $key ) ? array_values( $key ) : [ $key ], array_values( $other_keys ) );
+				$this->deleted = array_merge( $this->deleted, $keys );
 				return count( $keys );
 			}
 
-			public function flushDB( bool $async = false ): bool
+			public function flushDB( ?bool $sync = null ): bool
 			{
 				$this->store   = [];
 				$this->deleted = [];
