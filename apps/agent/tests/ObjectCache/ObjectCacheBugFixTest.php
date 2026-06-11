@@ -311,9 +311,10 @@ final class ObjectCacheBugFixTest extends TestCase
 
 			public function setOption( int $opt, mixed $value ): bool
 			{
-				// OPT_SCAN = 9, SCAN_RETRY = 1 (from the \Redis stub constants).
-				if ( $opt === 9 ) {
-					$this->scanRetrySet = ( (int) $value === 1 );
+				// Resolve via the \Redis constants so the tracker works against
+				// both the constants-only test stub and the real extension.
+				if ( $opt === \Redis::OPT_SCAN ) {
+					$this->scanRetrySet = ( (int) $value === \Redis::SCAN_RETRY );
 				}
 				return true;
 			}
@@ -408,7 +409,7 @@ final class ObjectCacheBugFixTest extends TestCase
 	public function test_fake_redis_accepts_null_iterator(): void
 	{
 		$redis = $this->buildFakeRedis();
-		$redis->setOption( 9, 1 ); // OPT_SCAN = 9, SCAN_RETRY = 1.
+		$redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
 		$it   = null;
 		$keys = $redis->scan( $it, 'wpmgr:*', 500 );
 		$this->assertIsArray( $keys );

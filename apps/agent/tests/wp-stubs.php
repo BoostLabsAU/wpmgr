@@ -258,8 +258,8 @@ if (!class_exists('Redis')) {
      */
     class Redis
     {
-        /** Option key for SCAN iteration behaviour. */
-        public const OPT_SCAN = 9;
+        /** Option key for SCAN iteration behaviour (matches the real phpredis value). */
+        public const OPT_SCAN = 4;
 
         /** SCAN option: retry automatically when a batch is empty. */
         public const SCAN_RETRY = 1;
