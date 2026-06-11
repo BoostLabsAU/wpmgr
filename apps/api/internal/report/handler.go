@@ -252,7 +252,11 @@ func (h *Handler) listReports(c *gin.Context) {
 	}
 	items := make([]reportDTO, 0, len(result.Items))
 	for _, r := range result.Items {
-		items = append(items, toReportDTO(r, "", ""))
+		// The web list renders download links directly from this response, so
+		// completed rows must carry presigned URLs (presigning is local SigV4
+		// signing — no storage round trip per item).
+		htmlURL, pdfURL := h.svc.PresignReportURLs(c.Request.Context(), r)
+		items = append(items, toReportDTO(r, htmlURL, pdfURL))
 	}
 	c.JSON(http.StatusOK, reportListDTO{Items: items, NextCursor: result.NextCursor})
 }

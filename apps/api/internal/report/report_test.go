@@ -637,9 +637,49 @@ func TestReportRepoIsolation_GeneratedReportCarriesTenantID(t *testing.T) {
 	}
 }
 
+// TestPresignReportURLs_OnlyCompletedReportsGetURLs verifies the shared
+// presign helper used by both the list and detail endpoints: completed
+// reports with blob keys get URLs, everything else gets empty strings.
+func TestPresignReportURLs_OnlyCompletedReportsGetURLs(t *testing.T) {
+	svc := NewService(&stubRepo{}, &urlBlobStorer{})
+
+	completed := GeneratedReport{
+		Status:      StatusCompleted,
+		HTMLBlobKey: "reports/t/c/r.html",
+		PDFBlobKey:  "reports/t/c/r.pdf",
+	}
+	htmlURL, pdfURL := svc.PresignReportURLs(context.Background(), completed)
+	if htmlURL != "https://signed.example/reports/t/c/r.html" {
+		t.Fatalf("completed report html url = %q", htmlURL)
+	}
+	if pdfURL != "https://signed.example/reports/t/c/r.pdf" {
+		t.Fatalf("completed report pdf url = %q", pdfURL)
+	}
+
+	pending := GeneratedReport{Status: StatusPending, HTMLBlobKey: "k.html", PDFBlobKey: "k.pdf"}
+	htmlURL, pdfURL = svc.PresignReportURLs(context.Background(), pending)
+	if htmlURL != "" || pdfURL != "" {
+		t.Fatalf("non-completed report must not get urls, got %q / %q", htmlURL, pdfURL)
+	}
+
+	// nil blob store (object storage not configured) degrades to empty URLs.
+	noBlob := NewService(&stubRepo{}, nil)
+	htmlURL, pdfURL = noBlob.PresignReportURLs(context.Background(), completed)
+	if htmlURL != "" || pdfURL != "" {
+		t.Fatalf("nil blob store must yield empty urls, got %q / %q", htmlURL, pdfURL)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+// urlBlobStorer returns a deterministic presigned URL for any key.
+type urlBlobStorer struct{ noopBlobStorer }
+
+func (u *urlBlobStorer) PresignGet(_ context.Context, key string, _ time.Duration) (string, error) {
+	return "https://signed.example/" + key, nil
+}
 
 // noopBlobStorer satisfies BlobStorer without doing anything.
 type noopBlobStorer struct{}
