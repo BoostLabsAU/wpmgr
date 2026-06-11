@@ -12,6 +12,7 @@
 -- name: GetObjectCacheConfig :one
 -- Operator read path (InTenantTx). Excludes password_encrypted column; callers
 -- that need the ciphertext use GetObjectCacheConfigWithSecret.
+-- has_password is a derived boolean: true when a ciphertext is stored.
 SELECT
     site_id, tenant_id, enabled, scheme, host, port, socket_path,
     database, username, prefix,
@@ -22,7 +23,8 @@ SELECT
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 FROM site_object_cache_config
 WHERE site_id = @site_id;
 
@@ -107,7 +109,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at;
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password;
 
 -- name: UpdateObjectCacheTestResult :one
 -- Record the outcome of an objectcache.test command. Stores the result JSON and
@@ -130,12 +133,15 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at;
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password;
 
 -- name: UpdateObjectCacheHeartbeatState :one
--- Heartbeat ingest path: update the live status fields and return the previous
+-- Heartbeat ingest path: update the live status fields and return the updated
 -- values so the service can detect state transitions (for SSE publishing).
--- Runs under InAgentTx (cross-tenant heartbeat path).
+-- tenant_id is required in the WHERE clause for defence-in-depth: even though
+-- InAgentTx sets app.agent='on' (RLS agent policy), the explicit predicate
+-- prevents a cross-tenant write when the agent identity is mis-issued.
 UPDATE site_object_cache_config
 SET oc_state            = @oc_state,
     oc_latency_ms       = @oc_latency_ms,
@@ -143,7 +149,7 @@ SET oc_state            = @oc_state,
     oc_used_memory_bytes = @oc_used_memory_bytes,
     oc_hit_ratio_pct    = @oc_hit_ratio_pct,
     updated_at          = now()
-WHERE site_id = @site_id
+WHERE site_id = @site_id AND tenant_id = @tenant_id
 RETURNING
     site_id, tenant_id, enabled, scheme, host, port, socket_path,
     database, username, prefix,
@@ -154,7 +160,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at;
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password;
 
 -- name: UpdateObjectCacheEnabled :one
 -- Enable/disable the object cache feature flag. enable=true is handshake-gated
@@ -174,7 +181,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at;
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password;
 
 -- ---------------------------------------------------------------------------
 -- site_object_cache_stats_history

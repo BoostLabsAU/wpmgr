@@ -166,6 +166,65 @@ final class FilesArchiverTest extends TestCase
     }
 
     /**
+     * M1 regression: wpmgr-object-cache-config.php must never appear in any
+     * produced archive part. The file lives at wp-content root (segment match)
+     * so the DEFAULT_EXCLUDES entry 'wpmgr-object-cache-config.php' must catch it.
+     */
+    public function test_object_cache_config_excluded_from_archive(): void
+    {
+        if (!class_exists(\ZipArchive::class)) {
+            self::markTestSkipped('ext-zip not available');
+        }
+
+        // One normal file + the credential config file at the wp-content root.
+        file_put_contents($this->sourceDir . '/normal.txt', str_repeat('N', 1024));
+        file_put_contents(
+            $this->sourceDir . '/wpmgr-object-cache-config.php',
+            "<?php\nreturn ['password' => 'supersecret'];\n"
+        );
+
+        $archiver = new FilesArchiver($this->sourceDir);
+        $noop     = static function (): void {};
+
+        $result = $archiver->archive($this->outDir, [], $noop);
+        self::assertTrue($result['done'] ?? false);
+
+        // Only the normal file should be packed; the credential file is excluded.
+        self::assertSame(1, $result['files_total'], 'wpmgr-object-cache-config.php must be excluded from the archive');
+
+        // Inspect every produced zip part to confirm the config file is absent.
+        foreach ($result['parts'] as $partName) {
+            $partPath = $this->outDir . DIRECTORY_SEPARATOR . $partName;
+            self::assertFileExists($partPath);
+            $zip = new \ZipArchive();
+            self::assertTrue($zip->open($partPath) === true);
+            for ($i = 0; $i < $zip->numFiles; $i++) {
+                $entry = (string) $zip->getNameIndex($i);
+                self::assertStringNotContainsString(
+                    'wpmgr-object-cache-config.php',
+                    $entry,
+                    'Credential config file leaked into backup archive at entry: ' . $entry
+                );
+            }
+            $zip->close();
+        }
+    }
+
+    /**
+     * Verify 'wpmgr-object-cache-config.php' is in DEFAULT_EXCLUDES so
+     * the segment-match logic in isExcluded() catches it at the top level
+     * and also inside any subdirectory (belt-and-suspenders for future layouts).
+     */
+    public function test_object_cache_config_in_default_excludes(): void
+    {
+        self::assertContains(
+            'wpmgr-object-cache-config.php',
+            FilesArchiver::DEFAULT_EXCLUDES,
+            'wpmgr-object-cache-config.php must be listed in DEFAULT_EXCLUDES'
+        );
+    }
+
+    /**
      * Recursively delete a directory tree (used by tear_down).
      *
      * @param string $path Absolute path.

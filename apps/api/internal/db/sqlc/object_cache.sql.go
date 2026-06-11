@@ -26,7 +26,8 @@ SELECT
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 FROM site_object_cache_config
 WHERE site_id = $1
 `
@@ -65,6 +66,7 @@ type GetObjectCacheConfigRow struct {
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	HasPassword        bool               `json:"has_password"`
 }
 
 // M68 Object Cache queries. Every statement is tenant-scoped both explicitly
@@ -78,6 +80,7 @@ type GetObjectCacheConfigRow struct {
 // ---------------------------------------------------------------------------
 // Operator read path (InTenantTx). Excludes password_encrypted column; callers
 // that need the ciphertext use GetObjectCacheConfigWithSecret.
+// has_password is a derived boolean: true when a ciphertext is stored.
 func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (GetObjectCacheConfigRow, error) {
 	row := q.db.QueryRow(ctx, getObjectCacheConfig, siteID)
 	var i GetObjectCacheConfigRow
@@ -115,6 +118,7 @@ func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (G
 		&i.OcHitRatioPct,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasPassword,
 	)
 	return i, err
 }
@@ -340,7 +344,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 `
 
 type UpdateObjectCacheEnabledParams struct {
@@ -383,6 +388,7 @@ type UpdateObjectCacheEnabledRow struct {
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	HasPassword        bool               `json:"has_password"`
 }
 
 // Enable/disable the object cache feature flag. enable=true is handshake-gated
@@ -425,6 +431,7 @@ func (q *Queries) UpdateObjectCacheEnabled(ctx context.Context, arg UpdateObject
 		&i.OcHitRatioPct,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasPassword,
 	)
 	return i, err
 }
@@ -437,7 +444,7 @@ SET oc_state            = $1,
     oc_used_memory_bytes = $4,
     oc_hit_ratio_pct    = $5,
     updated_at          = now()
-WHERE site_id = $6
+WHERE site_id = $6 AND tenant_id = $7
 RETURNING
     site_id, tenant_id, enabled, scheme, host, port, socket_path,
     database, username, prefix,
@@ -448,7 +455,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 `
 
 type UpdateObjectCacheHeartbeatStateParams struct {
@@ -458,6 +466,7 @@ type UpdateObjectCacheHeartbeatStateParams struct {
 	OcUsedMemoryBytes int64          `json:"oc_used_memory_bytes"`
 	OcHitRatioPct     pgtype.Numeric `json:"oc_hit_ratio_pct"`
 	SiteID            uuid.UUID      `json:"site_id"`
+	TenantID          uuid.UUID      `json:"tenant_id"`
 }
 
 type UpdateObjectCacheHeartbeatStateRow struct {
@@ -494,11 +503,14 @@ type UpdateObjectCacheHeartbeatStateRow struct {
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	HasPassword        bool               `json:"has_password"`
 }
 
-// Heartbeat ingest path: update the live status fields and return the previous
+// Heartbeat ingest path: update the live status fields and return the updated
 // values so the service can detect state transitions (for SSE publishing).
-// Runs under InAgentTx (cross-tenant heartbeat path).
+// tenant_id is required in the WHERE clause for defence-in-depth: even though
+// InAgentTx sets app.agent='on' (RLS agent policy), the explicit predicate
+// prevents a cross-tenant write when the agent identity is mis-issued.
 func (q *Queries) UpdateObjectCacheHeartbeatState(ctx context.Context, arg UpdateObjectCacheHeartbeatStateParams) (UpdateObjectCacheHeartbeatStateRow, error) {
 	row := q.db.QueryRow(ctx, updateObjectCacheHeartbeatState,
 		arg.OcState,
@@ -507,6 +519,7 @@ func (q *Queries) UpdateObjectCacheHeartbeatState(ctx context.Context, arg Updat
 		arg.OcUsedMemoryBytes,
 		arg.OcHitRatioPct,
 		arg.SiteID,
+		arg.TenantID,
 	)
 	var i UpdateObjectCacheHeartbeatStateRow
 	err := row.Scan(
@@ -543,6 +556,7 @@ func (q *Queries) UpdateObjectCacheHeartbeatState(ctx context.Context, arg Updat
 		&i.OcHitRatioPct,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasPassword,
 	)
 	return i, err
 }
@@ -564,7 +578,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 `
 
 type UpdateObjectCacheTestResultParams struct {
@@ -609,6 +624,7 @@ type UpdateObjectCacheTestResultRow struct {
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	HasPassword        bool               `json:"has_password"`
 }
 
 // Record the outcome of an objectcache.test command. Stores the result JSON and
@@ -658,6 +674,7 @@ func (q *Queries) UpdateObjectCacheTestResult(ctx context.Context, arg UpdateObj
 		&i.OcHitRatioPct,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasPassword,
 	)
 	return i, err
 }
@@ -731,7 +748,8 @@ RETURNING
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct,
-    created_at, updated_at
+    created_at, updated_at,
+    (password_encrypted IS NOT NULL)::boolean AS has_password
 `
 
 type UpsertObjectCacheConfigParams struct {
@@ -803,6 +821,7 @@ type UpsertObjectCacheConfigRow struct {
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
+	HasPassword        bool               `json:"has_password"`
 }
 
 // Insert-or-update the per-site object cache config. password_encrypted uses
@@ -881,6 +900,7 @@ func (q *Queries) UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectC
 		&i.OcHitRatioPct,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.HasPassword,
 	)
 	return i, err
 }

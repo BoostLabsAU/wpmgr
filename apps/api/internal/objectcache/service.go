@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -134,7 +136,7 @@ func (s *Service) Test(ctx context.Context, tenantID, siteID uuid.UUID, password
 
 	req := buildConfigRequest(cfg, password)
 	var result agentcmd.ObjectCacheTestResult
-	if err := s.cmdClient.Do(context.Background(), siteID, siteURL, "objectcache.test", req, &result); err != nil {
+	if err := s.cmdClient.Do(ctx, siteID, siteURL, "objectcache.test", req, &result); err != nil {
 		return Config{}, nil, fmt.Errorf("objectcache: test command failed: %w", err)
 	}
 
@@ -147,7 +149,7 @@ func (s *Service) Test(ctx context.Context, tenantID, siteID uuid.UUID, password
 
 	configHash := result.ConfigHash
 	if configHash == "" {
-		configHash = computeConfigHash(cfg, password)
+		configHash = computeConfigHash(cfg)
 	}
 
 	updated, err := s.repo.UpdateTestResult(ctx, tenantID, siteID, configHash, resultJSON, passedAt)
@@ -200,7 +202,7 @@ func (s *Service) Enable(ctx context.Context, tenantID, siteID uuid.UUID) (Confi
 
 	req := agentcmd.ObjectCacheEnableRequest{ConfigHash: cfg.LastTestConfigHash}
 	var result agentcmd.ObjectCacheEnableResult
-	if err := s.cmdClient.Do(context.Background(), siteID, siteURL, "objectcache.enable", req, &result); err != nil {
+	if err := s.cmdClient.Do(ctx, siteID, siteURL, "objectcache.enable", req, &result); err != nil {
 		return Config{}, fmt.Errorf("objectcache: enable command failed: %w", err)
 	}
 	if !result.OK {
@@ -230,7 +232,7 @@ func (s *Service) Disable(ctx context.Context, tenantID, siteID uuid.UUID) (Conf
 
 	req := agentcmd.ObjectCacheDisableRequest{Flush: true}
 	var result agentcmd.ObjectCacheDisableResult
-	if err := s.cmdClient.Do(context.Background(), siteID, siteURL, "objectcache.disable", req, &result); err != nil {
+	if err := s.cmdClient.Do(ctx, siteID, siteURL, "objectcache.disable", req, &result); err != nil {
 		return Config{}, fmt.Errorf("objectcache: disable command failed: %w", err)
 	}
 	if !result.OK {
@@ -262,7 +264,7 @@ func (s *Service) Flush(ctx context.Context, input FlushInput) (string, error) {
 		Reason: "operator flush via CP dashboard",
 	}
 	var result agentcmd.ObjectCacheFlushResult
-	if err := s.cmdClient.Do(context.Background(), input.SiteID, siteURL, "objectcache.flush", req, &result); err != nil {
+	if err := s.cmdClient.Do(ctx, input.SiteID, siteURL, "objectcache.flush", req, &result); err != nil {
 		return "", fmt.Errorf("objectcache: flush command failed: %w", err)
 	}
 	if !result.OK {
@@ -317,14 +319,16 @@ func (s *Service) IngestStats(ctx context.Context, input IngestStatsInput) error
 }
 
 // IngestHeartbeat handles the optional object_cache block from a heartbeat push.
+// tenantID is required and must come from the verified agent identity; it is
+// threaded through to the UPDATE WHERE clause to prevent cross-tenant writes.
 // If the state changed, publishes objectcache.status_changed immediately.
 // Publishes objectcache.stats_updated for non-transition updates (caller throttles).
-func (s *Service) IngestHeartbeat(ctx context.Context, siteID uuid.UUID, block *HeartbeatBlock) error {
+func (s *Service) IngestHeartbeat(ctx context.Context, tenantID, siteID uuid.UUID, block *HeartbeatBlock) error {
 	if block == nil {
 		return nil
 	}
 	hitRatioPct := block.HitRatioPct
-	updated, err := s.repo.UpdateHeartbeatState(ctx, siteID, block.State, block.LatencyMs, block.LastErrorClass, block.UsedMemoryBytes, &hitRatioPct)
+	updated, err := s.repo.UpdateHeartbeatState(ctx, tenantID, siteID, block.State, block.LatencyMs, block.LastErrorClass, block.UsedMemoryBytes, &hitRatioPct)
 	if err != nil {
 		return err
 	}
@@ -439,7 +443,7 @@ func (s *Service) pushApplyConfig(ctx context.Context, tenantID, siteID uuid.UUI
 		TenantID: tenantID,
 		SiteID:   siteID,
 		TS:       time.Now().UTC(),
-		Data:     map[string]any{"config_hash": computeConfigHash(cfg, password)},
+		Data:     map[string]any{"config_hash": computeConfigHash(cfg)},
 	})
 	return nil
 }
@@ -507,15 +511,44 @@ func buildConfigRequest(cfg Config, password string) agentcmd.ObjectCacheConfigR
 	}
 }
 
-// computeConfigHash returns a stable sha256 hex token of the connection-critical
-// config fields. Used as the enable-gate key when the agent does not return a
-// config_hash.
-func computeConfigHash(cfg Config, password string) string {
-	raw := fmt.Sprintf("%s|%s|%d|%s|%d|%s|%s|%s",
-		cfg.Scheme, cfg.Host, cfg.Port, cfg.SocketPath,
-		cfg.Database, cfg.Username, password, cfg.Prefix)
-	h := sha256.Sum256([]byte(raw))
-	return hex.EncodeToString(h[:16])
+// computeConfigHash returns a sha256 hex digest of the config fields with the
+// password omitted. The field set, key order, and JSON encoding match the
+// agent's computeHash (class-object-cache-config.php): the full config map is
+// built, "password" is removed, keys are sorted (ksort), and the result is
+// JSON-encoded. This produces an identical hash so the CP fallback and the
+// agent-reported hash agree, enabling the enable-gate to fire correctly.
+//
+// The password is intentionally excluded: including it would (a) embed a
+// plaintext secret in an SSE event payload and stored column, and (b) prevent
+// the hash from ever matching the agent's redacted hash.
+func computeConfigHash(cfg Config) string {
+	// Build a map with the exact field names the agent uses, sorted.
+	// The agent's fromParams populates these keys only; no password key.
+	m := map[string]any{
+		"analytics_enabled": cfg.AnalyticsEnabled,
+		"async_flush":       cfg.AsyncFlush,
+		"compression":       cfg.Compression,
+		"connect_timeout_ms": cfg.ConnectTimeoutMs,
+		"database":          cfg.Database,
+		"flush_on_failback": cfg.FlushOnFailback,
+		"flush_strategy":    cfg.FlushStrategy,
+		"host":              cfg.Host,
+		"maxttl_seconds":    cfg.MaxTTLSeconds,
+		"port":              cfg.Port,
+		"prefix":            cfg.Prefix,
+		"queryttl_seconds":  cfg.QueryTTLSeconds,
+		"read_timeout_ms":   cfg.ReadTimeoutMs,
+		"retry_count":       cfg.RetryCount,
+		"retry_interval_ms": cfg.RetryIntervalMs,
+		"scheme":            cfg.Scheme,
+		"serializer":        cfg.Serializer,
+		"shared":            cfg.Shared,
+		"socket_path":       cfg.SocketPath,
+		"username":          cfg.Username,
+	}
+	raw, _ := json.Marshal(m)
+	h := sha256.Sum256(raw)
+	return hex.EncodeToString(h[:])
 }
 
 // connectionChanged returns true when fields that invalidate a stored test
@@ -553,6 +586,13 @@ func defaultConfig(siteID, tenantID uuid.UUID) Config {
 	}
 }
 
+// prefixCharsetRe matches the valid prefix character set: lowercase letters,
+// digits, underscores, and hyphens. The agent's sanitizePrefix collapses
+// whitespace and strips other characters, so an empty-after-trim or
+// non-conforming prefix sent from the CP would silently lose its namespacing.
+// We reject rather than silently coerce so the operator is aware.
+var prefixCharsetRe = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
 // validateConfig validates the operator-supplied config fields.
 func validateConfig(input UpdateConfigInput) error {
 	cfg := input.Config
@@ -581,6 +621,18 @@ func validateConfig(input UpdateConfigInput) error {
 	}
 	if cfg.MaxTTLSeconds < 0 {
 		return domain.Validation("invalid_maxttl", "maxttl_seconds must be non-negative")
+	}
+	// Validate the key prefix. The agent falls back to 'wpmgr' on empty/invalid
+	// prefixes; an empty or whitespace-only prefix sent from the CP would defeat
+	// shared-Redis namespacing and make SCAN-based flush delete a neighbour's keys.
+	// Reject rather than silently coerce.
+	if p := strings.TrimSpace(cfg.Prefix); cfg.Prefix != "" {
+		if p == "" {
+			return domain.Validation("invalid_prefix", "prefix must not be whitespace-only")
+		}
+		if !prefixCharsetRe.MatchString(p) {
+			return domain.Validation("invalid_prefix", "prefix must contain only lowercase letters, digits, underscores, or hyphens")
+		}
 	}
 	return nil
 }

@@ -173,20 +173,18 @@ final class ObjectCacheDropinInstaller
 			return [ 'ok' => false, 'detail' => 'DISALLOW_FILE_MODS is set', 'foreign_dropin' => false ];
 		}
 
-		// Foreign drop-in check.
+		// Foreign drop-in check. Treat an unreadable existing file as foreign:
+		// we cannot confirm it is ours, so we must not overwrite it without $force.
 		if ( @is_file( $path ) ) {
 			$existing = @file_get_contents( $path );
-			if ( $existing !== false
-				&& strpos( $existing, self::SIGNATURE ) === false
-				&& trim( $existing ) !== ''
-			) {
-				if ( ! $force ) {
-					return [
-						'ok'            => false,
-						'detail'        => 'another object-cache drop-in is installed; use force to replace',
-						'foreign_dropin' => true,
-					];
-				}
+			$isForeign = $existing === false
+				|| ( strpos( $existing, self::SIGNATURE ) === false && trim( $existing ) !== '' );
+			if ( $isForeign && ! $force ) {
+				return [
+					'ok'            => false,
+					'detail'        => 'another object-cache drop-in is installed; use force to replace',
+					'foreign_dropin' => true,
+				];
 			}
 		}
 

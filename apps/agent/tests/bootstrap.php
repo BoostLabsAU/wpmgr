@@ -236,6 +236,14 @@ if (!class_exists('WP_REST_Request')) {
         {
             return $this->headers[strtolower($key)] ?? '';
         }
+
+        /**
+         * @return array<string,mixed>
+         */
+        public function get_json_params(): array
+        {
+            return [];
+        }
     }
 }
 

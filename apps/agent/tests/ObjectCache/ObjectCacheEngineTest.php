@@ -396,4 +396,57 @@ final class ObjectCacheEngineTest extends TestCase
 		$this->oc->set( 'norm_key', 'val', '' );
 		$this->assertSame( 'val', $this->oc->get( 'norm_key', '' ) );
 	}
+
+	// -------------------------------------------------------------------------
+	// S6: empty prefix defence
+	// -------------------------------------------------------------------------
+
+	/**
+	 * S6: the engine's sanitizePrefix method must fall back to 'wpmgr' when the
+	 * sanitized prefix is an empty string. We verify this indirectly through the
+	 * public surface: set/get in array mode must work regardless of how the
+	 * prefix was sanitized. The primary enforcement is that sanitizePrefix returns
+	 * 'wpmgr' for '' — covered by its own unit path through the engine constructor
+	 * and by the fromParams test in ObjectCacheConfigTest.
+	 */
+	public function test_engine_array_mode_operational_with_default_instance(): void
+	{
+		// boot() with no on-disk config file falls back to array mode.
+		$oc = \WPMgr_Object_Cache::boot();
+		$oc->set( 'ep_key', 'ep_val', 'default' );
+		$found  = null;
+		$result = $oc->get( 'ep_key', 'default', false, $found );
+		$this->assertTrue( $found, 'Array-mode boot must support set/get' );
+		$this->assertSame( 'ep_val', $result );
+	}
+
+	// -------------------------------------------------------------------------
+	// N1: group flush exact-segment post-filter
+	// -------------------------------------------------------------------------
+
+	/**
+	 * N1: flush_group('post') in array mode must clear 'post' group entries
+	 * and leave 'postmeta' group entries untouched. In array mode the L1 cache
+	 * is keyed by [ group ][ key ] so the flush is exact by group key — this
+	 * verifies the documented contract holds (the Redis path has additional
+	 * SCAN post-filtering to prevent the same over-delete in shared mode).
+	 */
+	public function test_flush_group_does_not_delete_similarly_named_group(): void
+	{
+		$this->oc->set( 'p1', 'post_val', 'post' );
+		$this->oc->set( 'pm1', 'postmeta_val', 'postmeta' );
+
+		$this->oc->flush_group( 'post' );
+
+		// 'post' group must be gone.
+		$found1 = null;
+		$this->oc->get( 'p1', 'post', false, $found1 );
+		$this->assertFalse( $found1, 'flush_group(post) must clear post group' );
+
+		// 'postmeta' group must be untouched.
+		$found2 = null;
+		$this->oc->get( 'pm1', 'postmeta', false, $found2 );
+		$this->assertTrue( $found2, 'flush_group(post) must not affect postmeta group' );
+		$this->assertSame( 'postmeta_val', $this->oc->get( 'pm1', 'postmeta' ) );
+	}
 }

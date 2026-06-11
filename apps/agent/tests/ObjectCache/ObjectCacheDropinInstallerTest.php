@@ -158,4 +158,96 @@ final class ObjectCacheDropinInstallerTest extends TestCase
 		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $this->stubPath );
 		$this->assertTrue( $installer->isWritable() );
 	}
+
+	/**
+	 * S5: an existing drop-in that is UNREADABLE (permissions deny read) must be
+	 * treated as FOREIGN and refused without $force, not overwritten.
+	 *
+	 * We simulate an unreadable file by writing a file, then chmod 000 before
+	 * calling install(). The test is skipped when running as root (root ignores
+	 * file permissions) or on Windows (chmod has no effect).
+	 */
+	public function test_unreadable_existing_dropin_treated_as_foreign_without_force(): void
+	{
+		if ( PHP_OS_FAMILY === 'Windows' ) {
+			$this->markTestSkipped( 'chmod 000 has no effect on Windows' );
+		}
+		if ( function_exists( 'posix_getuid' ) && posix_getuid() === 0 ) {
+			$this->markTestSkipped( 'Running as root: file permission restrictions do not apply' );
+		}
+
+		$path = $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL;
+		// Write a non-empty file with no WPMgr signature.
+		file_put_contents( $path, "<?php\n// unknown content.\n" );
+		@chmod( $path, 0000 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: simulate unreadable file for S5 check
+
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $this->stubPath );
+		$result    = $installer->install();
+
+		// Restore perms before any assertions so tear_down can clean up.
+		@chmod( $path, 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: restore perms after S5 check
+
+		$this->assertFalse( $result['ok'], 'install() must refuse to overwrite an unreadable file without force' );
+		$this->assertTrue( $result['foreign_dropin'], 'unreadable file must be classified as foreign_dropin' );
+	}
+
+	/**
+	 * S5: with $force=true the foreign guard is bypassed, but a 0000-perms file
+	 * cannot be overwritten at the OS level (file_put_contents fails). The key
+	 * invariant is that the forced install ATTEMPTS the write (i.e. does not
+	 * refuse with 'foreign_dropin') — the write itself may fail if the OS
+	 * prevents it. We verify that foreign_dropin is false (guard bypassed) even
+	 * if ok is false (write blocked by OS perms).
+	 */
+	public function test_unreadable_existing_dropin_force_bypasses_foreign_guard(): void
+	{
+		if ( PHP_OS_FAMILY === 'Windows' ) {
+			$this->markTestSkipped( 'chmod 000 has no effect on Windows' );
+		}
+		if ( function_exists( 'posix_getuid' ) && posix_getuid() === 0 ) {
+			$this->markTestSkipped( 'Running as root: file permission restrictions do not apply' );
+		}
+
+		$path = $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL;
+		file_put_contents( $path, "<?php\n// unknown content.\n" );
+		@chmod( $path, 0000 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: simulate unreadable file for S5 check
+
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $this->stubPath );
+		$result    = $installer->install( true );
+
+		@chmod( $path, 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: restore perms after S5 check
+
+		// The foreign guard must be bypassed (foreign_dropin=false).
+		// The write may still fail if the OS denies the 0000 file, which is fine
+		// — the guard bypass is the security property being tested.
+		$this->assertFalse(
+			$result['foreign_dropin'],
+			'install(force=true) must bypass the foreign guard even for an unreadable file'
+		);
+	}
+
+	/**
+	 * S5: state() classifies an unreadable file as STATE_FOREIGN (the
+	 * existing state() already does this correctly; this is a regression guard).
+	 */
+	public function test_state_foreign_for_unreadable_file(): void
+	{
+		if ( PHP_OS_FAMILY === 'Windows' ) {
+			$this->markTestSkipped( 'chmod 000 has no effect on Windows' );
+		}
+		if ( function_exists( 'posix_getuid' ) && posix_getuid() === 0 ) {
+			$this->markTestSkipped( 'Running as root: file permission restrictions do not apply' );
+		}
+
+		$path = $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL;
+		file_put_contents( $path, "<?php\n// some content.\n" );
+		@chmod( $path, 0000 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: simulate unreadable file
+
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $this->stubPath );
+		$state     = $installer->state();
+
+		@chmod( $path, 0644 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only: restore perms
+
+		$this->assertSame( ObjectCacheDropinInstaller::STATE_FOREIGN, $state );
+	}
 }

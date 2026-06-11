@@ -1277,7 +1277,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// M56 — Wire the RUM beacon key repo so UpdateConfig generates keys on first enable.
 	perfSvc.SetBeaconKeyRepo(rumBeaconRepo, os.Getenv("WPMGR_PUBLIC_BASE_URL"))
 	fontResultsAgentH := perf.NewFontResultsAgentHandler(perfRepo)
-	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc)
+	perfAgentH := perf.NewAgentHandler(perfSvc, rucssIngestSvc, ocSvc)
 
 	// ADR-045 Phase 2 — wire the auth service's transactional mailer (password
 	// reset link + change-password notification) + an in-memory rate limiter now

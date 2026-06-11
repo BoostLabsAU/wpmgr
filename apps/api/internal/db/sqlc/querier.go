@@ -430,6 +430,7 @@ type Querier interface {
 	// ---------------------------------------------------------------------------
 	// Operator read path (InTenantTx). Excludes password_encrypted column; callers
 	// that need the ciphertext use GetObjectCacheConfigWithSecret.
+	// has_password is a derived boolean: true when a ciphertext is stored.
 	GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (GetObjectCacheConfigRow, error)
 	// Service-internal path: used ONLY when rendering a signed agent command
 	// (apply_config / test). Never called from a handler directly.
@@ -1082,9 +1083,11 @@ type Querier interface {
 	// in the service layer (requires a non-NULL last_test_config_hash matching the
 	// current config). Runs under InTenantTx (operator path).
 	UpdateObjectCacheEnabled(ctx context.Context, arg UpdateObjectCacheEnabledParams) (UpdateObjectCacheEnabledRow, error)
-	// Heartbeat ingest path: update the live status fields and return the previous
+	// Heartbeat ingest path: update the live status fields and return the updated
 	// values so the service can detect state transitions (for SSE publishing).
-	// Runs under InAgentTx (cross-tenant heartbeat path).
+	// tenant_id is required in the WHERE clause for defence-in-depth: even though
+	// InAgentTx sets app.agent='on' (RLS agent policy), the explicit predicate
+	// prevents a cross-tenant write when the agent identity is mis-issued.
 	UpdateObjectCacheHeartbeatState(ctx context.Context, arg UpdateObjectCacheHeartbeatStateParams) (UpdateObjectCacheHeartbeatStateRow, error)
 	// Record the outcome of an objectcache.test command. Stores the result JSON and
 	// the config hash that was tested. When the test passed, last_tested_at is set;

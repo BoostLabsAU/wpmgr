@@ -9,10 +9,12 @@
  * Security constraints:
  *   - 0600 permissions: owner-only read, kept on every write.
  *   - Atomic write: tmp file + rename so a crash mid-write leaves the old config.
- *   - File is excluded from backup file-sets (backup-excluded marker in content).
+ *   - Excluded from backups via FilesArchiver DEFAULT_EXCLUDES (exact filename).
+ *   - Excluded from restores via FilesRestorer EXCLUDE_SUBSTRINGS.
  *   - Path is not user-controllable; always derived from WP_CONTENT_DIR.
  *   - The secret (Redis password) is stored here and nowhere else on the site.
  *   - Never echoed back in any response.
+ *   - Tmp file written under umask 0077 so secret bytes are never world-readable.
  *
  * @package WPMgr\Agent\ObjectCache
  */
@@ -148,30 +150,41 @@ final class ObjectCacheConfig
 			return false;
 		}
 
-		// Build PHP source. The backup-excluded comment is a marker so our backup
-		// file-set excluder can strip this file from archives.
+		// Build PHP source.
 		$export = var_export( $config, true ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- generating PHP source for config file, not debug output
 		$source = "<?php\n"
 			. "// WPMgr Object Cache connection config.\n"
-			. "// wpmgr-backup-exclude: this file contains credentials; excluded from backups.\n"
 			. "defined( 'ABSPATH' ) || exit;\n"
 			. "return " . $export . ";\n";
 
 		// Atomic write: write to a temp file, then rename.
 		$tmp = $this->filePath . '.tmp.' . wp_rand( 100000, 999999 );
 
-		$written = @file_put_contents( $tmp, $source, LOCK_EX );
+		// Narrow the umask so the tmp file is created 0600 at the OS level;
+		// the explicit chmod below is a belt-and-suspenders second layer.
+		// This closes the window between write and chmod (S8).
+		$prevUmask = umask( 0077 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_umask -- headless agent; must bracket secret-file write to ensure 0600 at creation
+		$written   = @file_put_contents( $tmp, $source, LOCK_EX );
+		umask( $prevUmask ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_umask -- restores umask after the secret-file write window
+
 		if ( $written === false ) {
 			return false;
 		}
 
-		// Set 0600 before rename so the file is never world-readable at any point.
+		// Belt-and-suspenders: explicit chmod in case umask was already overridden
+		// by the SAPI or an earlier call.
 		@chmod( $tmp, 0600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- headless agent; WP_Filesystem not initialized; direct chmod required for credential-file security
 
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic rename; WP_Filesystem::move() is non-atomic; justified per §4 guardrail
 		if ( ! @rename( $tmp, $this->filePath ) ) {
 			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup of a failed rename on a tmp file in the same dir; wp_delete_file() is equivalent for non-attachment files
 			return false;
+		}
+
+		// Invalidate opcache so a credential rotation is not silently served from
+		// stale bytecode on validate_timestamps=0 hosts (S7).
+		if ( function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $this->filePath, true );
 		}
 
 		// Invalidate the memoized load.
@@ -194,6 +207,9 @@ final class ObjectCacheConfig
 			return true;
 		}
 		$result = @unlink( $this->filePath ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- wp_delete_file wraps unlink; direct unlink is equivalent for a non-attachment file
+		if ( $result && function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $this->filePath, true );
+		}
 		$this->loaded = null;
 		return $result;
 	}
@@ -277,6 +293,11 @@ final class ObjectCacheConfig
 
 		$prefix = isset( $params['prefix'] ) && is_string( $params['prefix'] )
 			? sanitize_text_field( $params['prefix'] ) : 'wpmgr';
+		// An empty/whitespace prefix defeats shared-Redis namespacing; SCAN `:*`
+		// would match all keys across every tenant on a shared instance.
+		if ( $prefix === '' ) {
+			$prefix = 'wpmgr';
+		}
 
 		$maxttl = isset( $params['maxttl_seconds'] ) && is_int( $params['maxttl_seconds'] )
 			? (int) $params['maxttl_seconds'] : self::DEFAULT_MAXTTL;

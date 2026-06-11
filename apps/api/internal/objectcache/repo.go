@@ -214,8 +214,10 @@ func (r *Repo) UpdateEnabled(ctx context.Context, tenantID, siteID uuid.UUID, en
 
 // UpdateHeartbeatState updates the live status columns from a heartbeat push.
 // Returns the updated row so the service can detect state transitions.
+// tenantID is required for defence-in-depth: the explicit WHERE predicate
+// prevents a cross-tenant write even though InAgentTx sets app.agent='on'.
 // Runs under InAgentTx (cross-tenant heartbeat path).
-func (r *Repo) UpdateHeartbeatState(ctx context.Context, siteID uuid.UUID, state OCState, latencyMs int, lastErrorClass string, usedMemoryBytes int64, hitRatioPct *float64) (Config, error) {
+func (r *Repo) UpdateHeartbeatState(ctx context.Context, tenantID, siteID uuid.UUID, state OCState, latencyMs int, lastErrorClass string, usedMemoryBytes int64, hitRatioPct *float64) (Config, error) {
 	var out sqlc.GetObjectCacheConfigRow
 
 	var hitRatioNum pgtype.Numeric
@@ -231,6 +233,7 @@ func (r *Repo) UpdateHeartbeatState(ctx context.Context, siteID uuid.UUID, state
 			OcUsedMemoryBytes: usedMemoryBytes,
 			OcHitRatioPct:     hitRatioNum,
 			SiteID:            siteID,
+			TenantID:          tenantID,
 		})
 		if qerr != nil {
 			if errors.Is(qerr, pgx.ErrNoRows) {
@@ -357,6 +360,7 @@ func upsertRowToConfigRow(r sqlc.UpsertObjectCacheConfigRow) sqlc.GetObjectCache
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		HasPassword: r.HasPassword,
 	}
 }
 
@@ -376,6 +380,7 @@ func testResultRowToConfigRow(r sqlc.UpdateObjectCacheTestResultRow) sqlc.GetObj
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		HasPassword: r.HasPassword,
 	}
 }
 
@@ -395,6 +400,7 @@ func enabledRowToConfigRow(r sqlc.UpdateObjectCacheEnabledRow) sqlc.GetObjectCac
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		HasPassword: r.HasPassword,
 	}
 }
 
@@ -414,10 +420,12 @@ func heartbeatRowToConfigRow(r sqlc.UpdateObjectCacheHeartbeatStateRow) sqlc.Get
 		OcState: r.OcState, OcLatencyMs: r.OcLatencyMs, OcLastErrorClass: r.OcLastErrorClass,
 		OcUsedMemoryBytes: r.OcUsedMemoryBytes, OcHitRatioPct: r.OcHitRatioPct,
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		HasPassword: r.HasPassword,
 	}
 }
 
 // configFromRow maps a sqlc GetObjectCacheConfigRow (no password) to Config.
+// HasPassword is set from the derived has_password column in the SELECT.
 func configFromRow(r sqlc.GetObjectCacheConfigRow) Config {
 	c := Config{
 		SiteID:           r.SiteID,
@@ -429,6 +437,7 @@ func configFromRow(r sqlc.GetObjectCacheConfigRow) Config {
 		SocketPath:       r.SocketPath,
 		Database:         int(r.Database),
 		Username:         r.Username,
+		HasPassword:      r.HasPassword,
 		Prefix:           r.Prefix,
 		MaxTTLSeconds:    int(r.MaxttlSeconds),
 		QueryTTLSeconds:  int(r.QueryttlSeconds),

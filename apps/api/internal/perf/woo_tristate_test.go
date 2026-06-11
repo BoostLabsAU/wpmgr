@@ -58,7 +58,7 @@ func TestWooFieldAbsentInStatsReportLeavesStoredValueUntouched(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &wooFakeRepo{}
 	svc := NewService(repo, nil, nil, nil)
-	h := NewAgentHandler(svc, nil)
+	h := NewAgentHandler(svc, nil, nil)
 
 	eng := gin.New()
 	siteID, tenantID := uuid.New(), uuid.New()
@@ -90,7 +90,7 @@ func TestWooFieldTrueInStatsReportCallsMarkSupported(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	repo := &wooFakeRepo{}
 	svc := NewService(repo, nil, nil, nil)
-	h := NewAgentHandler(svc, nil)
+	h := NewAgentHandler(svc, nil, nil)
 
 	eng := gin.New()
 	siteID, tenantID := uuid.New(), uuid.New()

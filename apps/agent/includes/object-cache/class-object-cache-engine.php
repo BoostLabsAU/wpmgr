@@ -1444,7 +1444,10 @@ class WPMgr_Object_Cache
 	private function sanitizePrefix( string $prefix ): string
 	{
 		$prefix = preg_replace( '/[^a-zA-Z0-9_-]/', '_', $prefix ) ?? 'wpmgr';
-		return substr( $prefix, 0, 32 );
+		$prefix = substr( $prefix, 0, 32 );
+		// An empty prefix after sanitization defeats shared-Redis namespacing
+		// and makes SCAN `:*` flush cross site boundaries. Fall back to 'wpmgr'.
+		return $prefix !== '' ? $prefix : 'wpmgr';
 	}
 
 	/**
@@ -1682,6 +1685,16 @@ class WPMgr_Object_Cache
 	/**
 	 * Flush all keys for a specific group via SCAN+MATCH+UNLINK.
 	 *
+	 * The SCAN globs use '*' to span blog-ID and key segments, but '*' in Redis
+	 * glob spans ':' — so the pattern `prefix:*:post:*` also matches a key like
+	 * `prefix:1:postmeta:key` if the group substring appears as an interior
+	 * token. Post-filter each SCAN batch: only UNLINK keys whose colon-delimited
+	 * segments contain the exact group token at the correct position.
+	 *
+	 * Key shapes:
+	 *   Global:   prefix:group:key
+	 *   Per-blog: prefix:blogId:group:key
+	 *
 	 * @param string $group Normalized group.
 	 * @return bool
 	 */
@@ -1691,10 +1704,71 @@ class WPMgr_Object_Cache
 		$globalPattern = $this->prefix . ':' . $group . ':';
 		$blogPattern   = $this->prefix . ':*:' . $group . ':';
 
-		$this->executeScanFlush( $globalPattern );
-		$this->executeScanFlush( $blogPattern );
+		$this->executeScanFlushWithGroupFilter( $globalPattern, $group, false );
+		$this->executeScanFlushWithGroupFilter( $blogPattern, $group, true );
 
 		return true;
+	}
+
+	/**
+	 * SCAN+MATCH+UNLINK with exact group-segment post-filter.
+	 *
+	 * After each SCAN batch the keys are filtered to those where the group
+	 * token sits at the exact colon-segment position:
+	 *   $hasBlogSegment=false: prefix:group:key     => segment index 1
+	 *   $hasBlogSegment=true:  prefix:blogId:group:key => segment index 2
+	 *
+	 * @param string $prefixPattern SCAN MATCH pattern.
+	 * @param string $group         Exact group name to confirm.
+	 * @param bool   $hasBlogSegment Whether the pattern includes a blog-ID wildcard.
+	 * @return void
+	 */
+	private function executeScanFlushWithGroupFilter( string $prefixPattern, string $group, bool $hasBlogSegment ): void
+	{
+		if ( $this->redis === null ) {
+			return;
+		}
+
+		$cursor  = '0';
+		$pattern = $prefixPattern . '*';
+		// Group segment index in the colon-delimited key:
+		// Global key:   0=prefix, 1=group, 2+=key
+		// Per-blog key: 0=prefix, 1=blogId, 2=group, 3+=key
+		$groupSegmentIndex = $hasBlogSegment ? 2 : 1;
+
+		do {
+			$result = $this->redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
+
+			if ( $result === false ) {
+				break;
+			}
+
+			if ( is_array( $result ) && count( $result ) === 2 ) {
+				$cursor = (string) $result[0];
+				$keys   = is_array( $result[1] ) ? $result[1] : [];
+			} else {
+				break;
+			}
+
+			if ( $keys !== [] ) {
+				// Post-filter: confirm the key's group segment is an exact match.
+				$confirmed = [];
+				foreach ( $keys as $k ) {
+					$parts = explode( ':', (string) $k );
+					if ( isset( $parts[ $groupSegmentIndex ] ) && $parts[ $groupSegmentIndex ] === $group ) {
+						$confirmed[] = $k;
+					}
+				}
+				if ( $confirmed !== [] ) {
+					if ( $this->asyncFlush ) {
+						$this->redis->unlink( ...$confirmed );
+					} else {
+						$this->redis->del( ...$confirmed );
+					}
+				}
+				usleep( 500 ); // 0.5ms inter-batch sleep to reduce instance impact.
+			}
+		} while ( $cursor !== '0' );
 	}
 
 	/**

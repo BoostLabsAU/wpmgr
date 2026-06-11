@@ -92,6 +92,9 @@ final class FilesArchiver
         'cache',
         'upgrade',
         'upgrade-temp-backup',
+        // Object-cache credentials file: contains the plaintext Redis password;
+        // must never be packed into a backup archive.
+        'wpmgr-object-cache-config.php',
     ];
 
     /**
