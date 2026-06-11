@@ -69,9 +69,11 @@ final class Router
         // Action commands dispatched by name. The {command} segment names the
         // action; it is threaded into verifyCommand() so the token is bound to
         // both the site (aud) and this specific command (cmd).
+        // Pattern allows dots so dot-notation commands (e.g. objectcache.apply_config)
+        // are reachable alongside underscore-only names (e.g. cache_purge).
         register_rest_route(
             self::NAMESPACE,
-            '/command/(?P<command>[a-z0-9_-]+)',
+            '/command/(?P<command>[a-z0-9_.]+)',
             [
                 'methods'             => 'POST',
                 'callback'            => [$this, 'handleCommand'],
@@ -79,7 +81,12 @@ final class Router
                 'args'                => [
                     'command' => [
                         'required'          => true,
-                        'sanitize_callback' => 'sanitize_key',
+                        // Strip anything outside the allowed set [a-z0-9_.] rather than
+                        // using sanitize_key() which removes dots and breaks dot-notation
+                        // command names like objectcache.apply_config.
+                        'sanitize_callback' => static function ( string $v ): string {
+                            return preg_replace( '/[^a-z0-9_.]/', '', strtolower( $v ) ) ?? '';
+                        },
                     ],
                 ],
             ]

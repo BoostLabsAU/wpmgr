@@ -11,6 +11,24 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
+// ---------------------------------------------------------------------------
+// Constants needed by the object-cache drop-in and engine files.
+// ---------------------------------------------------------------------------
+if (!defined('ABSPATH')) {
+    define('ABSPATH', sys_get_temp_dir() . '/wpmgr_wp_abspath/');
+}
+if (!defined('WPMGR_AGENT_DIR')) {
+    define('WPMGR_AGENT_DIR', dirname(__DIR__));
+}
+
+// Bootstrap the object-cache engine class (global namespace, loaded via
+// require_once; must come after ABSPATH is defined).
+if (!class_exists('WPMgr_Object_Cache')) {
+    require_once dirname(__DIR__) . '/includes/object-cache/class-object-cache-config.php';
+    require_once dirname(__DIR__) . '/includes/object-cache/class-redis-connection.php';
+    require_once dirname(__DIR__) . '/includes/object-cache/class-object-cache-engine.php';
+}
+
 // WP $wpdb result-format constants (used by PreloadQueue SELECTs). Real WP
 // defines these in wp-db.php; declare them for the in-memory $wpdb doubles.
 if (!defined('ARRAY_A')) {
@@ -118,6 +136,10 @@ if (!function_exists('sanitize_text_field')) {
         return trim($filtered);
     }
 }
+
+
+
+
 
 if (!function_exists('sanitize_email')) {
     /**

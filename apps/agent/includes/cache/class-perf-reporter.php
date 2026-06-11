@@ -17,6 +17,7 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Cache;
 
+use WPMgr\Agent\ObjectCache\ObjectCacheHeartbeat;
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
 
@@ -199,6 +200,10 @@ final class PerfReporter
                     $body['cache_miss_count'] = $tally['misses'];
                 }
             }
+
+            // Inject the optional object-cache heartbeat block when configured
+            // and analytics are enabled. Absent when no config or analytics disabled.
+            ObjectCacheHeartbeat::inject($body);
 
             $this->post(self::PATH_STATS, $body);
         } catch (\Throwable $e) {
