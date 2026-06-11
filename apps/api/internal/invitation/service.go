@@ -82,6 +82,10 @@ func (s *Service) CreateOrgInvitation(ctx context.Context, tenantID, actorID uui
 	if !targetRole.Valid() {
 		return "", domain.Validation("role_invalid", "invalid role")
 	}
+	// RoleClient is portal-only; org invitations must never carry it.
+	if targetRole == authz.RoleClient {
+		return "", domain.Validation("role_invalid", "client role cannot be assigned via org invitation")
+	}
 	if !actorRole.AtLeast(targetRole) {
 		return "", domain.Forbidden("role_grant_exceeds_actor", "you cannot grant a role higher than your own")
 	}
@@ -98,6 +102,7 @@ func (s *Service) CreateOrgInvitation(ctx context.Context, tenantID, actorID uui
 			Email:     email,
 			Scope:     "org",
 			SiteID:    pgtype.UUID{Valid: false},
+			ClientID:  pgtype.UUID{Valid: false},
 			Role:      role,
 			TokenHash: tokenHash,
 			InvitedBy: pgtype.UUID{Bytes: actorID, Valid: actorID != uuid.Nil},
@@ -161,6 +166,7 @@ type AcceptInput struct {
 type AcceptResult struct {
 	TenantID uuid.UUID
 	SiteID   *uuid.UUID
+	ClientID *uuid.UUID
 	Scope    string
 }
 
@@ -331,6 +337,33 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 			Metadata:   map[string]any{"invitation_id": inv.ID.String(), "role": inv.Role},
 		})
 
+	case "client":
+		if !inv.ClientID.Valid {
+			return AcceptResult{}, domain.Internal("invitation_client_missing", "client invitation has no client_id")
+		}
+		clientID := uuid.UUID(inv.ClientID.Bytes)
+		err = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+			_, qerr := sqlc.New(tx).CreateClientMember(ctx, sqlc.CreateClientMemberParams{
+				TenantID:  tenantID,
+				ClientID:  clientID,
+				UserID:    u.ID,
+				InvitedBy: inv.InvitedBy,
+			})
+			return qerr
+		})
+		if err != nil {
+			return AcceptResult{}, domain.Internal("client_member_create_failed", "failed to grant portal access").WithCause(err)
+		}
+		_, _ = s.audit.Record(ctx, audit.Event{
+			TenantID:   tenantID,
+			ActorType:  audit.ActorUser,
+			ActorID:    u.ID.String(),
+			Action:     "client_member.accepted",
+			TargetType: "client",
+			TargetID:   clientID.String(),
+			Metadata:   map[string]any{"invitation_id": inv.ID.String(), "client_id": clientID.String()},
+		})
+
 	default:
 		return AcceptResult{}, domain.Internal("invitation_scope_unknown", "unknown invitation scope: "+inv.Scope)
 	}
@@ -345,6 +378,10 @@ func (s *Service) Accept(ctx context.Context, in AcceptInput) (AcceptResult, err
 		id := uuid.UUID(inv.SiteID.Bytes)
 		result.SiteID = &id
 	}
+	if inv.Scope == "client" && inv.ClientID.Valid {
+		id := uuid.UUID(inv.ClientID.Bytes)
+		result.ClientID = &id
+	}
 	return result, nil
 }
 
@@ -353,4 +390,87 @@ func (s *Service) incrementAttempts(ctx context.Context, tenantID, invID uuid.UU
 		_, err := sqlc.New(tx).IncrementInviteAttempts(ctx, invID)
 		return err
 	})
+}
+
+// CreateClientInvitation creates a scope='client' invitation token and sends a
+// portal-invite email. Returns the raw accept link (always; copyable-link
+// fallback for unconfigured SMTP), the invitation ID, and the expiry time.
+// This satisfies client.InviteService.
+func (s *Service) CreateClientInvitation(ctx context.Context, tenantID, clientID, actorID uuid.UUID, email string) (acceptLink string, invitationID uuid.UUID, expiresAt time.Time, err error) {
+	rawToken, tokenHash, err := generateSecureToken()
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, domain.Internal("token_gen_failed", "failed to generate invitation token").WithCause(err)
+	}
+
+	expiry := time.Now().UTC().Add(7 * 24 * time.Hour)
+	var inv sqlc.Invitation
+	err = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).CreateInvitation(ctx, sqlc.CreateInvitationParams{
+			TenantID:  tenantID,
+			Email:     email,
+			Scope:     "client",
+			SiteID:    pgtype.UUID{Valid: false},
+			ClientID:  pgtype.UUID{Bytes: clientID, Valid: true},
+			Role:      string(authz.RoleClient),
+			TokenHash: tokenHash,
+			InvitedBy: pgtype.UUID{Bytes: actorID, Valid: actorID != uuid.Nil},
+			ExpiresAt: expiry,
+		})
+		if qerr != nil {
+			return domain.Internal("invitation_create_failed", "failed to create client invitation").WithCause(qerr)
+		}
+		inv = row
+		return nil
+	})
+	if err != nil {
+		return "", uuid.Nil, time.Time{}, err
+	}
+
+	link := s.baseURL + "/accept?token=" + rawToken
+
+	// Send the portal invite email when the ADR-045 mailer is wired.
+	// Resolve client and agency names best-effort.
+	var clientName, agencyName, inviterName string
+	inviterName = "Your agency"
+	agencyName = s.tenantName(ctx, tenantID)
+	if agencyName == "" {
+		agencyName = "Your agency"
+	}
+	_ = s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx, "SELECT name FROM clients WHERE id = $1 AND tenant_id = $2", clientID, tenantID).Scan(&clientName)
+	})
+	if clientName == "" {
+		clientName = agencyName
+	}
+	if actorID != uuid.Nil {
+		if u, uerr := s.authRepo.GetUserByID(ctx, actorID); uerr == nil && strings.TrimSpace(u.Name) != "" {
+			inviterName = u.Name
+		}
+	}
+
+	if s.enqueuer != nil {
+		_ = s.enqueuer.Enqueue(ctx, uuid.Nil, []string{email}, "client_portal_invite", map[string]any{
+			"Name":         "there",
+			"InviterName":  inviterName,
+			"ClientName":   clientName,
+			"AgencyName":   agencyName,
+			"AcceptURL":    link,
+			"ExpiresHours": "168",
+		})
+	} else if s.mailer != nil {
+		body := "You have been invited to access the " + clientName + " portal, managed by " + agencyName + ".\n\nAccept your invitation here:\n" + link + "\n\nThis link expires in 7 days and is single-use."
+		_ = s.mailer.Send(ctx, []string{email}, "You have been invited to a client portal", body)
+	}
+
+	_, _ = s.audit.Record(ctx, audit.Event{
+		TenantID:   tenantID,
+		ActorType:  audit.ActorUser,
+		ActorID:    actorID.String(),
+		Action:     "client_member.invited",
+		TargetType: "client",
+		TargetID:   clientID.String(),
+		Metadata:   map[string]any{"email": email, "invitation_id": inv.ID.String(), "client_id": clientID.String()},
+	})
+
+	return link, inv.ID, expiry, nil
 }

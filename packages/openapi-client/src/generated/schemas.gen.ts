@@ -1072,6 +1072,52 @@ export const MeSchema = {
       type: "string",
       format: "uuid",
     },
+    scope: {
+      type: "string",
+      description:
+        "Principal scope: org for full members, site for collaborators/portal principals, empty for unauthenticated.",
+      enum: ["org", "site", ""],
+    },
+    role: {
+      $ref: "#/components/schemas/PrincipalRole",
+    },
+    portal: {
+      $ref: "#/components/schemas/MePortal",
+    },
+  },
+} as const;
+
+export const PrincipalRoleSchema = {
+  type: "string",
+  description:
+    'Effective role of the authenticated principal. Extends the member Role enum with "client" for portal principals. The existing Role enum (owner/admin/operator/viewer) is unchanged; this standalone enum is used only in Me responses.\n',
+  enum: ["owner", "admin", "operator", "viewer", "client", ""],
+} as const;
+
+export const MePortalSchema = {
+  type: "object",
+  description: 'Portal branding context. Present only when role == "client".',
+  required: ["client_id", "client_name", "agency_name"],
+  properties: {
+    client_id: {
+      type: "string",
+      format: "uuid",
+    },
+    client_name: {
+      type: "string",
+    },
+    logo_url: {
+      type: "string",
+      format: "uri",
+    },
+    color: {
+      type: "string",
+      description:
+        "Hex color for portal accent (e.g. #0E7C8B). Web layer validates before applying.",
+    },
+    agency_name: {
+      type: "string",
+    },
   },
 } as const;
 
@@ -7243,6 +7289,443 @@ export const ClientReportListSchema = {
       type: "string",
       description:
         "Opaque keyset cursor. Pass as `cursor` in the next request to fetch the next page. Absent when there are no more pages.",
+    },
+  },
+} as const;
+
+export const ClientMemberSchema = {
+  type: "object",
+  required: ["user_id", "email", "created_at"],
+  properties: {
+    user_id: {
+      type: "string",
+      format: "uuid",
+    },
+    email: {
+      type: "string",
+      format: "email",
+    },
+    name: {
+      type: "string",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const ClientMemberListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/ClientMember",
+      },
+    },
+  },
+} as const;
+
+export const ClientMemberCreateRequestSchema = {
+  type: "object",
+  required: ["email"],
+  properties: {
+    email: {
+      type: "string",
+      format: "email",
+    },
+  },
+} as const;
+
+export const ClientMemberInviteResultSchema = {
+  type: "object",
+  required: ["email"],
+  properties: {
+    email: {
+      type: "string",
+      format: "email",
+    },
+    invited: {
+      type: "boolean",
+      description:
+        "True when an invitation was created (unknown email); false when an existing user was added directly.",
+    },
+    user_id: {
+      type: "string",
+      format: "uuid",
+      description: "Present when invited=false (the user already existed).",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+      description: "Present when invited=false.",
+    },
+    accept_link: {
+      type: "string",
+      description:
+        "Always present. The invite accept URL (copyable fallback when SMTP is unconfigured).",
+    },
+    invitation_id: {
+      type: "string",
+      format: "uuid",
+      description: "Present when invited=true.",
+    },
+    expires_at: {
+      type: "string",
+      format: "date-time",
+      description: "Present when invited=true.",
+    },
+  },
+} as const;
+
+export const ClientInvitationSchema = {
+  type: "object",
+  required: ["id", "email", "created_at", "expires_at", "status"],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    email: {
+      type: "string",
+      format: "email",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    expires_at: {
+      type: "string",
+      format: "date-time",
+    },
+    status: {
+      type: "string",
+      description: "Derived status: pending, accepted, expired, or revoked.",
+      enum: ["pending", "accepted", "expired", "revoked"],
+    },
+  },
+} as const;
+
+export const ClientInvitationListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/ClientInvitation",
+      },
+    },
+  },
+} as const;
+
+export const PortalOverviewSchema = {
+  type: "object",
+  required: ["client", "agency_name", "site_count", "report_count"],
+  properties: {
+    client: {
+      type: "object",
+      required: ["id", "name"],
+      properties: {
+        id: {
+          type: "string",
+          format: "uuid",
+        },
+        name: {
+          type: "string",
+        },
+        logo_url: {
+          type: "string",
+          format: "uri",
+        },
+        color: {
+          type: "string",
+        },
+      },
+    },
+    agency_name: {
+      type: "string",
+    },
+    site_count: {
+      type: "integer",
+    },
+    report_count: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const PortalSiteSchema = {
+  type: "object",
+  required: ["id", "name", "url", "status"],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    name: {
+      type: "string",
+    },
+    url: {
+      type: "string",
+      format: "uri",
+    },
+    status: {
+      type: "string",
+      description:
+        "Real connection state value (connected/degraded/disconnected). Web layer applies soft labels.",
+    },
+    last_backup_at: {
+      type: "string",
+      format: "date-time",
+    },
+    uptime_30d_pct: {
+      type: "number",
+      format: "float",
+    },
+    tls_expires_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalSiteListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalSite",
+      },
+    },
+  },
+} as const;
+
+export const PortalIncidentSchema = {
+  type: "object",
+  required: ["started_at", "duration_seconds"],
+  properties: {
+    started_at: {
+      type: "string",
+      format: "date-time",
+    },
+    ended_at: {
+      type: "string",
+      format: "date-time",
+    },
+    duration_seconds: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const PortalUptimeSummarySchema = {
+  type: "object",
+  required: ["range", "uptime_pct", "avg_latency_ms"],
+  properties: {
+    range: {
+      type: "string",
+    },
+    uptime_pct: {
+      type: "number",
+      format: "float",
+    },
+    avg_latency_ms: {
+      type: "number",
+      format: "float",
+    },
+    tls_expires_at: {
+      type: "string",
+      format: "date-time",
+    },
+    incidents: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalIncident",
+      },
+    },
+  },
+} as const;
+
+export const PortalBackupItemSchema = {
+  type: "object",
+  required: ["id", "kind", "status", "created_at"],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    kind: {
+      type: "string",
+    },
+    status: {
+      type: "string",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    completed_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalBackupListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalBackupItem",
+      },
+    },
+  },
+} as const;
+
+export const PortalUpdateItemSchema = {
+  type: "object",
+  required: ["type", "name", "status"],
+  properties: {
+    type: {
+      type: "string",
+    },
+    name: {
+      type: "string",
+    },
+    from_version: {
+      type: "string",
+    },
+    to_version: {
+      type: "string",
+    },
+    status: {
+      type: "string",
+    },
+    finished_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalUpdateListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalUpdateItem",
+      },
+    },
+  },
+} as const;
+
+export const PortalVitalMetricSchema = {
+  type: "object",
+  required: ["metric", "p75", "rating", "samples"],
+  properties: {
+    metric: {
+      type: "string",
+      enum: ["lcp", "inp", "cls"],
+    },
+    p75: {
+      type: "number",
+      format: "float",
+    },
+    rating: {
+      type: "string",
+      enum: ["good", "needs-improvement", "poor", "insufficient-data"],
+    },
+    samples: {
+      type: "integer",
+      format: "int64",
+    },
+  },
+} as const;
+
+export const PortalVitalsSummarySchema = {
+  type: "object",
+  required: ["range", "metrics"],
+  properties: {
+    range: {
+      type: "string",
+    },
+    metrics: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalVitalMetric",
+      },
+    },
+  },
+} as const;
+
+export const PortalReportItemSchema = {
+  type: "object",
+  required: ["id", "client_id", "period_start", "period_end", "created_at"],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    client_id: {
+      type: "string",
+      format: "uuid",
+    },
+    period_start: {
+      type: "string",
+      format: "date-time",
+    },
+    period_end: {
+      type: "string",
+      format: "date-time",
+    },
+    created_at: {
+      type: "string",
+      format: "date-time",
+    },
+    completed_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalReportListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalReportItem",
+      },
+    },
+  },
+} as const;
+
+export const PortalReportDownloadSchema = {
+  type: "object",
+  required: ["url", "expires_at"],
+  properties: {
+    url: {
+      type: "string",
+      description: "Presigned download URL (valid for the object storage TTL).",
+    },
+    expires_at: {
+      type: "string",
+      format: "date-time",
     },
   },
 } as const;

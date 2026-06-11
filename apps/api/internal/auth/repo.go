@@ -325,6 +325,29 @@ func (r *Repo) FirstActiveShareTenant(ctx context.Context, userID uuid.UUID) (uu
 	return tenantID, found
 }
 
+// FirstClientMemberTenant returns the tenant of the user's earliest client
+// membership, used at login to pick an active tenant for portal-only users who
+// have no org membership and no site_share. Mirrors FirstActiveShareTenant.
+// Runs under InUserTx so client_members_self_read (user_id = app.user_id)
+// allows the SELECT. Returns ok=false on no memberships or error.
+func (r *Repo) FirstClientMemberTenant(ctx context.Context, userID uuid.UUID) (uuid.UUID, bool) {
+	var tenantID uuid.UUID
+	var found bool
+	err := r.pool.InUserTx(ctx, userID, func(tx pgx.Tx) error {
+		tid, qerr := sqlc.New(tx).FirstClientMemberTenant(ctx, userID)
+		if qerr != nil {
+			return qerr
+		}
+		tenantID = tid
+		found = true
+		return nil
+	})
+	if err != nil {
+		return uuid.Nil, false
+	}
+	return tenantID, found
+}
+
 // ListMembershipsForTenant returns a tenant's members (RLS-scoped).
 func (r *Repo) ListMembershipsForTenant(ctx context.Context, tenantID uuid.UUID, limit, offset int32) ([]Membership, error) {
 	var out []Membership

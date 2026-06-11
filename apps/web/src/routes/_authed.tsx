@@ -18,6 +18,13 @@ export const Route = createFileRoute("/_authed")({
         search: { redirect: location.href },
       });
     }
+    // Portal users (role==="client") never belong in the agency shell. Redirect
+    // them to /portal BEFORE the NoOrgScreen check so they don't see onboarding.
+    // This is the reverse gate: /portal/route.tsx handles the agency->portal
+    // direction; this handles the portal->agency direction.
+    if (me.role === "client") {
+      throw redirect({ to: "/portal" });
+    }
     // Superadmins are monitoring-only: they have no org and never manage sites,
     // so keep them inside the Admin area and out of the tenant-scoped shell
     // (which would 403 / bounce them to the create-org screen). They still reach

@@ -25,6 +25,7 @@ interface TabDef {
 const TABS: TabDef[] = [
   { label: "Sites", path: "sites" },
   { label: "Reports", path: "reports" },
+  { label: "Portal access", path: "members" },
 ];
 
 function ClientDetailLayout() {

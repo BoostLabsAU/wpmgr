@@ -205,6 +205,57 @@ func (q *Queries) GetClient(ctx context.Context, arg GetClientParams) (GetClient
 	return i, err
 }
 
+const getClientBrandsByIDs = `-- name: GetClientBrandsByIDs :many
+SELECT id, tenant_id, name, color, logo_url, archived_at
+FROM clients
+WHERE id = ANY($1::uuid[]) AND tenant_id = $2
+ORDER BY created_at ASC, id ASC
+`
+
+type GetClientBrandsByIDsParams struct {
+	Ids      []uuid.UUID `json:"ids"`
+	TenantID uuid.UUID   `json:"tenant_id"`
+}
+
+type GetClientBrandsByIDsRow struct {
+	ID         uuid.UUID          `json:"id"`
+	TenantID   uuid.UUID          `json:"tenant_id"`
+	Name       string             `json:"name"`
+	Color      *string            `json:"color"`
+	LogoUrl    *string            `json:"logo_url"`
+	ArchivedAt pgtype.Timestamptz `json:"archived_at"`
+}
+
+// m66: portal branding — fetches client name + branding fields for the given
+// client IDs. Runs under RunTenantTx(p) (site-scope with portal principal).
+// The portal uses the earliest-created client for primary branding.
+func (q *Queries) GetClientBrandsByIDs(ctx context.Context, arg GetClientBrandsByIDsParams) ([]GetClientBrandsByIDsRow, error) {
+	rows, err := q.db.Query(ctx, getClientBrandsByIDs, arg.Ids, arg.TenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetClientBrandsByIDsRow
+	for rows.Next() {
+		var i GetClientBrandsByIDsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.Name,
+			&i.Color,
+			&i.LogoUrl,
+			&i.ArchivedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const hardDeleteClient = `-- name: HardDeleteClient :execrows
 DELETE FROM clients
 WHERE id = $1 AND tenant_id = $2

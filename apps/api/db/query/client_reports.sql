@@ -175,3 +175,39 @@ WHERE tenant_id  = @tenant_id
   AND finished_at >= @from_time
   AND finished_at  < @to_time
 GROUP BY target_type;
+
+-- ---------------------------------------------------------------------------
+-- m66 — Portal report queries
+-- ---------------------------------------------------------------------------
+
+-- name: ListCompletedReportsForClients :many
+-- Portal report list: completed reports for a set of client IDs. The
+-- client_id = ANY(@client_ids) predicate is the cross-client isolation gate
+-- (generated_reports has no site_scope restrictive policy). Only
+-- status='completed' rows are returned — the portal must not surface
+-- pending/generating/failed states (locked decision, section 8).
+-- Keyset cursor: composite (created_at, id) predicate matches ListReports.
+SELECT id, tenant_id, client_id, period_start, period_end,
+       status, created_at, completed_at
+FROM generated_reports
+WHERE tenant_id = @tenant_id
+  AND client_id = ANY(@client_ids::uuid[])
+  AND status    = 'completed'
+  AND (
+        sqlc.narg('cursor_created_at')::timestamptz IS NULL
+        OR (created_at, id) < (@cursor_created_at::timestamptz, @cursor_id::uuid)
+      )
+ORDER BY created_at DESC, id DESC
+LIMIT @row_limit;
+
+-- name: GetCompletedReportForPortal :one
+-- Load a single completed report checking client_id membership in the caller's
+-- client list. Returns ErrNoRows when the report is not found, not completed,
+-- or the client_id is not in the provided list (cross-client IDOR guard).
+SELECT id, tenant_id, client_id, period_start, period_end,
+       status, html_blob_key, pdf_blob_key, created_at, completed_at
+FROM generated_reports
+WHERE id        = @id
+  AND tenant_id = @tenant_id
+  AND client_id = ANY(@client_ids::uuid[])
+  AND status    = 'completed';

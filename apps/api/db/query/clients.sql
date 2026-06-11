@@ -90,3 +90,12 @@ SET client_id  = sqlc.narg('client_id')::uuid,
     updated_at = now()
 WHERE tenant_id = @tenant_id
   AND id = ANY(@site_ids::uuid[]);
+
+-- name: GetClientBrandsByIDs :many
+-- m66: portal branding — fetches client name + branding fields for the given
+-- client IDs. Runs under RunTenantTx(p) (site-scope with portal principal).
+-- The portal uses the earliest-created client for primary branding.
+SELECT id, tenant_id, name, color, logo_url, archived_at
+FROM clients
+WHERE id = ANY(@ids::uuid[]) AND tenant_id = @tenant_id
+ORDER BY created_at ASC, id ASC;

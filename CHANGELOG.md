@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-06-11
+
+### Added
+
+- **Read-only client portal: give each client their own branded login and dashboard.** From a client's detail page, open the new "Portal access" tab to invite client users by email. Existing users are added immediately; new email addresses receive a tokenized invite link with a 7-day expiry. The invite accept link is always shown as a copyable fallback so the flow works even when instance email is not configured. Revoke any member instantly, revoke or regenerate a pending invite, and all of this is also available to the agency when the invite is regenerated (the link rotates and the old one stops working). Clients sign in on the same login page and land automatically at `/portal` after authentication, with no agency screens visible and no way to navigate to them. The portal shell shows the client's logo, brand color applied as a scoped accent, and an agency attribution footer ("Managed by {agency}"). Two-item navigation: Sites and Reports. No sidebar, no org switcher, no write controls anywhere in the portal tree. The sites overview lists each client site with its last backup date, 30-day uptime percentage, and TLS expiry. Site status wording is softened for client audiences: "Monitoring active" instead of connected, and "Needs attention" instead of degraded or disconnected. Each site links to a detail page with four read-only cards: uptime summary and incident history (24-hour, 7-day, 30-day, and 90-day ranges), backup inventory (completed backups only, no restore or download controls, no destination or blob keys), applied updates log, and Core Web Vitals p75 field data with per-metric ratings. The Reports page lists all completed white-label reports for the client and provides HTML and PDF download links. Portal users hold a new `client` role ranked below viewer with zero permissions. They can see only their own client's sites and reports, cannot access any agency endpoint or event stream, and lose access the moment they are removed, when the client is archived, or when the client is deleted. Migration m66. Security reviewed in two rounds including live row-level-security isolation tests.
+
+### Fixed
+
+- **Deleting a client that still had sites assigned failed with a database error since 0.37.0.** The composite foreign key on the clients-to-sites relationship nulled the wrong columns on delete, causing a constraint violation instead of cleanly unassigning the sites. Sites are now correctly unassigned when a client is deleted, matching the documented behavior.
+
 ## [0.38.1] - 2026-06-11
 
 ### Fixed

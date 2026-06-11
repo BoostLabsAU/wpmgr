@@ -284,6 +284,56 @@ func (q *Queries) GetClientWithTimezone(ctx context.Context, arg GetClientWithTi
 	return i, err
 }
 
+const getCompletedReportForPortal = `-- name: GetCompletedReportForPortal :one
+SELECT id, tenant_id, client_id, period_start, period_end,
+       status, html_blob_key, pdf_blob_key, created_at, completed_at
+FROM generated_reports
+WHERE id        = $1
+  AND tenant_id = $2
+  AND client_id = ANY($3::uuid[])
+  AND status    = 'completed'
+`
+
+type GetCompletedReportForPortalParams struct {
+	ID        uuid.UUID   `json:"id"`
+	TenantID  uuid.UUID   `json:"tenant_id"`
+	ClientIds []uuid.UUID `json:"client_ids"`
+}
+
+type GetCompletedReportForPortalRow struct {
+	ID          uuid.UUID          `json:"id"`
+	TenantID    uuid.UUID          `json:"tenant_id"`
+	ClientID    uuid.UUID          `json:"client_id"`
+	PeriodStart time.Time          `json:"period_start"`
+	PeriodEnd   time.Time          `json:"period_end"`
+	Status      string             `json:"status"`
+	HtmlBlobKey string             `json:"html_blob_key"`
+	PdfBlobKey  string             `json:"pdf_blob_key"`
+	CreatedAt   time.Time          `json:"created_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+}
+
+// Load a single completed report checking client_id membership in the caller's
+// client list. Returns ErrNoRows when the report is not found, not completed,
+// or the client_id is not in the provided list (cross-client IDOR guard).
+func (q *Queries) GetCompletedReportForPortal(ctx context.Context, arg GetCompletedReportForPortalParams) (GetCompletedReportForPortalRow, error) {
+	row := q.db.QueryRow(ctx, getCompletedReportForPortal, arg.ID, arg.TenantID, arg.ClientIds)
+	var i GetCompletedReportForPortalRow
+	err := row.Scan(
+		&i.ID,
+		&i.TenantID,
+		&i.ClientID,
+		&i.PeriodStart,
+		&i.PeriodEnd,
+		&i.Status,
+		&i.HtmlBlobKey,
+		&i.PdfBlobKey,
+		&i.CreatedAt,
+		&i.CompletedAt,
+	)
+	return i, err
+}
+
 const getReport = `-- name: GetReport :one
 SELECT id, tenant_id, client_id, schedule_id, period_start, period_end, status, data_snapshot, html_blob_key, pdf_blob_key, error, created_at, updated_at, completed_at FROM generated_reports
 WHERE id = $1 AND tenant_id = $2 AND client_id = $3
@@ -418,6 +468,85 @@ func (q *Queries) GetUpdateReportStats(ctx context.Context, arg GetUpdateReportS
 	for rows.Next() {
 		var i GetUpdateReportStatsRow
 		if err := rows.Scan(&i.TargetType, &i.Succeeded, &i.Failed); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCompletedReportsForClients = `-- name: ListCompletedReportsForClients :many
+
+SELECT id, tenant_id, client_id, period_start, period_end,
+       status, created_at, completed_at
+FROM generated_reports
+WHERE tenant_id = $1
+  AND client_id = ANY($2::uuid[])
+  AND status    = 'completed'
+  AND (
+        $3::timestamptz IS NULL
+        OR (created_at, id) < ($3::timestamptz, $4::uuid)
+      )
+ORDER BY created_at DESC, id DESC
+LIMIT $5
+`
+
+type ListCompletedReportsForClientsParams struct {
+	TenantID        uuid.UUID          `json:"tenant_id"`
+	ClientIds       []uuid.UUID        `json:"client_ids"`
+	CursorCreatedAt pgtype.Timestamptz `json:"cursor_created_at"`
+	CursorID        uuid.UUID          `json:"cursor_id"`
+	RowLimit        int32              `json:"row_limit"`
+}
+
+type ListCompletedReportsForClientsRow struct {
+	ID          uuid.UUID          `json:"id"`
+	TenantID    uuid.UUID          `json:"tenant_id"`
+	ClientID    uuid.UUID          `json:"client_id"`
+	PeriodStart time.Time          `json:"period_start"`
+	PeriodEnd   time.Time          `json:"period_end"`
+	Status      string             `json:"status"`
+	CreatedAt   time.Time          `json:"created_at"`
+	CompletedAt pgtype.Timestamptz `json:"completed_at"`
+}
+
+// ---------------------------------------------------------------------------
+// m66 — Portal report queries
+// ---------------------------------------------------------------------------
+// Portal report list: completed reports for a set of client IDs. The
+// client_id = ANY(@client_ids) predicate is the cross-client isolation gate
+// (generated_reports has no site_scope restrictive policy). Only
+// status='completed' rows are returned — the portal must not surface
+// pending/generating/failed states (locked decision, section 8).
+// Keyset cursor: composite (created_at, id) predicate matches ListReports.
+func (q *Queries) ListCompletedReportsForClients(ctx context.Context, arg ListCompletedReportsForClientsParams) ([]ListCompletedReportsForClientsRow, error) {
+	rows, err := q.db.Query(ctx, listCompletedReportsForClients,
+		arg.TenantID,
+		arg.ClientIds,
+		arg.CursorCreatedAt,
+		arg.CursorID,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCompletedReportsForClientsRow
+	for rows.Next() {
+		var i ListCompletedReportsForClientsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.ClientID,
+			&i.PeriodStart,
+			&i.PeriodEnd,
+			&i.Status,
+			&i.CreatedAt,
+			&i.CompletedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

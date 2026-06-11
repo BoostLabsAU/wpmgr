@@ -1,12 +1,16 @@
 // Package authz defines the WPMgr role hierarchy, the permission matrix, and
 // the helpers handlers/middleware use to enforce role minimums and discrete
-// permissions. Roles are totally ordered: owner > admin > operator > viewer.
+// permissions. Roles are totally ordered: owner > admin > operator > viewer > client.
 package authz
 
 // Role is a principal's role within a tenant.
 type Role string
 
 const (
+	// RoleClient is a read-only client portal principal. Ranked below viewer;
+	// holds zero permissions. Portal access is granted via client_members, not
+	// org membership or site shares. A future permission grant must be explicit.
+	RoleClient Role = "client"
 	// RoleViewer can read tenant-scoped resources but not mutate them.
 	RoleViewer Role = "viewer"
 	// RoleOperator can manage sites (create/update/delete) in addition to reads.
@@ -18,11 +22,15 @@ const (
 )
 
 // rank gives each role a comparable level; higher is more privileged.
+// RoleClient sits at 1 (not 0) so that a missing-key zero-value does NOT
+// accidentally satisfy AtLeast(RoleClient). Every registered role is
+// reachable by rank; an unregistered string gets 0 and fails all AtLeast checks.
 var rank = map[Role]int{
-	RoleViewer:   1,
-	RoleOperator: 2,
-	RoleAdmin:    3,
-	RoleOwner:    4,
+	RoleClient:   1,
+	RoleViewer:   2,
+	RoleOperator: 3,
+	RoleAdmin:    4,
+	RoleOwner:    5,
 }
 
 // Valid reports whether r is a known role.
@@ -119,6 +127,11 @@ const (
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
 // is intentionally simple (role-rank based) for V0; finer-grained grants can be
 // layered later without changing call sites.
+//
+// RoleClient intentionally appears in ZERO entries. Allows(RoleClient, p) is
+// false for every Permission, including PermSiteRead. Portal routes use
+// RequireClientPortal() instead of RequirePermission(). A future permission
+// grant for client principals must be added here deliberately.
 var minRoleFor = map[Permission]Role{
 	PermSiteRead:      RoleViewer,
 	PermSiteWrite:     RoleOperator,

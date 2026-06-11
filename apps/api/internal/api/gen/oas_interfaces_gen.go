@@ -9,6 +9,10 @@ type ActivateOrgRes interface {
 	activateOrgRes()
 }
 
+type AddClientMemberRes interface {
+	addClientMemberRes()
+}
+
 type AddFleetEmailSuppressionRes interface {
 	addFleetEmailSuppressionRes()
 }
@@ -189,6 +193,10 @@ type DeleteSiteShareRes interface {
 	deleteSiteShareRes()
 }
 
+type DownloadPortalReportRes interface {
+	downloadPortalReportRes()
+}
+
 type EnrollRes interface {
 	enrollRes()
 }
@@ -251,6 +259,18 @@ type GetMeRes interface {
 
 type GetOrgEmailConfigRes interface {
 	getOrgEmailConfigRes()
+}
+
+type GetPortalOverviewRes interface {
+	getPortalOverviewRes()
+}
+
+type GetPortalSiteUptimeRes interface {
+	getPortalSiteUptimeRes()
+}
+
+type GetPortalSiteVitalsRes interface {
+	getPortalSiteVitalsRes()
 }
 
 type GetReadyzRes interface {
@@ -321,6 +341,14 @@ type ListAuditRes interface {
 	listAuditRes()
 }
 
+type ListClientInvitationsRes interface {
+	listClientInvitationsRes()
+}
+
+type ListClientMembersRes interface {
+	listClientMembersRes()
+}
+
 type ListClientReportsRes interface {
 	listClientReportsRes()
 }
@@ -347,6 +375,22 @@ type ListFleetEmailSuppressionRes interface {
 
 type ListMembersRes interface {
 	listMembersRes()
+}
+
+type ListPortalReportsRes interface {
+	listPortalReportsRes()
+}
+
+type ListPortalSiteBackupsRes interface {
+	listPortalSiteBackupsRes()
+}
+
+type ListPortalSiteUpdatesRes interface {
+	listPortalSiteUpdatesRes()
+}
+
+type ListPortalSitesRes interface {
+	listPortalSitesRes()
 }
 
 type ListRestoreRunEventsRes interface {
@@ -477,8 +521,16 @@ type RefreshSiteUpdatesRes interface {
 	refreshSiteUpdatesRes()
 }
 
+type RegenerateClientInvitationRes interface {
+	regenerateClientInvitationRes()
+}
+
 type RegisterRes interface {
 	registerRes()
+}
+
+type RemoveClientMemberRes interface {
+	removeClientMemberRes()
 }
 
 type ResendEmailLogRes interface {
@@ -495,6 +547,10 @@ type RestoreSiteRes interface {
 
 type RevokeApiKeyRes interface {
 	revokeApiKeyRes()
+}
+
+type RevokeClientInvitationRes interface {
+	revokeClientInvitationRes()
 }
 
 type RevokeSiteRes interface {
