@@ -11,12 +11,46 @@ declare(strict_types=1);
 
 require_once dirname(__DIR__) . '/vendor/autoload.php';
 
+// Activate Patchwork's stream wrapper before loading any stub files. This
+// ensures every file included after this point is run through Patchwork's
+// code-manipulation pipeline, making functions defined in those files
+// redefinable by Brain Monkey via Functions\when() / Functions\expect()
+// without throwing Patchwork\Exceptions\DefinedTooEarly.
+//
+// Brain Monkey's own setUp() also requires Patchwork (via patchwork-loader.php),
+// but that only runs when the first test calls Monkey\setUp(). We require it
+// here so that wp-stubs.php (loaded next) is already preprocessed.
+if (!function_exists('Patchwork\redefine')) {
+    require_once dirname(__DIR__) . '/vendor/antecedent/patchwork/Patchwork.php';
+}
+
+// wp-stubs.php must be required AFTER Patchwork is active so that every
+// function defined there goes through Patchwork's stream wrapper and becomes
+// redefinable. Brain Monkey tests override these defaults via Functions\when().
+require_once __DIR__ . '/wp-stubs.php';
+
 // ---------------------------------------------------------------------------
 // Constants needed by the object-cache drop-in and engine files.
 // ---------------------------------------------------------------------------
+
+// ABSPATH is placed two levels deep so dirname(ABSPATH) resolves to a
+// dedicated subdirectory of tmp rather than tmp itself. This keeps the
+// keystore's legacy-file candidate path (.../wpmgr_wp_abspath/
+// .wpmgr-agent-master.key) isolated from system tmp and away from any
+// stale artefacts.
 if (!defined('ABSPATH')) {
-    define('ABSPATH', sys_get_temp_dir() . '/wpmgr_wp_abspath/');
+    define('ABSPATH', sys_get_temp_dir() . '/wpmgr_wp_abspath/site/');
 }
+
+// Ensure the ABSPATH parent directory exists so keystore writability checks
+// do not fail on a missing path. The parent is what candidateKeyDirs() uses
+// as the first fallback candidate.
+$_absParent = dirname(rtrim((string) ABSPATH, '/\\'));
+if (!is_dir($_absParent)) {
+    @mkdir($_absParent, 0755, true);
+}
+unset($_absParent);
+
 if (!defined('WPMGR_AGENT_DIR')) {
     define('WPMGR_AGENT_DIR', dirname(__DIR__));
 }
@@ -48,116 +82,6 @@ if (!defined('OBJECT')) {
 // a tiny surface. Brain Monkey stubs FUNCTIONS, not classes, so we declare
 // what we need here. Keep these intentionally small and dumb.
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// Minimal WP global function stubs for tests that do NOT use Brain Monkey.
-//
-// Brain Monkey-based tests can override these via Functions\when() in setUp;
-// when they do not, the real stub below is called. Non-Brain-Monkey tests
-// (e.g. CacheWriterTest) rely on these directly.
-// ---------------------------------------------------------------------------
-
-if (!function_exists('wp_parse_url')) {
-    /**
-     * Thin wrapper around parse_url() — mirrors the real WP implementation.
-     *
-     * @param string   $url       The URL to parse.
-     * @param int      $component Optional PHP_URL_* constant (-1 for full array).
-     * @return mixed
-     */
-    function wp_parse_url(string $url, int $component = -1): mixed
-    {
-        return parse_url($url, $component);
-    }
-}
-
-if (!function_exists('wp_mkdir_p')) {
-    /**
-     * Recursively creates directories — mirrors the real WP implementation.
-     *
-     * @param string $target Directory path to create.
-     * @return bool True on success or if the directory already exists.
-     */
-    function wp_mkdir_p(string $target): bool
-    {
-        if (is_dir($target)) {
-            return true;
-        }
-        return mkdir($target, 0755, true);
-    }
-}
-
-if (!function_exists('wp_rand')) {
-    /**
-     * Returns a random integer — mirrors the real WP implementation.
-     *
-     * @param int $min Lower bound (inclusive).
-     * @param int $max Upper bound (inclusive).
-     * @return int
-     */
-    function wp_rand(int $min = 0, int $max = 0): int
-    {
-        if ($min === 0 && $max === 0) {
-            $max = PHP_INT_MAX;
-        }
-        return random_int($min, $max);
-    }
-}
-
-if (!function_exists('wp_unslash')) {
-    /**
-     * Removes slashes from a value — mirrors the real WP implementation
-     * (stripslashes_deep) closely enough for the tests.
-     *
-     * @param mixed $value Value to unslash.
-     * @return mixed
-     */
-    function wp_unslash(mixed $value): mixed
-    {
-        if (is_array($value)) {
-            return array_map('wp_unslash', $value);
-        }
-        return is_string($value) ? stripslashes($value) : $value;
-    }
-}
-
-if (!function_exists('sanitize_text_field')) {
-    /**
-     * Sanitizes a string from user input — approximates the real WP
-     * implementation (strip tags, collapse whitespace, trim).
-     *
-     * @param string $str Value to sanitize.
-     * @return string
-     */
-    function sanitize_text_field(string $str): string
-    {
-        $filtered = strip_tags($str);
-        $filtered = preg_replace('/[\r\n\t ]+/', ' ', $filtered) ?? '';
-        return trim($filtered);
-    }
-}
-
-
-
-
-
-if (!function_exists('sanitize_email')) {
-    /**
-     * Strips out all characters not allowed in an email address — mirrors the
-     * real WP implementation closely enough for unit tests (real WP uses a
-     * regex allow-list; here we validate with PHP's native filter, which is
-     * sufficient for the addresses used in tests).
-     *
-     * @param string $email Candidate email address.
-     * @return string The sanitized address, or '' if invalid.
-     */
-    function sanitize_email(string $email): string
-    {
-        $email = trim($email);
-        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false ? $email : '';
-    }
-}
-
 
 if (!class_exists('WP_Error')) {
     class WP_Error

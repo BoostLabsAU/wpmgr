@@ -1,0 +1,242 @@
+<?php
+/**
+ * WordPress function stubs for the PHPUnit test suite.
+ *
+ * This file MUST be required AFTER vendor/autoload.php so that Patchwork's
+ * stream wrapper is already active. Functions defined here are included in
+ * Patchwork's redefine registry, which means Brain Monkey can override them
+ * per-test via Functions\when() / Functions\expect() without throwing
+ * Patchwork\Exceptions\DefinedTooEarly or
+ * Brain\Monkey\Expectation\Exception\MissingFunctionExpectations.
+ *
+ * Rules:
+ *   - Guard every definition with function_exists() so a test that defines its
+ *     own global stub (outside Brain Monkey) does not collide.
+ *   - Semantics mirror WP core closely enough for the test surface, but remain
+ *     minimal — these are stubs, not re-implementations.
+ *   - No class definitions, no constant definitions (those stay in bootstrap.php).
+ *
+ * @package WPMgr\Agent\Tests
+ */
+
+declare(strict_types=1);
+
+// ---------------------------------------------------------------------------
+// URL / path helpers
+// ---------------------------------------------------------------------------
+
+if (!function_exists('wp_parse_url')) {
+    /**
+     * Thin wrapper around parse_url() — mirrors the real WP implementation.
+     *
+     * @param string $url       The URL to parse.
+     * @param int    $component Optional PHP_URL_* constant (-1 for full array).
+     * @return mixed
+     */
+    function wp_parse_url(string $url, int $component = -1): mixed
+    {
+        return parse_url($url, $component);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filesystem helpers
+// ---------------------------------------------------------------------------
+
+if (!function_exists('wp_mkdir_p')) {
+    /**
+     * Recursively creates directories — mirrors the real WP implementation.
+     *
+     * @param string $target Directory path to create.
+     * @return bool True on success or if the directory already exists.
+     */
+    function wp_mkdir_p(string $target): bool
+    {
+        if (is_dir($target)) {
+            return true;
+        }
+        return mkdir($target, 0755, true);
+    }
+}
+
+if (!function_exists('wp_delete_file')) {
+    /**
+     * Deletes a file — mirrors the real WP implementation (suppressed unlink).
+     *
+     * The return type is intentionally omitted (not declared void) so that tests
+     * which mock this function via Functions\when()->alias() and return a bool
+     * from @unlink() are accepted by Patchwork without NonNullToVoid errors.
+     *
+     * @param string $file Absolute path to the file to delete.
+     */
+    function wp_delete_file(string $file)
+    {
+        @unlink($file); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- test stub only
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Random
+// ---------------------------------------------------------------------------
+
+if (!function_exists('wp_rand')) {
+    /**
+     * Returns a random integer — mirrors the real WP implementation.
+     *
+     * @param int $min Lower bound (inclusive).
+     * @param int $max Upper bound (inclusive).
+     * @return int
+     */
+    function wp_rand(int $min = 0, int $max = 0): int
+    {
+        if ($min === 0 && $max === 0) {
+            $max = PHP_INT_MAX;
+        }
+        return random_int($min, $max);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Input sanitization
+// ---------------------------------------------------------------------------
+
+if (!function_exists('wp_unslash')) {
+    /**
+     * Removes slashes from a value — mirrors the real WP implementation.
+     *
+     * @param mixed $value Value to unslash.
+     * @return mixed
+     */
+    function wp_unslash(mixed $value): mixed
+    {
+        if (is_array($value)) {
+            return array_map('wp_unslash', $value);
+        }
+        return is_string($value) ? stripslashes($value) : $value;
+    }
+}
+
+if (!function_exists('sanitize_text_field')) {
+    /**
+     * Sanitizes a string from user input — approximates the real WP implementation.
+     *
+     * @param string $str Value to sanitize.
+     * @return string
+     */
+    function sanitize_text_field(string $str): string
+    {
+        $filtered = strip_tags($str);
+        $filtered = preg_replace('/[\r\n\t ]+/', ' ', $filtered) ?? '';
+        return trim($filtered);
+    }
+}
+
+if (!function_exists('sanitize_email')) {
+    /**
+     * Strips out all characters not allowed in an email address.
+     *
+     * @param string $email Candidate email address.
+     * @return string The sanitized address, or '' if invalid.
+     */
+    function sanitize_email(string $email): string
+    {
+        $email = trim($email);
+        return filter_var($email, FILTER_VALIDATE_EMAIL) !== false ? $email : '';
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Output escaping
+// ---------------------------------------------------------------------------
+
+if (!function_exists('esc_html')) {
+    /**
+     * Escapes text for safe use in HTML output — passthrough stub for tests.
+     *
+     * Real WP applies htmlspecialchars + charset encoding; for test purposes
+     * returning the input unchanged is sufficient since tests verify logic,
+     * not escaping fidelity.
+     *
+     * @param string $text Text to escape.
+     * @return string
+     */
+    function esc_html(string $text): string
+    {
+        return $text;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WP option store (default: no stored value)
+// ---------------------------------------------------------------------------
+
+if (!function_exists('get_option')) {
+    /**
+     * Retrieves a WP option value — default stub returns $default.
+     *
+     * @param string $option  Option name.
+     * @param mixed  $default Value to return when option is absent.
+     * @return mixed
+     */
+    function get_option(string $option, mixed $default = false): mixed
+    {
+        return $default;
+    }
+}
+
+if (!function_exists('get_site_option')) {
+    /**
+     * Retrieves a network-scoped option — default stub returns $default.
+     *
+     * @param string $option  Option name.
+     * @param mixed  $default Value to return when option is absent.
+     * @return mixed
+     */
+    function get_site_option(string $option, mixed $default = false): mixed
+    {
+        return $default;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WP conditional functions (conservative defaults)
+// ---------------------------------------------------------------------------
+
+if (!function_exists('is_singular')) {
+    /**
+     * Whether the query is for an existing single post of any type.
+     * Default stub returns false so no-cache checks do not trigger on a miss.
+     *
+     * @return bool
+     */
+    function is_singular(): bool
+    {
+        return false;
+    }
+}
+
+if (!function_exists('is_user_logged_in')) {
+    /**
+     * Whether the current visitor is logged in.
+     * Default stub returns false so the optimizer does not skip transforms.
+     *
+     * @return bool
+     */
+    function is_user_logged_in(): bool
+    {
+        return false;
+    }
+}
+
+if (!function_exists('wp_suspend_cache_addition')) {
+    /**
+     * Whether cache addition is currently suspended.
+     * Default stub returns false (cache additions proceed normally).
+     *
+     * @return bool
+     */
+    function wp_suspend_cache_addition(): bool
+    {
+        return false;
+    }
+}
