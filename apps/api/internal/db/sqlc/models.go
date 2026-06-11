@@ -765,7 +765,8 @@ type SitePerfConfig struct {
 	FontsSubsetMode            string             `json:"fonts_subset_mode"`
 	FontsSubsetRange           string             `json:"fonts_subset_range"`
 	WooCacheableSession        bool               `json:"woo_cacheable_session"`
-	WooThemeFragmentsSupported bool               `json:"woo_theme_fragments_supported"`
+	WooThemeFragmentsSupported *bool              `json:"woo_theme_fragments_supported"`
+	WooFragmentsProbedAt       pgtype.Timestamptz `json:"woo_fragments_probed_at"`
 	RumEnabled                 bool               `json:"rum_enabled"`
 	RumSampleRate              float32            `json:"rum_sample_rate"`
 	MaxDistinctCountries       int32              `json:"max_distinct_countries"`

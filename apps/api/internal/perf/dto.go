@@ -112,9 +112,12 @@ type perfConfigDTO struct {
 	// WooCacheableSession is operator read+write (default false).
 	WooCacheableSession bool `json:"woo_cacheable_session"`
 	// WooThemeFragmentsSupported is agent-reported, read-only from the web.
-	// The CP ignores this field on PUT; the agent is the sole writer via
-	// perf/config-ack.
-	WooThemeFragmentsSupported bool `json:"woo_theme_fragments_supported"`
+	// Tri-state: null = never probed, false = probed unsupported, true = probed
+	// supported. The CP ignores this field on PUT; the agent is the sole writer.
+	WooThemeFragmentsSupported *bool `json:"woo_theme_fragments_supported"`
+	// WooFragmentsProbedAt is the RFC3339 timestamp of the last probe. Omitted
+	// (null / absent) when never probed. Read-only.
+	WooFragmentsProbedAt *string `json:"woo_fragments_probed_at,omitempty"`
 
 	// M56 / RUM — Real User Monitoring settings.
 	// RumEnabled and RumSampleRate are operator read+write. BeaconKeySet is
@@ -206,6 +209,10 @@ func toConfigDTO(c Config) perfConfigDTO {
 	}
 	if !c.UpdatedAt.IsZero() {
 		dto.UpdatedAt = c.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	if c.WooFragmentsProbedAt != nil {
+		s := c.WooFragmentsProbedAt.UTC().Format(time.RFC3339)
+		dto.WooFragmentsProbedAt = &s
 	}
 	return dto
 }

@@ -1051,9 +1051,12 @@ type Querier interface {
 	// UpdateTenantName renames a tenant. tenants has no RLS, so the handler verifies
 	// the caller's membership + admin/owner role before calling this.
 	UpdateTenantName(ctx context.Context, arg UpdateTenantNameParams) (Tenant, error)
-	// Stamps the agent-reported woo_theme_fragments_supported flag. Agent write path
-	// (InAgentTx) — the agent is the sole writer; operators can never set this.
-	UpdateWooThemeFragmentsSupported(ctx context.Context, arg UpdateWooThemeFragmentsSupportedParams) error
+	// Stamps the agent-reported woo_theme_fragments_supported flag and records when
+	// the probe ran (woo_fragments_probed_at). Agent write path (InAgentTx) — the
+	// agent is the sole writer; operators can never set this via the API.
+	// Returns the number of rows affected so the caller can detect a missing config
+	// row (0 rows = operator has never saved a config for this site).
+	UpdateWooThemeFragmentsSupported(ctx context.Context, arg UpdateWooThemeFragmentsSupportedParams) (int64, error)
 	// Tenant-scoped create-or-update of the tenant's default alert channel.
 	UpsertAlertConfig(ctx context.Context, arg UpsertAlertConfigParams) (AlertConfig, error)
 	// Mint path (app.tenant_id). Idempotent insert-or-return: the first call seeds

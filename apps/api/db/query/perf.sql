@@ -538,11 +538,15 @@ ON CONFLICT (site_id, source_hash) DO UPDATE SET
     updated_at    = now()
 RETURNING *;
 
--- name: UpdateWooThemeFragmentsSupported :exec
--- Stamps the agent-reported woo_theme_fragments_supported flag. Agent write path
--- (InAgentTx) — the agent is the sole writer; operators can never set this.
+-- name: UpdateWooThemeFragmentsSupported :execrows
+-- Stamps the agent-reported woo_theme_fragments_supported flag and records when
+-- the probe ran (woo_fragments_probed_at). Agent write path (InAgentTx) — the
+-- agent is the sole writer; operators can never set this via the API.
+-- Returns the number of rows affected so the caller can detect a missing config
+-- row (0 rows = operator has never saved a config for this site).
 UPDATE site_perf_config
 SET woo_theme_fragments_supported = @woo_theme_fragments_supported,
+    woo_fragments_probed_at       = now(),
     updated_at                    = now()
 WHERE site_id = @site_id;
 

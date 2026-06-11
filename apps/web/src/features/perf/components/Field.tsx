@@ -161,6 +161,13 @@ export interface TextFieldProps {
   hint?: ReactNode;
   /** aria-label override when the visible label isn't descriptive enough. */
   ariaLabel?: string;
+  /** When true, the input receives focus on mount (used by draft-reveal flows). */
+  autoFocus?: boolean;
+  /**
+   * Inline field-level error message. When set, renders below the input with
+   * role="alert" and marks the input aria-invalid. Takes precedence over `hint`.
+   */
+  error?: string;
 }
 
 export function TextField({
@@ -173,8 +180,11 @@ export function TextField({
   type = "text",
   hint,
   ariaLabel,
+  autoFocus,
+  error,
 }: TextFieldProps) {
   const id = useId();
+  const errId = useId();
   return (
     <div className="space-y-1.5">
       <Label
@@ -192,9 +202,18 @@ export function TextField({
         placeholder={placeholder}
         disabled={disabled}
         aria-label={ariaLabel ?? label}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={error ? errId : undefined}
         autoComplete={type === "password" ? "off" : undefined}
+        autoFocus={autoFocus}
       />
-      {hint ? <p className="text-xs text-muted-foreground">{hint}</p> : null}
+      {error ? (
+        <p id={errId} role="alert" className="text-xs text-destructive">
+          {error}
+        </p>
+      ) : hint ? (
+        <p className="text-xs text-muted-foreground">{hint}</p>
+      ) : null}
     </div>
   );
 }

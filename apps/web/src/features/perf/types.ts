@@ -131,7 +131,16 @@ export interface PerfConfig {
   //                                   server ignores it on PUT). When false the
   //                                   toggle must be rendered disabled.
   woo_cacheable_session: boolean;
-  readonly woo_theme_fragments_supported: boolean;
+  /**
+   * Agent-reported tri-state:
+   *   true  — probed: theme supports wc-cart-fragments (toggle enabled).
+   *   false — probed: theme does NOT support wc-cart-fragments (toggle permanently disabled).
+   *   null  — never probed yet (toggle disabled with a "checking" message).
+   * Server ignores this field on PUT; it is read-only from the agent.
+   */
+  readonly woo_theme_fragments_supported: boolean | null;
+  /** ISO 8601 timestamp of the most recent woo_theme_fragments_supported probe. */
+  readonly woo_fragments_probed_at?: string;
 
   // Server / install state (read-only, agent-reported)
   server_software?: string;

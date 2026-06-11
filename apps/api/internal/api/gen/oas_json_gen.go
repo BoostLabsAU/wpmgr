@@ -33913,6 +33913,57 @@ func (s *OptMediaVariantResultState) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes bool as json.
+func (o OptNilBool) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	if o.Null {
+		e.Null()
+		return
+	}
+	e.Bool(bool(o.Value))
+}
+
+// Decode decodes bool from json.
+func (o *OptNilBool) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptNilBool to nil")
+	}
+	if d.Next() == jx.Null {
+		if err := d.Null(); err != nil {
+			return err
+		}
+
+		var v bool
+		o.Value = v
+		o.Set = true
+		o.Null = true
+		return nil
+	}
+	o.Set = true
+	o.Null = false
+	v, err := d.Bool()
+	if err != nil {
+		return err
+	}
+	o.Value = bool(v)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptNilBool) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptNilBool) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes time.Time as json.
 func (o OptNilDateTime) Encode(e *jx.Encoder, format func(*jx.Encoder, time.Time)) {
 	if !o.Set {
@@ -37349,6 +37400,12 @@ func (s *PerfConfig) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.WooFragmentsProbedAt.Set {
+			e.FieldStart("woo_fragments_probed_at")
+			s.WooFragmentsProbedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		if s.ConfigVersion.Set {
 			e.FieldStart("config_version")
 			s.ConfigVersion.Encode(e)
@@ -37362,7 +37419,7 @@ func (s *PerfConfig) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfPerfConfig = [67]string{
+var jsonFieldsNameOfPerfConfig = [68]string{
 	0:  "cache_enabled",
 	1:  "cache_logged_in",
 	2:  "cache_mobile",
@@ -37428,8 +37485,9 @@ var jsonFieldsNameOfPerfConfig = [67]string{
 	62: "htaccess_managed",
 	63: "woo_cacheable_session",
 	64: "woo_theme_fragments_supported",
-	65: "config_version",
-	66: "updated_at",
+	65: "woo_fragments_probed_at",
+	66: "config_version",
+	67: "updated_at",
 }
 
 // Decode decodes PerfConfig from json.
@@ -38162,6 +38220,16 @@ func (s *PerfConfig) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"woo_theme_fragments_supported\"")
+			}
+		case "woo_fragments_probed_at":
+			if err := func() error {
+				s.WooFragmentsProbedAt.Reset()
+				if err := s.WooFragmentsProbedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"woo_fragments_probed_at\"")
 			}
 		case "config_version":
 			if err := func() error {

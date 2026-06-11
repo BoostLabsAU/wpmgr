@@ -20,8 +20,18 @@ export interface SettingRowProps {
   saving?: boolean;
   /** Server-affecting change: show "Applying to server…" until the SSE ack. */
   applying?: boolean;
-  /** Optional reveal slot rendered under the row when `checked`. */
+  /**
+   * Optional reveal slot rendered under the row when `checked`.
+   * All existing call sites pass neither `open` nor children — behaviour is
+   * identical to before this prop existed.
+   */
   children?: ReactNode;
+  /**
+   * Additive override: when true the children slot is revealed even when
+   * `checked` is false (used by CdnSection's draft-enable flow). Has no effect
+   * when `children` is absent. Default: false.
+   */
+  open?: boolean;
 }
 
 export function SettingRow({
@@ -33,6 +43,7 @@ export function SettingRow({
   saving = false,
   applying = false,
   children,
+  open = false,
 }: SettingRowProps) {
   const id = useId();
   return (
@@ -74,7 +85,7 @@ export function SettingRow({
           />
         </div>
       </div>
-      {checked && children ? (
+      {(checked || open) && children ? (
         <div className="mt-3 border-t border-border pt-3">{children}</div>
       ) : null}
     </div>

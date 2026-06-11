@@ -33,6 +33,14 @@ use WPMgr\Agent\Cache\WooFragmentsProbe;
 use WPMgr\Agent\Cache\WooFragmentsRuntime;
 use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
+// Brain Monkey stubs may not cover delete_option. Add a global stub fallback.
+if (!function_exists('delete_transient')) {
+    function delete_transient(string $k): bool
+    {
+        return true;
+    }
+}
+
 /**
  * @covers \WPMgr\Agent\Cache\Cacheability
  * @covers \WPMgr\Agent\Cache\CacheConfig
@@ -942,5 +950,246 @@ final class WooCommerceCacheTest extends TestCase
             @rmdir($tmpDir . '/assets');
             @rmdir($tmpDir);
         }
+    }
+
+    // =========================================================================
+    // Front-end probe: asymmetric latch + tri-state + throttle + reset
+    // =========================================================================
+
+    /**
+     * Option store for probe-state tests (replaces Brain Monkey stubs in setUp).
+     *
+     * @var array<string,mixed>
+     */
+    private array $probeOptionStore = [];
+
+    /**
+     * Set up per-test option store for the probe state tests.
+     * Brain Monkey is already set up in the class set_up(); this method re-aliases
+     * the option functions with the per-test store so probe-state tests are
+     * independent of each other.
+     *
+     * @param array<string,mixed> $initial Initial option values.
+     * @return void
+     */
+    private function stubProbeOptions(array $initial = []): void
+    {
+        $this->probeOptionStore = $initial;
+        Functions\when('get_option')->alias(function ($k, $d = false) {
+            if (array_key_exists($k, $this->probeOptionStore)) {
+                return $this->probeOptionStore[$k];
+            }
+            return $d;
+        });
+        Functions\when('update_option')->alias(function ($k, $v) {
+            $this->probeOptionStore[$k] = $v;
+            return true;
+        });
+        Functions\when('delete_option')->alias(function ($k) {
+            unset($this->probeOptionStore[$k]);
+            return true;
+        });
+    }
+
+    /**
+     * Probe latch: a single positive detection persists TRUE immediately.
+     * Rationale: no need to accumulate evidence for a positive — the two-signal
+     * detect() is already conservative (enqueued + selector).
+     */
+    public function test_probe_positive_latches_immediately(): void
+    {
+        $this->stubProbeOptions();
+
+        // Simulate WooCommerce active + handle enqueued + selector present.
+        // We stub wp_script_is to return true and pass HTML with the selector.
+        Functions\when('wp_script_is')->justReturn(true);
+
+        // Class WooCommerce must exist for detect() to proceed.
+        if (!class_exists('WooCommerce')) {
+            // @phpstan-ignore-next-line
+            eval('class WooCommerce {}'); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test-only WooCommerce stub; never ships
+        }
+
+        $html = self::HTML; // contains widget_shopping_cart_content
+        WooFragmentsProbe::runFrontEndProbe($html, '/shop/');
+
+        // After one positive probe, result should be TRUE.
+        $result = WooFragmentsProbe::getStoredResult();
+        $this->assertTrue($result, 'probe: single positive must latch TRUE immediately');
+
+        // The persisted woo_fragments_supported option must also be set.
+        $this->assertTrue(
+            (bool) ($this->probeOptionStore[PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED] ?? false),
+            'probe: persistWooSupported must be called with true on positive detection'
+        );
+    }
+
+    /**
+     * Probe latch: two negative probes on the SAME URL do NOT persist FALSE.
+     * Only distinct-URL negatives count toward the threshold.
+     */
+    public function test_probe_same_url_negatives_do_not_accumulate(): void
+    {
+        $this->stubProbeOptions();
+
+        // No enqueued handle: detect() returns false.
+        Functions\when('wp_script_is')->justReturn(false);
+
+        if (!class_exists('WooCommerce')) {
+            // @phpstan-ignore-next-line
+            eval('class WooCommerce {}'); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test-only WooCommerce stub; never ships
+        }
+
+        // Run the probe NEGATIVE_LATCH_THRESHOLD times on the same URL.
+        for ($i = 0; $i < WooFragmentsProbe::NEGATIVE_LATCH_THRESHOLD; $i++) {
+            WooFragmentsProbe::runFrontEndProbe(self::HTML_PLAIN, '/product/same-url/');
+        }
+
+        // Result must still be null (threshold not met because same URL repeated).
+        $result = WooFragmentsProbe::getStoredResult();
+        $this->assertNull(
+            $result,
+            'probe: repeated negatives on the same URL must not latch FALSE'
+        );
+
+        // The persisted option must be absent (never written a false).
+        $this->assertArrayNotHasKey(
+            PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED,
+            $this->probeOptionStore,
+            'probe: persistWooSupported must NOT be called when threshold not met'
+        );
+    }
+
+    /**
+     * Probe latch: N consecutive negative probes on DISTINCT URLs latch FALSE.
+     * This is the anti-flap guard: we need enough evidence from different pages.
+     */
+    public function test_probe_distinct_url_negatives_latch_false_after_threshold(): void
+    {
+        $this->stubProbeOptions();
+
+        Functions\when('wp_script_is')->justReturn(false);
+
+        if (!class_exists('WooCommerce')) {
+            // @phpstan-ignore-next-line
+            eval('class WooCommerce {}'); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test-only WooCommerce stub; never ships
+        }
+
+        // Run the probe on NEGATIVE_LATCH_THRESHOLD - 1 distinct URLs; result
+        // must still be null (not enough distinct negatives yet).
+        for ($i = 0; $i < WooFragmentsProbe::NEGATIVE_LATCH_THRESHOLD - 1; $i++) {
+            WooFragmentsProbe::runFrontEndProbe(self::HTML_PLAIN, '/product/item-' . $i . '/');
+        }
+        $this->assertNull(
+            WooFragmentsProbe::getStoredResult(),
+            'probe: threshold - 1 distinct negatives must not yet latch FALSE'
+        );
+
+        // One more distinct URL crosses the threshold.
+        WooFragmentsProbe::runFrontEndProbe(self::HTML_PLAIN, '/product/item-final/');
+
+        $result = WooFragmentsProbe::getStoredResult();
+        $this->assertFalse($result, 'probe: N distinct-URL negatives must latch FALSE');
+        $this->assertFalse(
+            (bool) ($this->probeOptionStore[PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED] ?? true),
+            'probe: persistWooSupported must be called with false after threshold'
+        );
+    }
+
+    /**
+     * Probe throttle: after a result is latched, subsequent calls within
+     * PROBE_THROTTLE_SECONDS are skipped (no redundant re-probing).
+     */
+    public function test_probe_throttle_skips_within_window(): void
+    {
+        $this->stubProbeOptions();
+
+        Functions\when('wp_script_is')->justReturn(false);
+
+        if (!class_exists('WooCommerce')) {
+            // @phpstan-ignore-next-line
+            eval('class WooCommerce {}'); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test-only WooCommerce stub; never ships
+        }
+
+        // Latch a FALSE result by running enough distinct-URL negatives.
+        for ($i = 0; $i < WooFragmentsProbe::NEGATIVE_LATCH_THRESHOLD; $i++) {
+            WooFragmentsProbe::runFrontEndProbe(self::HTML_PLAIN, '/product/t-' . $i . '/');
+        }
+        $this->assertFalse(WooFragmentsProbe::getStoredResult(), 'setup: must have latched FALSE');
+
+        // Snapshot the option store after the latch.
+        $storeAfterLatch = $this->probeOptionStore;
+
+        // Now run the probe again immediately (within the throttle window). The
+        // last_at is "now" so elapsed < PROBE_THROTTLE_SECONDS: the probe should
+        // be skipped and the option store should be unchanged.
+        Functions\when('wp_script_is')->justReturn(true); // would flip to true if run
+        WooFragmentsProbe::runFrontEndProbe(self::HTML, '/new-url/');
+
+        // Result must still be FALSE (throttle prevented re-probe).
+        $this->assertFalse(
+            WooFragmentsProbe::getStoredResult(),
+            'probe: throttle must prevent re-probe within PROBE_THROTTLE_SECONDS'
+        );
+    }
+
+    /**
+     * Tri-state: when the option is absent (never probed), reportStats() must
+     * omit woo_theme_fragments_supported from the stats body entirely.
+     *
+     * This test validates the omission contract by reading the built body map
+     * indirectly: since reportStats() calls $this->post() (which we cannot
+     * intercept without mocking), we verify the intermediate getStoredResult()
+     * returns null, which is the condition that causes the field omission.
+     */
+    public function test_unprobed_option_causes_field_omission(): void
+    {
+        $this->stubProbeOptions(); // no options set = never probed
+
+        // When no probe has run, getStoredResult() must return null.
+        $result = WooFragmentsProbe::getStoredResult();
+        $this->assertNull(
+            $result,
+            'tri-state: absent option must return null (never probed)'
+        );
+    }
+
+    /**
+     * Probe reset: switch_theme must delete the probe state option so the next
+     * front-end render re-probes from scratch.
+     */
+    public function test_reset_state_clears_probe_on_theme_switch(): void
+    {
+        $this->stubProbeOptions([
+            WooFragmentsProbe::OPTION_PROBE_STATE            => ['result' => true, 'negatives' => [], 'last_at' => time()],
+            PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED      => true,
+        ]);
+
+        // Verify options are set before reset.
+        $this->assertArrayHasKey(
+            WooFragmentsProbe::OPTION_PROBE_STATE,
+            $this->probeOptionStore,
+            'setup: probe state must be present before reset'
+        );
+
+        WooFragmentsProbe::resetState();
+
+        // Both options must be absent after reset.
+        $this->assertArrayNotHasKey(
+            WooFragmentsProbe::OPTION_PROBE_STATE,
+            $this->probeOptionStore,
+            'reset: probe state option must be deleted on theme switch'
+        );
+        $this->assertArrayNotHasKey(
+            PerfReporter::OPTION_WOO_FRAGMENTS_SUPPORTED,
+            $this->probeOptionStore,
+            'reset: woo_fragments_supported option must also be deleted on theme switch'
+        );
+
+        // After reset, getStoredResult() must return null (never probed).
+        $this->assertNull(
+            WooFragmentsProbe::getStoredResult(),
+            'reset: getStoredResult must return null after resetState()'
+        );
     }
 }

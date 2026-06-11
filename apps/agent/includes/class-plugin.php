@@ -503,6 +503,14 @@ final class Plugin
         add_action('activated_plugin', [DbCleanup::class, 'bustPluginTableMapCache']);
         add_action('deactivated_plugin', [DbCleanup::class, 'bustPluginTableMapCache']);
 
+        // Woo cart-fragments probe reset. Theme and plugin changes can alter
+        // whether the active theme exposes wc-cart-fragments. Delete the stored
+        // probe state so the next front-end render re-probes from scratch.
+        // Static method reference keeps the hook table serialization-safe.
+        add_action('switch_theme', [\WPMgr\Agent\Cache\WooFragmentsProbe::class, 'resetState']);
+        add_action('activated_plugin', [\WPMgr\Agent\Cache\WooFragmentsProbe::class, 'resetState']);
+        add_action('deactivated_plugin', [\WPMgr\Agent\Cache\WooFragmentsProbe::class, 'resetState']);
+
         // ADR-037 Sprint 2 — diagnostics cron handler. Scheduler::scheduleEvents
         // sets up the cron event; the handler runs the on-demand DiagnosticsCommand
         // and pushes its result to the CP at /agent/v1/diagnostics. Kept here

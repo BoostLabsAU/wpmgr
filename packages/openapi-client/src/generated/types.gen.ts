@@ -2441,14 +2441,20 @@ export type PerfConfig = {
    */
   woo_cacheable_session?: boolean;
   /**
-   * Agent-reported (read-only). Set to true by the agent after it probes
-   * the site's active theme and confirms WooCommerce fragment-refresh
-   * compatibility (wc_ajax_get_refreshed_fragments hook availability).
-   * The CP stores this value but never lets an operator write it via PUT.
-   * Old agents that pre-date M53 will leave this field false.
+   * Agent-reported (read-only). Tri-state: null = never probed, false =
+   * probed and the active theme does not expose the standard WooCommerce
+   * cart-fragments hook, true = probed and supported. The CP stores this
+   * value but never lets an operator write it via PUT. Null is the
+   * correct initial state (M67); the agent stamps true/false only after
+   * running a genuine front-end probe.
    *
    */
   readonly woo_theme_fragments_supported?: boolean;
+  /**
+   * RFC3339 timestamp of the last agent probe. Null when never probed.
+   *
+   */
+  readonly woo_fragments_probed_at?: string;
   readonly config_version?: number;
   readonly updated_at?: string;
 };

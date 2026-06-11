@@ -118,25 +118,53 @@ final class PerfReporter
                 $lastPreloadAt = $stored !== null ? (int) $stored : null;
             }
 
-            // Phase 1 (issue #169): probe whether the active theme supports
-            // WooCommerce cart-fragments. Runs regardless of the woo_cacheable_session
-            // flag so the CP/dashboard can show support status before the operator
-            // enables the feature. Conservative: false unless confidently detected.
-            // The result is persisted so the serve path (drop-in) and write path
-            // (Cacheability) can read the baked value without re-running the probe
-            // on every request. When the value flips the drop-in config is rewritten
-            // and existing shells are purged so stale support state never serves
-            // cart-holding visitors a cached page.
-            $wooFragsSupported = WooFragmentsProbe::detectFromScriptRegistry();
-            self::persistWooSupported($wooFragsSupported, $this->cache);
+            // Phase 1 (issue #169): report the persisted front-end probe result.
+            //
+            // The authoritative probe now runs in CacheWriter::handle() on real
+            // front-end renders (where WooCommerce actually enqueues its scripts).
+            // Here we only READ the stored tri-state:
+            //   null  = never probed (option absent) -> OMIT from the body so the
+            //           CP handler leaves the stored value unchanged.
+            //   true/false = probed result -> include in the body.
+            //
+            // As an opportunistic upgrade: if the current request is a genuine
+            // front-end (not admin, not cron, not REST) and wc-cart-fragments is
+            // already registered, allow detectFromScriptRegistry() to contribute a
+            // TRUE upgrade — but NEVER use it as a source of FALSE (it cannot
+            // confirm absence in non-frontend contexts).
+            $wooFragsResult = WooFragmentsProbe::getStoredResult();
+
+            $isCron  = function_exists('wp_doing_cron') && wp_doing_cron();
+            $isAdmin = function_exists('is_admin') && is_admin();
+            $isRest  = defined('REST_REQUEST') && (bool) constant('REST_REQUEST');
+            if ($wooFragsResult === null
+                && !$isCron
+                && !$isAdmin
+                && !$isRest
+                && WooFragmentsProbe::detectFromScriptRegistry()
+            ) {
+                // Registry check confirmed on a genuine front-end (rare path): treat
+                // as a positive signal and latch. The selector guard in detect() is
+                // not available here (no buffer), so this only upgrades null -> true
+                // when the script handle is confirmed present. A false from the
+                // registry is IGNORED (structurally unreliable in most contexts).
+                self::persistWooSupported(true, $this->cache);
+                $wooFragsResult = true;
+            }
 
             $body = [
                 'cached_pages_count'         => $stats['pages'],
                 'cache_size_bytes'           => $stats['bytes'],
                 'preload_pending'            => $preloadPending,
                 'preload_total'              => $preloadTotal,
-                'woo_theme_fragments_supported' => $wooFragsSupported,
             ];
+
+            // Include the woo_theme_fragments_supported field only when we have a
+            // confirmed probe result. Absence tells the CP to leave its stored value
+            // unchanged (agent_handler.go:128 omitempty semantics).
+            if ($wooFragsResult !== null) {
+                $body['woo_theme_fragments_supported'] = $wooFragsResult;
+            }
             if ($lastPreloadAt !== null) {
                 $body['last_preload_at'] = $lastPreloadAt;
             }
