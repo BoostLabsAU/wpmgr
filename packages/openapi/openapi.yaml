@@ -9735,14 +9735,22 @@ components:
             flag before the agent performs its first probe.
         woo_theme_fragments_supported:
           type: boolean
+          nullable: true
           readOnly: true
-          default: false
           description: |
-            Agent-reported (read-only). Set to true by the agent after it probes
-            the site's active theme and confirms WooCommerce fragment-refresh
-            compatibility (wc_ajax_get_refreshed_fragments hook availability).
-            The CP stores this value but never lets an operator write it via PUT.
-            Old agents that pre-date M53 will leave this field false.
+            Agent-reported (read-only). Tri-state: null = never probed, false =
+            probed and the active theme does not expose the standard WooCommerce
+            cart-fragments hook, true = probed and supported. The CP stores this
+            value but never lets an operator write it via PUT. Null is the
+            correct initial state (M67); the agent stamps true/false only after
+            running a genuine front-end probe.
+        woo_fragments_probed_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            RFC3339 timestamp of the last agent probe. Null when never probed.
         config_version: { type: integer, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }
     CacheStats:

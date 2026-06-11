@@ -85,8 +85,9 @@ type repository interface {
 	UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, error)
 	GetCDNCredentialsCiphertext(ctx context.Context, tenantID, siteID uuid.UUID) ([]byte, string, error)
 	UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error
-	// M53 / #169 — agent-reported WooCommerce theme probe result.
-	UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error
+	// M53 / #169 — agent-reported WooCommerce theme probe result (tri-state after M67).
+	// Returns (rowsAffected, error); 0 rows means no config row exists yet for the site.
+	UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) (int64, error)
 	GetCacheStats(ctx context.Context, tenantID, siteID uuid.UUID) (CacheStats, error)
 	UpsertCacheStats(ctx context.Context, s CacheStats) (CacheStats, error)
 	MarkCachePurged(ctx context.Context, tenantID, siteID uuid.UUID, kind string) error
@@ -473,11 +474,22 @@ func (s *Service) MarkConfigApplied(ctx context.Context, siteID uuid.UUID, serve
 }
 
 // MarkWooFragmentsSupported records the agent-reported WooCommerce theme-probe
-// result (InAgentTx). Called from the perf/config-ack agent endpoint whenever the
+// result (InAgentTx). Called from the stats-report agent endpoint whenever the
 // agent probes and reports woo_theme_fragments_supported. This is READ-ONLY from
-// the operator API; only the agent writes it.
+// the operator API; only the agent writes it. A 0-row result (no config row yet
+// for the site) is logged at debug level and treated as a no-op — the agent will
+// re-report on its next heartbeat after the operator saves a config.
 func (s *Service) MarkWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error {
-	return s.repo.UpdateWooFragmentsSupported(ctx, siteID, supported)
+	n, err := s.repo.UpdateWooFragmentsSupported(ctx, siteID, supported)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		s.logger.Debug("woo fragments probe: no config row yet for site (no-op)",
+			slog.String("site_id", siteID.String()),
+			slog.Bool("supported", supported))
+	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

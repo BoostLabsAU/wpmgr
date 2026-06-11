@@ -4597,10 +4597,18 @@ export const PerfConfigSchema = {
     },
     woo_theme_fragments_supported: {
       type: "boolean",
+      nullable: true,
       readOnly: true,
-      default: false,
       description:
-        "Agent-reported (read-only). Set to true by the agent after it probes\nthe site's active theme and confirms WooCommerce fragment-refresh\ncompatibility (wc_ajax_get_refreshed_fragments hook availability).\nThe CP stores this value but never lets an operator write it via PUT.\nOld agents that pre-date M53 will leave this field false.\n",
+        "Agent-reported (read-only). Tri-state: null = never probed, false =\nprobed and the active theme does not expose the standard WooCommerce\ncart-fragments hook, true = probed and supported. The CP stores this\nvalue but never lets an operator write it via PUT. Null is the\ncorrect initial state (M67); the agent stamps true/false only after\nrunning a genuine front-end probe.\n",
+    },
+    woo_fragments_probed_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+      readOnly: true,
+      description:
+        "RFC3339 timestamp of the last agent probe. Null when never probed.\n",
     },
     config_version: {
       type: "integer",

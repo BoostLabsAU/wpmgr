@@ -124,6 +124,28 @@ final class CacheWriter
         try {
             $ctx = $this->resolveContext($buffer);
             $optimized = false;
+
+            // Front-end WooCommerce cart-fragments probe. Runs on real front-end
+            // renders when WooCommerce is active and the request is not admin/ajax/
+            // REST/cron. This is the only execution context where WooCommerce
+            // actually enqueues wc-cart-fragments, making detect() able to succeed.
+            // The probe is throttled internally (at most once per 12 h, or
+            // immediately when no result has been stored yet).
+            // Fire-and-forget: any failure must never affect the page output.
+            try {
+                if (class_exists('WooCommerce')
+                    && empty($ctx['is_admin'])
+                    && empty($ctx['is_ajax'])
+                    && !defined('REST_REQUEST')
+                    && !defined('DOING_CRON')
+                ) {
+                    $uri = isset($ctx['uri_path']) ? (string) $ctx['uri_path'] : '';
+                    WooFragmentsProbe::runFrontEndProbe($buffer, $uri);
+                }
+            } catch (\Throwable $e) {
+                // Fire-and-forget: swallow.
+            }
+
             // Optimize ONLY when this request is actually cacheable (a MISS we
             // are about to store): the optimization pipeline is the same shape
             // we cache, so a non-cacheable request is served verbatim.

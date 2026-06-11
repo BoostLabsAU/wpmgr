@@ -116,10 +116,6 @@ func (s *PerfConfig) setDefaults() {
 		val := bool(false)
 		s.WooCacheableSession.SetTo(val)
 	}
-	{
-		val := bool(false)
-		s.WooThemeFragmentsSupported.SetTo(val)
-	}
 }
 
 // setDefaults set default value of fields.

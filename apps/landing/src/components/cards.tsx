@@ -1,5 +1,7 @@
 import { Icon } from "@/components/icon";
 import { cn } from "@/lib/cn";
+import type { ClusterFeature, FeatureVisual } from "@/data/content";
+import { VISUALS } from "@/components/feature-visuals";
 
 /** Soft hairline card. The ONLY bordered/rounded surface in a block; inner
  *  content groups with spacing and dividers, never a second nested card. */
@@ -25,26 +27,6 @@ export function IconChip({ name }: { name: string }) {
     <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--primary-subtle)] text-[var(--primary-pressed)]">
       <Icon name={name} size={18} />
     </span>
-  );
-}
-
-export function FeatureCard({
-  icon,
-  title,
-  desc,
-}: {
-  icon: string;
-  title: string;
-  desc: string;
-}) {
-  return (
-    <Card className="flex flex-col gap-3">
-      <div className="flex items-center gap-3">
-        <IconChip name={icon} />
-        <h3 className="text-lg font-semibold text-foreground">{title}</h3>
-      </div>
-      <p className="text-sm leading-relaxed text-muted-foreground">{desc}</p>
-    </Card>
   );
 }
 
@@ -125,6 +107,69 @@ export function StatChip({
         {value}
       </span>
       <span className="text-sm leading-relaxed text-muted-foreground">{label}</span>
+    </Card>
+  );
+}
+
+/** Uniform platform-index card used in PlatformSection cluster grids.
+ *
+ *  Structure:
+ *    - Header: IconChip + h4 title (single line, truncate seatbelt)
+ *    - Summary: p.line-clamp-2 seatbelt
+ *    - Bullets: flex-1 ul so footers align regardless of 2 vs 4 bullets
+ *    - Visual (only when visual prop set): block from VISUALS registry
+ *    - Footer link (only when link prop set): "See it in depth" + ArrowRight
+ *
+ *  The Reveal wrapper in PlatformSection MUST carry className="h-full" or
+ *  equal-height rows silently break (auto-rows-fr requires the motion div to
+ *  pass height through to the card). */
+export function ClusterFeatureCard({
+  icon,
+  title,
+  summary,
+  bullets,
+  link,
+  visual,
+}: ClusterFeature) {
+  const Visual = visual ? VISUALS[visual as FeatureVisual] : null;
+  return (
+    <Card className="flex h-full flex-col gap-3 p-5">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <IconChip name={icon} />
+        <h4 className="truncate text-base font-semibold text-foreground">{title}</h4>
+      </div>
+
+      {/* Summary */}
+      <p className="line-clamp-2 text-sm leading-relaxed text-muted-foreground">{summary}</p>
+
+      {/* Bullets: flex-1 absorbs height differences so footer links align */}
+      <ul className="flex flex-1 flex-col gap-1.5">
+        {bullets.map((b) => (
+          <li key={b} className="flex items-start gap-2 text-sm text-muted-foreground">
+            <Icon name="Check" size={14} className="mt-0.5 shrink-0 text-[var(--success)]" />
+            <span>{b}</span>
+          </li>
+        ))}
+      </ul>
+
+      {/* Mini data visual (only on cards with a deep-dive link) */}
+      {Visual && (
+        <div className="pt-1">
+          <Visual />
+        </div>
+      )}
+
+      {/* Footer deep-dive link */}
+      {link && (
+        <a
+          href={link.href}
+          className="mt-auto inline-flex items-center gap-1.5 pt-2 text-sm font-medium text-primary transition-colors duration-[var(--duration-fast)] hover:text-[var(--primary-hover)]"
+        >
+          See it in depth
+          <Icon name="ArrowRight" size={14} />
+        </a>
+      )}
     </Card>
   );
 }

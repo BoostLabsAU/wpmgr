@@ -6,6 +6,13 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.39.1] - 2026-06-11
+
+### Fixed
+
+- **The WooCommerce cart-aware caching toggle could never be enabled, on any site or theme.** The agent's theme support detection ran only inside scheduled background jobs and remote command handlers, two contexts where WooCommerce never loads its storefront scripts, so every check reported "unsupported" and re-stamped that result on every heartbeat. Detection now runs during real storefront page renders: any positive detection enables the toggle immediately, a negative verdict requires three different pages to agree (cart fragments often load only on cart pages), the check repeats after theme or plugin changes, and until a real check has happened the dashboard now says "Checking your theme" instead of pretending the theme is unsupported. Existing stored verdicts were reset since none were trustworthy. Requires agent 0.39.1; migration m67.
+- **Enabling the CDN failed with "cdn_url is required" before you could type a URL.** The CDN switch saved immediately on flip, but the URL field only appears after the switch is on, so the save was always rejected and the switch snapped back, hiding the field again. Flipping the switch on now reveals and focuses the URL field without saving; the setting saves in one step once a valid URL is entered, and validation problems show inline on the field instead of a generic error message.
+
 ## [0.39.0] - 2026-06-11
 
 ### Added

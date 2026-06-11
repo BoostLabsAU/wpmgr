@@ -1,7 +1,6 @@
 import { MotionConfig } from "motion/react";
 import {
   Faq,
-  FeatureGrid,
   FinalCta,
   Footer,
   Hero,
@@ -12,6 +11,7 @@ import {
   OpenSource,
   PerformanceHow,
   PerformanceSpotlight,
+  PlatformSection,
   RumSection,
   Security,
   Stats,
@@ -28,7 +28,7 @@ export function App() {
       <main>
         <Hero />
         <TrustStrip />
-        <FeatureGrid />
+        <PlatformSection />
         <PerformanceSpotlight />
         <PerformanceHow />
         <RumSection />

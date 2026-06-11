@@ -1,31 +1,14 @@
-import { motion } from "motion/react";
 import { cn } from "@/lib/cn";
+import { TrendSparkline } from "@/components/sparkline";
+import { DistributionBar, type DistributionSegment, type Rating } from "@/components/distribution-bar";
 
-// Rating colour maps. "good" = green (success token), "needs-improvement" = amber
-// (warning token), "poor" = red (a desaturated red that stays within the token
-// family). No raw hex, no neon. All three map to the semantic vars in globals.css.
-const RATING_BAR: Record<"good" | "needs-improvement" | "poor", string> = {
-  "good":              "bg-[var(--success)]",
-  "needs-improvement": "bg-[var(--warning-subtle-fg)]",
-  "poor":              "bg-[oklch(55%_0.16_22)]",
-};
-const RATING_DOT: Record<"good" | "needs-improvement" | "poor", string> = {
-  "good":              "bg-[var(--success)]",
-  "needs-improvement": "bg-[var(--warning-subtle-fg)]",
-  "poor":              "bg-[oklch(55%_0.16_22)]",
-};
-const RATING_BADGE: Record<"good" | "needs-improvement" | "poor", string> = {
+// Rating badge colour maps. "good" = green (success token), "needs-improvement"
+// = amber (warning token), "poor" = a desaturated red within the token family.
+// No raw hex, no neon.
+const RATING_BADGE: Record<Rating, string> = {
   "good":              "bg-[var(--success-subtle)] text-[var(--success-subtle-fg)]",
   "needs-improvement": "bg-[var(--warning-subtle)] text-[var(--warning-subtle-fg)]",
   "poor":              "bg-[oklch(95%_0.03_22)] text-[oklch(40%_0.14_22)] dark:bg-[oklch(28%_0.08_22)] dark:text-[oklch(85%_0.10_22)]",
-};
-
-type Rating = "good" | "needs-improvement" | "poor";
-
-type DistributionSegment = {
-  label: string;
-  pct: number;
-  tone: Rating;
 };
 
 type MetricRow = {
@@ -33,92 +16,6 @@ type MetricRow = {
   p75: string;
   rating: Rating;
 };
-
-type TrendPoint = number;
-
-/** A three-segment horizontal distribution bar (good / needs-improvement / poor).
- *  Segments animate in from the left using scaleX on each. */
-function DistributionBar({ segments }: { segments: DistributionSegment[] }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex h-2 w-full overflow-hidden rounded-full bg-muted">
-        {segments.map((seg, i) => (
-          <motion.div
-            key={seg.label}
-            className={cn("h-full", RATING_BAR[seg.tone])}
-            style={{ width: `${seg.pct}%` }}
-            initial={{ opacity: 0 }}
-            whileInView={{ opacity: 1 }}
-            viewport={{ once: true, margin: "-60px" }}
-            transition={{ duration: 0.5, delay: i * 0.1, ease: [0.22, 1, 0.36, 1] }}
-          />
-        ))}
-      </div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1">
-        {segments.map((seg) => (
-          <span key={seg.label} className="inline-flex items-center gap-1.5 text-2xs text-muted-foreground">
-            <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", RATING_DOT[seg.tone])} />
-            <span>{seg.label}</span>
-            <span className="font-mono" style={{ fontVariantNumeric: "tabular-nums" }}>
-              {seg.pct}%
-            </span>
-          </span>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-/** A minimal polyline-style sparkline built from divs to avoid an SVG chart
- *  dependency. Renders as a series of bottom-aligned bars at varying heights,
- *  which reads as a trend shape. A horizontal threshold line is drawn at the
- *  passing boundary. All sample data, labelled as such. */
-function TrendSparkline({
-  points,
-  threshold,
-}: {
-  points: TrendPoint[];
-  threshold: number;
-}) {
-  const max = Math.max(...points, threshold) * 1.15;
-  const thresholdPct = (threshold / max) * 100;
-
-  return (
-    <div className="relative h-14 w-full">
-      {/* Threshold line */}
-      <div
-        aria-hidden
-        className="absolute right-0 left-0 h-px border-t border-dashed border-[var(--warning-subtle-fg)]/60"
-        style={{ bottom: `${thresholdPct}%` }}
-      />
-      {/* Bars */}
-      <div className="absolute inset-0 flex items-end gap-px">
-        {points.map((v, i) => {
-          const pct = Math.round((v / max) * 100);
-          const belowThreshold = v <= threshold;
-          return (
-            <motion.div
-              key={i}
-              className={cn(
-                "flex-1 min-w-0 rounded-t-[2px]",
-                belowThreshold ? "bg-[var(--success)]/70" : "bg-[var(--warning-subtle-fg)]/70",
-              )}
-              style={{ height: `${pct}%` }}
-              initial={{ scaleY: 0, transformOrigin: "bottom" }}
-              whileInView={{ scaleY: 1 }}
-              viewport={{ once: true, margin: "-60px" }}
-              transition={{
-                duration: 0.4,
-                delay: i * 0.025,
-                ease: [0.22, 1, 0.36, 1],
-              }}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
 
 /** A compact row in the five-metric summary table at the bottom of the card. */
 function MetricRow({ name, p75, rating }: MetricRow) {
@@ -158,7 +55,7 @@ export function RumPreview({
   p75: string;
   rating: Rating;
   distribution: DistributionSegment[];
-  trend: TrendPoint[];
+  trend: number[];
   threshold: number;
   metrics: MetricRow[];
 }) {

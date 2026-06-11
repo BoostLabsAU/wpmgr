@@ -200,15 +200,21 @@ func (r *Repo) UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverS
 }
 
 // UpdateWooFragmentsSupported stamps the agent-reported woo_theme_fragments_supported
-// flag. Agent write path (InAgentTx) — the agent is the sole writer; operators
-// can never set this via the API.
-func (r *Repo) UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) error {
-	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
-		return sqlc.New(tx).UpdateWooThemeFragmentsSupported(ctx, sqlc.UpdateWooThemeFragmentsSupportedParams{
-			WooThemeFragmentsSupported: supported,
+// flag and woo_fragments_probed_at. Agent write path (InAgentTx) — the agent is
+// the sole writer; operators can never set this via the API.
+// Returns (rowsAffected, error); callers log when rowsAffected == 0 (no config
+// row yet for the site; the agent will re-report after the operator saves one).
+func (r *Repo) UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) (int64, error) {
+	var n int64
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).UpdateWooThemeFragmentsSupported(ctx, sqlc.UpdateWooThemeFragmentsSupportedParams{
+			WooThemeFragmentsSupported: &supported,
 			SiteID:                     siteID,
 		})
+		n = rows
+		return qerr
 	})
+	return n, err
 }
 
 // GetCacheStats returns the latest reported cache gauges for a site. Operator
@@ -922,6 +928,7 @@ func configFromRow(row sqlc.SitePerfConfig) Config {
 		HtaccessManaged:            row.HtaccessManaged,
 		WooCacheableSession:        row.WooCacheableSession,
 		WooThemeFragmentsSupported: row.WooThemeFragmentsSupported,
+		WooFragmentsProbedAt:       tsToTimePtr(row.WooFragmentsProbedAt),
 		FontsTranscodeWOFF2:        row.FontsTranscodeWoff2,
 		FontsSubset:                row.FontsSubset,
 		FontsSubsetMode:            row.FontsSubsetMode,

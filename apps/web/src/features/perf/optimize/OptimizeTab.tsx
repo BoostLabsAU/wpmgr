@@ -43,7 +43,7 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
   const [, setRenderTick] = useState(0);
   const forceUpdate = useCallback(() => setRenderTick((n) => n + 1), []);
 
-  function save(patch: Partial<PerfConfig>) {
+  function save(patch: Partial<PerfConfig>, onError?: (err: Error) => void) {
     if (!config.data) return;
     const keys = Object.keys(patch);
     // Register keys as in-flight before the mutation fires.
@@ -52,6 +52,13 @@ export function OptimizeTab({ siteId, hostname, canOperate }: OptimizeTabProps) 
     update.mutate(
       { ...config.data, ...patch },
       {
+        onError: onError
+          ? (err) => {
+              // The global toast fires from usePerfConfig's own onError handler.
+              // The optional callback lets the caller surface an inline error too.
+              onError(err);
+            }
+          : undefined,
         onSettled: () => {
           // Remove these keys from the in-flight set once the PUT completes
           // (success or error). onSettled fires after onSuccess/onError.

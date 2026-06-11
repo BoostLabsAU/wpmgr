@@ -14441,6 +14441,69 @@ func (o OptMediaVariantResultState) Or(d MediaVariantResultState) MediaVariantRe
 	return d
 }
 
+// NewOptNilBool returns new OptNilBool with value set to v.
+func NewOptNilBool(v bool) OptNilBool {
+	return OptNilBool{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilBool is optional nullable bool.
+type OptNilBool struct {
+	Value bool
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilBool was set.
+func (o OptNilBool) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilBool) Reset() {
+	var v bool
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilBool) SetTo(v bool) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilBool) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilBool) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v bool
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilBool) Get() (v bool, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilBool) Or(d bool) bool {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptNilDateTime returns new OptNilDateTime with value set to v.
 func NewOptNilDateTime(v time.Time) OptNilDateTime {
 	return OptNilDateTime{
@@ -16919,14 +16982,17 @@ type PerfConfig struct {
 	// it until its own probe passes. This allows operators to pre-enable the
 	// flag before the agent performs its first probe.
 	WooCacheableSession OptBool `json:"woo_cacheable_session"`
-	// Agent-reported (read-only). Set to true by the agent after it probes
-	// the site's active theme and confirms WooCommerce fragment-refresh
-	// compatibility (wc_ajax_get_refreshed_fragments hook availability).
-	// The CP stores this value but never lets an operator write it via PUT.
-	// Old agents that pre-date M53 will leave this field false.
-	WooThemeFragmentsSupported OptBool     `json:"woo_theme_fragments_supported"`
-	ConfigVersion              OptInt      `json:"config_version"`
-	UpdatedAt                  OptDateTime `json:"updated_at"`
+	// Agent-reported (read-only). Tri-state: null = never probed, false =
+	// probed and the active theme does not expose the standard WooCommerce
+	// cart-fragments hook, true = probed and supported. The CP stores this
+	// value but never lets an operator write it via PUT. Null is the
+	// correct initial state (M67); the agent stamps true/false only after
+	// running a genuine front-end probe.
+	WooThemeFragmentsSupported OptNilBool `json:"woo_theme_fragments_supported"`
+	// RFC3339 timestamp of the last agent probe. Null when never probed.
+	WooFragmentsProbedAt OptNilDateTime `json:"woo_fragments_probed_at"`
+	ConfigVersion        OptInt         `json:"config_version"`
+	UpdatedAt            OptDateTime    `json:"updated_at"`
 }
 
 // GetCacheEnabled returns the value of CacheEnabled.
@@ -17250,8 +17316,13 @@ func (s *PerfConfig) GetWooCacheableSession() OptBool {
 }
 
 // GetWooThemeFragmentsSupported returns the value of WooThemeFragmentsSupported.
-func (s *PerfConfig) GetWooThemeFragmentsSupported() OptBool {
+func (s *PerfConfig) GetWooThemeFragmentsSupported() OptNilBool {
 	return s.WooThemeFragmentsSupported
+}
+
+// GetWooFragmentsProbedAt returns the value of WooFragmentsProbedAt.
+func (s *PerfConfig) GetWooFragmentsProbedAt() OptNilDateTime {
+	return s.WooFragmentsProbedAt
 }
 
 // GetConfigVersion returns the value of ConfigVersion.
@@ -17585,8 +17656,13 @@ func (s *PerfConfig) SetWooCacheableSession(val OptBool) {
 }
 
 // SetWooThemeFragmentsSupported sets the value of WooThemeFragmentsSupported.
-func (s *PerfConfig) SetWooThemeFragmentsSupported(val OptBool) {
+func (s *PerfConfig) SetWooThemeFragmentsSupported(val OptNilBool) {
 	s.WooThemeFragmentsSupported = val
+}
+
+// SetWooFragmentsProbedAt sets the value of WooFragmentsProbedAt.
+func (s *PerfConfig) SetWooFragmentsProbedAt(val OptNilDateTime) {
+	s.WooFragmentsProbedAt = val
 }
 
 // SetConfigVersion sets the value of ConfigVersion.

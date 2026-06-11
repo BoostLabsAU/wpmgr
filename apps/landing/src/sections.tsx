@@ -9,7 +9,8 @@ import {
 import { Icon } from "@/components/icon";
 import { FleetHubLogo, Logo, Wordmark } from "@/components/logo";
 import { ThemeToggle } from "@/components/theme-toggle";
-import { FeatureCard, IconChip, ProofChip, StatChip, StepCard } from "@/components/cards";
+import { ClusterFeatureCard, IconChip, ProofChip, StatChip, StepCard } from "@/components/cards";
+import { useActiveCluster } from "@/lib/use-active-cluster";
 import { BeforeAfterCard } from "@/components/before-after";
 import { CodeSnippet } from "@/components/code-snippet";
 import { FAQItem } from "@/components/faq-item";
@@ -231,24 +232,87 @@ export function TrustStrip() {
   );
 }
 
-export function FeatureGrid() {
+/** Sticky chip rail with one chip per cluster. Highlights the active cluster
+ *  (scrollspy via useActiveCluster). Works as plain anchor links without JS. */
+function ClusterChipRail({ clusters, active }: {
+  clusters: typeof FEATURES.clusters;
+  active: string | null;
+}) {
+  return (
+    <div className="sticky top-16 z-30 -mx-5 bg-background/85 px-5 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
+      <div className="flex gap-2 overflow-x-auto py-3 [scrollbar-width:none]">
+        {clusters.map((c) => {
+          const isActive = active === c.id;
+          return (
+            <a
+              key={c.id}
+              href={`#${c.id}`}
+              className={
+                isActive
+                  ? "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-transparent bg-[var(--primary-subtle)] px-3 py-1.5 text-xs font-medium whitespace-nowrap text-[var(--primary-pressed)] transition-colors duration-[var(--duration-fast)]"
+                  : "inline-flex shrink-0 items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-xs font-medium whitespace-nowrap text-muted-foreground transition-colors duration-[var(--duration-fast)] hover:text-foreground"
+              }
+            >
+              <Icon name={c.icon} size={14} />
+              {c.name}
+            </a>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+export function PlatformSection() {
+  const clusterIds = FEATURES.clusters.map((c) => c.id);
+  const active = useActiveCluster(clusterIds);
+
   return (
     <Section id="features">
       <Container className="flex flex-col gap-10">
         <Reveal>
           <SectionHeading align="left" eyebrow={FEATURES.eyebrow} title={FEATURES.heading} lead={FEATURES.subhead} />
         </Reveal>
-        <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-          {FEATURES.cards.map((c, i) => (
-            <Reveal key={c.title} delay={(i % 3) * 0.05}>
-              <FeatureCard icon={c.icon} title={c.title} desc={c.desc} />
+
+        <ClusterChipRail clusters={FEATURES.clusters} active={active} />
+
+        {FEATURES.clusters.map((cluster) => (
+          <div
+            key={cluster.id}
+            id={cluster.id}
+            className="scroll-mt-36 flex flex-col gap-6 border-t border-border pt-12 first:border-t-0 first:pt-0"
+          >
+            {/* Cluster header */}
+            <Reveal>
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center gap-3">
+                  <IconChip name={cluster.icon} />
+                  <h3 className="text-xl font-semibold text-foreground">{cluster.name}</h3>
+                </div>
+                <p className="max-w-2xl text-sm text-muted-foreground">{cluster.tagline}</p>
+              </div>
             </Reveal>
-          ))}
-        </div>
+
+            {/* Card grid: auto-rows-fr equalizes row heights structurally */}
+            <div className="grid auto-rows-fr gap-5 sm:grid-cols-2 lg:grid-cols-3">
+              {cluster.features.map((f, i) => (
+                // h-full is REQUIRED here: auto-rows-fr + the motion div must
+                // pass height through to the card or equal heights break.
+                <Reveal key={f.title} className="h-full" delay={(i % 3) * 0.05}>
+                  <ClusterFeatureCard {...f} />
+                </Reveal>
+              ))}
+            </div>
+          </div>
+        ))}
       </Container>
     </Section>
   );
 }
+
+/** @deprecated Use PlatformSection. Kept as an alias so any stale import
+ *  continues to compile while the rename propagates. */
+export { PlatformSection as FeatureGrid };
 
 export function MediaSpotlight() {
   return (

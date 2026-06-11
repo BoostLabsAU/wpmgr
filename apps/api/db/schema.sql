@@ -1452,7 +1452,11 @@ CREATE TABLE site_perf_config (
     fonts_subset_range            text        NOT NULL DEFAULT 'latin-ext',
     -- M53 / #169 — WooCommerce cacheable-session.
     woo_cacheable_session         boolean     NOT NULL DEFAULT false,
-    woo_theme_fragments_supported boolean     NOT NULL DEFAULT false,
+    -- M67 — tri-state: NULL = never probed, false = probed unsupported, true = probed supported.
+    -- NOT NULL and DEFAULT false were dropped (m67); existing false rows reset to NULL.
+    woo_theme_fragments_supported boolean,
+    -- M67 — timestamp of the last agent probe; NULL when never probed.
+    woo_fragments_probed_at       timestamptz,
     -- M56 — Real User Monitoring (RUM). All off by default (opt-in per site).
     -- rum_enabled: per-site toggle; must be true for the beacon to be injected.
     -- rum_sample_rate: fraction of beacons the CP keeps after server-side sampling.
