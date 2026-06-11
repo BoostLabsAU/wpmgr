@@ -403,12 +403,7 @@ func (h *Handler) summary(c *gin.Context) {
 	}
 
 	// Filter site reports to AllowedSiteIDs (defense-in-depth).
-	filtered := make([]report.SiteReport, 0, len(allSiteReports))
-	for _, sr := range allSiteReports {
-		if _, ok2 := allowedSet[sr.SiteID]; ok2 {
-			filtered = append(filtered, sr)
-		}
-	}
+	filtered := filterSiteReports(allSiteReports, allowedSet)
 
 	// -----------------------------------------------------------------------
 	// Recompute totals over the filtered set.
@@ -1146,6 +1141,21 @@ func vitalRating(metric string, p75 float64) string {
 		return "poor"
 	}
 	return "unknown"
+}
+
+// filterSiteReports keeps only site reports whose SiteID is in allowed. This
+// is the defense-in-depth gate between the report aggregator (which lists ALL
+// sites of the client under InTenantTx, not the principal's RLS scope) and the
+// summary response. Removing this filter would let a stale or diverged
+// AllowedSiteIDs set leak other sites' data; portal_summary_test.go pins it.
+func filterSiteReports(reports []report.SiteReport, allowed map[uuid.UUID]struct{}) []report.SiteReport {
+	filtered := make([]report.SiteReport, 0, len(reports))
+	for _, sr := range reports {
+		if _, ok := allowed[sr.SiteID]; ok {
+			filtered = append(filtered, sr)
+		}
+	}
+	return filtered
 }
 
 // worstCWVRating returns the worst (most degraded) CWV rating across the given
