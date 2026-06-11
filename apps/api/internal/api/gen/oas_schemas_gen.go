@@ -4178,6 +4178,9 @@ type ClientMemberInviteResult struct {
 	// True when an invitation was created (unknown email); false when an existing user was added
 	// directly.
 	Invited OptBool `json:"invited"`
+	// True when the invitation email was successfully enqueued and SMTP is configured. False when SMTP
+	// is unconfigured or enqueue failed — the accept_link is always returned as the copy-link fallback.
+	EmailSent bool `json:"email_sent"`
 	// Present when invited=false (the user already existed).
 	UserID OptUUID `json:"user_id"`
 	// Present when invited=false.
@@ -4198,6 +4201,11 @@ func (s *ClientMemberInviteResult) GetEmail() string {
 // GetInvited returns the value of Invited.
 func (s *ClientMemberInviteResult) GetInvited() OptBool {
 	return s.Invited
+}
+
+// GetEmailSent returns the value of EmailSent.
+func (s *ClientMemberInviteResult) GetEmailSent() bool {
+	return s.EmailSent
 }
 
 // GetUserID returns the value of UserID.
@@ -4233,6 +4241,11 @@ func (s *ClientMemberInviteResult) SetEmail(val string) {
 // SetInvited sets the value of Invited.
 func (s *ClientMemberInviteResult) SetInvited(val OptBool) {
 	s.Invited = val
+}
+
+// SetEmailSent sets the value of EmailSent.
+func (s *ClientMemberInviteResult) SetEmailSent(val bool) {
+	s.EmailSent = val
 }
 
 // SetUserID sets the value of UserID.
@@ -8921,6 +8934,62 @@ type GetPortalSiteVitalsUnauthorized Error
 
 func (*GetPortalSiteVitalsUnauthorized) getPortalSiteVitalsRes() {}
 
+type GetPortalSummaryForbidden Error
+
+func (*GetPortalSummaryForbidden) getPortalSummaryRes() {}
+
+type GetPortalSummaryRange string
+
+const (
+	GetPortalSummaryRange7d  GetPortalSummaryRange = "7d"
+	GetPortalSummaryRange30d GetPortalSummaryRange = "30d"
+	GetPortalSummaryRange90d GetPortalSummaryRange = "90d"
+)
+
+// AllValues returns all GetPortalSummaryRange values.
+func (GetPortalSummaryRange) AllValues() []GetPortalSummaryRange {
+	return []GetPortalSummaryRange{
+		GetPortalSummaryRange7d,
+		GetPortalSummaryRange30d,
+		GetPortalSummaryRange90d,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s GetPortalSummaryRange) MarshalText() ([]byte, error) {
+	switch s {
+	case GetPortalSummaryRange7d:
+		return []byte(s), nil
+	case GetPortalSummaryRange30d:
+		return []byte(s), nil
+	case GetPortalSummaryRange90d:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *GetPortalSummaryRange) UnmarshalText(data []byte) error {
+	switch GetPortalSummaryRange(data) {
+	case GetPortalSummaryRange7d:
+		*s = GetPortalSummaryRange7d
+		return nil
+	case GetPortalSummaryRange30d:
+		*s = GetPortalSummaryRange30d
+		return nil
+	case GetPortalSummaryRange90d:
+		*s = GetPortalSummaryRange90d
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type GetPortalSummaryUnauthorized Error
+
+func (*GetPortalSummaryUnauthorized) getPortalSummaryRes() {}
+
 type GetReadyzOK Readiness
 
 func (*GetReadyzOK) getReadyzRes() {}
@@ -13337,6 +13406,52 @@ func (o OptGetPortalSiteVitalsRange) Or(d GetPortalSiteVitalsRange) GetPortalSit
 	return d
 }
 
+// NewOptGetPortalSummaryRange returns new OptGetPortalSummaryRange with value set to v.
+func NewOptGetPortalSummaryRange(v GetPortalSummaryRange) OptGetPortalSummaryRange {
+	return OptGetPortalSummaryRange{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGetPortalSummaryRange is optional GetPortalSummaryRange.
+type OptGetPortalSummaryRange struct {
+	Value GetPortalSummaryRange
+	Set   bool
+}
+
+// IsSet returns true if OptGetPortalSummaryRange was set.
+func (o OptGetPortalSummaryRange) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGetPortalSummaryRange) Reset() {
+	var v GetPortalSummaryRange
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGetPortalSummaryRange) SetTo(v GetPortalSummaryRange) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGetPortalSummaryRange) Get() (v GetPortalSummaryRange, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGetPortalSummaryRange) Or(d GetPortalSummaryRange) GetPortalSummaryRange {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptGetSiteUptimeWindow returns new OptGetSiteUptimeWindow with value set to v.
 func NewOptGetSiteUptimeWindow(v GetSiteUptimeWindow) OptGetSiteUptimeWindow {
 	return OptGetSiteUptimeWindow{
@@ -14567,6 +14682,69 @@ func (o OptNilDateTime) Or(d time.Time) time.Time {
 	return d
 }
 
+// NewOptNilFloat32 returns new OptNilFloat32 with value set to v.
+func NewOptNilFloat32(v float32) OptNilFloat32 {
+	return OptNilFloat32{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilFloat32 is optional nullable float32.
+type OptNilFloat32 struct {
+	Value float32
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilFloat32 was set.
+func (o OptNilFloat32) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilFloat32) Reset() {
+	var v float32
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilFloat32) SetTo(v float32) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilFloat32) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilFloat32) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v float32
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilFloat32) Get() (v float32, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilFloat32) Or(d float32) float32 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptNilInt returns new OptNilInt with value set to v.
 func NewOptNilInt(v int) OptNilInt {
 	return OptNilInt{
@@ -14750,6 +14928,132 @@ func (o OptNilInt64) Get() (v int64, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptNilInt64) Or(d int64) int64 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptNilPortalSummarySiteVitalsRating returns new OptNilPortalSummarySiteVitalsRating with value set to v.
+func NewOptNilPortalSummarySiteVitalsRating(v PortalSummarySiteVitalsRating) OptNilPortalSummarySiteVitalsRating {
+	return OptNilPortalSummarySiteVitalsRating{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilPortalSummarySiteVitalsRating is optional nullable PortalSummarySiteVitalsRating.
+type OptNilPortalSummarySiteVitalsRating struct {
+	Value PortalSummarySiteVitalsRating
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilPortalSummarySiteVitalsRating was set.
+func (o OptNilPortalSummarySiteVitalsRating) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilPortalSummarySiteVitalsRating) Reset() {
+	var v PortalSummarySiteVitalsRating
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilPortalSummarySiteVitalsRating) SetTo(v PortalSummarySiteVitalsRating) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilPortalSummarySiteVitalsRating) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilPortalSummarySiteVitalsRating) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v PortalSummarySiteVitalsRating
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilPortalSummarySiteVitalsRating) Get() (v PortalSummarySiteVitalsRating, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilPortalSummarySiteVitalsRating) Or(d PortalSummarySiteVitalsRating) PortalSummarySiteVitalsRating {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptNilPortalSummaryVitalsOverall returns new OptNilPortalSummaryVitalsOverall with value set to v.
+func NewOptNilPortalSummaryVitalsOverall(v PortalSummaryVitalsOverall) OptNilPortalSummaryVitalsOverall {
+	return OptNilPortalSummaryVitalsOverall{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilPortalSummaryVitalsOverall is optional nullable PortalSummaryVitalsOverall.
+type OptNilPortalSummaryVitalsOverall struct {
+	Value PortalSummaryVitalsOverall
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilPortalSummaryVitalsOverall was set.
+func (o OptNilPortalSummaryVitalsOverall) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilPortalSummaryVitalsOverall) Reset() {
+	var v PortalSummaryVitalsOverall
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilPortalSummaryVitalsOverall) SetTo(v PortalSummaryVitalsOverall) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilPortalSummaryVitalsOverall) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilPortalSummaryVitalsOverall) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v PortalSummaryVitalsOverall
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilPortalSummaryVitalsOverall) Get() (v PortalSummaryVitalsOverall, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilPortalSummaryVitalsOverall) Or(d PortalSummaryVitalsOverall) PortalSummaryVitalsOverall {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -15409,6 +15713,98 @@ func (o OptPairingCodeCreate) Get() (v PairingCodeCreate, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptPairingCodeCreate) Or(d PairingCodeCreate) PairingCodeCreate {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPortalSummaryLatestReport returns new OptPortalSummaryLatestReport with value set to v.
+func NewOptPortalSummaryLatestReport(v PortalSummaryLatestReport) OptPortalSummaryLatestReport {
+	return OptPortalSummaryLatestReport{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPortalSummaryLatestReport is optional PortalSummaryLatestReport.
+type OptPortalSummaryLatestReport struct {
+	Value PortalSummaryLatestReport
+	Set   bool
+}
+
+// IsSet returns true if OptPortalSummaryLatestReport was set.
+func (o OptPortalSummaryLatestReport) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPortalSummaryLatestReport) Reset() {
+	var v PortalSummaryLatestReport
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPortalSummaryLatestReport) SetTo(v PortalSummaryLatestReport) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPortalSummaryLatestReport) Get() (v PortalSummaryLatestReport, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPortalSummaryLatestReport) Or(d PortalSummaryLatestReport) PortalSummaryLatestReport {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptPortalVitalsDistribution returns new OptPortalVitalsDistribution with value set to v.
+func NewOptPortalVitalsDistribution(v PortalVitalsDistribution) OptPortalVitalsDistribution {
+	return OptPortalVitalsDistribution{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptPortalVitalsDistribution is optional PortalVitalsDistribution.
+type OptPortalVitalsDistribution struct {
+	Value PortalVitalsDistribution
+	Set   bool
+}
+
+// IsSet returns true if OptPortalVitalsDistribution was set.
+func (o OptPortalVitalsDistribution) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptPortalVitalsDistribution) Reset() {
+	var v PortalVitalsDistribution
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptPortalVitalsDistribution) SetTo(v PortalVitalsDistribution) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptPortalVitalsDistribution) Get() (v PortalVitalsDistribution, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptPortalVitalsDistribution) Or(d PortalVitalsDistribution) PortalVitalsDistribution {
 	if v, ok := o.Get(); ok {
 		return v
 	}
@@ -17898,6 +18294,107 @@ func (s *PortalOverviewClient) SetColor(val OptString) {
 	s.Color = val
 }
 
+// Ref: #/components/schemas/PortalRecentWorkItem
+type PortalRecentWorkItem struct {
+	Type     PortalRecentWorkItemType `json:"type"`
+	SiteID   uuid.UUID                `json:"site_id"`
+	SiteName string                   `json:"site_name"`
+	// Human-readable description, e.g. 'WooCommerce 9.1.2 -> 9.2.0' or 'Full backup (12.3 MB)'.
+	Label      string    `json:"label"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// GetType returns the value of Type.
+func (s *PortalRecentWorkItem) GetType() PortalRecentWorkItemType {
+	return s.Type
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *PortalRecentWorkItem) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSiteName returns the value of SiteName.
+func (s *PortalRecentWorkItem) GetSiteName() string {
+	return s.SiteName
+}
+
+// GetLabel returns the value of Label.
+func (s *PortalRecentWorkItem) GetLabel() string {
+	return s.Label
+}
+
+// GetOccurredAt returns the value of OccurredAt.
+func (s *PortalRecentWorkItem) GetOccurredAt() time.Time {
+	return s.OccurredAt
+}
+
+// SetType sets the value of Type.
+func (s *PortalRecentWorkItem) SetType(val PortalRecentWorkItemType) {
+	s.Type = val
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *PortalRecentWorkItem) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSiteName sets the value of SiteName.
+func (s *PortalRecentWorkItem) SetSiteName(val string) {
+	s.SiteName = val
+}
+
+// SetLabel sets the value of Label.
+func (s *PortalRecentWorkItem) SetLabel(val string) {
+	s.Label = val
+}
+
+// SetOccurredAt sets the value of OccurredAt.
+func (s *PortalRecentWorkItem) SetOccurredAt(val time.Time) {
+	s.OccurredAt = val
+}
+
+type PortalRecentWorkItemType string
+
+const (
+	PortalRecentWorkItemTypeUpdate PortalRecentWorkItemType = "update"
+	PortalRecentWorkItemTypeBackup PortalRecentWorkItemType = "backup"
+)
+
+// AllValues returns all PortalRecentWorkItemType values.
+func (PortalRecentWorkItemType) AllValues() []PortalRecentWorkItemType {
+	return []PortalRecentWorkItemType{
+		PortalRecentWorkItemTypeUpdate,
+		PortalRecentWorkItemTypeBackup,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PortalRecentWorkItemType) MarshalText() ([]byte, error) {
+	switch s {
+	case PortalRecentWorkItemTypeUpdate:
+		return []byte(s), nil
+	case PortalRecentWorkItemTypeBackup:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PortalRecentWorkItemType) UnmarshalText(data []byte) error {
+	switch PortalRecentWorkItemType(data) {
+	case PortalRecentWorkItemTypeUpdate:
+		*s = PortalRecentWorkItemTypeUpdate
+		return nil
+	case PortalRecentWorkItemTypeBackup:
+		*s = PortalRecentWorkItemTypeBackup
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // Ref: #/components/schemas/PortalReportDownload
 type PortalReportDownload struct {
 	// Presigned download URL (valid for the object storage TTL).
@@ -18113,6 +18610,493 @@ func (s *PortalSiteList) SetItems(val []PortalSite) {
 
 func (*PortalSiteList) listPortalSitesRes() {}
 
+// Ref: #/components/schemas/PortalSummary
+type PortalSummary struct {
+	GeneratedAt time.Time `json:"generated_at"`
+	PeriodStart time.Time `json:"period_start"`
+	PeriodEnd   time.Time `json:"period_end"`
+	// Human-readable range, e.g. '12 May 2026 – 10 Jun 2026'.
+	PeriodLabel string              `json:"period_label"`
+	Totals      PortalSummaryTotals `json:"totals"`
+	// Worst CWV rating across all sites with samples. Null when no samples.
+	VitalsOverall      OptNilPortalSummaryVitalsOverall `json:"vitals_overall"`
+	VitalsDistribution OptPortalVitalsDistribution      `json:"vitals_distribution"`
+	// Fleet day-wise average across sites with data.
+	UptimeDaily  []PortalUptimeDay            `json:"uptime_daily"`
+	Sites        []PortalSummarySite          `json:"sites"`
+	LatestReport OptPortalSummaryLatestReport `json:"latest_report"`
+	// Up to 20 most recent successful updates and backups, descending by time.
+	RecentWork []PortalRecentWorkItem `json:"recent_work"`
+}
+
+// GetGeneratedAt returns the value of GeneratedAt.
+func (s *PortalSummary) GetGeneratedAt() time.Time {
+	return s.GeneratedAt
+}
+
+// GetPeriodStart returns the value of PeriodStart.
+func (s *PortalSummary) GetPeriodStart() time.Time {
+	return s.PeriodStart
+}
+
+// GetPeriodEnd returns the value of PeriodEnd.
+func (s *PortalSummary) GetPeriodEnd() time.Time {
+	return s.PeriodEnd
+}
+
+// GetPeriodLabel returns the value of PeriodLabel.
+func (s *PortalSummary) GetPeriodLabel() string {
+	return s.PeriodLabel
+}
+
+// GetTotals returns the value of Totals.
+func (s *PortalSummary) GetTotals() PortalSummaryTotals {
+	return s.Totals
+}
+
+// GetVitalsOverall returns the value of VitalsOverall.
+func (s *PortalSummary) GetVitalsOverall() OptNilPortalSummaryVitalsOverall {
+	return s.VitalsOverall
+}
+
+// GetVitalsDistribution returns the value of VitalsDistribution.
+func (s *PortalSummary) GetVitalsDistribution() OptPortalVitalsDistribution {
+	return s.VitalsDistribution
+}
+
+// GetUptimeDaily returns the value of UptimeDaily.
+func (s *PortalSummary) GetUptimeDaily() []PortalUptimeDay {
+	return s.UptimeDaily
+}
+
+// GetSites returns the value of Sites.
+func (s *PortalSummary) GetSites() []PortalSummarySite {
+	return s.Sites
+}
+
+// GetLatestReport returns the value of LatestReport.
+func (s *PortalSummary) GetLatestReport() OptPortalSummaryLatestReport {
+	return s.LatestReport
+}
+
+// GetRecentWork returns the value of RecentWork.
+func (s *PortalSummary) GetRecentWork() []PortalRecentWorkItem {
+	return s.RecentWork
+}
+
+// SetGeneratedAt sets the value of GeneratedAt.
+func (s *PortalSummary) SetGeneratedAt(val time.Time) {
+	s.GeneratedAt = val
+}
+
+// SetPeriodStart sets the value of PeriodStart.
+func (s *PortalSummary) SetPeriodStart(val time.Time) {
+	s.PeriodStart = val
+}
+
+// SetPeriodEnd sets the value of PeriodEnd.
+func (s *PortalSummary) SetPeriodEnd(val time.Time) {
+	s.PeriodEnd = val
+}
+
+// SetPeriodLabel sets the value of PeriodLabel.
+func (s *PortalSummary) SetPeriodLabel(val string) {
+	s.PeriodLabel = val
+}
+
+// SetTotals sets the value of Totals.
+func (s *PortalSummary) SetTotals(val PortalSummaryTotals) {
+	s.Totals = val
+}
+
+// SetVitalsOverall sets the value of VitalsOverall.
+func (s *PortalSummary) SetVitalsOverall(val OptNilPortalSummaryVitalsOverall) {
+	s.VitalsOverall = val
+}
+
+// SetVitalsDistribution sets the value of VitalsDistribution.
+func (s *PortalSummary) SetVitalsDistribution(val OptPortalVitalsDistribution) {
+	s.VitalsDistribution = val
+}
+
+// SetUptimeDaily sets the value of UptimeDaily.
+func (s *PortalSummary) SetUptimeDaily(val []PortalUptimeDay) {
+	s.UptimeDaily = val
+}
+
+// SetSites sets the value of Sites.
+func (s *PortalSummary) SetSites(val []PortalSummarySite) {
+	s.Sites = val
+}
+
+// SetLatestReport sets the value of LatestReport.
+func (s *PortalSummary) SetLatestReport(val OptPortalSummaryLatestReport) {
+	s.LatestReport = val
+}
+
+// SetRecentWork sets the value of RecentWork.
+func (s *PortalSummary) SetRecentWork(val []PortalRecentWorkItem) {
+	s.RecentWork = val
+}
+
+func (*PortalSummary) getPortalSummaryRes() {}
+
+// Ref: #/components/schemas/PortalSummaryLatestReport
+type PortalSummaryLatestReport struct {
+	ID          uuid.UUID `json:"id"`
+	PeriodStart time.Time `json:"period_start"`
+	PeriodEnd   time.Time `json:"period_end"`
+	CompletedAt time.Time `json:"completed_at"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalSummaryLatestReport) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetPeriodStart returns the value of PeriodStart.
+func (s *PortalSummaryLatestReport) GetPeriodStart() time.Time {
+	return s.PeriodStart
+}
+
+// GetPeriodEnd returns the value of PeriodEnd.
+func (s *PortalSummaryLatestReport) GetPeriodEnd() time.Time {
+	return s.PeriodEnd
+}
+
+// GetCompletedAt returns the value of CompletedAt.
+func (s *PortalSummaryLatestReport) GetCompletedAt() time.Time {
+	return s.CompletedAt
+}
+
+// SetID sets the value of ID.
+func (s *PortalSummaryLatestReport) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetPeriodStart sets the value of PeriodStart.
+func (s *PortalSummaryLatestReport) SetPeriodStart(val time.Time) {
+	s.PeriodStart = val
+}
+
+// SetPeriodEnd sets the value of PeriodEnd.
+func (s *PortalSummaryLatestReport) SetPeriodEnd(val time.Time) {
+	s.PeriodEnd = val
+}
+
+// SetCompletedAt sets the value of CompletedAt.
+func (s *PortalSummaryLatestReport) SetCompletedAt(val time.Time) {
+	s.CompletedAt = val
+}
+
+// Ref: #/components/schemas/PortalSummarySite
+type PortalSummarySite struct {
+	ID   uuid.UUID `json:"id"`
+	Name string    `json:"name"`
+	URL  url.URL   `json:"url"`
+	// Connection state (connected/degraded/disconnected).
+	Status string `json:"status"`
+	// Null when no uptime checks exist for this site in the period.
+	UptimePct       OptNilFloat32     `json:"uptime_pct"`
+	UptimeDaily     []PortalUptimeDay `json:"uptime_daily"`
+	Incidents       int               `json:"incidents"`
+	LastBackupAt    OptNilDateTime    `json:"last_backup_at"`
+	BackupsInPeriod int               `json:"backups_in_period"`
+	UpdatesInPeriod int               `json:"updates_in_period"`
+	// Worst CWV rating across LCP/INP/CLS. Null when no RUM samples.
+	VitalsRating OptNilPortalSummarySiteVitalsRating `json:"vitals_rating"`
+	TLSExpiresAt OptNilDateTime                      `json:"tls_expires_at"`
+}
+
+// GetID returns the value of ID.
+func (s *PortalSummarySite) GetID() uuid.UUID {
+	return s.ID
+}
+
+// GetName returns the value of Name.
+func (s *PortalSummarySite) GetName() string {
+	return s.Name
+}
+
+// GetURL returns the value of URL.
+func (s *PortalSummarySite) GetURL() url.URL {
+	return s.URL
+}
+
+// GetStatus returns the value of Status.
+func (s *PortalSummarySite) GetStatus() string {
+	return s.Status
+}
+
+// GetUptimePct returns the value of UptimePct.
+func (s *PortalSummarySite) GetUptimePct() OptNilFloat32 {
+	return s.UptimePct
+}
+
+// GetUptimeDaily returns the value of UptimeDaily.
+func (s *PortalSummarySite) GetUptimeDaily() []PortalUptimeDay {
+	return s.UptimeDaily
+}
+
+// GetIncidents returns the value of Incidents.
+func (s *PortalSummarySite) GetIncidents() int {
+	return s.Incidents
+}
+
+// GetLastBackupAt returns the value of LastBackupAt.
+func (s *PortalSummarySite) GetLastBackupAt() OptNilDateTime {
+	return s.LastBackupAt
+}
+
+// GetBackupsInPeriod returns the value of BackupsInPeriod.
+func (s *PortalSummarySite) GetBackupsInPeriod() int {
+	return s.BackupsInPeriod
+}
+
+// GetUpdatesInPeriod returns the value of UpdatesInPeriod.
+func (s *PortalSummarySite) GetUpdatesInPeriod() int {
+	return s.UpdatesInPeriod
+}
+
+// GetVitalsRating returns the value of VitalsRating.
+func (s *PortalSummarySite) GetVitalsRating() OptNilPortalSummarySiteVitalsRating {
+	return s.VitalsRating
+}
+
+// GetTLSExpiresAt returns the value of TLSExpiresAt.
+func (s *PortalSummarySite) GetTLSExpiresAt() OptNilDateTime {
+	return s.TLSExpiresAt
+}
+
+// SetID sets the value of ID.
+func (s *PortalSummarySite) SetID(val uuid.UUID) {
+	s.ID = val
+}
+
+// SetName sets the value of Name.
+func (s *PortalSummarySite) SetName(val string) {
+	s.Name = val
+}
+
+// SetURL sets the value of URL.
+func (s *PortalSummarySite) SetURL(val url.URL) {
+	s.URL = val
+}
+
+// SetStatus sets the value of Status.
+func (s *PortalSummarySite) SetStatus(val string) {
+	s.Status = val
+}
+
+// SetUptimePct sets the value of UptimePct.
+func (s *PortalSummarySite) SetUptimePct(val OptNilFloat32) {
+	s.UptimePct = val
+}
+
+// SetUptimeDaily sets the value of UptimeDaily.
+func (s *PortalSummarySite) SetUptimeDaily(val []PortalUptimeDay) {
+	s.UptimeDaily = val
+}
+
+// SetIncidents sets the value of Incidents.
+func (s *PortalSummarySite) SetIncidents(val int) {
+	s.Incidents = val
+}
+
+// SetLastBackupAt sets the value of LastBackupAt.
+func (s *PortalSummarySite) SetLastBackupAt(val OptNilDateTime) {
+	s.LastBackupAt = val
+}
+
+// SetBackupsInPeriod sets the value of BackupsInPeriod.
+func (s *PortalSummarySite) SetBackupsInPeriod(val int) {
+	s.BackupsInPeriod = val
+}
+
+// SetUpdatesInPeriod sets the value of UpdatesInPeriod.
+func (s *PortalSummarySite) SetUpdatesInPeriod(val int) {
+	s.UpdatesInPeriod = val
+}
+
+// SetVitalsRating sets the value of VitalsRating.
+func (s *PortalSummarySite) SetVitalsRating(val OptNilPortalSummarySiteVitalsRating) {
+	s.VitalsRating = val
+}
+
+// SetTLSExpiresAt sets the value of TLSExpiresAt.
+func (s *PortalSummarySite) SetTLSExpiresAt(val OptNilDateTime) {
+	s.TLSExpiresAt = val
+}
+
+// Worst CWV rating across LCP/INP/CLS. Null when no RUM samples.
+type PortalSummarySiteVitalsRating string
+
+const (
+	PortalSummarySiteVitalsRatingGood             PortalSummarySiteVitalsRating = "good"
+	PortalSummarySiteVitalsRatingNeedsImprovement PortalSummarySiteVitalsRating = "needs-improvement"
+	PortalSummarySiteVitalsRatingPoor             PortalSummarySiteVitalsRating = "poor"
+)
+
+// AllValues returns all PortalSummarySiteVitalsRating values.
+func (PortalSummarySiteVitalsRating) AllValues() []PortalSummarySiteVitalsRating {
+	return []PortalSummarySiteVitalsRating{
+		PortalSummarySiteVitalsRatingGood,
+		PortalSummarySiteVitalsRatingNeedsImprovement,
+		PortalSummarySiteVitalsRatingPoor,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PortalSummarySiteVitalsRating) MarshalText() ([]byte, error) {
+	switch s {
+	case PortalSummarySiteVitalsRatingGood:
+		return []byte(s), nil
+	case PortalSummarySiteVitalsRatingNeedsImprovement:
+		return []byte(s), nil
+	case PortalSummarySiteVitalsRatingPoor:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PortalSummarySiteVitalsRating) UnmarshalText(data []byte) error {
+	switch PortalSummarySiteVitalsRating(data) {
+	case PortalSummarySiteVitalsRatingGood:
+		*s = PortalSummarySiteVitalsRatingGood
+		return nil
+	case PortalSummarySiteVitalsRatingNeedsImprovement:
+		*s = PortalSummarySiteVitalsRatingNeedsImprovement
+		return nil
+	case PortalSummarySiteVitalsRatingPoor:
+		*s = PortalSummarySiteVitalsRatingPoor
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/PortalSummaryTotals
+type PortalSummaryTotals struct {
+	SiteCount int `json:"site_count"`
+	// Null when no site has uptime checks in the period.
+	AvgUptimePct   OptNilFloat32 `json:"avg_uptime_pct"`
+	Incidents      int           `json:"incidents"`
+	BackupsCount   int           `json:"backups_count"`
+	UpdatesApplied int           `json:"updates_applied"`
+	UpdatesFailed  int           `json:"updates_failed"`
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *PortalSummaryTotals) GetSiteCount() int {
+	return s.SiteCount
+}
+
+// GetAvgUptimePct returns the value of AvgUptimePct.
+func (s *PortalSummaryTotals) GetAvgUptimePct() OptNilFloat32 {
+	return s.AvgUptimePct
+}
+
+// GetIncidents returns the value of Incidents.
+func (s *PortalSummaryTotals) GetIncidents() int {
+	return s.Incidents
+}
+
+// GetBackupsCount returns the value of BackupsCount.
+func (s *PortalSummaryTotals) GetBackupsCount() int {
+	return s.BackupsCount
+}
+
+// GetUpdatesApplied returns the value of UpdatesApplied.
+func (s *PortalSummaryTotals) GetUpdatesApplied() int {
+	return s.UpdatesApplied
+}
+
+// GetUpdatesFailed returns the value of UpdatesFailed.
+func (s *PortalSummaryTotals) GetUpdatesFailed() int {
+	return s.UpdatesFailed
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *PortalSummaryTotals) SetSiteCount(val int) {
+	s.SiteCount = val
+}
+
+// SetAvgUptimePct sets the value of AvgUptimePct.
+func (s *PortalSummaryTotals) SetAvgUptimePct(val OptNilFloat32) {
+	s.AvgUptimePct = val
+}
+
+// SetIncidents sets the value of Incidents.
+func (s *PortalSummaryTotals) SetIncidents(val int) {
+	s.Incidents = val
+}
+
+// SetBackupsCount sets the value of BackupsCount.
+func (s *PortalSummaryTotals) SetBackupsCount(val int) {
+	s.BackupsCount = val
+}
+
+// SetUpdatesApplied sets the value of UpdatesApplied.
+func (s *PortalSummaryTotals) SetUpdatesApplied(val int) {
+	s.UpdatesApplied = val
+}
+
+// SetUpdatesFailed sets the value of UpdatesFailed.
+func (s *PortalSummaryTotals) SetUpdatesFailed(val int) {
+	s.UpdatesFailed = val
+}
+
+// Worst CWV rating across all sites with samples. Null when no samples.
+type PortalSummaryVitalsOverall string
+
+const (
+	PortalSummaryVitalsOverallGood             PortalSummaryVitalsOverall = "good"
+	PortalSummaryVitalsOverallNeedsImprovement PortalSummaryVitalsOverall = "needs-improvement"
+	PortalSummaryVitalsOverallPoor             PortalSummaryVitalsOverall = "poor"
+)
+
+// AllValues returns all PortalSummaryVitalsOverall values.
+func (PortalSummaryVitalsOverall) AllValues() []PortalSummaryVitalsOverall {
+	return []PortalSummaryVitalsOverall{
+		PortalSummaryVitalsOverallGood,
+		PortalSummaryVitalsOverallNeedsImprovement,
+		PortalSummaryVitalsOverallPoor,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s PortalSummaryVitalsOverall) MarshalText() ([]byte, error) {
+	switch s {
+	case PortalSummaryVitalsOverallGood:
+		return []byte(s), nil
+	case PortalSummaryVitalsOverallNeedsImprovement:
+		return []byte(s), nil
+	case PortalSummaryVitalsOverallPoor:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *PortalSummaryVitalsOverall) UnmarshalText(data []byte) error {
+	switch PortalSummaryVitalsOverall(data) {
+	case PortalSummaryVitalsOverallGood:
+		*s = PortalSummaryVitalsOverallGood
+		return nil
+	case PortalSummaryVitalsOverallNeedsImprovement:
+		*s = PortalSummaryVitalsOverallNeedsImprovement
+		return nil
+	case PortalSummaryVitalsOverallPoor:
+		*s = PortalSummaryVitalsOverallPoor
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 // Ref: #/components/schemas/PortalUpdateItem
 type PortalUpdateItem struct {
 	Type        string      `json:"type"`
@@ -18199,6 +19183,34 @@ func (s *PortalUpdateList) SetItems(val []PortalUpdateItem) {
 }
 
 func (*PortalUpdateList) listPortalSiteUpdatesRes() {}
+
+// Ref: #/components/schemas/PortalUptimeDay
+type PortalUptimeDay struct {
+	// ISO date (YYYY-MM-DD) for the bucket.
+	Day time.Time `json:"day"`
+	// Average uptime percentage for that day (0-100).
+	UptimePct float32 `json:"uptime_pct"`
+}
+
+// GetDay returns the value of Day.
+func (s *PortalUptimeDay) GetDay() time.Time {
+	return s.Day
+}
+
+// GetUptimePct returns the value of UptimePct.
+func (s *PortalUptimeDay) GetUptimePct() float32 {
+	return s.UptimePct
+}
+
+// SetDay sets the value of Day.
+func (s *PortalUptimeDay) SetDay(val time.Time) {
+	s.Day = val
+}
+
+// SetUptimePct sets the value of UptimePct.
+func (s *PortalUptimeDay) SetUptimePct(val float32) {
+	s.UptimePct = val
+}
 
 // Ref: #/components/schemas/PortalUptimeSummary
 type PortalUptimeSummary struct {
@@ -18410,6 +19422,80 @@ func (s *PortalVitalMetricRating) UnmarshalText(data []byte) error {
 	default:
 		return errors.Errorf("invalid value: %q", data)
 	}
+}
+
+// Ref: #/components/schemas/PortalVitalsDistribution
+type PortalVitalsDistribution struct {
+	Lcp PortalVitalsRatingCount `json:"lcp"`
+	Inp PortalVitalsRatingCount `json:"inp"`
+	Cls PortalVitalsRatingCount `json:"cls"`
+}
+
+// GetLcp returns the value of Lcp.
+func (s *PortalVitalsDistribution) GetLcp() PortalVitalsRatingCount {
+	return s.Lcp
+}
+
+// GetInp returns the value of Inp.
+func (s *PortalVitalsDistribution) GetInp() PortalVitalsRatingCount {
+	return s.Inp
+}
+
+// GetCls returns the value of Cls.
+func (s *PortalVitalsDistribution) GetCls() PortalVitalsRatingCount {
+	return s.Cls
+}
+
+// SetLcp sets the value of Lcp.
+func (s *PortalVitalsDistribution) SetLcp(val PortalVitalsRatingCount) {
+	s.Lcp = val
+}
+
+// SetInp sets the value of Inp.
+func (s *PortalVitalsDistribution) SetInp(val PortalVitalsRatingCount) {
+	s.Inp = val
+}
+
+// SetCls sets the value of Cls.
+func (s *PortalVitalsDistribution) SetCls(val PortalVitalsRatingCount) {
+	s.Cls = val
+}
+
+// Ref: #/components/schemas/PortalVitalsRatingCount
+type PortalVitalsRatingCount struct {
+	Good             int `json:"good"`
+	NeedsImprovement int `json:"needs_improvement"`
+	Poor             int `json:"poor"`
+}
+
+// GetGood returns the value of Good.
+func (s *PortalVitalsRatingCount) GetGood() int {
+	return s.Good
+}
+
+// GetNeedsImprovement returns the value of NeedsImprovement.
+func (s *PortalVitalsRatingCount) GetNeedsImprovement() int {
+	return s.NeedsImprovement
+}
+
+// GetPoor returns the value of Poor.
+func (s *PortalVitalsRatingCount) GetPoor() int {
+	return s.Poor
+}
+
+// SetGood sets the value of Good.
+func (s *PortalVitalsRatingCount) SetGood(val int) {
+	s.Good = val
+}
+
+// SetNeedsImprovement sets the value of NeedsImprovement.
+func (s *PortalVitalsRatingCount) SetNeedsImprovement(val int) {
+	s.NeedsImprovement = val
+}
+
+// SetPoor sets the value of Poor.
+func (s *PortalVitalsRatingCount) SetPoor(val int) {
+	s.Poor = val
 }
 
 // Ref: #/components/schemas/PortalVitalsSummary

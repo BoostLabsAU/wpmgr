@@ -7349,7 +7349,7 @@ export const ClientMemberCreateRequestSchema = {
 
 export const ClientMemberInviteResultSchema = {
   type: "object",
-  required: ["email"],
+  required: ["email", "email_sent"],
   properties: {
     email: {
       type: "string",
@@ -7359,6 +7359,11 @@ export const ClientMemberInviteResultSchema = {
       type: "boolean",
       description:
         "True when an invitation was created (unknown email); false when an existing user was added directly.",
+    },
+    email_sent: {
+      type: "boolean",
+      description:
+        "True when the invitation email was successfully enqueued and SMTP is configured. False when SMTP is unconfigured or enqueue failed — the accept_link is always returned as the copy-link fallback.",
     },
     user_id: {
       type: "string",
@@ -7734,6 +7739,278 @@ export const PortalReportDownloadSchema = {
     expires_at: {
       type: "string",
       format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalUptimeDaySchema = {
+  type: "object",
+  required: ["day", "uptime_pct"],
+  properties: {
+    day: {
+      type: "string",
+      format: "date",
+      description: "ISO date (YYYY-MM-DD) for the bucket.",
+    },
+    uptime_pct: {
+      type: "number",
+      format: "float",
+      description: "Average uptime percentage for that day (0-100).",
+    },
+  },
+} as const;
+
+export const PortalVitalsRatingCountSchema = {
+  type: "object",
+  required: ["good", "needs_improvement", "poor"],
+  properties: {
+    good: {
+      type: "integer",
+    },
+    needs_improvement: {
+      type: "integer",
+    },
+    poor: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const PortalVitalsDistributionSchema = {
+  type: "object",
+  required: ["lcp", "inp", "cls"],
+  properties: {
+    lcp: {
+      $ref: "#/components/schemas/PortalVitalsRatingCount",
+    },
+    inp: {
+      $ref: "#/components/schemas/PortalVitalsRatingCount",
+    },
+    cls: {
+      $ref: "#/components/schemas/PortalVitalsRatingCount",
+    },
+  },
+} as const;
+
+export const PortalSummaryTotalsSchema = {
+  type: "object",
+  required: [
+    "site_count",
+    "incidents",
+    "backups_count",
+    "updates_applied",
+    "updates_failed",
+  ],
+  properties: {
+    site_count: {
+      type: "integer",
+    },
+    avg_uptime_pct: {
+      type: "number",
+      format: "float",
+      nullable: true,
+      description: "Null when no site has uptime checks in the period.",
+    },
+    incidents: {
+      type: "integer",
+    },
+    backups_count: {
+      type: "integer",
+    },
+    updates_applied: {
+      type: "integer",
+    },
+    updates_failed: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const PortalSummarySiteSchema = {
+  type: "object",
+  required: [
+    "id",
+    "name",
+    "url",
+    "status",
+    "incidents",
+    "backups_in_period",
+    "updates_in_period",
+  ],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    name: {
+      type: "string",
+    },
+    url: {
+      type: "string",
+      format: "uri",
+    },
+    status: {
+      type: "string",
+      description: "Connection state (connected/degraded/disconnected).",
+    },
+    uptime_pct: {
+      type: "number",
+      format: "float",
+      nullable: true,
+      description:
+        "Null when no uptime checks exist for this site in the period.",
+    },
+    uptime_daily: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalUptimeDay",
+      },
+    },
+    incidents: {
+      type: "integer",
+    },
+    last_backup_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+    },
+    backups_in_period: {
+      type: "integer",
+    },
+    updates_in_period: {
+      type: "integer",
+    },
+    vitals_rating: {
+      type: "string",
+      nullable: true,
+      description:
+        "Worst CWV rating across LCP/INP/CLS. Null when no RUM samples.",
+      enum: ["good", "needs-improvement", "poor"],
+    },
+    tls_expires_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+    },
+  },
+} as const;
+
+export const PortalSummaryLatestReportSchema = {
+  type: "object",
+  required: ["id", "period_start", "period_end", "completed_at"],
+  properties: {
+    id: {
+      type: "string",
+      format: "uuid",
+    },
+    period_start: {
+      type: "string",
+      format: "date",
+    },
+    period_end: {
+      type: "string",
+      format: "date",
+    },
+    completed_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalRecentWorkItemSchema = {
+  type: "object",
+  required: ["type", "site_id", "site_name", "label", "occurred_at"],
+  properties: {
+    type: {
+      type: "string",
+      enum: ["update", "backup"],
+    },
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_name: {
+      type: "string",
+    },
+    label: {
+      type: "string",
+      description:
+        "Human-readable description, e.g. 'WooCommerce 9.1.2 -> 9.2.0' or 'Full backup (12.3 MB)'.",
+    },
+    occurred_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const PortalSummarySchema = {
+  type: "object",
+  required: [
+    "generated_at",
+    "period_start",
+    "period_end",
+    "period_label",
+    "totals",
+    "uptime_daily",
+    "sites",
+    "recent_work",
+  ],
+  properties: {
+    generated_at: {
+      type: "string",
+      format: "date-time",
+    },
+    period_start: {
+      type: "string",
+      format: "date-time",
+    },
+    period_end: {
+      type: "string",
+      format: "date-time",
+    },
+    period_label: {
+      type: "string",
+      description: "Human-readable range, e.g. '12 May 2026 – 10 Jun 2026'.",
+    },
+    totals: {
+      $ref: "#/components/schemas/PortalSummaryTotals",
+    },
+    vitals_overall: {
+      type: "string",
+      nullable: true,
+      description:
+        "Worst CWV rating across all sites with samples. Null when no samples.",
+      enum: ["good", "needs-improvement", "poor"],
+    },
+    vitals_distribution: {
+      $ref: "#/components/schemas/PortalVitalsDistribution",
+    },
+    uptime_daily: {
+      type: "array",
+      description: "Fleet day-wise average across sites with data.",
+      items: {
+        $ref: "#/components/schemas/PortalUptimeDay",
+      },
+    },
+    sites: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PortalSummarySite",
+      },
+    },
+    latest_report: {
+      $ref: "#/components/schemas/PortalSummaryLatestReport",
+      nullable: true,
+    },
+    recent_work: {
+      type: "array",
+      description:
+        "Up to 20 most recent successful updates and backups, descending by time.",
+      items: {
+        $ref: "#/components/schemas/PortalRecentWorkItem",
+      },
     },
   },
 } as const;

@@ -986,6 +986,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	// m64 — build report workers now that rumStore and other sources are available.
 	// Both workers are nil when S3 is not configured (reports require object storage).
+	// portalReportSources is hoisted here so the portal handler can reference it
+	// for /summary; it is set only when reportBlobStore != nil.
+	var portalReportSources *reportpkg.Sources
 	var reportGenerateWorker *reportpkg.GenerateWorker
 	reportScheduleScanWorker := reportpkg.NewScheduleScanWorker(reportRepo, logger)
 	if reportBlobStore != nil {
@@ -1050,6 +1053,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 			MaxRetries: 0,
 		})
 		reportGenerateWorker = reportpkg.NewGenerateWorker(reportRepo, reportSvc, reportSources, reportHTMLRenderer, reportPDFRenderer, logoSSRFClient, logger)
+		// Share aggregator sources with the portal summary handler (email source
+		// is disabled inside SetReportSources — never exposed in the portal).
+		portalReportSources = &reportSources
 	}
 
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
@@ -1478,6 +1484,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	clientMemberH := clientpkg.NewMemberHandler(pool, authRepo, invitationSvc, auditRec, publicBaseURL)
 	clientH.SetMemberHandler(clientMemberH)
 	portalH := portalpkg.NewHandler(pool, siteSvc, uptimeSvc, backup.NewRepo(pool), reportSvc, rumStore)
+	// Wire the metrics store for cheap per-site aggregate queries on /portal/sites
+	// (uptime_30d_pct + tls_expires_at) and for the /portal/summary fleet series.
+	// metricsStore is always available (Postgres fallback).
+	portalH.SetMetricsStore(metricsStore)
+	// Wire report sources for /portal/summary when object storage is configured.
+	// SetReportSources nulls the email source — it is never exposed in the portal.
+	if portalReportSources != nil {
+		portalH.SetReportSources(*portalReportSources)
+	}
 
 	// m33 — superadmin instance-management area.
 	// authSvc satisfies admin.VerificationResender via ResendVerificationByID.

@@ -4171,6 +4171,10 @@ export type ClientMemberInviteResult = {
    */
   invited?: boolean;
   /**
+   * True when the invitation email was successfully enqueued and SMTP is configured. False when SMTP is unconfigured or enqueue failed — the accept_link is always returned as the copy-link fallback.
+   */
+  email_sent: boolean;
+  /**
    * Present when invited=false (the user already existed).
    */
   user_id?: string;
@@ -4307,6 +4311,109 @@ export type PortalReportDownload = {
    */
   url: string;
   expires_at: string;
+};
+
+export type PortalUptimeDay = {
+  /**
+   * ISO date (YYYY-MM-DD) for the bucket.
+   */
+  day: string;
+  /**
+   * Average uptime percentage for that day (0-100).
+   */
+  uptime_pct: number;
+};
+
+export type PortalVitalsRatingCount = {
+  good: number;
+  needs_improvement: number;
+  poor: number;
+};
+
+export type PortalVitalsDistribution = {
+  lcp: PortalVitalsRatingCount;
+  inp: PortalVitalsRatingCount;
+  cls: PortalVitalsRatingCount;
+};
+
+export type PortalSummaryTotals = {
+  site_count: number;
+  /**
+   * Null when no site has uptime checks in the period.
+   */
+  avg_uptime_pct?: number;
+  incidents: number;
+  backups_count: number;
+  updates_applied: number;
+  updates_failed: number;
+};
+
+export type PortalSummarySite = {
+  id: string;
+  name: string;
+  url: string;
+  /**
+   * Connection state (connected/degraded/disconnected).
+   */
+  status: string;
+  /**
+   * Null when no uptime checks exist for this site in the period.
+   */
+  uptime_pct?: number;
+  uptime_daily?: Array<PortalUptimeDay>;
+  incidents: number;
+  last_backup_at?: string;
+  backups_in_period: number;
+  updates_in_period: number;
+  /**
+   * Worst CWV rating across LCP/INP/CLS. Null when no RUM samples.
+   */
+  vitals_rating?: "good" | "needs-improvement" | "poor";
+  tls_expires_at?: string;
+};
+
+export type PortalSummaryLatestReport = {
+  id: string;
+  period_start: string;
+  period_end: string;
+  completed_at: string;
+};
+
+export type PortalRecentWorkItem = {
+  type: "update" | "backup";
+  site_id: string;
+  site_name: string;
+  /**
+   * Human-readable description, e.g. 'WooCommerce 9.1.2 -> 9.2.0' or 'Full backup (12.3 MB)'.
+   */
+  label: string;
+  occurred_at: string;
+};
+
+export type PortalSummary = {
+  generated_at: string;
+  period_start: string;
+  period_end: string;
+  /**
+   * Human-readable range, e.g. '12 May 2026 – 10 Jun 2026'.
+   */
+  period_label: string;
+  totals: PortalSummaryTotals;
+  /**
+   * Worst CWV rating across all sites with samples. Null when no samples.
+   */
+  vitals_overall?: "good" | "needs-improvement" | "poor";
+  vitals_distribution?: PortalVitalsDistribution;
+  /**
+   * Fleet day-wise average across sites with data.
+   */
+  uptime_daily: Array<PortalUptimeDay>;
+  sites: Array<PortalSummarySite>;
+  latest_report?: PortalSummaryLatestReport;
+  /**
+   * Up to 20 most recent successful updates and backups, descending by time.
+   */
+  recent_work: Array<PortalRecentWorkItem>;
 };
 
 /**
@@ -10629,6 +10736,39 @@ export type GetPortalSiteVitalsResponses = {
 
 export type GetPortalSiteVitalsResponse =
   GetPortalSiteVitalsResponses[keyof GetPortalSiteVitalsResponses];
+
+export type GetPortalSummaryData = {
+  body?: never;
+  path?: never;
+  query?: {
+    range?: "7d" | "30d" | "90d";
+  };
+  url: "/api/v1/portal/summary";
+};
+
+export type GetPortalSummaryErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+};
+
+export type GetPortalSummaryError =
+  GetPortalSummaryErrors[keyof GetPortalSummaryErrors];
+
+export type GetPortalSummaryResponses = {
+  /**
+   * Portal summary
+   */
+  200: PortalSummary;
+};
+
+export type GetPortalSummaryResponse =
+  GetPortalSummaryResponses[keyof GetPortalSummaryResponses];
 
 export type ListPortalReportsData = {
   body?: never;

@@ -85,3 +85,17 @@ WHERE site_id   = @site_id
   AND status    = 'succeeded'
 ORDER BY finished_at DESC, id DESC
 LIMIT @row_limit;
+
+-- name: ListAppliedTasksForSites :many
+-- Returns recently succeeded update tasks across a set of sites, ordered newest
+-- first. Used by the portal /summary recent_work feed. The site_ids param is
+-- always p.AllowedSiteIDs (RLS double-gate via app.site_scope on update_tasks).
+-- `, id` tiebreaker follows the project ORDER BY convention.
+SELECT site_id, target_type, target_slug, from_version, to_version, finished_at
+FROM update_tasks
+WHERE tenant_id  = @tenant_id
+  AND site_id    = ANY(@site_ids::uuid[])
+  AND status     = 'succeeded'
+  AND finished_at >= @since
+ORDER BY finished_at DESC, id DESC
+LIMIT @row_limit;

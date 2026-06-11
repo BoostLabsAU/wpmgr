@@ -791,6 +791,15 @@ type Handler interface {
 	//
 	// GET /api/v1/portal/sites/{siteId}/vitals
 	GetPortalSiteVitals(ctx context.Context, params GetPortalSiteVitalsParams) (GetPortalSiteVitalsRes, error)
+	// GetPortalSummary implements getPortalSummary operation.
+	//
+	// Returns the full portal dashboard payload: KPI totals, per-site uptime and vitals, recent work
+	// feed, and latest report reference. Data is derived from report.BuildReportData with the email
+	// source disabled. Only sites in the principal's AllowedSiteIDs are returned. The ?range parameter
+	// accepts 7d, 30d, or 90d; other values are clamped to 30d. In v2 only 30d is fully supported.
+	//
+	// GET /api/v1/portal/summary
+	GetPortalSummary(ctx context.Context, params GetPortalSummaryParams) (GetPortalSummaryRes, error)
 	// GetReadyz implements getReadyz operation.
 	//
 	// Returns 200 when the service can serve traffic (DB reachable).

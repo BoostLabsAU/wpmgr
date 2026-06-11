@@ -34,6 +34,8 @@ var subjects = map[string]string{
 	"email_digest":        "Your WPMgr email delivery digest",
 	// m64: white-label client reports.
 	"report_ready": "Your website report is ready",
+	// m66: client portal.
+	"client_portal_invite": "You have been invited to a client portal",
 }
 
 // TemplateRenderer renders the embedded HTML + plaintext templates. It parses
