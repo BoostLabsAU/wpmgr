@@ -83,102 +83,77 @@ final class ObjectCacheBugFixTest extends TestCase
 	}
 
 	// =========================================================================
-	// BUG 1: Stub templating
+	// Phase A: Self-contained generated artifact
 	// =========================================================================
 
 	/**
-	 * The stub template must contain the placeholder token.
+	 * The generated drop-in artifact must contain our SIGNATURE and Version: 2.0.0
+	 * within the first 200 bytes.
 	 */
-	public function test_stub_template_contains_placeholder(): void
+	public function test_generated_artifact_signature_and_version_in_first_200_bytes(): void
 	{
-		$stubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		$this->assertFileExists( $stubPath );
-		$content = (string) file_get_contents( $stubPath );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		$this->assertFileExists( $artifactPath );
+		$first200 = substr( (string) file_get_contents( $artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			"'" . ObjectCacheDropinInstaller::ENGINE_PATH_PLACEHOLDER . "'",
-			$content,
-			'Stub template must contain the engine path placeholder token'
+			ObjectCacheDropinInstaller::SIGNATURE,
+			$first200,
+			'SIGNATURE must be in the first 200 bytes of the generated artifact'
+		);
+		$this->assertStringContainsString(
+			'Version: 2.0.0',
+			$first200,
+			'Version: 2.0.0 must be in the first 200 bytes of the generated artifact'
 		);
 	}
 
 	/**
-	 * After install(), the installed stub must contain the resolved engine path,
-	 * not the raw placeholder, and must be valid PHP.
+	 * install() with the generated artifact installs a byte-for-byte copy and
+	 * state() returns ours-current. The installed file must be valid PHP.
 	 */
-	public function test_install_stamps_engine_path_into_dropin(): void
+	public function test_install_copies_generated_artifact(): void
 	{
-		$realStubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		if ( ! is_file( $realStubPath ) ) {
-			$this->markTestSkipped( 'Stub template not found' );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		if ( ! is_file( $artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
 		}
 
-		// opcache_invalidate is a built-in; the installer calls it with @-suppression
-		// so no mock is needed — it silently no-ops in the test environment.
-
-		$installer  = new ObjectCacheDropinInstaller( $this->tmpDir, $realStubPath );
-		$result     = $installer->install();
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $artifactPath );
+		$result    = $installer->install();
 
 		$this->assertTrue( $result['ok'], 'install() must succeed: ' . $result['detail'] );
 
-		$installed = (string) file_get_contents( $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL );
+		$installed  = (string) file_get_contents( $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL );
+		$artifact   = (string) file_get_contents( $artifactPath );
+		$this->assertSame( $artifact, $installed, 'Installed file must be byte-for-byte copy of the artifact' );
 
-		// The PHP string literal assignment of the placeholder must have been replaced.
-		// We check for the PHP assignment form (with surrounding quotes), not the
-		// raw token which may also appear in doc-comments.
-		$this->assertStringNotContainsString(
-			"= '" . ObjectCacheDropinInstaller::ENGINE_PATH_PLACEHOLDER . "'",
-			$installed,
-			'Installed stub must not contain the raw placeholder token as a PHP string literal'
-		);
-
-		// The installed file must reference the engine file path.
-		$enginePath = dirname( __DIR__, 2 ) . '/includes/object-cache/class-object-cache-engine.php';
-		if ( is_file( $enginePath ) ) {
-			$this->assertStringContainsString(
-				'class-object-cache-engine.php',
-				$installed,
-				'Installed stub must contain the engine file path'
-			);
-		}
-
-		// Probe 1 regression: the un-stamped guard comparison must survive
-		// stamping (it is concatenated in the template precisely so that the
-		// installer's str_replace cannot rewrite it into a self-comparison,
-		// which would make the stamped path dead code).
-		$this->assertStringContainsString(
-			"'__WPMGR' . '_OC_ENGINE_PATH__'",
-			$installed,
-			'The guard comparison token must remain concatenated after stamping (probe 1 must stay live)'
-		);
-
-		// The installed file must be syntactically valid PHP.
-		$tmpOut = sys_get_temp_dir() . '/wpmgr_stub_lint_' . uniqid( '', true ) . '.php';
+		// Must be syntactically valid PHP.
+		$tmpOut = sys_get_temp_dir() . '/wpmgr_artifact_lint_' . uniqid( '', true ) . '.php';
 		file_put_contents( $tmpOut, $installed );
 		$output = [];
 		$exit   = 0;
 		exec( 'php -l ' . escapeshellarg( $tmpOut ) . ' 2>&1', $output, $exit );
 		@unlink( $tmpOut ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- test cleanup
-		$this->assertSame( 0, $exit, 'Stamped stub must be valid PHP. php -l output: ' . implode( "\n", $output ) );
+		$this->assertSame( 0, $exit, 'Installed artifact must be valid PHP: ' . implode( "\n", $output ) );
 	}
 
 	/**
-	 * The SIGNATURE check must still work on a stamped stub
-	 * (signature must not depend on the placeholder content).
+	 * The SIGNATURE check must work on the generated artifact after install.
 	 */
-	public function test_state_ours_current_on_stamped_stub(): void
+	public function test_state_ours_current_on_generated_artifact(): void
 	{
-		$realStubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		if ( ! is_file( $realStubPath ) ) {
-			$this->markTestSkipped( 'Stub template not found' );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		if ( ! is_file( $artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
 		}
 
-		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $realStubPath );
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $artifactPath );
 		$installer->install();
 
 		$this->assertSame(
 			ObjectCacheDropinInstaller::STATE_OURS_CURRENT,
 			$installer->state(),
-			'state() must return ours-current after install with the real stub template'
+			'state() must return ours-current after install with the generated artifact'
 		);
 	}
 

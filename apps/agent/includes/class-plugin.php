@@ -1026,21 +1026,11 @@ final class Plugin
             return;
         }
 
-        // Version changed (or first boot): invalidate engine opcache entries.
-        if (function_exists('opcache_invalidate') && defined('WPMGR_AGENT_DIR')) {
-            $engineDir = rtrim((string) constant('WPMGR_AGENT_DIR'), '/\\')
-                . '/includes/object-cache';
-
-            foreach ([
-                $engineDir . '/class-object-cache-engine.php',
-                $engineDir . '/class-object-cache-config.php',
-                $engineDir . '/class-redis-connection.php',
-            ] as $engineFile) {
-                if (@is_file($engineFile)) {
-                    @opcache_invalidate($engineFile, true);
-                }
-            }
-        }
+        // Version changed (or first boot): invalidate all object-cache opcache
+        // entries — the generated artifact in assets/, the installed drop-in in
+        // wp-content/, and the engine source files inside the plugin.
+        $installer = new \WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller();
+        $installer->invalidateEngineFiles();
 
         update_option('wpmgr_agent_engine_opcache_version', $currentVersion, false);
     }

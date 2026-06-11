@@ -109,7 +109,7 @@ agent-zip: agent-vendor ## Package the WordPress agent plugin as a zip (with ifs
 	# Staging under wpmgr-agent/ pins the slug regardless of the .zip filename,
 	# so every upload is recognised as an in-place update of the same plugin.
 	rsync -a --delete \
-		--exclude 'tests/' --exclude '*.dist' --exclude '.phpunit.cache/' \
+		--exclude 'tests/' --exclude 'tools/' --exclude '*.dist' --exclude '.phpunit.cache/' \
 		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
 		--exclude '.DS_Store' --exclude '*.zip' \
 		--exclude 'patchwork.json' \
@@ -151,7 +151,7 @@ agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fl
 	# excluded because wp.org rejects unexpected Markdown files (B4 / C8).
 	# Dev-only files mirror the existing agent-zip excludes.
 	rsync -a --delete \
-		--exclude 'tests/' --exclude '*.dist' --exclude '.phpunit.cache/' \
+		--exclude 'tests/' --exclude 'tools/' --exclude '*.dist' --exclude '.phpunit.cache/' \
 		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
 		--exclude '.DS_Store' --exclude '*.zip' \
 		--exclude 'phpstan.neon' --exclude 'phpstan-baseline.neon' \

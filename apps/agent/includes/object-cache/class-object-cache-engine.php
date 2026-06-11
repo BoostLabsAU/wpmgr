@@ -364,7 +364,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.41.3';
+	public const ENGINE_VERSION = '0.41.4';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).

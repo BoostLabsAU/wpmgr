@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.4] - 2026-06-11
+
+### Changed
+
+- **Object cache: the drop-in is now fully self-contained.** Instead of a small locator file that finds the engine inside the plugin directory at runtime, the installer now ships one generated file containing the complete engine, connection layer, and config loader. The file is produced at build time, byte-identical per release, and has zero runtime dependence on the plugin folder name or location, which removes the entire class of "drop-in present but engine never active" failures the locator design allowed. The encrypted credentials file stays separate and 0600.
+
+### Added
+
+- **Object cache: non-activation now names its cause.** When the drop-in is installed but the engine is not the active cache, the heartbeat reports a specific reason instead of a generic flag: a stale opcode cache, an early cache definition by another component, a suppression filter, an outdated or foreign drop-in, a missing file, or an explicit kill-switch or install-mode bail. The heartbeat also reports the site PHP version and SAPI, and opcache invalidation results are verified and reported rather than silently suppressed.
+
+Agent-only release. Drop-in version 2.0.0; existing installs refresh automatically on the next heartbeat after the agent updates.
+
 ## [0.41.3] - 2026-06-11
 
 ### Changed

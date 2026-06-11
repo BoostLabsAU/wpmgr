@@ -10,20 +10,18 @@
  * fragile persisted-option chain that previously caused the status pill to stay
  * "Disabled" on working sites.
  *
- * The persisted option ('wpmgr_object_cache_stats') remains the carrier for the
- * analytics window-delta metrics (hit_count/miss_count/ops_per_sec/avg_wait_ms)
- * which are accumulated across requests between heartbeat pushes and then
- * consumed-and-reset here. Those fields are only merged in when analytics is on.
+ * Phase B — cause-vector diagnosability: when the drop-in is present on disk
+ * but the engine is not our WPMgr_Object_Cache instance, last_error_class is
+ * replaced by a SPECIFIC cause derived from:
+ *   - The breadcrumb ($GLOBALS['wpmgr_oc_stub']) set by the drop-in preamble.
+ *   - ReflectionFunction on wp_cache_init to detect an early third-party
+ *     definition that pre-empted ours.
+ *   - The enable_loading_object_cache_dropin filter (filter_suppressed).
+ *   - Installed file absence / signature mismatch / version mismatch.
+ *   - Stale opcache bytecode (breadcrumb absent while disk file has our version).
  *
- * When the config exists but the drop-in global is absent or not our class (e.g.
- * a foreign drop-in is installed, or the engine failed to load), state is emitted
- * as 'disabled' with last_error_class 'engine_not_loaded' so the CP can
- * distinguish "engine working" from "engine not in memory".
- *
- * Config absent → returns null (feature not configured; CP treats absence as
- * disabled and leaves its stored state unchanged).
- * Analytics off → emits the state-only block (no delta fields); the pill still
- * shows the correct live state.
+ * The heartbeat block also includes 'php_version' and 'php_sapi' for diagnostics;
+ * the CP ignores unknown fields.
  *
  * @package WPMgr\Agent\ObjectCache
  */
@@ -56,21 +54,14 @@ final class ObjectCacheHeartbeat
 			return null;
 		}
 
-		// Check config file exists (feature is configured).
 		$configLoader = new ObjectCacheConfig();
 		$config       = $configLoader->load();
 
 		if ( $config === [] ) {
-			// Feature not configured: return null so the CP leaves its stored
-			// state unchanged (absence = no-op, not "disabled").
 			return null;
 		}
 
 		// ---------- Live-state read ------------------------------------------
-		// The heartbeat request itself has the drop-in active (it fires inside
-		// the same WP request). If our engine is loaded, $GLOBALS['wp_object_cache']
-		// is our WPMgr_Object_Cache instance. Read state directly — no option chain.
-
 		$liveEngine = isset( $GLOBALS['wp_object_cache'] ) && $GLOBALS['wp_object_cache'] instanceof \WPMgr_Object_Cache
 			? $GLOBALS['wp_object_cache']
 			: null;
@@ -79,32 +70,32 @@ final class ObjectCacheHeartbeat
 			$liveStats = $liveEngine->getHeartbeatStats();
 		} else {
 			// Drop-in is absent or a foreign engine is loaded.
-			$liveStats = [
+			$lastErrorClass = self::diagnoseCause();
+			$liveStats      = [
 				'state'                => 'disabled',
 				'latency_ms'           => 0.0,
-				'last_error_class'     => 'engine_not_loaded',
+				'last_error_class'     => $lastErrorClass,
 				'hit_ratio_window_pct' => 0.0,
 				'engine_version'       => '',
 			];
 		}
 
-		// Sanitize derived floats: a NAN or INF in the live stats block would
-		// cause json_encode to return false and drop the entire report payload.
-		$liveStats['latency_ms']           = is_finite( (float) ( $liveStats['latency_ms'] ?? 0.0 ) )
+		// Sanitize derived floats.
+		$liveStats['latency_ms'] = is_finite( (float) ( $liveStats['latency_ms'] ?? 0.0 ) )
 			? (float) $liveStats['latency_ms']
 			: 0.0;
 		$liveStats['hit_ratio_window_pct'] = is_finite( (float) ( $liveStats['hit_ratio_window_pct'] ?? 0.0 ) )
 			? (float) $liveStats['hit_ratio_window_pct']
 			: 0.0;
 
+		// Phase B: runtime environment fields (bounded short strings; CP ignores unknowns).
+		$phpVersion = PHP_VERSION;
+		$phpSapi    = PHP_SAPI;
+
 		// ---------- Analytics delta metrics ----------------------------------
-		// Analytics defaults to ON when the key is absent (matching the m68
-		// default and the engine's persistStats gate).
 		$analyticsOn = ! isset( $config['analytics_enabled'] ) || (bool) $config['analytics_enabled'];
 
 		if ( ! $analyticsOn ) {
-			// Analytics disabled: return state-only block (no delta fields).
-			// The pill will show the live state; throughput metrics are omitted.
 			return [
 				'state'                => is_string( $liveStats['state'] ?? null ) ? $liveStats['state'] : 'disabled',
 				'latency_ms'           => $liveStats['latency_ms'],
@@ -112,16 +103,18 @@ final class ObjectCacheHeartbeat
 				'hit_ratio_window_pct' => $liveStats['hit_ratio_window_pct'],
 				'used_memory_bytes'    => isset( $liveStats['used_memory_bytes'] ) ? (int) $liveStats['used_memory_bytes'] : 0,
 				'engine_version'       => is_string( $liveStats['engine_version'] ?? null ) ? $liveStats['engine_version'] : '',
+				'php_version'          => $phpVersion,
+				'php_sapi'             => $phpSapi,
 			];
 		}
 
-		// Read persisted stats (written by engine shutdown hook across prior requests).
+		// Read persisted stats (written by engine shutdown hook).
 		$stats = get_option( self::OPTION_STATS, null );
 		if ( ! is_array( $stats ) ) {
 			$stats = [];
 		}
 
-		// Consume the window-delta counters and compute derived analytics fields.
+		// Consume window-delta counters.
 		$hitCount  = isset( $stats['delta_hit_count'] ) ? (int) $stats['delta_hit_count'] : 0;
 		$missCount = isset( $stats['delta_miss_count'] ) ? (int) $stats['delta_miss_count'] : 0;
 		$ops       = isset( $stats['delta_ops'] ) ? (int) $stats['delta_ops'] : 0;
@@ -129,18 +122,14 @@ final class ObjectCacheHeartbeat
 		$samples   = isset( $stats['delta_sample_count'] ) ? (int) $stats['delta_sample_count'] : 0;
 		$sinceTs   = isset( $stats['delta_since_ts'] ) ? (float) $stats['delta_since_ts'] : 0.0;
 
-		// ops_per_sec: total ops in the window / elapsed seconds since window start.
 		$elapsedSec = $sinceTs > 0 ? max( 0.001, microtime( true ) - $sinceTs ) : 0.0;
 		$opsPerSec  = ( $elapsedSec > 0 && $ops > 0 ) ? round( $ops / $elapsedSec, 2 ) : 0.0;
+		$avgWaitMs  = $samples > 0 ? round( $waitMs / $samples, 2 ) : 0.0;
 
-		// avg_wait_ms: total wait time / number of samples (requests with Redis ops).
-		$avgWaitMs = $samples > 0 ? round( $waitMs / $samples, 2 ) : 0.0;
-
-		// Sanitize derived floats before they enter the payload.
 		$opsPerSec = is_finite( $opsPerSec ) ? $opsPerSec : 0.0;
 		$avgWaitMs = is_finite( $avgWaitMs ) ? $avgWaitMs : 0.0;
 
-		// Reset the delta counters in the stored option (consume-and-reset).
+		// Reset the delta counters (consume-and-reset).
 		$reset = array_merge( $stats, [
 			'delta_hit_count'    => 0,
 			'delta_miss_count'   => 0,
@@ -162,6 +151,8 @@ final class ObjectCacheHeartbeat
 			'miss_count'           => $missCount,
 			'ops_per_sec'          => $opsPerSec,
 			'avg_wait_ms'          => $avgWaitMs,
+			'php_version'          => $phpVersion,
+			'php_sapi'             => $phpSapi,
 		];
 	}
 
@@ -178,5 +169,88 @@ final class ObjectCacheHeartbeat
 		if ( $block !== null ) {
 			$payload['object_cache'] = $block;
 		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Phase B: non-activation cause diagnosis
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Derive the specific cause string when the engine is not our WPMgr_Object_Cache.
+	 *
+	 * Probe order (first match wins):
+	 *   1. Breadcrumb bail reasons (php_floor / installing / killswitch).
+	 *   2. Breadcrumb absent while disk file has our version => stale_opcache_suspected.
+	 *   3. wp_cache_init defined in a file that is not our drop-in => early_definition.
+	 *   4. enable_loading_object_cache_dropin filter active => filter_suppressed.
+	 *   5. Drop-in file absent from wp-content => dropin_missing.
+	 *   6. Drop-in header version older than shipped artifact => dropin_outdated.
+	 *   7. Drop-in lacks our signature => foreign_dropin.
+	 *   8. Fallback => engine_not_loaded.
+	 *
+	 * @return string Cause identifier for last_error_class.
+	 */
+	private static function diagnoseCause(): string
+	{
+		// Probe 1 + 2: breadcrumb.
+		if ( isset( $GLOBALS['wpmgr_oc_stub'] ) && is_array( $GLOBALS['wpmgr_oc_stub'] ) ) {
+			$bail = $GLOBALS['wpmgr_oc_stub']['bail'] ?? null;
+			if ( $bail === 'php_floor' ) {
+				return 'bail_php_floor';
+			}
+			if ( $bail === 'installing' ) {
+				return 'bail_installing';
+			}
+			if ( $bail === 'killswitch' ) {
+				return 'bail_killswitch';
+			}
+			// Breadcrumb is present and bail is 'engine_inline': the drop-in ran
+			// but WPMgr_Object_Cache still isn't our instance. Fall through to
+			// more specific probes.
+		} else {
+			// Breadcrumb absent: the drop-in's preamble block never ran.
+			// Check whether the on-disk file has our current version — if so,
+			// the file was compiled by opcache but the preamble code was not
+			// executed, which is the stale-opcache bytecode signature.
+			$installer = new ObjectCacheDropinInstaller();
+			$state     = $installer->state();
+			if ( $state === ObjectCacheDropinInstaller::STATE_OURS_CURRENT ) {
+				return 'stale_opcache_suspected';
+			}
+		}
+
+		// Probe 3: wp_cache_init defined elsewhere (early third-party definition).
+		if ( function_exists( 'wp_cache_init' ) ) {
+			try {
+				$rf       = new \ReflectionFunction( 'wp_cache_init' );
+				$filename = $rf->getFileName();
+				if ( is_string( $filename ) && strpos( $filename, 'wpmgr' ) === false ) {
+					return 'early_definition';
+				}
+			} catch ( \Throwable $e ) {
+				// Reflection failed; fall through.
+			}
+		}
+
+		// Probe 4: enable_loading_object_cache_dropin filter suppressing the drop-in.
+		if ( function_exists( 'has_filter' ) && has_filter( 'enable_loading_object_cache_dropin' ) ) {
+			return 'filter_suppressed';
+		}
+
+		// Probe 5–7: inspect the installed drop-in file.
+		$installer = new ObjectCacheDropinInstaller();
+		$state     = $installer->state();
+
+		if ( $state === ObjectCacheDropinInstaller::STATE_MISSING ) {
+			return 'dropin_missing';
+		}
+		if ( $state === ObjectCacheDropinInstaller::STATE_OURS_OUTDATED ) {
+			return 'dropin_outdated';
+		}
+		if ( $state === ObjectCacheDropinInstaller::STATE_FOREIGN ) {
+			return 'foreign_dropin';
+		}
+
+		return 'engine_not_loaded';
 	}
 }
