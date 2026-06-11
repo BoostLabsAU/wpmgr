@@ -16,6 +16,7 @@ import {
   getPortalSiteVitals,
   listPortalReports,
   downloadPortalReport,
+  getPortalSummary,
   type PortalOverview,
   type PortalSite,
   type PortalUptimeSummary,
@@ -26,6 +27,14 @@ import {
   type PortalVitalMetric,
   type PortalReportItem,
   type PortalReportDownload,
+  type PortalSummary,
+  type PortalSummaryTotals,
+  type PortalSummarySite,
+  type PortalSummaryLatestReport,
+  type PortalRecentWorkItem,
+  type PortalUptimeDay,
+  type PortalVitalsDistribution,
+  type PortalVitalsRatingCount,
 } from "@wpmgr/api";
 
 import { toError } from "@/features/auth/use-auth";
@@ -46,6 +55,14 @@ export type {
   PortalVitalMetric,
   PortalReportItem,
   PortalReportDownload,
+  PortalSummary,
+  PortalSummaryTotals,
+  PortalSummarySite,
+  PortalSummaryLatestReport,
+  PortalRecentWorkItem,
+  PortalUptimeDay,
+  PortalVitalsDistribution,
+  PortalVitalsRatingCount,
 };
 
 // ---------------------------------------------------------------------------
@@ -56,6 +73,7 @@ export const portalKeys = {
   all: ["portal"] as const,
   overview: () => [...portalKeys.all, "overview"] as const,
   sites: () => [...portalKeys.all, "sites"] as const,
+  summary: (range: string) => [...portalKeys.all, "summary", range] as const,
   site: (id: string) => [...portalKeys.all, "site", id] as const,
   uptime: (id: string, range: string) =>
     [...portalKeys.site(id), "uptime", range] as const,
@@ -173,6 +191,29 @@ export function usePortalReports(): UseQueryResult<PortalReportItem[], Error> {
       if (error) throw toError(error);
       return data?.items ?? [];
     },
+  });
+}
+
+// usePortalSummary — fleet summary for the portal overview dashboard.
+// The API accepts 7d/30d/90d and clamps anything else to 30d.
+// staleTime 5 min matches the contract spec (the report aggregator is
+// not cheap to run on every poll).
+export type PortalSummaryRange = "7d" | "30d" | "90d";
+
+export function usePortalSummary(
+  range: PortalSummaryRange = "30d",
+): UseQueryResult<PortalSummary, Error> {
+  return useQuery({
+    queryKey: portalKeys.summary(range),
+    queryFn: async () => {
+      const { data, error } = await getPortalSummary({
+        query: { range },
+      });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data;
+    },
+    staleTime: 5 * 60 * 1000, // 5 min — summary is expensive, don't hammer it
   });
 }
 

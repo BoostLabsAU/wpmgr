@@ -64,7 +64,13 @@ function InvitationStatusBadge({
 // Accept link copy helper
 // ---------------------------------------------------------------------------
 
-function CopyLink({ link }: { link: string }) {
+function CopyLink({
+  link,
+  primaryLabel,
+}: {
+  link: string;
+  primaryLabel?: string;
+}) {
   const [copied, setCopied] = useState(false);
 
   function handleCopy() {
@@ -76,9 +82,11 @@ function CopyLink({ link }: { link: string }) {
 
   return (
     <div className="flex flex-col gap-1">
-      <p className="text-xs text-[var(--color-muted-foreground)]">
-        Share this link directly if email is not configured.
-      </p>
+      {primaryLabel ? (
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          {primaryLabel}
+        </p>
+      ) : null}
       <div className="flex items-center gap-2">
         <code className="min-w-0 flex-1 truncate rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-2 py-1 font-mono text-xs text-[var(--color-foreground)]">
           {link}
@@ -171,10 +179,17 @@ function InviteForm({ clientId }: { clientId: string }) {
       {result ? (
         <div className="mt-3 space-y-2 rounded-md border border-[var(--color-border)] bg-[var(--color-background)] p-3">
           {result.invited ? (
-            <p className="text-sm text-[var(--color-foreground)]">
-              Invitation sent to{" "}
-              <span className="font-medium">{result.email}</span>.
-            </p>
+            result.email_sent ? (
+              <p className="text-sm text-[var(--color-foreground)]">
+                Invitation emailed to{" "}
+                <span className="font-medium">{result.email}</span>.
+              </p>
+            ) : (
+              <p className="text-sm text-[var(--color-foreground)]">
+                Email is not configured — share this link with{" "}
+                <span className="font-medium">{result.email}</span>.
+              </p>
+            )
           ) : (
             <p className="text-sm text-[var(--color-foreground)]">
               Portal access granted to{" "}
@@ -182,7 +197,14 @@ function InviteForm({ clientId }: { clientId: string }) {
             </p>
           )}
           {result.accept_link ? (
-            <CopyLink link={result.accept_link} />
+            <CopyLink
+              link={result.accept_link}
+              primaryLabel={
+                result.invited && result.email_sent
+                  ? "Or share the link directly"
+                  : undefined
+              }
+            />
           ) : null}
         </div>
       ) : null}

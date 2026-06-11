@@ -33,22 +33,22 @@ function buildSegments(dist: RumDistribution): Segment[] {
       key: "good",
       label: "Good",
       pct: dist.good_pct,
-      bgClass: "bg-green-500 dark:bg-green-500",
-      textClass: "text-white",
+      bgClass: "bg-[var(--color-success)]",
+      textClass: "text-[var(--color-success-foreground)]",
     },
     {
       key: "needs_improvement",
       label: "NI",
       pct: dist.needs_improvement_pct,
-      bgClass: "bg-amber-400 dark:bg-amber-400",
-      textClass: "text-white",
+      bgClass: "bg-[var(--color-warning)]",
+      textClass: "text-[var(--color-warning-foreground)]",
     },
     {
       key: "poor",
       label: "Poor",
       pct: dist.poor_pct,
-      bgClass: "bg-red-500 dark:bg-red-500",
-      textClass: "text-white",
+      bgClass: "bg-[var(--color-destructive)]",
+      textClass: "text-[var(--color-destructive-foreground)]",
     },
   ];
 }
@@ -86,7 +86,7 @@ export function RumDistributionBar({
     if (suppressed) {
       return (
         <span
-          className="mt-0.5 inline-flex items-center gap-1 text-xs text-muted-foreground"
+          className="mt-0.5 inline-flex items-center gap-1 text-xs text-[var(--color-muted-foreground)]"
           title={`${metricLabel}: insufficient samples`}
         >
           <AlertCircle aria-hidden="true" className="size-3 shrink-0" />
@@ -147,7 +147,7 @@ export function RumDistributionBar({
 
       {/* Legend row */}
       <div
-        className="mt-1 flex items-center gap-3 text-[10px] text-muted-foreground"
+        className="mt-1 flex items-center gap-3 text-[10px] text-[var(--color-muted-foreground)]"
         aria-hidden="true"
       >
         {segments.map((seg) => (
