@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-06-11
+
+### Added
+
+- **The client portal overview is now a real dashboard.** Instead of a thin header and a plain sites list, portal users land on a live summary of everything their agency does for them: a status banner ("All sites operating normally" or "N sites need attention"), five headline numbers with animated counters (sites monitored, average uptime, backups, updates applied, site speed rating), a month-at-a-glance section with the fleet uptime trend and a Core Web Vitals distribution band, a callout for the latest white-label report with HTML and PDF downloads, richer site cards (brand-colored avatar, 30-day uptime sparkline, speed rating chip, TLS expiry, last backup, per-period backup and update counts), and a day-grouped "Recent work" timeline showing each update and backup the agency performed. A period switcher covers the last 7, 30, or 90 days. The data comes from one new read-only summary endpoint that reuses the report aggregator; everything is strictly scoped to the client's own sites, and agency-internal details (email logs, error logs, raw metrics) are never exposed. Security reviewed (verdict ship, no findings to fix).
+
+### Fixed
+
+- **Client portal invitations never sent the email.** The invitation email template existed and the send was wired, but the template was missing from the mailer's subject registry, so every send failed silently while the screen claimed the invitation was emailed. Invitations now send when instance email is configured, and the confirmation is honest either way: "Invitation emailed to {address}" only when it actually went out, otherwise a clear prompt to share the copyable invite link. A new completeness test prevents any future template from shipping without its subject registration.
+
 ## [0.39.1] - 2026-06-11
 
 ### Fixed
