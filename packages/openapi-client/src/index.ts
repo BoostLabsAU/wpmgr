@@ -189,6 +189,14 @@ export {
   downloadPortalReport,
   // portal summary (m66 Phase 2 dashboard)
   getPortalSummary,
+  // object cache (m68 Phase 0/1)
+  getObjectCacheConfig,
+  putObjectCacheConfig,
+  testObjectCache,
+  enableObjectCache,
+  disableObjectCache,
+  flushObjectCache,
+  getObjectCacheStatsHistory,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -658,4 +666,24 @@ export type {
   PortalVitalsRatingCount,
   GetPortalSummaryData,
   GetPortalSummaryResponse,
+  // object cache (m68 Phase 0/1)
+  ObjectCacheConfig,
+  ObjectCacheConfigPut,
+  ObjectCacheTestResult,
+  ObjectCacheStatsHistoryPoint,
+  ObjectCacheStatsHistory,
+  GetObjectCacheConfigData,
+  GetObjectCacheConfigResponse,
+  PutObjectCacheConfigData,
+  PutObjectCacheConfigResponse,
+  TestObjectCacheData,
+  TestObjectCacheResponse,
+  EnableObjectCacheData,
+  EnableObjectCacheResponse,
+  DisableObjectCacheData,
+  DisableObjectCacheResponse,
+  FlushObjectCacheData,
+  FlushObjectCacheResponse,
+  GetObjectCacheStatsHistoryData,
+  GetObjectCacheStatsHistoryResponse,
 } from "./generated/types.gen";

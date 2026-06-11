@@ -14,11 +14,13 @@ import { WooCommerceSection } from "./WooCommerceSection";
 import { ServerStatusCard } from "./ServerStatusCard";
 import { PreloadProgress } from "./PreloadProgress";
 import { CacheHitRatioTrendCard } from "./CacheHitRatioTrendCard";
+import { ObjectCachePanel } from "./ObjectCachePanel";
 
 // CacheTab — the Cache entry surface. Overview tiles + live preload progress +
 // the action toolbar + the server-status card + the basic/advanced settings
-// panels. SSE is wired here via usePerfEvents so the tab patches its own caches
-// live (no polling). Every setting autosaves (optimistic PUT → toast on error).
+// panels + the Object Cache section. SSE is wired here via usePerfEvents so the
+// tab patches its own caches live (no polling). Every setting autosaves
+// (optimistic PUT → toast on error).
 
 export interface CacheTabProps {
   siteId: string;
@@ -27,6 +29,8 @@ export interface CacheTabProps {
   canOperate: boolean;
   /** admin+ — the destructive delete-everything purge. */
   canManage: boolean;
+  /** Agent version string from the site record (may be undefined). */
+  agentVersion?: string;
 }
 
 export function CacheTab({
@@ -34,6 +38,7 @@ export function CacheTab({
   hostname,
   canOperate,
   canManage,
+  agentVersion,
 }: CacheTabProps) {
   usePerfEvents(siteId);
 
@@ -102,6 +107,20 @@ export function CacheTab({
         disabled={disabled}
         saving={update.isPending}
       />
+
+      <section aria-labelledby="oc-section-heading">
+        <h2
+          id="oc-section-heading"
+          className="mb-3 text-sm font-semibold text-foreground"
+        >
+          Object Cache
+        </h2>
+        <ObjectCachePanel
+          siteId={siteId}
+          agentVersion={agentVersion}
+          canOperate={canOperate}
+        />
+      </section>
     </div>
   );
 }

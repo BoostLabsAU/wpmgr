@@ -1,6 +1,9 @@
 package objectcache
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // ---------------------------------------------------------------------------
 // Wire DTOs for the REST API surface
@@ -38,6 +41,10 @@ type ConfigDTO struct {
 
 	LastTestConfigHash string     `json:"last_test_config_hash,omitempty"`
 	LastTestedAt       *time.Time `json:"last_tested_at,omitempty"`
+	// LastTestResult is the stored agent test result (including the server
+	// capability report) passed through verbatim so the dashboard renders
+	// server requirements without re-running a test.
+	LastTestResult json.RawMessage `json:"last_test_result,omitempty"`
 
 	// Live status (from heartbeat).
 	OCState          string   `json:"oc_state"`

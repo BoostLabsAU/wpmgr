@@ -4457,6 +4457,10 @@ export type ObjectCacheConfig = {
   last_test_config_hash?: string;
   last_tested_at?: string;
   /**
+   * The stored result of the most recent connection test, including the server capability report, so the dashboard can show requirements without re-running a test.
+   */
+  last_test_result?: ObjectCacheTestResult;
+  /**
    * Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
    */
   oc_state: string;
@@ -4500,14 +4504,40 @@ export type ObjectCacheConfigPut = {
 };
 
 /**
+ * Server and PHP extension capabilities detected by the agent during a connection test. phpredis_version empty or absent means the phpredis extension is not installed on the server.
+ */
+export type ObjectCacheCapabilities = {
+  phpredis_version?: string;
+  igbinary_available: boolean;
+  lzf_available: boolean;
+  lz4_available: boolean;
+  zstd_available: boolean;
+  tls_supported: boolean;
+  value_metadata_reads: boolean;
+  native_retry_options: boolean;
+  keepttl_supported: boolean;
+  flush_async_supported: boolean;
+};
+
+/**
  * Result of an objectcache.test command.
  */
 export type ObjectCacheTestResult = {
   ok: boolean;
   detail?: string;
+  reachable: boolean;
   latency_ms?: number;
   server_version?: string;
   eviction_policy?: string;
+  max_memory_bytes?: number;
+  used_memory_bytes?: number;
+  capabilities?: ObjectCacheCapabilities;
+  /**
+   * dedicated_db or shared_prefix; drives the flush strategy disclosure.
+   */
+  flush_capability_class?: string;
+  acl_denials?: Array<string>;
+  round_trip_ok: boolean;
   config_hash?: string;
 };
 

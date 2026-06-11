@@ -8131,6 +8131,16 @@ export const ObjectCacheConfigSchema = {
       format: "date-time",
       nullable: true,
     },
+    last_test_result: {
+      allOf: [
+        {
+          $ref: "#/components/schemas/ObjectCacheTestResult",
+        },
+      ],
+      nullable: true,
+      description:
+        "The stored result of the most recent connection test, including the server capability report, so the dashboard can show requirements without re-running a test.",
+    },
     oc_state: {
       type: "string",
       description:
@@ -8241,10 +8251,60 @@ export const ObjectCacheConfigPutSchema = {
   },
 } as const;
 
+export const ObjectCacheCapabilitiesSchema = {
+  type: "object",
+  description:
+    "Server and PHP extension capabilities detected by the agent during a connection test. phpredis_version empty or absent means the phpredis extension is not installed on the server.",
+  required: [
+    "igbinary_available",
+    "lzf_available",
+    "lz4_available",
+    "zstd_available",
+    "tls_supported",
+    "value_metadata_reads",
+    "native_retry_options",
+    "keepttl_supported",
+    "flush_async_supported",
+  ],
+  properties: {
+    phpredis_version: {
+      type: "string",
+      nullable: true,
+    },
+    igbinary_available: {
+      type: "boolean",
+    },
+    lzf_available: {
+      type: "boolean",
+    },
+    lz4_available: {
+      type: "boolean",
+    },
+    zstd_available: {
+      type: "boolean",
+    },
+    tls_supported: {
+      type: "boolean",
+    },
+    value_metadata_reads: {
+      type: "boolean",
+    },
+    native_retry_options: {
+      type: "boolean",
+    },
+    keepttl_supported: {
+      type: "boolean",
+    },
+    flush_async_supported: {
+      type: "boolean",
+    },
+  },
+} as const;
+
 export const ObjectCacheTestResultSchema = {
   type: "object",
   description: "Result of an objectcache.test command.",
-  required: ["ok"],
+  required: ["ok", "reachable", "round_trip_ok"],
   properties: {
     ok: {
       type: "boolean",
@@ -8252,6 +8312,9 @@ export const ObjectCacheTestResultSchema = {
     detail: {
       type: "string",
       nullable: true,
+    },
+    reachable: {
+      type: "boolean",
     },
     latency_ms: {
       type: "integer",
@@ -8263,6 +8326,33 @@ export const ObjectCacheTestResultSchema = {
     eviction_policy: {
       type: "string",
       nullable: true,
+    },
+    max_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    used_memory_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    capabilities: {
+      $ref: "#/components/schemas/ObjectCacheCapabilities",
+    },
+    flush_capability_class: {
+      type: "string",
+      description:
+        "dedicated_db or shared_prefix; drives the flush strategy disclosure.",
+      nullable: true,
+    },
+    acl_denials: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      nullable: true,
+    },
+    round_trip_ok: {
+      type: "boolean",
     },
     config_hash: {
       type: "string",

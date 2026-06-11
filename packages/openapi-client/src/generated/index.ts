@@ -1025,6 +1025,7 @@ export {
   type Membership,
   type MembershipList,
   type MePortal,
+  type ObjectCacheCapabilities,
   type ObjectCacheConfig,
   type ObjectCacheConfigPut,
   type ObjectCacheStatsHistory,

@@ -11951,6 +11951,122 @@ func (s *MembershipList) SetItems(val []Membership) {
 
 func (*MembershipList) listMembersRes() {}
 
+// Server and PHP extension capabilities detected by the agent during a connection test.
+// phpredis_version empty or absent means the phpredis extension is not installed on the server.
+// Ref: #/components/schemas/ObjectCacheCapabilities
+type ObjectCacheCapabilities struct {
+	PhpredisVersion     OptNilString `json:"phpredis_version"`
+	IgbinaryAvailable   bool         `json:"igbinary_available"`
+	LzfAvailable        bool         `json:"lzf_available"`
+	Lz4Available        bool         `json:"lz4_available"`
+	ZstdAvailable       bool         `json:"zstd_available"`
+	TLSSupported        bool         `json:"tls_supported"`
+	ValueMetadataReads  bool         `json:"value_metadata_reads"`
+	NativeRetryOptions  bool         `json:"native_retry_options"`
+	KeepttlSupported    bool         `json:"keepttl_supported"`
+	FlushAsyncSupported bool         `json:"flush_async_supported"`
+}
+
+// GetPhpredisVersion returns the value of PhpredisVersion.
+func (s *ObjectCacheCapabilities) GetPhpredisVersion() OptNilString {
+	return s.PhpredisVersion
+}
+
+// GetIgbinaryAvailable returns the value of IgbinaryAvailable.
+func (s *ObjectCacheCapabilities) GetIgbinaryAvailable() bool {
+	return s.IgbinaryAvailable
+}
+
+// GetLzfAvailable returns the value of LzfAvailable.
+func (s *ObjectCacheCapabilities) GetLzfAvailable() bool {
+	return s.LzfAvailable
+}
+
+// GetLz4Available returns the value of Lz4Available.
+func (s *ObjectCacheCapabilities) GetLz4Available() bool {
+	return s.Lz4Available
+}
+
+// GetZstdAvailable returns the value of ZstdAvailable.
+func (s *ObjectCacheCapabilities) GetZstdAvailable() bool {
+	return s.ZstdAvailable
+}
+
+// GetTLSSupported returns the value of TLSSupported.
+func (s *ObjectCacheCapabilities) GetTLSSupported() bool {
+	return s.TLSSupported
+}
+
+// GetValueMetadataReads returns the value of ValueMetadataReads.
+func (s *ObjectCacheCapabilities) GetValueMetadataReads() bool {
+	return s.ValueMetadataReads
+}
+
+// GetNativeRetryOptions returns the value of NativeRetryOptions.
+func (s *ObjectCacheCapabilities) GetNativeRetryOptions() bool {
+	return s.NativeRetryOptions
+}
+
+// GetKeepttlSupported returns the value of KeepttlSupported.
+func (s *ObjectCacheCapabilities) GetKeepttlSupported() bool {
+	return s.KeepttlSupported
+}
+
+// GetFlushAsyncSupported returns the value of FlushAsyncSupported.
+func (s *ObjectCacheCapabilities) GetFlushAsyncSupported() bool {
+	return s.FlushAsyncSupported
+}
+
+// SetPhpredisVersion sets the value of PhpredisVersion.
+func (s *ObjectCacheCapabilities) SetPhpredisVersion(val OptNilString) {
+	s.PhpredisVersion = val
+}
+
+// SetIgbinaryAvailable sets the value of IgbinaryAvailable.
+func (s *ObjectCacheCapabilities) SetIgbinaryAvailable(val bool) {
+	s.IgbinaryAvailable = val
+}
+
+// SetLzfAvailable sets the value of LzfAvailable.
+func (s *ObjectCacheCapabilities) SetLzfAvailable(val bool) {
+	s.LzfAvailable = val
+}
+
+// SetLz4Available sets the value of Lz4Available.
+func (s *ObjectCacheCapabilities) SetLz4Available(val bool) {
+	s.Lz4Available = val
+}
+
+// SetZstdAvailable sets the value of ZstdAvailable.
+func (s *ObjectCacheCapabilities) SetZstdAvailable(val bool) {
+	s.ZstdAvailable = val
+}
+
+// SetTLSSupported sets the value of TLSSupported.
+func (s *ObjectCacheCapabilities) SetTLSSupported(val bool) {
+	s.TLSSupported = val
+}
+
+// SetValueMetadataReads sets the value of ValueMetadataReads.
+func (s *ObjectCacheCapabilities) SetValueMetadataReads(val bool) {
+	s.ValueMetadataReads = val
+}
+
+// SetNativeRetryOptions sets the value of NativeRetryOptions.
+func (s *ObjectCacheCapabilities) SetNativeRetryOptions(val bool) {
+	s.NativeRetryOptions = val
+}
+
+// SetKeepttlSupported sets the value of KeepttlSupported.
+func (s *ObjectCacheCapabilities) SetKeepttlSupported(val bool) {
+	s.KeepttlSupported = val
+}
+
+// SetFlushAsyncSupported sets the value of FlushAsyncSupported.
+func (s *ObjectCacheCapabilities) SetFlushAsyncSupported(val bool) {
+	s.FlushAsyncSupported = val
+}
+
 // Per-site object cache configuration and live status.
 // Ref: #/components/schemas/ObjectCacheConfig
 type ObjectCacheConfig struct {
@@ -11982,6 +12098,9 @@ type ObjectCacheConfig struct {
 	// Non-empty after a passing test; cleared when connection fields change.
 	LastTestConfigHash OptNilString   `json:"last_test_config_hash"`
 	LastTestedAt       OptNilDateTime `json:"last_tested_at"`
+	// The stored result of the most recent connection test, including the server capability report, so
+	// the dashboard can show requirements without re-running a test.
+	LastTestResult OptNilObjectCacheTestResult `json:"last_test_result"`
 	// Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
 	OcState           string        `json:"oc_state"`
 	OcLatencyMs       int           `json:"oc_latency_ms"`
@@ -12110,6 +12229,11 @@ func (s *ObjectCacheConfig) GetLastTestConfigHash() OptNilString {
 // GetLastTestedAt returns the value of LastTestedAt.
 func (s *ObjectCacheConfig) GetLastTestedAt() OptNilDateTime {
 	return s.LastTestedAt
+}
+
+// GetLastTestResult returns the value of LastTestResult.
+func (s *ObjectCacheConfig) GetLastTestResult() OptNilObjectCacheTestResult {
+	return s.LastTestResult
 }
 
 // GetOcState returns the value of OcState.
@@ -12265,6 +12389,11 @@ func (s *ObjectCacheConfig) SetLastTestConfigHash(val OptNilString) {
 // SetLastTestedAt sets the value of LastTestedAt.
 func (s *ObjectCacheConfig) SetLastTestedAt(val OptNilDateTime) {
 	s.LastTestedAt = val
+}
+
+// SetLastTestResult sets the value of LastTestResult.
+func (s *ObjectCacheConfig) SetLastTestResult(val OptNilObjectCacheTestResult) {
+	s.LastTestResult = val
 }
 
 // SetOcState sets the value of OcState.
@@ -13062,12 +13191,20 @@ func (s *ObjectCacheStatsHistoryPoint) SetEvictedKeysDelta(val int64) {
 // Result of an objectcache.test command.
 // Ref: #/components/schemas/ObjectCacheTestResult
 type ObjectCacheTestResult struct {
-	Ok             bool         `json:"ok"`
-	Detail         OptNilString `json:"detail"`
-	LatencyMs      OptInt       `json:"latency_ms"`
-	ServerVersion  OptNilString `json:"server_version"`
-	EvictionPolicy OptNilString `json:"eviction_policy"`
-	ConfigHash     OptNilString `json:"config_hash"`
+	Ok              bool                       `json:"ok"`
+	Detail          OptNilString               `json:"detail"`
+	Reachable       bool                       `json:"reachable"`
+	LatencyMs       OptInt                     `json:"latency_ms"`
+	ServerVersion   OptNilString               `json:"server_version"`
+	EvictionPolicy  OptNilString               `json:"eviction_policy"`
+	MaxMemoryBytes  OptInt64                   `json:"max_memory_bytes"`
+	UsedMemoryBytes OptInt64                   `json:"used_memory_bytes"`
+	Capabilities    OptObjectCacheCapabilities `json:"capabilities"`
+	// Dedicated_db or shared_prefix; drives the flush strategy disclosure.
+	FlushCapabilityClass OptNilString      `json:"flush_capability_class"`
+	ACLDenials           OptNilStringArray `json:"acl_denials"`
+	RoundTripOk          bool              `json:"round_trip_ok"`
+	ConfigHash           OptNilString      `json:"config_hash"`
 }
 
 // GetOk returns the value of Ok.
@@ -13078,6 +13215,11 @@ func (s *ObjectCacheTestResult) GetOk() bool {
 // GetDetail returns the value of Detail.
 func (s *ObjectCacheTestResult) GetDetail() OptNilString {
 	return s.Detail
+}
+
+// GetReachable returns the value of Reachable.
+func (s *ObjectCacheTestResult) GetReachable() bool {
+	return s.Reachable
 }
 
 // GetLatencyMs returns the value of LatencyMs.
@@ -13095,6 +13237,36 @@ func (s *ObjectCacheTestResult) GetEvictionPolicy() OptNilString {
 	return s.EvictionPolicy
 }
 
+// GetMaxMemoryBytes returns the value of MaxMemoryBytes.
+func (s *ObjectCacheTestResult) GetMaxMemoryBytes() OptInt64 {
+	return s.MaxMemoryBytes
+}
+
+// GetUsedMemoryBytes returns the value of UsedMemoryBytes.
+func (s *ObjectCacheTestResult) GetUsedMemoryBytes() OptInt64 {
+	return s.UsedMemoryBytes
+}
+
+// GetCapabilities returns the value of Capabilities.
+func (s *ObjectCacheTestResult) GetCapabilities() OptObjectCacheCapabilities {
+	return s.Capabilities
+}
+
+// GetFlushCapabilityClass returns the value of FlushCapabilityClass.
+func (s *ObjectCacheTestResult) GetFlushCapabilityClass() OptNilString {
+	return s.FlushCapabilityClass
+}
+
+// GetACLDenials returns the value of ACLDenials.
+func (s *ObjectCacheTestResult) GetACLDenials() OptNilStringArray {
+	return s.ACLDenials
+}
+
+// GetRoundTripOk returns the value of RoundTripOk.
+func (s *ObjectCacheTestResult) GetRoundTripOk() bool {
+	return s.RoundTripOk
+}
+
 // GetConfigHash returns the value of ConfigHash.
 func (s *ObjectCacheTestResult) GetConfigHash() OptNilString {
 	return s.ConfigHash
@@ -13110,6 +13282,11 @@ func (s *ObjectCacheTestResult) SetDetail(val OptNilString) {
 	s.Detail = val
 }
 
+// SetReachable sets the value of Reachable.
+func (s *ObjectCacheTestResult) SetReachable(val bool) {
+	s.Reachable = val
+}
+
 // SetLatencyMs sets the value of LatencyMs.
 func (s *ObjectCacheTestResult) SetLatencyMs(val OptInt) {
 	s.LatencyMs = val
@@ -13123,6 +13300,36 @@ func (s *ObjectCacheTestResult) SetServerVersion(val OptNilString) {
 // SetEvictionPolicy sets the value of EvictionPolicy.
 func (s *ObjectCacheTestResult) SetEvictionPolicy(val OptNilString) {
 	s.EvictionPolicy = val
+}
+
+// SetMaxMemoryBytes sets the value of MaxMemoryBytes.
+func (s *ObjectCacheTestResult) SetMaxMemoryBytes(val OptInt64) {
+	s.MaxMemoryBytes = val
+}
+
+// SetUsedMemoryBytes sets the value of UsedMemoryBytes.
+func (s *ObjectCacheTestResult) SetUsedMemoryBytes(val OptInt64) {
+	s.UsedMemoryBytes = val
+}
+
+// SetCapabilities sets the value of Capabilities.
+func (s *ObjectCacheTestResult) SetCapabilities(val OptObjectCacheCapabilities) {
+	s.Capabilities = val
+}
+
+// SetFlushCapabilityClass sets the value of FlushCapabilityClass.
+func (s *ObjectCacheTestResult) SetFlushCapabilityClass(val OptNilString) {
+	s.FlushCapabilityClass = val
+}
+
+// SetACLDenials sets the value of ACLDenials.
+func (s *ObjectCacheTestResult) SetACLDenials(val OptNilStringArray) {
+	s.ACLDenials = val
+}
+
+// SetRoundTripOk sets the value of RoundTripOk.
+func (s *ObjectCacheTestResult) SetRoundTripOk(val bool) {
+	s.RoundTripOk = val
 }
 
 // SetConfigHash sets the value of ConfigHash.
@@ -16344,6 +16551,69 @@ func (o OptNilInt64) Or(d int64) int64 {
 	return d
 }
 
+// NewOptNilObjectCacheTestResult returns new OptNilObjectCacheTestResult with value set to v.
+func NewOptNilObjectCacheTestResult(v ObjectCacheTestResult) OptNilObjectCacheTestResult {
+	return OptNilObjectCacheTestResult{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilObjectCacheTestResult is optional nullable ObjectCacheTestResult.
+type OptNilObjectCacheTestResult struct {
+	Value ObjectCacheTestResult
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilObjectCacheTestResult was set.
+func (o OptNilObjectCacheTestResult) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilObjectCacheTestResult) Reset() {
+	var v ObjectCacheTestResult
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilObjectCacheTestResult) SetTo(v ObjectCacheTestResult) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilObjectCacheTestResult) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilObjectCacheTestResult) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v ObjectCacheTestResult
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilObjectCacheTestResult) Get() (v ObjectCacheTestResult, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilObjectCacheTestResult) Or(d ObjectCacheTestResult) ObjectCacheTestResult {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptNilPortalSummarySiteVitalsRating returns new OptNilPortalSummarySiteVitalsRating with value set to v.
 func NewOptNilPortalSummarySiteVitalsRating(v PortalSummarySiteVitalsRating) OptNilPortalSummarySiteVitalsRating {
 	return OptNilPortalSummarySiteVitalsRating{
@@ -17031,6 +17301,52 @@ func (o OptNilUUID) Get() (v uuid.UUID, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptNilUUID) Or(d uuid.UUID) uuid.UUID {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptObjectCacheCapabilities returns new OptObjectCacheCapabilities with value set to v.
+func NewOptObjectCacheCapabilities(v ObjectCacheCapabilities) OptObjectCacheCapabilities {
+	return OptObjectCacheCapabilities{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptObjectCacheCapabilities is optional ObjectCacheCapabilities.
+type OptObjectCacheCapabilities struct {
+	Value ObjectCacheCapabilities
+	Set   bool
+}
+
+// IsSet returns true if OptObjectCacheCapabilities was set.
+func (o OptObjectCacheCapabilities) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptObjectCacheCapabilities) Reset() {
+	var v ObjectCacheCapabilities
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptObjectCacheCapabilities) SetTo(v ObjectCacheCapabilities) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptObjectCacheCapabilities) Get() (v ObjectCacheCapabilities, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptObjectCacheCapabilities) Or(d ObjectCacheCapabilities) ObjectCacheCapabilities {
 	if v, ok := o.Get(); ok {
 		return v
 	}
