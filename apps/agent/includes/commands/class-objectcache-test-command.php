@@ -181,10 +181,13 @@ final class ObjectcacheTestCommand implements CommandInterface
 				}
 			}
 
-			// Check if SCAN is denied.
+			// Check if SCAN is denied using the canonical phpredis by-ref iterator idiom.
 			$scanDenied = false;
 			try {
-				$redis->scan( '0', [ 'match' => '__wpmgr_scan_probe__', 'count' => 1 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
+				$redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+				$it = null;
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem; by-ref iterator is the canonical phpredis pattern
+				$redis->scan( $it, '__wpmgr_scan_probe__', 1 );
 			} catch ( \Throwable $e ) {
 				$scanDenied   = true;
 				$aclDenials[] = 'scan';

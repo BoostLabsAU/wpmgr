@@ -18,8 +18,12 @@ import (
 type OCState string
 
 const (
-	// OCStateDisabled means no config exists or the feature is toggled off.
-	OCStateDisabled   OCState = ""
+	// OCStateUnknown is the zero value used when the agent sends an unrecognised
+	// state string. The heartbeat update is skipped to preserve the stored state.
+	OCStateUnknown    OCState = ""
+	// OCStateDisabled means the drop-in is configured but the engine is not serving
+	// (e.g. toggled off at the WordPress layer while config still exists).
+	OCStateDisabled   OCState = "disabled"
 	// OCStateConnected means the last command cycle completed without errors.
 	OCStateConnected  OCState = "connected"
 	// OCStateDegraded means array-fallback is active or reconnect-once fired.

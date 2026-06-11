@@ -240,3 +240,37 @@ if (!function_exists('wp_suspend_cache_addition')) {
         return false;
     }
 }
+
+// ---------------------------------------------------------------------------
+// phpredis \Redis class stub (used when the phpredis extension is not loaded).
+//
+// Provides the class constants required by the object-cache engine and commands
+// so that production code referencing \Redis::OPT_SCAN / \Redis::SCAN_RETRY etc.
+// can be parsed and type-checked at test time without the extension installed.
+// The class intentionally has NO method implementations; the engine always runs
+// in array mode during unit tests (no live Redis connection).
+// ---------------------------------------------------------------------------
+
+if (!class_exists('Redis')) {
+    /**
+     * Minimal stub for the phpredis \Redis class.
+     * Only the constants used by the WPMgr object-cache engine are declared.
+     */
+    class Redis
+    {
+        /** Option key for SCAN iteration behaviour (matches the real phpredis value). */
+        public const OPT_SCAN = 4;
+
+        /** SCAN option: retry automatically when a batch is empty. */
+        public const SCAN_RETRY = 1;
+
+        /** SCAN option: do not retry (caller handles empty batches). */
+        public const SCAN_NORETRY = 0;
+
+        /** Serializer: none (raw bytes). */
+        public const SERIALIZER_NONE = 0;
+
+        /** Serializer: PHP serialize(). */
+        public const SERIALIZER_PHP = 1;
+    }
+}

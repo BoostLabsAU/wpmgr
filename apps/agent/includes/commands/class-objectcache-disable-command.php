@@ -75,7 +75,7 @@ final class ObjectcacheDisableCommand implements CommandInterface
 		} catch ( \Throwable $e ) {
 			return [
 				'ok'             => false,
-				'detail'         => 'objectcache.disable failed',
+				'detail'         => 'objectcache.disable failed: ' . get_class( $e ),
 				'dropin_removed' => $dropinRemoved,
 				'flushed'        => $flushed,
 			];
@@ -112,24 +112,24 @@ final class ObjectcacheDisableCommand implements CommandInterface
 			if ( $useFlushDb ) {
 				$redis->flushDB( $async );
 			} else {
-				// SCAN+MATCH+UNLINK prefix-scoped.
-				$cursor  = '0';
+				// SCAN+MATCH+UNLINK prefix-scoped using canonical phpredis idiom:
+				// by-ref integer iterator, SCAN_RETRY, flat key array return.
+				$redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+				$it      = null;
 				$pattern = $prefix . ':*';
-				do {
-					$result = $redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
-					if ( ! is_array( $result ) || count( $result ) !== 2 ) {
-						break;
-					}
-					$cursor = (string) $result[0];
-					$keys   = is_array( $result[1] ) ? $result[1] : [];
-					if ( $keys !== [] ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem; by-ref iterator is the canonical phpredis pattern
+				while ( ( $keys = $redis->scan( $it, $pattern, 500 ) ) !== false ) {
+					if ( ! empty( $keys ) ) {
 						if ( $async ) {
 							$redis->unlink( ...$keys );
 						} else {
 							$redis->del( ...$keys );
 						}
 					}
-				} while ( $cursor !== '0' );
+					if ( $it === 0 ) {
+						break;
+					}
+				}
 			}
 
 			$conn->close();

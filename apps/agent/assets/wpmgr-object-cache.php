@@ -2,10 +2,15 @@
 /**
  * WPMgr Object Cache drop-in stub (object-cache.php).
  *
- * This file is a static locator stub. WordPress loads it very early from
+ * This file is a locator stub. WordPress loads it very early from
  * wp-content/object-cache.php. Its sole job is to find the real engine inside
  * the WPMgr agent plugin directory and include it. The engine itself is never
  * written to wp-content; only this stub is.
+ *
+ * At install time the ObjectCacheDropinInstaller replaces the placeholder token
+ * __WPMGR_OC_ENGINE_PATH__ with the var_export'd absolute path to the engine
+ * file, giving the stub a reliable first-probe candidate that works even before
+ * WordPress has set up plugin-directory constants.
  *
  * Bail-outs applied here (before the engine loads):
  *   - Direct web request (no ABSPATH).
@@ -19,7 +24,7 @@
  * silenced.
  *
  * WPMgr Object Cache drop-in
- * Version: 1.0.0
+ * Version: 1.1.0
  *
  * @package WPMgr\Agent\ObjectCache
  */
@@ -43,22 +48,40 @@ if ( defined( 'WPMGR_OBJECT_CACHE_DISABLED' ) && WPMGR_OBJECT_CACHE_DISABLED ) {
 	return;
 }
 
-// Locate the engine entry file. We probe our plugin dir (when the agent is
-// installed as a normal plugin) and the mu-plugin loader path. We do NOT probe
-// arbitrary directories; we control both paths.
+// Locate the engine entry file.
+//
+// Probe order:
+//   1. Stamped absolute path (replaced by installer at install time from the
+//      agent plugin's own WPMGR_AGENT_DIR — defined at install time even though
+//      it is undefined this early during wp_start_object_cache()). This is the
+//      authoritative path for any correctly installed stub.
+//   2. WP_CONTENT_DIR fallback — WP_CONTENT_DIR IS defined before drop-ins load;
+//      resilient to the plugin directory being moved after install.
+//   3. WPMGR_AGENT_DIR probe — only defined when the agent plugin is fully loaded;
+//      harmless fallback for any edge case.
 $wpmgr_oc_engine = '';
 
-if ( defined( 'WPMGR_AGENT_DIR' ) ) {
-	$wpmgr_oc_candidate = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
-		. '/includes/object-cache/class-object-cache-engine.php';
+// Probe 1: stamped absolute path (placeholder replaced at install time).
+$wpmgr_oc_stamped = '__WPMGR_OC_ENGINE_PATH__';
+if ( $wpmgr_oc_stamped !== '' && $wpmgr_oc_stamped !== '__WPMGR_OC_ENGINE_PATH__' ) {
+	if ( @is_file( $wpmgr_oc_stamped ) ) {
+		$wpmgr_oc_engine = $wpmgr_oc_stamped;
+	}
+}
+
+// Probe 2: WP_CONTENT_DIR (always defined before drop-ins load).
+if ( $wpmgr_oc_engine === '' && defined( 'WP_CONTENT_DIR' ) ) {
+	$wpmgr_oc_candidate = rtrim( (string) constant( 'WP_CONTENT_DIR' ), '/\\' )
+		. '/plugins/wpmgr-agent/includes/object-cache/class-object-cache-engine.php';
 	if ( @is_file( $wpmgr_oc_candidate ) ) {
 		$wpmgr_oc_engine = $wpmgr_oc_candidate;
 	}
 }
 
-if ( $wpmgr_oc_engine === '' && defined( 'WP_PLUGIN_DIR' ) ) {
-	$wpmgr_oc_candidate = rtrim( (string) constant( 'WP_PLUGIN_DIR' ), '/\\' )
-		. '/wpmgr-agent/includes/object-cache/class-object-cache-engine.php';
+// Probe 3: WPMGR_AGENT_DIR (defined only after plugin load; edge-case fallback).
+if ( $wpmgr_oc_engine === '' && defined( 'WPMGR_AGENT_DIR' ) ) {
+	$wpmgr_oc_candidate = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
+		. '/includes/object-cache/class-object-cache-engine.php';
 	if ( @is_file( $wpmgr_oc_candidate ) ) {
 		$wpmgr_oc_engine = $wpmgr_oc_candidate;
 	}
@@ -75,4 +98,4 @@ if ( $wpmgr_oc_engine === '' ) {
 
 require_once $wpmgr_oc_engine;
 
-unset( $wpmgr_oc_engine, $wpmgr_oc_candidate );
+unset( $wpmgr_oc_engine, $wpmgr_oc_candidate, $wpmgr_oc_stamped );

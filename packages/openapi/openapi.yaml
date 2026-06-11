@@ -12482,7 +12482,7 @@ components:
             without re-running a test.
         oc_state:
           type: string
-          description: "Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'."
+          description: "Live connectivity state from the last heartbeat: '' (unknown/no config), 'disabled', 'connected', 'degraded', or 'down'."
         oc_latency_ms:
           type: integer
         oc_last_error_class:

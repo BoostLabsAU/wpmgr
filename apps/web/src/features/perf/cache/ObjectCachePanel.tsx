@@ -117,7 +117,7 @@ function StateLabel({ state }: { state: OcState }) {
       </span>
     );
   }
-  // "disabled" or ""
+  // "disabled", "" — both render as "Disabled"
   return (
     <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium text-muted-foreground ring-1 ring-border">
       <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-muted-foreground" />

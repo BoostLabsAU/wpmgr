@@ -116,6 +116,7 @@ func toConfigDTO(c Config) ConfigDTO {
 		AnalyticsEnabled: c.AnalyticsEnabled,
 		LastTestConfigHash: c.LastTestConfigHash,
 		LastTestedAt:     c.LastTestedAt,
+		LastTestResult:   c.LastTestResultJSON,
 		OCState:          string(c.OCState),
 		OCLatencyMs:      c.OCLatencyMs,
 		OCLastErrorClass: c.OCLastErrorClass,

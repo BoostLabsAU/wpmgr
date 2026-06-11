@@ -1646,30 +1646,26 @@ class WPMgr_Object_Cache
 	 * Execute a SCAN+MATCH+UNLINK flush scoped to the given pattern prefix.
 	 * COUNT 500, inter-batch sleep (0.5ms) to bound instance impact.
 	 *
+	 * Uses the canonical phpredis SCAN idiom: by-ref integer iterator and
+	 * SCAN_RETRY so phpredis handles empty-batch re-scanning internally,
+	 * returning a flat key array (not the [cursor, keys] tuple used by Predis).
+	 *
 	 * @param string $prefixPattern Key prefix to match (e.g. "wpmgr:").
 	 * @return bool
 	 */
 	private function executeScanFlush( string $prefixPattern ): bool
 	{
-		$cursor  = '0';
+		if ( $this->redis === null ) {
+			return false;
+		}
+
+		$this->redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+		$it      = null;
 		$pattern = $prefixPattern . '*';
 
-		do {
-			$result = $this->redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
-
-			if ( $result === false ) {
-				break;
-			}
-
-			// phpredis returns [ cursor, keys ] or [ cursor, false ].
-			if ( is_array( $result ) && count( $result ) === 2 ) {
-				$cursor = (string) $result[0];
-				$keys   = is_array( $result[1] ) ? $result[1] : [];
-			} else {
-				break;
-			}
-
-			if ( $keys !== [] ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem; by-ref iterator is the canonical phpredis pattern
+		while ( ( $keys = $this->redis->scan( $it, $pattern, 500 ) ) !== false ) {
+			if ( ! empty( $keys ) ) {
 				if ( $this->asyncFlush ) {
 					$this->redis->unlink( ...$keys );
 				} else {
@@ -1677,7 +1673,10 @@ class WPMgr_Object_Cache
 				}
 				usleep( 500 ); // 0.5ms inter-batch sleep to reduce instance impact.
 			}
-		} while ( $cursor !== '0' );
+			if ( $it === 0 ) {
+				break;
+			}
+		}
 
 		return true;
 	}
@@ -1729,28 +1728,20 @@ class WPMgr_Object_Cache
 			return;
 		}
 
-		$cursor  = '0';
 		$pattern = $prefixPattern . '*';
 		// Group segment index in the colon-delimited key:
 		// Global key:   0=prefix, 1=group, 2+=key
 		// Per-blog key: 0=prefix, 1=blogId, 2=group, 3+=key
 		$groupSegmentIndex = $hasBlogSegment ? 2 : 1;
 
-		do {
-			$result = $this->redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
+		// Canonical phpredis SCAN idiom: by-ref integer iterator, SCAN_RETRY,
+		// flat key array return (not the [cursor, keys] tuple used by Predis).
+		$this->redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+		$it = null;
 
-			if ( $result === false ) {
-				break;
-			}
-
-			if ( is_array( $result ) && count( $result ) === 2 ) {
-				$cursor = (string) $result[0];
-				$keys   = is_array( $result[1] ) ? $result[1] : [];
-			} else {
-				break;
-			}
-
-			if ( $keys !== [] ) {
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem; by-ref iterator is the canonical phpredis pattern
+		while ( ( $keys = $this->redis->scan( $it, $pattern, 500 ) ) !== false ) {
+			if ( ! empty( $keys ) ) {
 				// Post-filter: confirm the key's group segment is an exact match.
 				$confirmed = [];
 				foreach ( $keys as $k ) {
@@ -1768,7 +1759,10 @@ class WPMgr_Object_Cache
 				}
 				usleep( 500 ); // 0.5ms inter-batch sleep to reduce instance impact.
 			}
-		} while ( $cursor !== '0' );
+			if ( $it === 0 ) {
+				break;
+			}
+		}
 	}
 
 	/**
@@ -1873,21 +1867,56 @@ class WPMgr_Object_Cache
 
 	/**
 	 * Persist aggregated stats for the heartbeat block.
-	 * Uses a wp-option (non-autoloaded) so the PerfReporter can read it.
+	 *
+	 * ACCUMULATES this request's counters into the wp-option so that the
+	 * heartbeat can consume window-delta values (hit_count, miss_count,
+	 * ops, wait_ms) across multiple requests between heartbeat pushes.
+	 * The heartbeat consumer reads the accumulated deltas and resets them
+	 * (consume-and-reset pattern).
 	 *
 	 * @return void
 	 */
 	private function persistStats(): void
 	{
-		if ( ! function_exists( 'update_option' ) ) {
+		if ( ! function_exists( 'update_option' ) || ! function_exists( 'get_option' ) ) {
 			return;
 		}
 		if ( ! isset( $this->config['analytics_enabled'] ) || ! $this->config['analytics_enabled'] ) {
 			return;
 		}
 
-		$stats = $this->getHeartbeatStats();
-		update_option( 'wpmgr_object_cache_stats', $stats, false );
+		// Read the existing accumulated option (default empty array).
+		$existing = get_option( 'wpmgr_object_cache_stats', [] );
+		if ( ! is_array( $existing ) ) {
+			$existing = [];
+		}
+
+		// Compute per-request snapshot fields (state, latency, last error).
+		$snapshot = $this->getHeartbeatStats();
+
+		// Accumulate cumulative delta counters into the stored option.
+		// These are consumed-and-reset by ObjectCacheHeartbeat::build().
+		$totalOps = $this->redisReads + $this->redisWrites;
+
+		$merged = array_merge( $snapshot, [
+			// Carry forward any unconsumed deltas from prior requests.
+			'delta_hit_count'   => ( isset( $existing['delta_hit_count'] ) ? (int) $existing['delta_hit_count'] : 0 )
+				+ $this->cache_hits,
+			'delta_miss_count'  => ( isset( $existing['delta_miss_count'] ) ? (int) $existing['delta_miss_count'] : 0 )
+				+ $this->cache_misses,
+			'delta_ops'         => ( isset( $existing['delta_ops'] ) ? (int) $existing['delta_ops'] : 0 )
+				+ $totalOps,
+			'delta_wait_ms'     => ( isset( $existing['delta_wait_ms'] ) ? (float) $existing['delta_wait_ms'] : 0.0 )
+				+ $this->totalWaitMs,
+			'delta_sample_count' => ( isset( $existing['delta_sample_count'] ) ? (int) $existing['delta_sample_count'] : 0 )
+				+ ( $totalOps > 0 ? 1 : 0 ),
+			// Timestamp of the first un-consumed delta (for ops_per_sec calculation).
+			'delta_since_ts'    => isset( $existing['delta_since_ts'] ) && (float) $existing['delta_since_ts'] > 0
+				? (float) $existing['delta_since_ts']
+				: microtime( true ),
+		] );
+
+		update_option( 'wpmgr_object_cache_stats', $merged, false );
 	}
 
 	// -------------------------------------------------------------------------

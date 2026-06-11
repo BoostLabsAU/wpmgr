@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -30,6 +31,7 @@ type Service struct {
 	cmdClient *agentcmd.Client
 	urler     SiteURLer
 	publisher site.EventPublisher
+	logger    *slog.Logger
 }
 
 // NewService wires the service with its dependencies.
@@ -40,7 +42,18 @@ func NewService(repo *Repo, box *cryptbox.AgeIdentity, cmdClient *agentcmd.Clien
 		cmdClient: cmdClient,
 		urler:     urler,
 		publisher: pub,
+		logger:    slog.Default(),
 	}
+}
+
+// capDetail bounds an agent-supplied detail string before logging. The agent
+// normally returns a short fixed string, but the value is attacker-controlled
+// on a compromised site.
+func capDetail(s string) string {
+	if len(s) > 256 {
+		return s[:256]
+	}
+	return s
 }
 
 // GetConfig returns the per-site object cache config (without the password).
@@ -95,6 +108,14 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 	cfg.OCLastErrorClass = stored.OCLastErrorClass
 	cfg.OCUsedMemoryBytes = stored.OCUsedMemoryBytes
 	cfg.OCHitRatioPct = stored.OCHitRatioPct
+
+	// Preserve the test result unless the connection changed (in which case
+	// clearTestHash is true and the result is intentionally discarded because it
+	// no longer corresponds to the saved config).
+	if !clearTestHash {
+		cfg.LastTestResultJSON = stored.LastTestResultJSON
+		cfg.LastTestedAt = stored.LastTestedAt
+	}
 
 	saved, err := s.repo.UpsertConfig(ctx, tenantID, cfg, passwordEncrypted, clearTestHash)
 	if err != nil {
@@ -206,6 +227,11 @@ func (s *Service) Enable(ctx context.Context, tenantID, siteID uuid.UUID) (Confi
 		return Config{}, fmt.Errorf("objectcache: enable command failed: %w", err)
 	}
 	if !result.OK {
+		s.logger.Warn("objectcache: enable rejected by agent",
+			slog.String("site_id", siteID.String()),
+			slog.String("detail", capDetail(result.Detail)),
+			slog.Bool("foreign_dropin", result.ForeignDropin),
+		)
 		if result.ForeignDropin {
 			return Config{}, domain.Conflict("foreign_dropin", "another object cache drop-in is installed; remove it first or use force")
 		}
@@ -236,6 +262,10 @@ func (s *Service) Disable(ctx context.Context, tenantID, siteID uuid.UUID) (Conf
 		return Config{}, fmt.Errorf("objectcache: disable command failed: %w", err)
 	}
 	if !result.OK {
+		s.logger.Warn("objectcache: disable rejected by agent",
+			slog.String("site_id", siteID.String()),
+			slog.String("detail", capDetail(result.Detail)),
+		)
 		return Config{}, domain.Validation("objectcache_disable_failed", result.Detail)
 	}
 
@@ -268,6 +298,10 @@ func (s *Service) Flush(ctx context.Context, input FlushInput) (string, error) {
 		return "", fmt.Errorf("objectcache: flush command failed: %w", err)
 	}
 	if !result.OK {
+		s.logger.Warn("objectcache: flush rejected by agent",
+			slog.String("site_id", input.SiteID.String()),
+			slog.String("detail", capDetail(result.Detail)),
+		)
 		return "", domain.Validation("objectcache_flush_failed", result.Detail)
 	}
 

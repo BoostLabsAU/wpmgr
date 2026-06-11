@@ -118,7 +118,7 @@ final class ObjectcacheFlushCommand implements CommandInterface
 		} catch ( \Throwable $e ) {
 			return [
 				'ok'          => false,
-				'detail'      => 'objectcache.flush failed',
+				'detail'      => 'objectcache.flush failed: ' . get_class( $e ),
 				'strategy'    => '',
 				'keys_deleted' => 0,
 			];
@@ -129,6 +129,10 @@ final class ObjectcacheFlushCommand implements CommandInterface
 	 * SCAN+MATCH+UNLINK flush for a given key pattern.
 	 * Returns the approximate number of keys deleted.
 	 *
+	 * Uses the canonical phpredis SCAN idiom: by-ref integer iterator,
+	 * SCAN_RETRY option so phpredis handles empty-batch re-scanning internally,
+	 * and a flat key array return (not the [cursor, keys] tuple used by Predis).
+	 *
 	 * @param \Redis $redis   Active phpredis handle.
 	 * @param string $pattern Key pattern (e.g. "prefix:*").
 	 * @param bool   $async   Use UNLINK (async) vs DEL.
@@ -136,16 +140,13 @@ final class ObjectcacheFlushCommand implements CommandInterface
 	 */
 	private function scanFlush( \Redis $redis, string $pattern, bool $async ): int
 	{
-		$cursor = '0';
-		$total  = 0;
-		do {
-			$result = $redis->scan( $cursor, [ 'match' => $pattern, 'count' => 500 ] ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem
-			if ( ! is_array( $result ) || count( $result ) !== 2 ) {
-				break;
-			}
-			$cursor = (string) $result[0];
-			$keys   = is_array( $result[1] ) ? $result[1] : [];
-			if ( $keys !== [] ) {
+		$redis->setOption( \Redis::OPT_SCAN, \Redis::SCAN_RETRY );
+		$it    = null;
+		$total = 0;
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_scan -- phpredis SCAN command, not filesystem; by-ref iterator is the canonical phpredis pattern
+		while ( ( $keys = $redis->scan( $it, $pattern, 500 ) ) !== false ) {
+			if ( ! empty( $keys ) ) {
 				$total += count( $keys );
 				if ( $async ) {
 					$redis->unlink( ...$keys );
@@ -154,7 +155,10 @@ final class ObjectcacheFlushCommand implements CommandInterface
 				}
 				usleep( 500 ); // 0.5ms inter-batch sleep.
 			}
-		} while ( $cursor !== '0' );
+			if ( $it === 0 ) {
+				break;
+			}
+		}
 
 		return $total;
 	}

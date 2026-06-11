@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.1] - 2026-06-11
+
+### Fixed
+
+- **Object cache: the engine now actually starts on real sites.** The object-cache.php drop-in installed by 0.41.0 located the engine through constants that WordPress does not define yet at the moment drop-ins load, so the engine silently never booted: the status pill stayed "Disabled", analytics stayed empty, and Redis never received a key even though Enable reported success. The installer now stamps the resolved engine path directly into the drop-in at install time, with a content-directory fallback, and the agent automatically refreshes an outdated drop-in on its next heartbeat, so existing installs self-heal after updating the agent. No manual disable and re-enable needed.
+- **Object cache: flush no longer fails with a 422.** Five Redis SCAN call sites (the flush and disable commands, the connection test's capability probe, and two engine flush paths) called SCAN with the wrong client API shape, which threw on every invocation. The connection test also misreported this as an ACL denial. All five now use the correct phpredis iterator pattern, pinned by a signature-enforcing test double.
+- **Object cache: the saved connection test result now survives reloads.** The config response never included the stored test result, and saving any unrelated setting wiped it. The Server capabilities card now renders from the stored result, which is preserved across saves and intentionally discarded only when connection fields change.
+- **Object cache: analytics can now populate.** The agent heartbeat previously never included hit and miss counts, so the charts could never receive data. The engine now accumulates per-request counters and the heartbeat reports them as consume-and-reset deltas alongside average latency and operations per second.
+- **Object cache: honest status reporting end to end.** The dashboard pill now distinguishes "configured but not serving" (a real reported state) from never configured; an unrecognised state from an agent no longer blanks the stored state; agent command failures now surface as error toasts instead of success; and command failures carry the exception class name (never the message, which could contain connection details) for diagnosability. Swallowed ingest and command errors are now logged with bounded, length-capped detail strings.
+
+Requires agent 0.41.1 for the on-site fixes; the dashboard fixes apply on the API and web update alone. Security reviewed (verdict ship; the two log-hygiene notes were fixed before release).
+
 ## [0.41.0] - 2026-06-11
 
 ### Added
