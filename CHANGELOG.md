@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.5] - 2026-06-11
+
+### Fixed
+
+- **Object cache: a loose-typed cache call can no longer take the site down.** The 0.41.4 self-contained drop-in activated correctly but enforced strict parameter types on the WordPress cache API surface; the first plugin call passing an integer group name (a pattern WordPress core tolerates by casting) became a fatal error on every request. All public cache methods now accept what core accepts and normalize internally, the generated drop-in no longer carries a strict-types declaration, and every cache wrapper catches unexpected errors and degrades to a cache miss instead of crashing the request. The exact call shape that caused the outage is now a permanent regression test that runs against the generated drop-in itself.
+
+Agent-only release. Drop-in version 2.0.1. If your site was affected: delete wp-content/object-cache.php to recover, update the agent, then enable the object cache again.
+
 ## [0.41.4] - 2026-06-11
 
 ### Changed

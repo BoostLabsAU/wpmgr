@@ -1,15 +1,13 @@
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.0
+ * Version: 2.0.1
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
  *
  * @package WPMgr\Agent\ObjectCache
  */
-
-declare(strict_types=1);
 
 namespace {
 
@@ -19,7 +17,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.0', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.1', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -888,7 +886,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.41.4';
+	public const ENGINE_VERSION = '0.41.5';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -1123,22 +1121,28 @@ class WPMgr_Object_Cache
 	/**
 	 * Adds data to the cache if the key does not already exist.
 	 *
+	 * Accepts any scalar for $group and $expire to match WP core's loose-typed
+	 * cache.php API. Non-string/falsy $group is cast to string (empty => 'default').
+	 * Non-int $expire is cast to int.
+	 *
 	 * @param int|string $key    Cache key.
 	 * @param mixed      $data   Data to store.
-	 * @param string     $group  Cache group.
-	 * @param int        $expire TTL in seconds.
+	 * @param mixed      $group  Cache group (any scalar).
+	 * @param mixed      $expire TTL in seconds (any numeric).
 	 * @return bool
 	 */
-	public function add( $key, $data, string $group = '', int $expire = 0 ): bool
+	public function add( $key, $data, $group = '', $expire = 0 ): bool
 	{
+		$group  = $this->castGroup( $group );
+		$expire = (int) $expire;
 		if ( function_exists( 'wp_suspend_cache_addition' ) && wp_suspend_cache_addition() ) {
 			return false;
 		}
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
-		$group   = $this->normalizeGroup( $group );
-		$keyStr  = (string) $key;
+		$group  = $this->normalizeGroup( $group );
+		$keyStr = (string) $key;
 
 		// L1 hit: key already exists.
 		if ( isset( $this->cache[ $group ][ $keyStr ] ) ) {
@@ -1173,12 +1177,14 @@ class WPMgr_Object_Cache
 	 * Adds multiple cache entries.
 	 *
 	 * @param array<int|string,mixed> $data   Map of key => value.
-	 * @param string                  $group  Cache group.
-	 * @param int                     $expire TTL in seconds.
+	 * @param mixed                   $group  Cache group (any scalar).
+	 * @param mixed                   $expire TTL in seconds (any numeric).
 	 * @return array<int|string,bool>
 	 */
-	public function add_multiple( array $data, string $group = '', int $expire = 0 ): array
+	public function add_multiple( array $data, $group = '', $expire = 0 ): array
 	{
+		$group  = $this->castGroup( $group );
+		$expire = (int) $expire;
 		$results = [];
 		foreach ( $data as $key => $value ) {
 			$results[ $key ] = $this->add( $key, $value, $group, $expire );
@@ -1191,12 +1197,14 @@ class WPMgr_Object_Cache
 	 *
 	 * @param int|string $key    Cache key.
 	 * @param mixed      $data   New data.
-	 * @param string     $group  Cache group.
-	 * @param int        $expire TTL in seconds.
+	 * @param mixed      $group  Cache group (any scalar).
+	 * @param mixed      $expire TTL in seconds (any numeric).
 	 * @return bool
 	 */
-	public function replace( $key, $data, string $group = '', int $expire = 0 ): bool
+	public function replace( $key, $data, $group = '', $expire = 0 ): bool
 	{
+		$group  = $this->castGroup( $group );
+		$expire = (int) $expire;
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
@@ -1239,12 +1247,14 @@ class WPMgr_Object_Cache
 	 *
 	 * @param int|string $key    Cache key.
 	 * @param mixed      $data   Data to store.
-	 * @param string     $group  Cache group.
-	 * @param int        $expire TTL in seconds (0 = use maxttl).
+	 * @param mixed      $group  Cache group (any scalar).
+	 * @param mixed      $expire TTL in seconds (any numeric; 0 = use maxttl).
 	 * @return bool
 	 */
-	public function set( $key, $data, string $group = '', int $expire = 0 ): bool
+	public function set( $key, $data, $group = '', $expire = 0 ): bool
 	{
+		$group  = $this->castGroup( $group );
+		$expire = (int) $expire;
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
@@ -1278,12 +1288,14 @@ class WPMgr_Object_Cache
 	 * Sets multiple cache entries using a pipeline.
 	 *
 	 * @param array<int|string,mixed> $data   Map of key => value.
-	 * @param string                  $group  Cache group.
-	 * @param int                     $expire TTL in seconds.
+	 * @param mixed                   $group  Cache group (any scalar).
+	 * @param mixed                   $expire TTL in seconds (any numeric).
 	 * @return array<int|string,bool>
 	 */
-	public function set_multiple( array $data, string $group = '', int $expire = 0 ): array
+	public function set_multiple( array $data, $group = '', $expire = 0 ): array
 	{
+		$group   = $this->castGroup( $group );
+		$expire  = (int) $expire;
 		$group   = $this->normalizeGroup( $group );
 		$results = [];
 
@@ -1353,13 +1365,14 @@ class WPMgr_Object_Cache
 	 * Retrieves cached data.
 	 *
 	 * @param int|string $key   Cache key.
-	 * @param string     $group Cache group.
+	 * @param mixed      $group Cache group (any scalar).
 	 * @param bool       $force Bypass L1.
 	 * @param bool|null  $found Output: whether the key was found.
 	 * @return mixed False when not found.
 	 */
-	public function get( $key, string $group = '', bool $force = false, ?bool &$found = null )
+	public function get( $key, $group = '', bool $force = false, ?bool &$found = null )
 	{
+		$group = $this->castGroup( $group );
 		if ( ! $this->validateKey( $key ) ) {
 			$found = false;
 			return false;
@@ -1414,12 +1427,13 @@ class WPMgr_Object_Cache
 	 * Retrieves multiple cached values using MGET.
 	 *
 	 * @param array<int|string> $keys  Cache keys.
-	 * @param string            $group Cache group.
+	 * @param mixed             $group Cache group (any scalar).
 	 * @param bool              $force Bypass L1.
 	 * @return array<int|string,mixed>
 	 */
-	public function get_multiple( array $keys, string $group = '', bool $force = false ): array
+	public function get_multiple( array $keys, $group = '', bool $force = false ): array
 	{
+		$group   = $this->castGroup( $group );
 		$group   = $this->normalizeGroup( $group );
 		$results = [];
 
@@ -1514,11 +1528,12 @@ class WPMgr_Object_Cache
 	 * Deletes cached data.
 	 *
 	 * @param int|string $key   Cache key.
-	 * @param string     $group Cache group.
+	 * @param mixed      $group Cache group (any scalar).
 	 * @return bool
 	 */
-	public function delete( $key, string $group = '' ): bool
+	public function delete( $key, $group = '' ): bool
 	{
+		$group = $this->castGroup( $group );
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
@@ -1551,11 +1566,12 @@ class WPMgr_Object_Cache
 	 * Deletes multiple cached entries.
 	 *
 	 * @param array<int|string> $keys  Cache keys.
-	 * @param string            $group Cache group.
+	 * @param mixed             $group Cache group (any scalar).
 	 * @return array<int|string,bool>
 	 */
-	public function delete_multiple( array $keys, string $group = '' ): array
+	public function delete_multiple( array $keys, $group = '' ): array
 	{
+		$group   = $this->castGroup( $group );
 		$group   = $this->normalizeGroup( $group );
 		$results = [];
 
@@ -1570,11 +1586,12 @@ class WPMgr_Object_Cache
 	 *
 	 * @param int|string $key    Cache key.
 	 * @param int        $offset Amount to increment.
-	 * @param string     $group  Cache group.
+	 * @param mixed      $group  Cache group (any scalar).
 	 * @return int|false New value or false on failure.
 	 */
-	public function incr( $key, int $offset = 1, string $group = '' )
+	public function incr( $key, int $offset = 1, $group = '' )
 	{
+		$group = $this->castGroup( $group );
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
@@ -1633,11 +1650,12 @@ class WPMgr_Object_Cache
 	 *
 	 * @param int|string $key    Cache key.
 	 * @param int        $offset Amount to decrement.
-	 * @param string     $group  Cache group.
+	 * @param mixed      $group  Cache group (any scalar).
 	 * @return int|false New value or false on failure.
 	 */
-	public function decr( $key, int $offset = 1, string $group = '' )
+	public function decr( $key, int $offset = 1, $group = '' )
 	{
+		$group = $this->castGroup( $group );
 		if ( ! $this->validateKey( $key ) ) {
 			return false;
 		}
@@ -1726,11 +1744,12 @@ class WPMgr_Object_Cache
 	/**
 	 * Flushes all entries in a specific group.
 	 *
-	 * @param string $group Cache group.
+	 * @param mixed $group Cache group (any scalar).
 	 * @return bool
 	 */
-	public function flush_group( string $group ): bool
+	public function flush_group( $group ): bool
 	{
+		$group = $this->castGroup( $group );
 		$group = $this->normalizeGroup( $group );
 		unset( $this->cache[ $group ] );
 
@@ -1879,6 +1898,19 @@ class WPMgr_Object_Cache
 	}
 
 	/**
+	 * Record a Throwable class name caught in a wp_cache_* wrapper.
+	 * Called from the global bridge functions so unexpected engine errors never
+	 * escape to user-visible PHP fatals.
+	 *
+	 * @param string $class Throwable class name (from get_class($e)).
+	 * @return void
+	 */
+	public function wpmgr_journal_wrapper_error( string $class ): void
+	{
+		$this->journalError( 'wrapper_catch', $class );
+	}
+
+	/**
 	 * Return stats suitable for the heartbeat block.
 	 *
 	 * @return array<string,mixed>
@@ -1949,6 +1981,29 @@ class WPMgr_Object_Cache
 			return $prefix . ':' . $group . ':' . $key;
 		}
 		return $prefix . ':' . $this->blogId . ':' . $group . ':' . $key;
+	}
+
+	/**
+	 * Cast any scalar $group to string, matching WP core's loose-typed cache API.
+	 *
+	 * WP core cache.php declares $group as untyped with a string default. Callers
+	 * may legally pass any scalar (int, float, bool, null). We cast to string so
+	 * normalizeGroup always receives a string. Empty/falsy values become '' which
+	 * normalizeGroup then maps to 'default'.
+	 *
+	 * @param mixed $group Raw group value from the caller.
+	 * @return string
+	 */
+	private function castGroup( $group ): string
+	{
+		if ( is_string( $group ) ) {
+			return $group;
+		}
+		// null, false, 0 => '' (normalizeGroup will convert to 'default').
+		if ( $group === null || $group === false || $group === 0 || $group === 0.0 ) {
+			return '';
+		}
+		return (string) $group;
 	}
 
 	/**
@@ -2553,26 +2608,36 @@ register_shutdown_function(
  *
  * @param int|string $key    Cache key.
  * @param mixed      $data   Data to store.
- * @param string     $group  Cache group.
- * @param int        $expire TTL in seconds.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
  * @return bool
  */
 function wp_cache_add( $key, $data, $group = '', $expire = 0 ): bool
 {
-	return wpmgr_get_object_cache()->add( $key, $data, $group, $expire );
+	try {
+		return wpmgr_get_object_cache()->add( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
  * Adds multiple cache entries.
  *
  * @param array<int|string,mixed> $data   Map of key => value.
- * @param string                  $group  Cache group.
- * @param int                     $expire TTL in seconds.
+ * @param mixed                   $group  Cache group (any scalar; cast to string internally).
+ * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
  * @return array<int|string,bool>
  */
 function wp_cache_add_multiple( array $data, $group = '', $expire = 0 ): array
 {
-	return wpmgr_get_object_cache()->add_multiple( $data, $group, $expire );
+	try {
+		return wpmgr_get_object_cache()->add_multiple( $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( array_keys( $data ), false );
+	}
 }
 
 /**
@@ -2580,91 +2645,133 @@ function wp_cache_add_multiple( array $data, $group = '', $expire = 0 ): array
  *
  * @param int|string $key    Cache key.
  * @param mixed      $data   New data.
- * @param string     $group  Cache group.
- * @param int        $expire TTL in seconds.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
  * @return bool
  */
 function wp_cache_replace( $key, $data, $group = '', $expire = 0 ): bool
 {
-	return wpmgr_get_object_cache()->replace( $key, $data, $group, $expire );
+	try {
+		return wpmgr_get_object_cache()->replace( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
  * Saves data to the cache.
  *
+ * WP core signature: wp_cache_set( $key, $data, $group = '', $expire = 0 ).
+ * The $group parameter is the THIRD argument; $expire is FOURTH.
+ * Callers that pass an int as $group (e.g. wp_cache_set($k, $v, 3600)) are
+ * treated by WP core as setting group='3600' with expire=0. We match that
+ * semantic via scalar normalization in the engine.
+ *
  * @param int|string $key    Cache key.
  * @param mixed      $data   Data to store.
- * @param string     $group  Cache group.
- * @param int        $expire TTL in seconds.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
  * @return bool
  */
 function wp_cache_set( $key, $data, $group = '', $expire = 0 ): bool
 {
-	return wpmgr_get_object_cache()->set( $key, $data, $group, $expire );
+	try {
+		return wpmgr_get_object_cache()->set( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
  * Sets multiple cache entries.
  *
  * @param array<int|string,mixed> $data   Map of key => value.
- * @param string                  $group  Cache group.
- * @param int                     $expire TTL in seconds.
+ * @param mixed                   $group  Cache group (any scalar; cast to string internally).
+ * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
  * @return array<int|string,bool>
  */
 function wp_cache_set_multiple( array $data, $group = '', $expire = 0 ): array
 {
-	return wpmgr_get_object_cache()->set_multiple( $data, $group, $expire );
+	try {
+		return wpmgr_get_object_cache()->set_multiple( $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( array_keys( $data ), false );
+	}
 }
 
 /**
  * Retrieves cached data.
  *
  * @param int|string $key   Cache key.
- * @param string     $group Cache group.
+ * @param mixed      $group Cache group (any scalar; cast to string internally).
  * @param bool       $force Force a fresh fetch from the backend.
  * @param bool|null  $found Output: whether the key was found.
  * @return mixed False when not found.
  */
 function wp_cache_get( $key, $group = '', $force = false, &$found = null )
 {
-	return wpmgr_get_object_cache()->get( $key, $group, $force, $found );
+	try {
+		return wpmgr_get_object_cache()->get( $key, $group, $force, $found );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		$found = false;
+		return false;
+	}
 }
 
 /**
  * Retrieves multiple cached values.
  *
  * @param array<int|string>  $keys  Cache keys.
- * @param string             $group Cache group.
+ * @param mixed              $group Cache group (any scalar; cast to string internally).
  * @param bool               $force Force fetch.
  * @return array<int|string,mixed>
  */
 function wp_cache_get_multiple( $keys, $group = '', $force = false ): array
 {
-	return wpmgr_get_object_cache()->get_multiple( $keys, $group, $force );
+	try {
+		return wpmgr_get_object_cache()->get_multiple( $keys, $group, $force );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( (array) $keys, false );
+	}
 }
 
 /**
  * Deletes cached data.
  *
  * @param int|string $key   Cache key.
- * @param string     $group Cache group.
+ * @param mixed      $group Cache group (any scalar; cast to string internally).
  * @return bool
  */
 function wp_cache_delete( $key, $group = '' ): bool
 {
-	return wpmgr_get_object_cache()->delete( $key, $group );
+	try {
+		return wpmgr_get_object_cache()->delete( $key, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
  * Deletes multiple cached entries.
  *
  * @param array<int|string> $keys  Cache keys.
- * @param string            $group Cache group.
+ * @param mixed             $group Cache group (any scalar; cast to string internally).
  * @return array<int|string,bool>
  */
 function wp_cache_delete_multiple( array $keys, $group = '' ): array
 {
-	return wpmgr_get_object_cache()->delete_multiple( $keys, $group );
+	try {
+		return wpmgr_get_object_cache()->delete_multiple( $keys, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( $keys, false );
+	}
 }
 
 /**
@@ -2672,12 +2779,17 @@ function wp_cache_delete_multiple( array $keys, $group = '' ): array
  *
  * @param int|string $key    Cache key.
  * @param int        $offset Amount to increment.
- * @param string     $group  Cache group.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
  * @return int|false New value or false on failure.
  */
 function wp_cache_incr( $key, $offset = 1, $group = '' )
 {
-	return wpmgr_get_object_cache()->incr( $key, $offset, $group );
+	try {
+		return wpmgr_get_object_cache()->incr( $key, $offset, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
@@ -2685,12 +2797,17 @@ function wp_cache_incr( $key, $offset = 1, $group = '' )
  *
  * @param int|string $key    Cache key.
  * @param int        $offset Amount to decrement.
- * @param string     $group  Cache group.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
  * @return int|false New value or false on failure.
  */
 function wp_cache_decr( $key, $offset = 1, $group = '' )
 {
-	return wpmgr_get_object_cache()->decr( $key, $offset, $group );
+	try {
+		return wpmgr_get_object_cache()->decr( $key, $offset, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
@@ -2700,7 +2817,12 @@ function wp_cache_decr( $key, $offset = 1, $group = '' )
  */
 function wp_cache_flush(): bool
 {
-	return wpmgr_get_object_cache()->flush();
+	try {
+		return wpmgr_get_object_cache()->flush();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
@@ -2710,18 +2832,28 @@ function wp_cache_flush(): bool
  */
 function wp_cache_flush_runtime(): bool
 {
-	return wpmgr_get_object_cache()->flush_runtime();
+	try {
+		return wpmgr_get_object_cache()->flush_runtime();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
  * Flushes all entries in a specific cache group.
  *
- * @param string $group Cache group.
+ * @param mixed $group Cache group (any scalar; cast to string internally).
  * @return bool
  */
 function wp_cache_flush_group( $group ): bool
 {
-	return wpmgr_get_object_cache()->flush_group( $group );
+	try {
+		return wpmgr_get_object_cache()->flush_group( $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
@@ -2731,7 +2863,11 @@ function wp_cache_flush_group( $group ): bool
  */
 function wp_cache_init(): void
 {
-	wpmgr_get_object_cache()->init();
+	try {
+		wpmgr_get_object_cache()->init();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
 }
 
 /**
@@ -2741,7 +2877,12 @@ function wp_cache_init(): void
  */
 function wp_cache_close(): bool
 {
-	return wpmgr_get_object_cache()->close();
+	try {
+		return wpmgr_get_object_cache()->close();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 /**
@@ -2752,7 +2893,11 @@ function wp_cache_close(): bool
  */
 function wp_cache_switch_to_blog( $blog_id ): void
 {
-	wpmgr_get_object_cache()->switch_to_blog( (int) $blog_id );
+	try {
+		wpmgr_get_object_cache()->switch_to_blog( (int) $blog_id );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
 }
 
 /**
@@ -2763,7 +2908,11 @@ function wp_cache_switch_to_blog( $blog_id ): void
  */
 function wp_cache_add_global_groups( $groups ): void
 {
-	wpmgr_get_object_cache()->add_global_groups( (array) $groups );
+	try {
+		wpmgr_get_object_cache()->add_global_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
 }
 
 /**
@@ -2774,7 +2923,11 @@ function wp_cache_add_global_groups( $groups ): void
  */
 function wp_cache_add_non_persistent_groups( $groups ): void
 {
-	wpmgr_get_object_cache()->add_non_persistent_groups( (array) $groups );
+	try {
+		wpmgr_get_object_cache()->add_non_persistent_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
 }
 
 /**
@@ -2785,7 +2938,11 @@ function wp_cache_add_non_persistent_groups( $groups ): void
  */
 function wp_cache_add_non_prefetchable_groups( $groups ): void
 {
-	wpmgr_get_object_cache()->add_non_prefetchable_groups( (array) $groups );
+	try {
+		wpmgr_get_object_cache()->add_non_prefetchable_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
 }
 
 /**
@@ -2796,7 +2953,12 @@ function wp_cache_add_non_prefetchable_groups( $groups ): void
  */
 function wp_cache_supports( $feature ): bool
 {
-	return wpmgr_get_object_cache()->supports( (string) $feature );
+	try {
+		return wpmgr_get_object_cache()->supports( (string) $feature );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
 }
 
 // phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound

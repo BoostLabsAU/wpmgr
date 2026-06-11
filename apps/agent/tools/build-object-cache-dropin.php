@@ -141,19 +141,23 @@ $engineClassDefinition  = rtrim($m[2]);  // class WPMgr_Object_Cache { ... }
 //   namespace { ... }                          — WPMgr_Object_Cache class (class_exists guard)
 //   namespace { ... }                          — boot code + wp_cache_* functions (function_exists guards)
 
+// NOTE: declare(strict_types=1) is intentionally ABSENT from the generated artifact.
+// The artifact is a WordPress compatibility surface (object-cache.php drop-in).
+// WordPress core's cache.php API is loose-typed by design; callers may pass int as
+// $group, numeric strings as $expire, etc. Strict types would cause TypeError fatals
+// on valid WP caller code (e.g. Action Scheduler: wp_cache_set($k, $v, 3600)).
+// Source files keep their own declares; only the generated drop-in omits it.
 $fileHeader = <<<'HDR'
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.0.0
+ * Version: 2.0.1
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
  *
  * @package WPMgr\Agent\ObjectCache
  */
-
-declare(strict_types=1);
 HDR;
 
 // Block 1: preamble in global namespace.
@@ -167,7 +171,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.0', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.0.1', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {

@@ -6,8 +6,8 @@
  *   1. Running the builder twice produces byte-identical output.
  *   2. The committed artifact matches a fresh build (same discipline as sqlc).
  *   3. The generated artifact is syntactically valid PHP.
- *   4. The SIGNATURE and Version: 2.0.0 appear within the first 200 bytes.
- *   5. The breadcrumb assignment is present and sets 'v' => '2.0.0'.
+ *   4. The SIGNATURE and Version: 2.0.1 appear within the first 200 bytes.
+ *   5. The breadcrumb assignment is present and sets 'v' => '2.0.1'.
  *   6. All bail gate strings are present.
  *
  * @package WPMgr\Agent\Tests\ObjectCache
@@ -134,7 +134,7 @@ final class ObjectCacheDropinBuildTest extends TestCase
 	}
 
 	/**
-	 * Version: 2.0.0 must be in the first 200 bytes.
+	 * Version: 2.0.1 must be in the first 200 bytes.
 	 */
 	public function test_version_in_first_200_bytes(): void
 	{
@@ -143,14 +143,14 @@ final class ObjectCacheDropinBuildTest extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $this->artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.0.0',
+			'Version: 2.0.1',
 			$first200,
-			'Version: 2.0.0 must appear within the first 200 bytes'
+			'Version: 2.0.1 must appear within the first 200 bytes'
 		);
 	}
 
 	/**
-	 * The artifact must set the breadcrumb with v => '2.0.0'.
+	 * The artifact must set the breadcrumb with v => '2.0.1'.
 	 */
 	public function test_breadcrumb_initialization_present(): void
 	{
@@ -164,9 +164,30 @@ final class ObjectCacheDropinBuildTest extends TestCase
 			'Breadcrumb key wpmgr_oc_stub must be present'
 		);
 		$this->assertStringContainsString(
-			"'v' => '2.0.0'",
+			"'v' => '2.0.1'",
 			$content,
-			'Breadcrumb must set v => 2.0.0'
+			'Breadcrumb must set v => 2.0.1'
+		);
+	}
+
+	/**
+	 * The generated artifact must NOT contain declare(strict_types=1).
+	 *
+	 * The drop-in is a WordPress compatibility surface. WP core cache.php is
+	 * loose-typed; callers may pass int as $group (e.g. Action Scheduler calls
+	 * wp_cache_set($key, $val, 3600)). Strict types would cause TypeError fatals
+	 * on valid WordPress caller code.
+	 */
+	public function test_artifact_has_no_strict_types_declaration(): void
+	{
+		if ( ! is_file( $this->artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
+		}
+		$content = (string) file_get_contents( $this->artifactPath );
+		$this->assertStringNotContainsString(
+			'declare(strict_types',
+			$content,
+			'Generated artifact must NOT contain declare(strict_types=1) — it is a WP compat surface with loose callers'
 		);
 	}
 
