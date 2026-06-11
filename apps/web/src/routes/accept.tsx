@@ -47,7 +47,7 @@ export const Route = createFileRoute("/accept")({
 
 interface AcceptResult {
   tenant_id: string;
-  scope: "org" | "site";
+  scope: "org" | "site" | "client";
   site_id?: string;
 }
 
@@ -200,7 +200,9 @@ function AcceptPage() {
       const result = json as unknown as AcceptResult;
 
       // The session cookie is now set. Navigate into the app.
-      if (result.scope === "site" && result.site_id) {
+      if (result.scope === "client") {
+        await navigate({ to: "/portal" });
+      } else if (result.scope === "site" && result.site_id) {
         await navigate({
           to: "/sites/$siteId/health",
           params: { siteId: result.site_id },

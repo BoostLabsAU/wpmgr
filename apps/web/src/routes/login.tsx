@@ -4,6 +4,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { AlertCircle, AlertTriangle, MailCheck } from "lucide-react";
 import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { getMe } from "@wpmgr/api";
 
 import { AuthLayout } from "@/components/layout/auth-layout";
 import { Button } from "@/components/ui/button";
@@ -21,6 +23,7 @@ import {
   useLogin,
   useResendVerification,
   EmailNotVerifiedError,
+  authKeys,
 } from "@/features/auth/use-auth";
 
 const searchSchema = z.object({
@@ -31,10 +34,14 @@ const searchSchema = z.object({
 export const Route = createFileRoute("/login")({
   validateSearch: searchSchema,
   // If a valid session already exists, skip the login page.
+  // Portal users (role==="client") are sent to /portal; everyone else to /sites or
+  // the requested redirect path.
   beforeLoad: async ({ context, search }) => {
     const me = await ensureMe(context.queryClient);
     if (me) {
-      throw redirect({ to: search.redirect ?? "/sites" });
+      throw redirect({
+        to: me.role === "client" ? "/portal" : (search.redirect ?? "/sites"),
+      });
     }
   },
   component: LoginPage,
@@ -52,6 +59,7 @@ function LoginPage() {
   const search = Route.useSearch();
   const loginMutation = useLogin();
   const resendMutation = useResendVerification();
+  const queryClient = useQueryClient();
   // Tracks when login failed because the email is not yet verified.
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
   const [resendSent, setResendSent] = useState(false);
@@ -73,7 +81,24 @@ function LoginPage() {
 
     await loginMutation.mutateAsync(values, {
       onSuccess: () => {
-        void navigate({ to: search.redirect ?? "/sites" });
+        // Force a fresh /auth/me so the middleware-resolved role/scope/portal
+        // fields are present (the login response Me may not carry them yet).
+        void queryClient
+          .fetchQuery({
+            queryKey: authKeys.me,
+            queryFn: async () => {
+              const { data } = await getMe();
+              return data ?? null;
+            },
+            staleTime: 0,
+          })
+          .then((freshMe) => {
+            if (freshMe?.role === "client") {
+              void navigate({ to: "/portal" });
+            } else {
+              void navigate({ to: search.redirect ?? "/sites" });
+            }
+          });
       },
       onError: (err) => {
         if (err instanceof EmailNotVerifiedError) {

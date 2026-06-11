@@ -131,6 +131,29 @@ func TestRequirePermissionSitePermsForSiteScope(t *testing.T) {
 	}
 }
 
+// TestPortalPrincipalRejectedFromSSEGates pins the m66 portal/SSE boundary:
+// every SSE stream route (/sites/events, /backups/:id/events,
+// /restores/:id/events, /updates/:id/events) is gated by
+// RequirePermission(PermSiteRead), and a portal principal must fail that gate.
+// Portal users get curated /portal DTOs only; the event streams carry raw
+// operational payloads (real connection states, backup lifecycle) that the
+// portal deliberately excludes. If RoleClient is ever granted PermSiteRead,
+// this test fails and the SSE routes need their own explicit portal check.
+func TestPortalPrincipalRejectedFromSSEGates(t *testing.T) {
+	p := &domain.Principal{
+		Type:           domain.PrincipalUser,
+		UserID:         uuid.New(),
+		TenantID:       uuid.New(),
+		Role:           string(RoleClient),
+		Scope:          domain.ScopeSite,
+		AllowedSiteIDs: []uuid.UUID{uuid.New()},
+		ClientIDs:      []uuid.UUID{uuid.New()},
+	}
+	if code := runWithPrincipal(p, RequirePermission(PermSiteRead)); code != http.StatusForbidden {
+		t.Fatalf("portal principal vs PermSiteRead (the SSE gate) = %d, want 403", code)
+	}
+}
+
 func TestRequireAuthAndTenant(t *testing.T) {
 	if code := runWithPrincipal(nil, RequireAuth()); code != http.StatusUnauthorized {
 		t.Fatalf("anonymous RequireAuth = %d, want 401", code)
