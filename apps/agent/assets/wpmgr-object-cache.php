@@ -24,7 +24,7 @@
  * silenced.
  *
  * WPMgr Object Cache drop-in
- * Version: 1.1.0
+ * Version: 1.2.0
  *
  * @package WPMgr\Agent\ObjectCache
  */
@@ -62,8 +62,10 @@ if ( defined( 'WPMGR_OBJECT_CACHE_DISABLED' ) && WPMGR_OBJECT_CACHE_DISABLED ) {
 $wpmgr_oc_engine = '';
 
 // Probe 1: stamped absolute path (placeholder replaced at install time).
+// The comparison token is concatenated so the installer's str_replace of the
+// quoted placeholder cannot rewrite this guard into a self-comparison.
 $wpmgr_oc_stamped = '__WPMGR_OC_ENGINE_PATH__';
-if ( $wpmgr_oc_stamped !== '' && $wpmgr_oc_stamped !== '__WPMGR_OC_ENGINE_PATH__' ) {
+if ( $wpmgr_oc_stamped !== '' && $wpmgr_oc_stamped !== '__WPMGR' . '_OC_ENGINE_PATH__' ) {
 	if ( @is_file( $wpmgr_oc_stamped ) ) {
 		$wpmgr_oc_engine = $wpmgr_oc_stamped;
 	}

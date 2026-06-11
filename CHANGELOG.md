@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.41.2] - 2026-06-11
+
+### Fixed
+
+- **Object cache: the engine's supporting classes now load at drop-in time.** The 0.41.1 drop-in located the engine correctly, but the engine file then loaded its config and connection classes through a plugin constant that does not exist that early in the WordPress boot, so it silently fell back to the in-memory array cache on every request and kept reporting itself idle. The engine now resolves its sibling class files from its own directory, which is always available. Agent-only fix.
+- **Object cache: the stamped engine path in the drop-in is honored.** The installer's placeholder replacement also rewrote the guard that detects an un-stamped stub, turning the stamped path into dead code; standard installs survived only via the content-directory fallback. The guard token is now built so stamping cannot touch it, and the drop-in version bump makes existing installs self-heal on the next agent heartbeat.
+
+Requires agent 0.41.2. No control plane or dashboard changes.
+
 ## [0.41.1] - 2026-06-11
 
 ### Fixed
