@@ -52,6 +52,7 @@ import {
   type BackupChipStatus,
 } from "@/components/status";
 import {
+  asConnectedSite,
   connectionStateOf,
   isReconnectable,
   type ConnectionState,
@@ -137,6 +138,11 @@ interface SiteRow {
   readonly connectionState: ConnectionState;
   /** ISO-8601 string for the <time datetime> attribute; null when unknown. */
   readonly lastSeenAt: string | null;
+  /**
+   * CP-written disconnect reason; distinguishes "agent_unreachable" (active
+   * verify failed) from "heartbeat_timeout" / absent (passive gap).
+   */
+  readonly disconnectedReason: string | null;
   readonly updatesCount: number;
   readonly updatesSeverity: "minor" | "major";
   readonly backupStatus: BackupChipStatus | null;
@@ -167,6 +173,7 @@ function rowOf(site: Site): SiteRow {
     hostname: hostnameFromUrl(site.url),
     connectionState: connectionStateOf(site),
     lastSeenAt: site.last_seen_at ?? null,
+    disconnectedReason: asConnectedSite(site).disconnected_reason ?? null,
     // M27 — real data from the sites list DTO. updates_available, last_backup_*
     // and agent_version are summarized/joined CP-side.
     updatesCount: site.updates_available ?? 0,
@@ -269,6 +276,7 @@ function buildColumns(
             <ConnectionStateBadge
               state={connectionState}
               lastSeenAt={lastSeenAt}
+              disconnectedReason={row.original.disconnectedReason}
             />
           </div>
         );

@@ -24,6 +24,7 @@ import { StatusDot, type StatusTone } from "./status-dot";
 // perpetual attention magnet.
 
 import type { ConnectionState } from "@/features/sites/connection-state";
+import { resolveLabel } from "./connection-state-badge-helpers";
 
 export interface ConnectionStateBadgeProps {
   state: ConnectionState;
@@ -31,6 +32,12 @@ export interface ConnectionStateBadgeProps {
   lastSeenAt?: string | null;
   /** ISO enrollment-code expiry; drives the "{N}m left" pending tail. */
   expiresAt?: string | null;
+  /**
+   * CP-written disconnect reason. Distinguishes an actively-verified failure
+   * ("agent_unreachable") from a passive heartbeat gap ("heartbeat_timeout").
+   * Only meaningful when `state === "disconnected"`.
+   */
+  disconnectedReason?: string | null;
   /** Pulse the dot once when the state changes. Defaults to true. */
   pulseOnChange?: boolean;
   className?: string;
@@ -137,6 +144,7 @@ export function ConnectionStateBadge({
   state,
   lastSeenAt,
   expiresAt,
+  disconnectedReason,
   pulseOnChange = true,
   className,
 }: ConnectionStateBadgeProps) {
@@ -146,14 +154,19 @@ export function ConnectionStateBadge({
   const now = useNow(tickFor(displayState));
   const shape = SHAPE[displayState];
 
+  // For disconnected state, override the label based on the disconnect reason
+  // so operators see an accurate, actionable description rather than the generic
+  // "Disconnected" label which conflates two different scenarios.
+  const displayLabel = resolveLabel(displayState, disconnectedReason);
+
   const tail = useMemo(
-    () => computeTail(displayState, now, lastSeenAt, expiresAt),
-    [displayState, now, lastSeenAt, expiresAt],
+    () => computeTail(displayState, now, lastSeenAt, expiresAt, disconnectedReason),
+    [displayState, now, lastSeenAt, expiresAt, disconnectedReason],
   );
 
   const a11yLabel = tail.text
-    ? `${shape.label}, ${tail.aria ?? tail.text}`
-    : shape.label;
+    ? `${displayLabel}, ${tail.aria ?? tail.text}`
+    : displayLabel;
 
   return (
     <span
@@ -162,6 +175,7 @@ export function ConnectionStateBadge({
         className,
       )}
       aria-label={a11yLabel}
+      title={tail.tooltip ?? undefined}
     >
       {/* The dot is decorative here; the wrapper span carries the a11y label
           (and an aria-live region announces pending countdowns, see below). */}
@@ -170,7 +184,7 @@ export function ConnectionStateBadge({
         glyph={shape.glyph}
         pulseOnChange={pulseOnChange}
       />
-      <span aria-hidden="true">{shape.label}</span>
+      <span aria-hidden="true">{displayLabel}</span>
       {tail.text ? (
         <>
           <span aria-hidden="true" className="text-muted-foreground">
@@ -235,6 +249,8 @@ interface Tail {
   text: string | null;
   /** Optional fuller phrasing for the accessible label. */
   aria?: string;
+  /** Optional tooltip text surfaced on the badge wrapper. */
+  tooltip?: string | null;
 }
 
 function computeTail(
@@ -242,6 +258,7 @@ function computeTail(
   now: number,
   lastSeenAt?: string | null,
   expiresAt?: string | null,
+  disconnectedReason?: string | null,
 ): Tail {
   switch (state) {
     case "pending_enrollment": {
@@ -255,12 +272,20 @@ function computeTail(
     case "degraded": {
       const t = shortRelative(lastSeenAt);
       if (!t) return { text: null };
-      return { text: `last seen ${t}`, aria: `last seen ${t}` };
+      const tooltip =
+        state === "degraded"
+          ? "Agent quiet; the control plane is verifying reachability."
+          : null;
+      return { text: `last seen ${t}`, aria: `last seen ${t}`, tooltip };
     }
     case "disconnected": {
       const t = shortRelative(lastSeenAt);
-      if (!t) return { text: null };
-      return { text: t, aria: `since ${t}` };
+      const isActiveVerify = disconnectedReason === "agent_unreachable";
+      const tooltip = isActiveVerify
+        ? "The control plane dialed the agent directly and got no answer."
+        : "The agent stopped reporting; the site itself may still be up. Check the uptime pill.";
+      if (!t) return { text: null, tooltip };
+      return { text: t, aria: `since ${t}`, tooltip };
     }
     case "revoked":
     case "archived":

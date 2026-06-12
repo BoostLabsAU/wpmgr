@@ -784,6 +784,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// M58: wire env-configurable thresholds (WPMGR_CONN_DEGRADE_AFTER,
 	// WPMGR_CONN_DISCONNECT_AFTER, WPMGR_CONN_DEGRADE_MISS_THRESHOLD) and the
 	// consecutive-miss counter incrementer so the sweeper uses hysteresis.
+	// 0.44.0: wire the active-verify dialer (WPMGR_SWEEP_ACTIVE_VERIFY,
+	// WPMGR_SWEEP_VERIFY_TIMEOUT, WPMGR_SWEEP_VERIFY_CONCURRENCY).
 	siteSweeper := site.NewSweeper(siteRepo, connSvc.(site.SweeperTransitioner), siteEventsPub)
 	if missInc, ok := siteRepo.(site.MissIncrementer); ok {
 		siteSweeper.SetMissIncrementer(missInc)
@@ -794,6 +796,30 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if cfg.Conn.DegradeMissThreshold > 0 {
 		siteSweeper.SetDegradeMissThreshold(cfg.Conn.DegradeMissThreshold)
 	}
+	// 0.44.0 active verify: wire the agent command client as the dialer when the
+	// CP signing key is configured (same guard as the recheck handler). The
+	// ConnectionService satisfies HeartbeatRecorder so RecordHeartbeat is reused
+	// exactly as the recheck_handler does (ADR-039: single recovery writer).
+	siteSweeper.SetActiveVerify(cfg.Conn.ActiveVerify)
+	if cfg.Conn.VerifyTimeout > 0 {
+		siteSweeper.SetVerifyTimeout(cfg.Conn.VerifyTimeout)
+	}
+	if cfg.Conn.VerifyConcurrency > 0 {
+		siteSweeper.SetVerifyConcurrency(cfg.Conn.VerifyConcurrency)
+	}
+	if rec, ok := connSvc.(site.HeartbeatRecorder); ok {
+		siteSweeper.SetHeartbeatRecorder(rec)
+	}
+	if cfg.Conn.ActiveVerify {
+		if cmdSigner, serr := agentcmd.NewSigner(cfg.Agent.SigningPrivateKey); serr == nil {
+			sweepVerifier := agentcmd.NewClient(ssrfClient, cmdSigner)
+			siteSweeper.SetVerifier(sweepVerifier)
+			logger.Info("sweep active verify enabled")
+		} else {
+			logger.Warn("sweep active verify disabled: CP signing key not configured or invalid; passive sweeper mode active")
+		}
+	}
+	siteSweeper.SetLogger(logger)
 	siteSweepWorker := site.NewSweepWorker(siteSweeper)
 	siteEventPruneWorker := site.NewEventPruneWorker(siteSweeper)
 	// SSE endpoint + the dedicated LISTEN listener.

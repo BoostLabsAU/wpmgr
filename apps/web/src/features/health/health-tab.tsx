@@ -105,7 +105,11 @@ export function HealthTab({ siteId }: { siteId: string }) {
 
       <Section label="Delivery">
         <CardHTTP card={cardFor(data, "http")} />
-        <CardCron card={cardFor(data, "cron")} />
+        <CardCron
+          card={cardFor(data, "cron")}
+          siteId={siteId}
+          siteUrl={site?.url}
+        />
       </Section>
 
       <Section label="Configuration">

@@ -289,6 +289,10 @@ final class Enrollment
      * it through the existing Connector before acting (Phase-6 finding B). We
      * never act on the revoke from this body alone.
      *
+     * @param int|null $timeout Per-request timeout override (seconds); defaults
+     *                          to self::TIMEOUT. The shutdown catch-up path
+     *                          passes a short budget so a slow CP can never
+     *                          hold an FPM worker long after output.
      * @return array{
      *     ok:bool,
      *     status:int,
@@ -298,7 +302,7 @@ final class Enrollment
      *     revoke_token:string
      * }
      */
-    public function sendHeartbeat(): array
+    public function sendHeartbeat(?int $timeout = null): array
     {
         if (!$this->settings->isEnrolled()) {
             $notEnrolled = $this->result(false, 0, 'not_enrolled', 'Not enrolled.');
@@ -314,9 +318,17 @@ final class Enrollment
 
         $body = (string) wp_json_encode($this->buildHeartbeatPayload());
 
-        $result = $this->signedPost(self::PATH_HEARTBEAT, $body);
+        $result = $this->signedPost(self::PATH_HEARTBEAT, $body, $timeout);
         if ($result['ok']) {
-            $this->settings->setLastHeartbeat(time());
+            $now = time();
+            $this->settings->setLastHeartbeat($now);
+            // Record a last-heartbeat ledger entry for the ping command's
+            // heartbeat_overdue_sec field and the shutdown catch-up guard.
+            // Non-autoloaded: this option is only read on the CP verify path
+            // and the shutdown hook, never on every page load.
+            if (function_exists('update_option')) {
+                update_option(\WPMgr\Agent\Commands\PingCommand::OPTION_LAST_HEARTBEAT_AT, $now, false);
+            }
         }
 
         return [

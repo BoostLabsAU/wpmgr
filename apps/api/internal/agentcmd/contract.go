@@ -165,3 +165,25 @@ type DiagnosticsRequest struct{}
 // the full current inventory — so the struct is intentionally empty.
 type MetadataRequest struct{}
 
+// PingRequest is the POST body for the `ping` command (0.44.0 active liveness).
+// The agent's ping command takes no params — it responds with a minimal
+// liveness envelope — so the struct is intentionally empty.
+type PingRequest struct{}
+
+// PingResponse is the agent's response to the `ping` command.
+//
+//   ok                    true iff the agent handled the command.
+//   agent_version         the agent's build version string.
+//   php_time              Unix timestamp as seen from PHP (sanity clock check).
+//   wp_cron_disabled      true when DISABLE_WP_CRON is set (explains why
+//                         passive heartbeats stopped; the site is still alive).
+//   heartbeat_overdue_sec seconds since the last WP-Cron-driven heartbeat, or
+//                         null when no heartbeat has been recorded locally.
+type PingResponse struct {
+	OK                 bool   `json:"ok"`
+	AgentVersion       string `json:"agent_version"`
+	PHPTime            int64  `json:"php_time"`
+	WPCronDisabled     bool   `json:"wp_cron_disabled"`
+	HeartbeatOverdueSec *int64 `json:"heartbeat_overdue_sec"`
+}
+

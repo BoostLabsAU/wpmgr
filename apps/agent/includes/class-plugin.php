@@ -64,6 +64,7 @@ use WPMgr\Agent\Commands\ObjectcacheDisableCommand;
 use WPMgr\Agent\Commands\ObjectcacheEnableCommand;
 use WPMgr\Agent\Commands\ObjectcacheFlushCommand;
 use WPMgr\Agent\Commands\ObjectcacheTestCommand;
+use WPMgr\Agent\Commands\PingCommand;
 use WPMgr\Agent\Commands\ResendEmailCommand;
 use WPMgr\Agent\Commands\SendTestEmailCommand;
 use WPMgr\Agent\Commands\SyncEmailConfigCommand;
@@ -241,6 +242,14 @@ final class Plugin
     private SuppressionCache $suppressionCache;
 
     /**
+     * Connection-liveness catch-up sender. Hooks onto 'shutdown' (priority
+     * 9999) and sends one heartbeat when the last recorded heartbeat is more
+     * than 120 s overdue, fixing false disconnects on page-cached idle sites
+     * where WP-Cron never fires.
+     */
+    private HeartbeatCatchup $heartbeatCatchup;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -330,8 +339,9 @@ final class Plugin
         $this->mailRouter        = new MailRouter($this->providerRouter, $this->settings);
         $this->emailLogReporter  = new EmailLogReporter($this->settings, $this->signer);
 
-        $this->router           = new Router($this->connector, $this->commands());
-        $this->admin            = new Admin($this->settings, $this->enrollment, $this->keystore, $this->lifecycle, $this->updateChecker);
+        $this->router              = new Router($this->connector, $this->commands());
+        $this->heartbeatCatchup    = new HeartbeatCatchup($this->settings, $this->enrollment);
+        $this->admin               = new Admin($this->settings, $this->enrollment, $this->keystore, $this->lifecycle, $this->updateChecker);
         $this->autologinReplay  = new ReplayCache();
         $this->autologin        = new AutologinCommand($this->connector, $this->autologinReplay, $this->signer, $this->settings);
     }
@@ -633,6 +643,11 @@ final class Plugin
         // Phase 4b — suppression-cache pull: runs every 15 min (HOOK_PULL) so
         // the local hash store stays current without a per-send CP dependency.
         add_action(SuppressionCache::HOOK_PULL, [$this, 'pullSuppressionCache']);
+
+        // Connection-liveness catch-up: send a heartbeat on shutdown when the
+        // last recorded heartbeat is overdue by more than 120 s. Fixes false
+        // disconnects on page-cached idle sites where WP-Cron never fires.
+        $this->heartbeatCatchup->register();
 
         // Admin-bar cache purge controls — register on EVERY request, not just
         // admin ones, so the "Purge this page" node can appear on the front-end
@@ -1277,6 +1292,11 @@ final class Plugin
             new ObjectcacheEnableCommand(),
             new ObjectcacheDisableCommand(),
             new ObjectcacheFlushCommand(),
+            // Connection-liveness hardening (0.44.0): cheap CP active-verify dial.
+            // Answers ok/agent_version/php_time/wp_cron_disabled/heartbeat_overdue_sec
+            // and kicks spawn_cron() so every verify dial drains overdue cron events
+            // on page-cached idle sites.
+            new PingCommand(),
         ];
     }
 

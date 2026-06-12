@@ -604,7 +604,7 @@ func (q *Queries) ListConnectionHistory(ctx context.Context, arg ListConnectionH
 }
 
 const listSitesToDegrade = `-- name: ListSitesToDegrade :many
-SELECT id, tenant_id FROM sites
+SELECT id, tenant_id, url FROM sites
 WHERE connection_state = 'connected'
   AND (last_seen_at IS NULL OR last_seen_at < $1)
 `
@@ -612,9 +612,12 @@ WHERE connection_state = 'connected'
 type ListSitesToDegradeRow struct {
 	ID       uuid.UUID `json:"id"`
 	TenantID uuid.UUID `json:"tenant_id"`
+	Url      string    `json:"url"`
 }
 
 // connected sites whose last heartbeat is older than the degrade cutoff.
+// url is included so the active-verify sweeper can dial the agent without a
+// secondary tenant-scoped lookup.
 func (q *Queries) ListSitesToDegrade(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDegradeRow, error) {
 	rows, err := q.db.Query(ctx, listSitesToDegrade, lastSeenAt)
 	if err != nil {
@@ -624,7 +627,7 @@ func (q *Queries) ListSitesToDegrade(ctx context.Context, lastSeenAt pgtype.Time
 	var items []ListSitesToDegradeRow
 	for rows.Next() {
 		var i ListSitesToDegradeRow
-		if err := rows.Scan(&i.ID, &i.TenantID); err != nil {
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.Url); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -636,7 +639,7 @@ func (q *Queries) ListSitesToDegrade(ctx context.Context, lastSeenAt pgtype.Time
 }
 
 const listSitesToDisconnect = `-- name: ListSitesToDisconnect :many
-SELECT id, tenant_id FROM sites
+SELECT id, tenant_id, url FROM sites
 WHERE connection_state = 'degraded'
   AND (last_seen_at IS NULL OR last_seen_at < $1)
 `
@@ -644,9 +647,12 @@ WHERE connection_state = 'degraded'
 type ListSitesToDisconnectRow struct {
 	ID       uuid.UUID `json:"id"`
 	TenantID uuid.UUID `json:"tenant_id"`
+	Url      string    `json:"url"`
 }
 
 // degraded sites whose last heartbeat is older than the disconnect cutoff.
+// url is included so the active-verify sweeper can dial the agent without a
+// secondary tenant-scoped lookup.
 func (q *Queries) ListSitesToDisconnect(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDisconnectRow, error) {
 	rows, err := q.db.Query(ctx, listSitesToDisconnect, lastSeenAt)
 	if err != nil {
@@ -656,7 +662,7 @@ func (q *Queries) ListSitesToDisconnect(ctx context.Context, lastSeenAt pgtype.T
 	var items []ListSitesToDisconnectRow
 	for rows.Next() {
 		var i ListSitesToDisconnectRow
-		if err := rows.Scan(&i.ID, &i.TenantID); err != nil {
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.Url); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

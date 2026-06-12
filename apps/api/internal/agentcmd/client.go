@@ -252,6 +252,79 @@ func (c *Client) MetadataRaw(ctx context.Context, siteID uuid.UUID, siteURL stri
 	return c.Metadata(ctx, siteID, siteURL, MetadataRequest{})
 }
 
+// Ping sends the signed `ping` command to the site's agent and returns the
+// parsed response (0.44.0 active liveness probe). siteID is bound into the
+// JWT's aud claim. An old agent without the ping route returns a 404 from the
+// REST API — callers should fall back to MetadataRaw for backward compatibility.
+// Ping never logs the response body; only the ok field is inspected.
+func (c *Client) Ping(ctx context.Context, siteID uuid.UUID, siteURL string) (PingResponse, error) {
+	var out PingResponse
+	if err := c.post(ctx, siteID, siteURL, "ping", PingRequest{}, &out); err != nil {
+		return PingResponse{}, err
+	}
+	return out, nil
+}
+
+// VerifyReachable implements the 0.44.0 liveness-fallback contract:
+//
+//  1. Try the `ping` command (new agents).  A 2xx response means alive.
+//  2. When ping returns a 404 or 400 (old agent / unknown command), fall back
+//     to MetadataRaw.  A 2xx metadata response means alive.
+//  3. Anything else (transport error, 5xx, both-fail) means not alive.
+//
+// The function returns (true, nil) when the site is reachable, (false, nil)
+// when it is not, and (false, err) only on unexpected infrastructure failures
+// (e.g. JWT-mint failure). Response bodies are discarded beyond the minimal
+// decode needed to detect the error; nothing is logged by this function —
+// callers should emit structured log lines with the returned outcome.
+func (c *Client) VerifyReachable(ctx context.Context, siteID uuid.UUID, siteURL string) (alive bool, fallbackUsed bool, err error) {
+	out, pingErr := c.Ping(ctx, siteID, siteURL)
+	if pingErr == nil && out.OK {
+		return true, false, nil
+	}
+
+	// Fall back to the metadata command when ping looks like an old agent
+	// (404/400 unknown command) — or when something answered 2xx without the
+	// agent-shaped ok field (captive portal, generic maintenance page): the
+	// metadata shape check below settles whether a real agent is behind it.
+	fallback := pingErr == nil && !out.OK
+	if pingErr != nil {
+		pingErrStr := pingErr.Error()
+		fallback = strings.Contains(pingErrStr, "status 404") ||
+			strings.Contains(pingErrStr, "status 400")
+	}
+	if fallback {
+		raw, metaErr := c.MetadataRaw(ctx, siteID, siteURL)
+		if metaErr == nil && looksLikeAgentMetadata(raw) {
+			return true, true, nil
+		}
+		// Both ping and shape-checked metadata failed — not alive.
+		return false, true, nil
+	}
+
+	// Hard transport / 5xx failure on ping — not alive.  The JWT-mint path
+	// returns a format error (no status code), so it falls here too: treat it
+	// as not alive rather than an infra error, to avoid blocking the sweeper.
+	return false, false, nil
+}
+
+// looksLikeAgentMetadata is the liveness shape check for the metadata
+// fallback: a 2xx alone must not count as alive (a captive portal or generic
+// 200 page would pass), so require the one field every agent version's
+// metadata command has always returned. Deliberately local — the tolerant
+// decoder in internal/agent accepts {} and would defeat the check (and
+// importing it would cycle: internal/agent imports this package).
+func looksLikeAgentMetadata(raw []byte) bool {
+	var probe struct {
+		WPVersion    string `json:"wp_version"`
+		AgentVersion string `json:"agent_version"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return false
+	}
+	return probe.WPVersion != "" || probe.AgentVersion != ""
+}
+
 // MediaOptimize sends the signed `media_optimize` command to the site's agent
 // (ADR-043). siteID is bound into the JWT's aud claim. The agent presigned-PUTs
 // each job's source variants and calls back to the CP's encode-ready endpoint;

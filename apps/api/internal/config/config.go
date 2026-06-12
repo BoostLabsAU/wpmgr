@@ -54,6 +54,18 @@ type ConnConfig struct {
 	// DisconnectAfter is the staleness window before a degraded site is
 	// disconnected. Default 900s. Env: WPMGR_CONN_DISCONNECT_AFTER.
 	DisconnectAfter time.Duration `koanf:"disconnect_after"`
+	// ActiveVerify enables CP-initiated active liveness checks (0.44.0).
+	// When true (the default) the sweeper dials the agent before executing the
+	// degrade or disconnect transition; a successful ping/metadata response
+	// resets the miss counter and skips the transition.
+	// Set WPMGR_SWEEP_ACTIVE_VERIFY=false to revert to the passive sweeper.
+	ActiveVerify bool `koanf:"active_verify"`
+	// VerifyTimeout is the per-dial timeout for active liveness checks.
+	// Default 8s. Env: WPMGR_SWEEP_VERIFY_TIMEOUT.
+	VerifyTimeout time.Duration `koanf:"verify_timeout"`
+	// VerifyConcurrency is the maximum number of concurrent active-verify dials
+	// per sweep tick. Default 8. Env: WPMGR_SWEEP_VERIFY_CONCURRENCY.
+	VerifyConcurrency int `koanf:"verify_concurrency"`
 }
 
 // AutologinConfig holds the Phase 5.5 one-click login tunables (ADR-031).
@@ -401,6 +413,9 @@ func defaults() map[string]any {
 		"conn.degrade_after":                "300s",
 		"conn.degrade_miss_threshold":       3,
 		"conn.disconnect_after":             "900s",
+		"conn.active_verify":                true,
+		"conn.verify_timeout":               "8s",
+		"conn.verify_concurrency":           8,
 	}
 }
 
@@ -483,6 +498,15 @@ func mapEnvKey(k string) string {
 		return "autologin." + strings.TrimPrefix(k, "autologin_")
 	case strings.HasPrefix(k, "conn_"):
 		return "conn." + strings.TrimPrefix(k, "conn_")
+	// WPMGR_SWEEP_ACTIVE_VERIFY -> conn.active_verify (0.44.0 active liveness).
+	case k == "sweep_active_verify":
+		return "conn.active_verify"
+	// WPMGR_SWEEP_VERIFY_TIMEOUT -> conn.verify_timeout.
+	case k == "sweep_verify_timeout":
+		return "conn.verify_timeout"
+	// WPMGR_SWEEP_VERIFY_CONCURRENCY -> conn.verify_concurrency.
+	case k == "sweep_verify_concurrency":
+		return "conn.verify_concurrency"
 	default:
 		return k
 	}

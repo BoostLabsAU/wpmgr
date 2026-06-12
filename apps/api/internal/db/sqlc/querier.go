@@ -871,8 +871,12 @@ type Querier interface {
 	// When sqlc.narg('client_id') is set only sites belonging to that client are returned (m63).
 	ListSites(ctx context.Context, arg ListSitesParams) ([]Site, error)
 	// connected sites whose last heartbeat is older than the degrade cutoff.
+	// url is included so the active-verify sweeper can dial the agent without a
+	// secondary tenant-scoped lookup.
 	ListSitesToDegrade(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDegradeRow, error)
 	// degraded sites whose last heartbeat is older than the disconnect cutoff.
+	// url is included so the active-verify sweeper can dial the agent without a
+	// secondary tenant-scoped lookup.
 	ListSitesToDisconnect(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDisconnectRow, error)
 	// Watchdog feeder: a running snapshot whose latest progress is older than the
 	// stall threshold (or whose runner never reported any progress despite being

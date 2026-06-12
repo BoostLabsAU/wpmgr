@@ -6,6 +6,22 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-06-12
+
+### Fixed
+
+- **Healthy idle sites on a page cache no longer show as disconnected (critical).** Agent heartbeats ride WP-Cron, which only runs when PHP boots. On a fully page-cached low-traffic site the web server serves every request from disk, WordPress never boots, and a healthy site showed as disconnected. The connection sweeper now dials each quiet site directly with a signed ping command before it degrades or disconnects the site, so dashboard liveness is no longer traffic-dependent. A captive portal or other generic 200 response is never counted as alive. Sites confirmed unreachable after the dial disconnect with the new reason "agent_unreachable", distinguishing them from sites that are simply idle.
+
+### Added
+
+- **Active reachability verification in the connection sweeper.** The sweeper dials each quiet site with a signed ping command (falls back to the metadata command for older agents) and treats a shape-verified 200 as a heartbeat, keeping the site connected. The dial also wakes WP-Cron so overdue scheduled work drains. Bounded: 8s per-dial timeout, 8 concurrent dials, 12s wall budget per sweep tick. Three environment knobs: `WPMGR_SWEEP_ACTIVE_VERIFY` (default on), `WPMGR_SWEEP_VERIFY_TIMEOUT`, `WPMGR_SWEEP_VERIFY_CONCURRENCY`.
+- **Agent: signed ping command.** A cheap liveness answer that spawns WP-Cron so overdue scheduled work drains on every verify dial.
+- **Agent: shutdown catch-up heartbeat.** Fires when WordPress boots and the last heartbeat is more than two minutes overdue. Stampede-locked, 5s timeout so it never holds a worker.
+- **Dashboard: accurate connection badge copy.** "Agent unreachable" when the control plane dialed and got no answer; "No heartbeat" when the agent is quiet but the site may just be idle. The degraded tooltip explains verification is in progress.
+- **Dashboard: Health-tab cron callout.** A dismissible callout recommends disabling WP-Cron and adding a real server cron entry when diagnostics show WP-Cron starvation on a cached site.
+
+Control plane, web, and agent 0.44.0; no migration.
+
 ## [0.43.3] - 2026-06-12
 
 ### Fixed
