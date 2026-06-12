@@ -210,6 +210,9 @@ final class EmailLogReporter {
 	 * @return array<int,array<string,mixed>>
 	 */
 	private function fetchBatch( object $wpdb, string $table, int $cursor ): array {
+		// Identifier defense in depth: $table is $wpdb->prefix plus a hard-coded
+		// constant, but escape it anyway so static analysis can verify the query.
+		$table = esc_sql( $table );
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- plugin-owned table; keyset cursor reads must not be cached (stale data would permanently skip rows)
 		$rows = $wpdb->get_results(
 			$wpdb->prepare(
