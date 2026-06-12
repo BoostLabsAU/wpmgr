@@ -124,7 +124,7 @@ done
 echo "[e2e] Step 5: provision..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress php /usr/local/bin/wpmgr-assert.php provision
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php provision
 
 # -----------------------------------------------------------------------
 # Step 6: assert-cli stage.
@@ -132,7 +132,7 @@ docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
 echo "[e2e] Step 6: assert-cli..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress php /usr/local/bin/wpmgr-assert.php assert-cli
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php assert-cli
 
 # -----------------------------------------------------------------------
 # Step 7: CROSS-REQUEST PERSISTENCE (FIX A direct regression net).
@@ -211,7 +211,7 @@ MUEOF
 # Write the mu-plugin inside the container.
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress bash -c \
+    exec -T -u www-data wordpress bash -c \
     "mkdir -p /var/www/html/wp-content/mu-plugins && cat > /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php" \
     <<< "${PROBE_MU_PLUGIN}"
 
@@ -251,7 +251,7 @@ fi
 echo "[e2e] Forensics: reading outage marker state between requests..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress php /usr/local/bin/wpmgr-assert.php outage-failback-forensics \
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php outage-failback-forensics \
     || echo "[e2e] WARN: forensics stage returned non-zero (non-fatal)"
 
 # Request 2: get the value (cross-request persistence).
@@ -279,7 +279,7 @@ echo "[e2e] PASS: Cross-request persistence: found=true, hit_count=${HIT_COUNT}"
 # Remove the probe mu-plugin.
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress rm -f /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php
+    exec -T -u www-data wordpress rm -f /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php
 
 # -----------------------------------------------------------------------
 # Step 8: Drop-in freshness guard.
