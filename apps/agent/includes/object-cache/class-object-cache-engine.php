@@ -2470,6 +2470,19 @@ class WPMgr_Object_Cache
 	}
 
 	/**
+	 * FD-6: Whether APCu is actually usable in this SAPI. function_exists alone
+	 * is wrong: on the command line the extension is commonly loaded with
+	 * apc.enable_cli off, so the functions exist but the store is inert and
+	 * the state file fallback must be used instead.
+	 *
+	 * @return bool
+	 */
+	private function apcuUsable(): bool
+	{
+		return function_exists( 'apcu_enabled' ) && apcu_enabled();
+	}
+
+	/**
 	 * FD-6: Read the cool-down state (APCu or state file).
 	 * Returns array{last_failure_ts:float,consecutive_failures:int} or null when absent.
 	 *
@@ -2478,7 +2491,7 @@ class WPMgr_Object_Cache
 	private function readCooldownState(): ?array
 	{
 		// APCu is preferred: no disk I/O on the hot path.
-		if ( function_exists( 'apcu_fetch' ) ) {
+		if ( $this->apcuUsable() ) {
 			$val = apcu_fetch( 'wpmgr_oc_cooldown' );
 			if ( is_array( $val ) ) {
 				return $val;
@@ -2511,7 +2524,7 @@ class WPMgr_Object_Cache
 	 */
 	private function writeCooldownState( array $state ): void
 	{
-		if ( function_exists( 'apcu_store' ) ) {
+		if ( $this->apcuUsable() ) {
 			apcu_store( 'wpmgr_oc_cooldown', $state, 600 );
 			return;
 		}
@@ -2596,7 +2609,7 @@ class WPMgr_Object_Cache
 	 */
 	private function clearCooldownState( array $config ): void
 	{
-		if ( function_exists( 'apcu_delete' ) ) {
+		if ( $this->apcuUsable() ) {
 			apcu_delete( 'wpmgr_oc_cooldown' );
 			return;
 		}
