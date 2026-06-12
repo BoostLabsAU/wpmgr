@@ -70,7 +70,11 @@ final class ObjectCacheDropinArtifactBootTest extends TestCase
         try {
             $output = [];
             $exit   = 0;
-            exec( 'php ' . escapeshellarg( $scriptFile ) . ' 2>&1', $output, $exit );
+            // -n: skip php.ini entirely so shared extensions (notably a real
+            // phpredis on CI runners) never load and the script's stub Redis
+            // class cannot collide with the extension's built-in class. The
+            // artifact's boot path uses only always-compiled-in extensions.
+            exec( escapeshellarg( PHP_BINARY ) . ' -n ' . escapeshellarg( $scriptFile ) . ' 2>&1', $output, $exit );
             $outputStr = implode( "\n", $output );
 
             $this->assertSame(
