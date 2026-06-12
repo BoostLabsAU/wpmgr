@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	rucssmodel "github.com/mosamlife/wpmgr/apps/api/internal/rucss/model"
 	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
 )
@@ -316,5 +319,187 @@ func TestRucssIngestNoIdentity401(t *testing.T) {
 
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("expected 401 without identity, got %d", rec.Code)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Fakes for object-cache stats-report tests
+// ---------------------------------------------------------------------------
+
+// fakeOCSvc is a test double for the objectCacheSvc interface used by
+// AgentHandler. It records calls so tests can assert ingest happened.
+type fakeOCSvc struct {
+	mu           sync.Mutex
+	statsInputs  []objectcache.IngestStatsInput
+	statsErr     error
+	heartbeats   []*objectcache.HeartbeatBlock
+	heartbeatErr error
+}
+
+func (f *fakeOCSvc) IngestStats(_ context.Context, input objectcache.IngestStatsInput) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.statsInputs = append(f.statsInputs, input)
+	return f.statsErr
+}
+
+func (f *fakeOCSvc) IngestHeartbeat(_ context.Context, _, _ uuid.UUID, block *objectcache.HeartbeatBlock) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.heartbeats = append(f.heartbeats, block)
+	return f.heartbeatErr
+}
+
+// buildStatsReportEngine builds a Gin engine that wires statsReport with an
+// identity and the given objectCacheSvc stub (may be nil to disable the block).
+func buildStatsReportEngine(t *testing.T, id agent.Identity, oc objectCacheSvc) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	svc := NewService(&fakeRepo{}, nil, nil, nil)
+	h := &AgentHandler{svc: svc, rucss: nil, ocSvc: oc}
+	eng := gin.New()
+	eng.POST("/agent/v1/cache/stats-report", withIdentity(id, h.statsReport))
+	return eng
+}
+
+// ---------------------------------------------------------------------------
+// TestStatsReportAcceptsFloatOpsPerSec — fix for the live prod 422
+//
+// Root cause: agentObjectCacheBlock.OpsPerSec was typed int, but the PHP agent
+// emits round($ops/$elapsed, 2) which produces a fractional JSON number
+// (e.g. 35.25). encoding/json rejects a fractional number for an int target
+// and fails the whole Unmarshal, 422-ing the entire stats-report.
+//
+// After the fix:
+//   - OpsPerSec is float64 in agentObjectCacheBlock (accepts 35.25).
+//   - ObjectCache is json.RawMessage (sub-block decoded separately, best-effort).
+//   - The response is 200 and IngestStats is called with the value.
+// ---------------------------------------------------------------------------
+func TestStatsReportAcceptsFloatOpsPerSec(t *testing.T) {
+	siteID, tenantID := uuid.New(), uuid.New()
+	id := agent.Identity{SiteID: siteID, TenantID: tenantID}
+	oc := &fakeOCSvc{}
+	eng := buildStatsReportEngine(t, id, oc)
+
+	// Build a stats-report body with a fractional ops_per_sec inside object_cache.
+	// The PHP agent emits this when $elapsed is non-zero and ops/elapsed is fractional.
+	body, _ := json.Marshal(map[string]any{
+		"cached_pages_count": 42,
+		"cache_size_bytes":   1024,
+		"cache_hit_count":    10,
+		"cache_miss_count":   2,
+		"object_cache": map[string]any{
+			"state":         "connected",
+			"latency_ms":    1.5,
+			"hit_count":     800,
+			"miss_count":    200,
+			"ops_per_sec":   35.25, // fractional — was fatal before this fix
+			"avg_wait_ms":   0.8,
+		},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/cache/stats-report", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	eng.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 for float ops_per_sec, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	oc.mu.Lock()
+	defer oc.mu.Unlock()
+
+	// IngestStats must have been called (hit_count=800, miss_count=200 are non-zero).
+	if len(oc.statsInputs) == 0 {
+		t.Fatal("expected IngestStats to be called; it was not")
+	}
+	inp := oc.statsInputs[0]
+	// ops_per_sec=35.25 should arrive at IngestStats as 35.25 (float64).
+	// The repo will round to 35 before writing to the integer DB column.
+	if inp.OpsPerSec < 35.0 || inp.OpsPerSec > 36.0 {
+		t.Errorf("OpsPerSec not in expected range [35,36]: got %v", inp.OpsPerSec)
+	}
+	if inp.HitCount != 800 || inp.MissCount != 200 {
+		t.Errorf("hit/miss counts wrong: hit=%d miss=%d", inp.HitCount, inp.MissCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestStatsReportMalformedObjectCacheBlockStill200
+//
+// Structural fix: even when the object_cache sub-block cannot be decoded
+// (wrong field types, garbage value, any JSON schema mismatch), the handler
+// must:
+//   - Log a WARNING (not return an error).
+//   - Ingest the page-cache stats portion normally.
+//   - Return 200 to the agent so it keeps reporting.
+//
+// This is the same class of bug as the email-log 422 incident (v0.35.3) and
+// is explicitly promised by the M68 handler comment.
+// ---------------------------------------------------------------------------
+func TestStatsReportMalformedObjectCacheBlockStill200(t *testing.T) {
+	cases := []struct {
+		name        string
+		objectCache any
+	}{
+		{
+			name:        "ops_per_sec is a non-numeric string",
+			objectCache: map[string]any{"state": "connected", "ops_per_sec": "not-a-number"},
+		},
+		{
+			name:        "object_cache is a bare string not an object",
+			objectCache: "garbage",
+		},
+		{
+			name:        "hit_count is a nested object",
+			objectCache: map[string]any{"state": "connected", "hit_count": map[string]any{"nested": true}},
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			siteID, tenantID := uuid.New(), uuid.New()
+			id := agent.Identity{SiteID: siteID, TenantID: tenantID}
+			oc := &fakeOCSvc{}
+			eng := buildStatsReportEngine(t, id, oc)
+
+			body, _ := json.Marshal(map[string]any{
+				"cached_pages_count": 10,
+				"cache_size_bytes":   512,
+				// Page-cache hit/miss counts — must still be ingested.
+				"cache_hit_count":  50,
+				"cache_miss_count": 5,
+				"object_cache":     tc.objectCache,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/agent/v1/cache/stats-report", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			rec := httptest.NewRecorder()
+			eng.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Errorf("%s: expected 200 with malformed object_cache block, got %d body=%s",
+					tc.name, rec.Code, rec.Body.String())
+			}
+			// The page-cache stats path (ReportCacheStats) must have completed.
+			// We confirm this indirectly: a 200 response means the handler did not
+			// short-circuit on the malformed block. IngestStats must NOT have been
+			// called for a block that failed decode.
+			oc.mu.Lock()
+			defer oc.mu.Unlock()
+			if len(oc.statsInputs) > 0 {
+				// A failed decode must skip IngestStats; a successful decode with
+				// zero hit/miss (the "hit_count is an object" case) also skips it
+				// (the service's zero-delta guard). Either way: zero calls expected
+				// for malformed blocks.
+				//
+				// For "ops_per_sec is a non-numeric string" and "object_cache is a
+				// bare string", json.Unmarshal fails entirely and the block is skipped.
+				// For "hit_count is a nested object", Unmarshal fails on the int64
+				// field. All three cases must produce len(statsInputs)==0.
+				t.Errorf("%s: IngestStats must not be called for a malformed block; called %d time(s)",
+					tc.name, len(oc.statsInputs))
+			}
+		})
 	}
 }

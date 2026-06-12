@@ -1,6 +1,7 @@
 package perf
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -39,13 +40,20 @@ const (
 // the agent group; the site + tenant are taken from the VERIFIED identity, never
 // from the body. The RUCSS endpoint additionally asserts the body's site_id
 // matches the JWT-bound site (no cross-site).
+// objectCacheSvc is the subset of *objectcache.Service used by AgentHandler.
+// Defined as an interface so tests can stub it without a live DB.
+type objectCacheSvc interface {
+	IngestStats(ctx context.Context, input objectcache.IngestStatsInput) error
+	IngestHeartbeat(ctx context.Context, tenantID, siteID uuid.UUID, block *objectcache.HeartbeatBlock) error
+}
+
 type AgentHandler struct {
 	svc   *Service
 	rucss *RucssIngestService
 	// ocSvc is the Object Cache service for the optional object_cache ingest block
 	// that the agent appends to its stats-report push. May be nil when the Object
 	// Cache feature is not wired.
-	ocSvc *objectcache.Service
+	ocSvc objectCacheSvc
 }
 
 // NewAgentHandler wires the agent handler. rucss and ocSvc may be nil.
@@ -92,7 +100,13 @@ type statsReportBody struct {
 	// absent or when the Object Cache service is not wired. All fields are
 	// attacker-controlled (a compromised site can forge them), so the handler
 	// clamps numeric ranges and validates string enums before forwarding.
-	ObjectCache *agentObjectCacheBlock `json:"object_cache,omitempty"`
+	//
+	// Stored as json.RawMessage so that a malformed block (e.g. the PHP agent
+	// emitting ops_per_sec as a float before we typed it correctly, or any
+	// future schema drift) does NOT fail the whole-body Unmarshal and cause a
+	// 422 for the page-cache stats portion. The block is decoded separately,
+	// best-effort: a decode failure is WARN-logged and the handler continues.
+	ObjectCache json.RawMessage `json:"object_cache,omitempty"`
 }
 
 // agentObjectCacheBlock is the optional object_cache sub-object inside a
@@ -119,7 +133,11 @@ type agentObjectCacheBlock struct {
 	HitCount         int64   `json:"hit_count,omitempty"`
 	MissCount        int64   `json:"miss_count,omitempty"`
 	AvgWaitMs        float64 `json:"avg_wait_ms,omitempty"`
-	OpsPerSec        int     `json:"ops_per_sec,omitempty"`
+	// OpsPerSec is typed float64 because the PHP agent emits round($ops/$elapsed, 2)
+	// which produces a fractional JSON number (e.g. 35.25). An int target would
+	// cause encoding/json to reject the whole block. The value is rounded to the
+	// nearest integer at the DB-bound service boundary (ops_per_sec column is integer).
+	OpsPerSec        float64 `json:"ops_per_sec,omitempty"`
 	EvictedKeysDelta int64   `json:"evicted_keys_delta,omitempty"`
 	ConnectedClients int     `json:"connected_clients,omitempty"`
 }
@@ -173,13 +191,31 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 			_ = wooErr
 		}
 	}
-	// M68 — object_cache block: best-effort, tolerant. A malformed or missing
-	// block MUST NOT 4xx this response (the email-log 422 lesson). The block is
-	// attacker-controlled (a compromised site can forge any value) so every field
-	// is clamped/validated before forwarding. siteID and tenantID come STRICTLY
-	// from the verified agent identity (id), never from the body.
-	if in.ObjectCache != nil && h.ocSvc != nil {
-		ocBlock := in.ObjectCache
+	// M68 — object_cache block: best-effort, tolerant. ObjectCache is a
+	// json.RawMessage: the outer Unmarshal captures the raw bytes without
+	// attempting to decode the sub-object, so a malformed block (wrong field
+	// types, future schema drift) CANNOT fail the whole stats-report and MUST
+	// NOT 4xx this response (the email-log 422 lesson, this handler's own
+	// comment promise). Decode the sub-object separately here.
+	// The block is attacker-controlled (a compromised site can forge any value)
+	// so every field is clamped/validated before forwarding. siteID and tenantID
+	// come STRICTLY from the verified agent identity (id), never from the body.
+	var ocBlockDecoded *agentObjectCacheBlock
+	if len(in.ObjectCache) > 0 && h.ocSvc != nil {
+		var parsed agentObjectCacheBlock
+		if decErr := json.Unmarshal(in.ObjectCache, &parsed); decErr != nil {
+			// A malformed block is a WARN (observability) not an error: the page-cache
+			// stats were already ingested above; the response is still 200.
+			slog.Warn("objectcache: block malformed, skipping",
+				slog.String("site_id", id.SiteID.String()),
+				slog.Any("error", decErr),
+			)
+		} else {
+			ocBlockDecoded = &parsed
+		}
+	}
+	if ocBlockDecoded != nil && h.ocSvc != nil {
+		ocBlock := ocBlockDecoded
 		// Validate the state enum. The agent legitimately emits 'disabled' when
 		// the drop-in is configured but not serving. Unknown values are coerced to
 		// "" (OCStateUnknown) and the heartbeat update is skipped entirely so we

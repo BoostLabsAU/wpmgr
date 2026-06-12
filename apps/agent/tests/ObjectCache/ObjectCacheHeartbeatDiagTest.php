@@ -461,6 +461,147 @@ final class ObjectCacheHeartbeatDiagTest extends TestCase
 		);
 	}
 
+	// =========================================================================
+	// Cross-language type contract: integer-typed fields must be PHP int
+	// =========================================================================
+
+	/**
+	 * Integer-typed fields in the analytics block must be PHP int, not float.
+	 *
+	 * The Go control plane types ops_per_sec, hit_count, miss_count, and
+	 * used_memory_bytes as int/int64. A PHP float emitted by json_encode
+	 * (e.g. 123.0 or 823.47) causes the CP to return 422 on every stats-report
+	 * from a site with real Redis traffic (idle sites emit 0 which PHP encodes
+	 * as integer, which is why QA missed it).
+	 *
+	 * This test builds the analytics block by seeding the OPTION_STATS option
+	 * with real delta values chosen so that delta_ops / elapsed_sec produces a
+	 * fractional rate. It then asserts:
+	 *   - ops_per_sec is a PHP int (not float).
+	 *   - hit_count, miss_count, used_memory_bytes are PHP int (not float).
+	 *   - json_encode of the block contains no fractional JSON number for those
+	 *     four fields (round-trip decode also confirms the types).
+	 */
+	public function test_block_integer_typed_fields_are_php_ints(): void
+	{
+		// ---- Wire config dir ----
+		// ObjectCacheConfig reads WP_CONTENT_DIR via constant(). That is a PHP
+		// internal function and cannot be stubbed by Brain Monkey / Patchwork.
+		// Instead we define WP_CONTENT_DIR to a fresh temp dir here if it is not
+		// already defined (another test may have defined it earlier in the process).
+		// If it IS already defined we write our config into that dir and clean it up
+		// after the test ourselves.
+		$configDir = defined( 'WP_CONTENT_DIR' ) ? (string) constant( 'WP_CONTENT_DIR' ) : $this->tmpDir;
+
+		if ( ! defined( 'WP_CONTENT_DIR' ) ) {
+			// phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedConstantFound -- test-only constant definition, mirrors WP core
+			define( 'WP_CONTENT_DIR', $this->tmpDir );
+			$configDir = $this->tmpDir;
+		}
+
+		$configFile = $configDir . '/wpmgr-object-cache-config.php';
+		$wroteCfg   = ! is_file( $configFile );
+		if ( $wroteCfg ) {
+			file_put_contents(
+				$configFile,
+				"<?php defined('ABSPATH') || exit; return ['host' => '127.0.0.1', 'port' => 6379, 'analytics_enabled' => true];\n"
+			);
+			// ObjectCacheConfig refuses to include world-readable secrets files.
+			// Set 0600 so the permission check passes in the test environment.
+			chmod( $configFile, 0600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- test-only chmod; WP_Filesystem not available in unit tests
+		}
+
+		// Seed the stats option with a delta that yields a non-integer rate.
+		// delta_ops=12345, delta_since_ts ≈ 10.7 seconds ago → rate ≈ 1153.7 ops/sec.
+		// The fix must round and cast to int → 1154 (or whatever round() returns).
+		$sinceTs = microtime( true ) - 10.7;
+		$this->optionStore[ ObjectCacheHeartbeat::OPTION_STATS ] = [
+			'delta_hit_count'    => 9876,
+			'delta_miss_count'   => 1234,
+			'delta_ops'          => 12345,
+			'delta_wait_ms'      => 543.21,
+			'delta_sample_count' => 42,
+			'delta_since_ts'     => $sinceTs,
+		];
+
+		// Boot the engine in array mode (no Redis) so getHeartbeatStats() is available.
+		// In array mode used_memory_bytes is absent from liveStats → block defaults to
+		// (int)0, which is still int, sufficient to assert the cast is in place.
+		$oc = \WPMgr_Object_Cache::boot();
+		$GLOBALS['wp_object_cache'] = $oc;
+
+		// ---- Build the block ----
+		$block = ObjectCacheHeartbeat::build();
+
+		// ---- Cleanup config if we wrote it ----
+		if ( $wroteCfg && is_file( $configFile ) ) {
+			@unlink( $configFile ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- test cleanup
+		}
+
+		// build() returns null only when no config is present; we wrote config above.
+		$this->assertNotNull( $block, 'build() must return a non-null block when config is present' );
+		$this->assertIsArray( $block );
+
+		// ---- Assert PHP types ----
+		$this->assertArrayHasKey( 'ops_per_sec', $block, 'analytics block must contain ops_per_sec' );
+		$this->assertArrayHasKey( 'hit_count', $block, 'analytics block must contain hit_count' );
+		$this->assertArrayHasKey( 'miss_count', $block, 'analytics block must contain miss_count' );
+		$this->assertArrayHasKey( 'used_memory_bytes', $block, 'analytics block must contain used_memory_bytes' );
+
+		$this->assertIsInt( $block['ops_per_sec'], 'ops_per_sec must be PHP int (Go types it as int)' );
+		$this->assertIsInt( $block['hit_count'], 'hit_count must be PHP int (Go types it as int64)' );
+		$this->assertIsInt( $block['miss_count'], 'miss_count must be PHP int (Go types it as int64)' );
+		$this->assertIsInt( $block['used_memory_bytes'], 'used_memory_bytes must be PHP int (Go types it as int64)' );
+
+		// ops_per_sec must be > 0 given our delta (12345 ops over ~10.7 s).
+		$this->assertGreaterThan( 0, $block['ops_per_sec'], 'ops_per_sec must be positive given real delta' );
+
+		// ---- Assert JSON encoding emits no fractional number for integer fields ----
+		$json = json_encode( $block );
+		$this->assertIsString( $json, 'json_encode must succeed' );
+
+		// Decode and verify round-trip types.
+		$decoded = json_decode( $json, true );
+		$this->assertIsArray( $decoded );
+
+		// In decoded JSON: integers arrive as PHP int (no trailing .0).
+		$this->assertIsInt( $decoded['ops_per_sec'], 'ops_per_sec must round-trip as integer through JSON' );
+		$this->assertIsInt( $decoded['hit_count'], 'hit_count must round-trip as integer through JSON' );
+		$this->assertIsInt( $decoded['miss_count'], 'miss_count must round-trip as integer through JSON' );
+		$this->assertIsInt( $decoded['used_memory_bytes'], 'used_memory_bytes must round-trip as integer through JSON' );
+
+		// Extra guard: the raw JSON string must not contain a decimal point
+		// immediately following the value of these fields (e.g. "ops_per_sec":823.47).
+		$this->assertDoesNotMatchRegularExpression(
+			'/"ops_per_sec"\s*:\s*-?\d+\.\d+/',
+			$json,
+			'ops_per_sec must not appear as a fractional number in JSON output'
+		);
+		$this->assertDoesNotMatchRegularExpression(
+			'/"hit_count"\s*:\s*-?\d+\.\d+/',
+			$json,
+			'hit_count must not appear as a fractional number in JSON output'
+		);
+		$this->assertDoesNotMatchRegularExpression(
+			'/"miss_count"\s*:\s*-?\d+\.\d+/',
+			$json,
+			'miss_count must not appear as a fractional number in JSON output'
+		);
+		$this->assertDoesNotMatchRegularExpression(
+			'/"used_memory_bytes"\s*:\s*-?\d+\.\d+/',
+			$json,
+			'used_memory_bytes must not appear as a fractional number in JSON output'
+		);
+
+		// ---- Float fields must remain numeric ----
+		// avg_wait_ms and hit_ratio_window_pct are typed float64 on the CP side;
+		// the CP accepts both integer and float values for those fields.
+		$this->assertArrayHasKey( 'avg_wait_ms', $block );
+		$this->assertArrayHasKey( 'hit_ratio_window_pct', $block );
+		$this->assertIsNumeric( $block['avg_wait_ms'] );
+		$this->assertIsNumeric( $block['hit_ratio_window_pct'] );
+	}
+
 	/**
 	 * build() must not call diagnoseCause() (removed method) and must emit
 	 * 'early_definer' in the block when a non-empty definer is present.
