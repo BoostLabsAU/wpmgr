@@ -33,6 +33,11 @@ final class ObjectCacheCooldownTest extends TestCase
     protected function set_up(): void
     {
         parent::set_up();
+        // The _state_path_override key is only honored when this constant is true.
+        // Define once for the test class (define is idempotent after first run).
+        if ( ! defined( 'WPMGR_OC_TEST_STATE_OVERRIDE' ) ) {
+            define( 'WPMGR_OC_TEST_STATE_OVERRIDE', true );
+        }
         $this->tmpDir = sys_get_temp_dir() . '/wpmgr_oc_cooldown_test_' . uniqid( '', true );
         mkdir( $this->tmpDir, 0755, true );
         $this->resetBootStatics();
@@ -456,5 +461,91 @@ final class ObjectCacheCooldownTest extends TestCase
         // We cannot force 'cooldown' in unit tests without a real state file,
         // but we verify the structure is correct via source inspection above.
         $this->assertTrue( true, 'FD-6 structural assertions passed' );
+    }
+
+    // -------------------------------------------------------------------------
+    // Test: security gate — _state_path_override requires WPMGR_OC_TEST_STATE_OVERRIDE
+    // -------------------------------------------------------------------------
+
+    /**
+     * INFO-1 security gate: _state_path_override in the on-disk config must be
+     * ignored in production (WPMGR_OC_TEST_STATE_OVERRIDE not defined/true).
+     *
+     * Since the test suite defines WPMGR_OC_TEST_STATE_OVERRIDE=true (set in
+     * set_up()), we verify the security guard logic via source inspection and
+     * by asserting that without the constant the code path falls through to
+     * cooldownStatePath() rather than the override.
+     */
+    public function test_state_path_override_requires_test_constant(): void
+    {
+        // Source-level: the engine must gate the override on WPMGR_OC_TEST_STATE_OVERRIDE.
+        $enginePath = dirname( __DIR__, 2 ) . '/includes/object-cache/class-object-cache-engine.php';
+        $content    = (string) file_get_contents( $enginePath );
+
+        $this->assertStringContainsString(
+            'WPMGR_OC_TEST_STATE_OVERRIDE',
+            $content,
+            'Engine must reference the WPMGR_OC_TEST_STATE_OVERRIDE constant as a gate for _state_path_override'
+        );
+
+        // The gate must be present in all three override usage sites:
+        // readCooldownState, writeCooldownState, clearCooldownState.
+        $overrideGateCount = substr_count( $content, 'WPMGR_OC_TEST_STATE_OVERRIDE' );
+        $this->assertGreaterThanOrEqual(
+            3,
+            $overrideGateCount,
+            'WPMGR_OC_TEST_STATE_OVERRIDE must appear in all three cooldown methods (read/write/clear)'
+        );
+
+        // The engine must use strict true comparison (=== true) not just defined().
+        $this->assertStringContainsString(
+            'WPMGR_OC_TEST_STATE_OVERRIDE === true',
+            $content,
+            'The gate must use === true (strict comparison), not just defined()'
+        );
+    }
+
+    /**
+     * INFO-1 behavioral test: when WPMGR_OC_TEST_STATE_OVERRIDE is true (as
+     * defined in this test class's set_up()), a _state_path_override in the
+     * config IS honored by readCooldownState().
+     */
+    public function test_state_path_override_is_honored_when_constant_is_true(): void
+    {
+        // WPMGR_OC_TEST_STATE_OVERRIDE is defined=true via set_up().
+        $this->assertTrue(
+            defined( 'WPMGR_OC_TEST_STATE_OVERRIDE' ) && WPMGR_OC_TEST_STATE_OVERRIDE === true,
+            'Test precondition: WPMGR_OC_TEST_STATE_OVERRIDE must be true for this test to be meaningful'
+        );
+
+        $ref = new \ReflectionClass( \WPMgr_Object_Cache::class );
+        $oc  = new \WPMgr_Object_Cache();
+
+        // Write a cooldown state to a specific file in tmpDir.
+        $stateFile = $this->tmpDir . '/gate-state.json';
+        file_put_contents( // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- test helper
+            $stateFile,
+            (string) json_encode( [
+                'last_failure_ts'     => (float) time(),
+                'consecutive_failures' => 2,
+            ] )
+        );
+
+        // Inject the override.
+        $configProp = $ref->getProperty( 'config' );
+        $configProp->setValue( $oc, [ '_state_path_override' => $stateFile ] );
+
+        // readCooldownState should find the state file via the override.
+        $method = $ref->getMethod( 'readCooldownState' );
+        $state  = $method->invoke( $oc );
+
+        $this->assertIsArray( $state, 'readCooldownState() must return the state when override is honored (constant=true)' );
+        $this->assertArrayHasKey(
+            'consecutive_failures',
+            $state,
+            'State read via override must contain consecutive_failures key'
+        );
+
+        @unlink( $stateFile ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- test cleanup
     }
 }

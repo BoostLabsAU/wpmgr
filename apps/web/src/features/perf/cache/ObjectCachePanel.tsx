@@ -656,6 +656,7 @@ function ConfigDialog({ open, onClose, siteId, config, canOperate, onTestResult 
   const [asyncFlush, setAsyncFlush] = useState(config.async_flush ?? false);
   const [flushOnFailback, setFlushOnFailback] = useState(config.flush_on_failback ?? true);
   const [analyticsEnabled, setAnalyticsEnabled] = useState(config.analytics_enabled ?? true);
+  const [debugHeaderEnabled, setDebugHeaderEnabled] = useState(config.debug_header_enabled ?? false);
   const [maxttl, setMaxttl] = useState(config.maxttl_seconds ?? 604800);
   const [connectTimeout, setConnectTimeout] = useState(config.connect_timeout_ms ?? 1000);
   const [readTimeout, setReadTimeout] = useState(config.read_timeout_ms ?? 1000);
@@ -688,6 +689,7 @@ function ConfigDialog({ open, onClose, siteId, config, canOperate, onTestResult 
       async_flush: asyncFlush,
       flush_on_failback: flushOnFailback,
       analytics_enabled: analyticsEnabled,
+      debug_header_enabled: debugHeaderEnabled,
       maxttl_seconds: maxttl,
       connect_timeout_ms: connectTimeout,
       read_timeout_ms: readTimeout,
@@ -835,6 +837,13 @@ function ConfigDialog({ open, onClose, siteId, config, canOperate, onTestResult 
                 description="Track hit/miss ratios and memory usage over time."
                 checked={analyticsEnabled}
                 onChange={setAnalyticsEnabled}
+                disabled={disabled}
+              />
+              <SettingRow
+                label="Debug response header"
+                description="Adds an x-wpmgr-object-cache header with live hit and miss counts to front end responses. Administrators always receive the header when logged in; this setting controls it for everyone else. Check a front end page to verify — the header does not appear on wp-admin pages, and pages served by the page cache will not carry it because WordPress does not run on those responses."
+                checked={debugHeaderEnabled}
+                onChange={setDebugHeaderEnabled}
                 disabled={disabled}
               />
             </div>

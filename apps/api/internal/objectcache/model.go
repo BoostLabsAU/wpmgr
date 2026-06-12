@@ -77,6 +77,11 @@ type Config struct {
 	// Analytics toggle.
 	AnalyticsEnabled bool
 
+	// DebugHeaderEnabled when true causes the apply_config push to include the
+	// flag so the drop-in emits a per-request X-WPMgr-Cache debug response
+	// header. Default false (silent in production).
+	DebugHeaderEnabled bool
+
 	// Test gate: non-empty when the most recent test PASSED for the config hash.
 	// Enable is rejected when this is empty (handshake gate).
 	LastTestConfigHash string

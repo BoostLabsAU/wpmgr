@@ -245,7 +245,7 @@ final class ObjectCacheFix416Test extends TestCase
 	}
 
 	/**
-	 * C1: Artifact Version header must be 2.1.1 (updated from 2.1.0 in 0.42.1).
+	 * C1: Artifact Version header must be 2.2.0 (updated from 2.1.0 in 0.43.0).
 	 */
 	public function test_artifact_version_header_is_202(): void
 	{
@@ -254,14 +254,14 @@ final class ObjectCacheFix416Test extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $this->artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.1.1',
+			'Version: 2.2.0',
 			$first200,
-			'Artifact Version header must be 2.1.1 after 0.42.1 FD hotfix bump'
+			'Artifact Version header must be 2.2.0 after 0.43.0 FD hotfix bump'
 		);
 	}
 
 	/**
-	 * C2: Breadcrumb v tag must be '2.1.1' (updated from 2.1.0 in 0.42.1).
+	 * C2: Breadcrumb v tag must be '2.2.0' (updated from 2.1.0 in 0.43.0).
 	 */
 	public function test_artifact_breadcrumb_version_is_202(): void
 	{
@@ -270,14 +270,14 @@ final class ObjectCacheFix416Test extends TestCase
 		}
 		$content = (string) file_get_contents( $this->artifactPath );
 		$this->assertStringContainsString(
-			"'v' => '2.1.1'",
+			"'v' => '2.2.0'",
 			$content,
-			"Breadcrumb must set v => '2.1.1' after 0.42.1 FD hotfix bump"
+			"Breadcrumb must set v => '2.2.0' after 0.43.0 FD hotfix bump"
 		);
 	}
 
 	/**
-	 * C3: ENGINE_VERSION constant in artifact must be '0.42.1' (updated from 0.42.0 in FD hotfix).
+	 * C3: ENGINE_VERSION constant in artifact must be '0.43.0' (updated from 0.42.0 in FD hotfix).
 	 */
 	public function test_artifact_engine_version_is_0416(): void
 	{
@@ -286,9 +286,9 @@ final class ObjectCacheFix416Test extends TestCase
 		}
 		$content = (string) file_get_contents( $this->artifactPath );
 		$this->assertStringContainsString(
-			"ENGINE_VERSION = '0.42.1'",
+			"ENGINE_VERSION = '0.43.0'",
 			$content,
-			"ENGINE_VERSION constant must be '0.42.1' in the artifact (FD hotfix)"
+			"ENGINE_VERSION constant must be '0.43.0' in the artifact (FD hotfix)"
 		);
 	}
 

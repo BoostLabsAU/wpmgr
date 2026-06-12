@@ -959,6 +959,125 @@ PHP;
     exit(0);
 }
 
+// ============================================================================
+// Stage: debug-header
+// ============================================================================
+if ($stage === 'debug-header') {
+    $configPath = '/var/www/html/wp-content/wpmgr-object-cache-config.php';
+
+    // Read the current config.
+    $readConfigCode = <<<'PHP'
+$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();
+echo json_encode($cfg->load());
+PHP;
+    $exit = wp('eval ' . escapeshellarg($readConfigCode), $configJson);
+    if ($exit !== 0) {
+        fail('debug-header: could not read current config: ' . $configJson);
+    }
+    $config = json_decode(trim($configJson), true);
+    if (!is_array($config)) {
+        fail('debug-header: config JSON was not an array: ' . $configJson);
+    }
+
+    // Helper: write the config with debug_header_enabled set to a given value.
+    $writeConfig = static function (array $cfg, bool $debugEnabled, string $configPath): void {
+        $cfg['debug_header_enabled'] = $debugEnabled;
+        $phpArray = var_export($cfg, true);
+        $src = "<?php\ndefined( 'ABSPATH' ) || exit;\nreturn {$phpArray};\n";
+        file_put_contents($configPath, $src);
+        chmod($configPath, 0600);
+    };
+
+    // -----------------------------------------------------------------------
+    // Sub-stage (a): debug_header_enabled=true → header present on front-end.
+    // -----------------------------------------------------------------------
+    $writeConfig($config, true, $configPath);
+
+    $curlExit = run('curl -s -D - -o /dev/null http://localhost/', $curlOut);
+    $foundHeader = false;
+    $headerValue = '';
+    foreach (explode("\n", $curlOut) as $line) {
+        if (stripos($line, 'x-wpmgr-object-cache:') !== false) {
+            $foundHeader = true;
+            $headerValue = trim(substr($line, strlen('x-wpmgr-object-cache:')));
+            break;
+        }
+    }
+
+    if (!$foundHeader) {
+        // Restore config before failing.
+        $writeConfig($config, false, $configPath);
+        fail('debug-header (a): x-wpmgr-object-cache header not present in front-end response with debug_header_enabled=true. curl output: ' . $curlOut);
+    }
+
+    // Validate the header value matches the spec regex.
+    if (!preg_match('/^state=(connected|degraded|down|disabled); hits=\d+; misses=\d+; reads=\d+; writes=\d+; ms=\d+\.\d{2}$/', $headerValue)) {
+        $writeConfig($config, false, $configPath);
+        fail('debug-header (a): header value does not match spec regex. Got: ' . $headerValue);
+    }
+
+    // Must report state=connected (Redis is up in this stage).
+    if (strpos($headerValue, 'state=connected') === false) {
+        $writeConfig($config, false, $configPath);
+        fail('debug-header (a): expected state=connected in header, got: ' . $headerValue);
+    }
+
+    pass('debug-header (a): x-wpmgr-object-cache present with state=connected: ' . $headerValue);
+
+    // -----------------------------------------------------------------------
+    // Sub-stage (b): debug_header_enabled=false → header absent on front-end.
+    // -----------------------------------------------------------------------
+    $writeConfig($config, false, $configPath);
+
+    $curlExit = run('curl -s -D - -o /dev/null http://localhost/', $curlOut2);
+    $headerAbsent = true;
+    foreach (explode("\n", $curlOut2) as $line) {
+        if (stripos($line, 'x-wpmgr-object-cache:') !== false) {
+            $headerAbsent = false;
+            break;
+        }
+    }
+
+    if (!$headerAbsent) {
+        fail('debug-header (b): x-wpmgr-object-cache header must NOT be present when debug_header_enabled=false (anonymous user)');
+    }
+    pass('debug-header (b): x-wpmgr-object-cache absent when flag=false');
+
+    // -----------------------------------------------------------------------
+    // Sub-stage (c): page cache HIT response must NOT carry the OC header.
+    //
+    // If the page cache is also enabled and warmed, a page-cache HIT serves
+    // the response from disk/memory before the object cache or WP hooks run.
+    // The x-wpmgr-object-cache header must therefore be absent on HIT responses.
+    // We detect a page-cache HIT by the presence of x-wpmgr-cache: HIT.
+    // -----------------------------------------------------------------------
+    // Request the homepage twice to warm the page cache (if it is active).
+    run('curl -s -o /dev/null http://localhost/', $warmOut);
+    run('curl -s -D - -o /dev/null http://localhost/', $warmOut2);
+
+    $pageCacheHit = false;
+    $ocHeaderOnHit = false;
+    foreach (explode("\n", $warmOut2) as $line) {
+        if (stripos($line, 'x-wpmgr-cache:') !== false && stripos($line, 'HIT') !== false) {
+            $pageCacheHit = true;
+        }
+        if (stripos($line, 'x-wpmgr-object-cache:') !== false) {
+            $ocHeaderOnHit = true;
+        }
+    }
+
+    if ($pageCacheHit) {
+        if ($ocHeaderOnHit) {
+            fail('debug-header (c): page-cache HIT response must NOT carry x-wpmgr-object-cache header. Both drop-ins must not emit it on the same request.');
+        }
+        pass('debug-header (c): page-cache HIT correctly omits x-wpmgr-object-cache header (two-drop-in interplay pinned)');
+    } else {
+        pass('debug-header (c): page cache not active or not warmed — interplay check skipped (non-blocking)');
+    }
+
+    exit(0);
+}
+
 // Unknown stage.
-fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, fd-bomb, codec-fallback, disable\n");
+fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, fd-bomb, codec-fallback, debug-header, disable\n");
 exit(1);

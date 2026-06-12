@@ -86,6 +86,43 @@ register_shutdown_function(
 	}
 );
 
+// Register the per-request debug header emitter via the send_headers action.
+// send_headers fires only on front-end main requests — not on REST API,
+// admin-ajax, WP-Cron, wp-admin, or wp-login.php. This is intentional.
+// Two-prong gate: (a) debug_header_enabled config key (operator opt-in, default
+// false), OR (b) the authenticated user has manage_options capability (admins
+// always see it on front-end probes; logged-in requests bypass the page cache,
+// so this is reliable).
+if ( function_exists( 'add_action' ) ) {
+	add_action(
+		'send_headers',
+		static function (): void {
+			global $wp_object_cache;
+			if ( ! ( $wp_object_cache instanceof \WPMgr_Object_Cache ) ) {
+				return;
+			}
+			if ( headers_sent() ) {
+				return;
+			}
+			// Gating: flag OR manage_options capability.
+			$config   = $wp_object_cache->wpmgr_get_config();
+			$flagOn   = ! empty( $config['debug_header_enabled'] );
+			$capOn    = false;
+			if ( ! $flagOn ) {
+				try {
+					$capOn = function_exists( 'current_user_can' ) && current_user_can( 'manage_options' );
+				} catch ( \Throwable $_ ) {
+					// Never fatal.
+				}
+			}
+			if ( ! $flagOn && ! $capOn ) {
+				return;
+			}
+			header( 'x-wpmgr-object-cache: ' . $wp_object_cache->buildDebugHeaderValue() );
+		}
+	);
+}
+
 // ---------------------------------------------------------------------------
 // WordPress wp_cache_* function bridge.
 // WordPress defines these functions in wp-includes/cache.php ONLY when an
@@ -565,7 +602,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.42.1';
+	public const ENGINE_VERSION = '0.43.0';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -1854,6 +1891,17 @@ class WPMgr_Object_Cache
 	}
 
 	/**
+	 * Return the loaded config array (for the debug-header emitter and diagnostics).
+	 * Does not expose the password; callers must not log or emit this array verbatim.
+	 *
+	 * @return array<string,mixed>
+	 */
+	public function wpmgr_get_config(): array
+	{
+		return $this->config;
+	}
+
+	/**
 	 * Record a Throwable class name caught in a wp_cache_* wrapper.
 	 * Called from the global bridge functions so unexpected engine errors never
 	 * escape to user-visible PHP fatals.
@@ -1924,6 +1972,51 @@ class WPMgr_Object_Cache
 		}
 
 		return $stats;
+	}
+
+	/**
+	 * Build the value for the x-wpmgr-object-cache debug response header.
+	 *
+	 * Emits only safe, non-sensitive per-request counters. The value never
+	 * contains Redis host, port, socket path, prefix, username, database index,
+	 * key names, or engine version — only aggregate counters derived from the
+	 * current request's activity.
+	 *
+	 * The header is emitted via the send_headers action, which WordPress fires
+	 * only on front-end main requests. It does not fire on REST API, admin-ajax,
+	 * WP-Cron, wp-admin, or wp-login.php requests; this is intentional and
+	 * consistent with the page-cache header family.
+	 *
+	 * State ladder matches getHeartbeatStats(): connected | degraded | down | disabled.
+	 *
+	 * @return string Header value string.
+	 */
+	public function buildDebugHeaderValue(): string
+	{
+		$state = 'disabled';
+		if ( $this->arrayMode && count( $this->errorJournal ) > 0 ) {
+			$state = 'down';
+		} elseif ( $this->arrayMode ) {
+			$state = 'disabled';
+		} elseif ( $this->connection !== null && $this->connection->isDegraded() ) {
+			$state = 'degraded';
+		} elseif ( $this->redis !== null ) {
+			$state = 'connected';
+		}
+
+		$ms = ( $this->redisReads + $this->redisWrites ) > 0
+			? round( $this->totalWaitMs / ( $this->redisReads + $this->redisWrites ), 2 )
+			: 0.0;
+
+		return sprintf(
+			'state=%s; hits=%d; misses=%d; reads=%d; writes=%d; ms=%.2f',
+			$state,
+			$this->cache_hits,
+			$this->cache_misses,
+			$this->redisReads,
+			$this->redisWrites,
+			$ms
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -2377,6 +2470,19 @@ class WPMgr_Object_Cache
 	}
 
 	/**
+	 * FD-6: Whether APCu is actually usable in this SAPI. function_exists alone
+	 * is wrong: on the command line the extension is commonly loaded with
+	 * apc.enable_cli off, so the functions exist but the store is inert and
+	 * the state file fallback must be used instead.
+	 *
+	 * @return bool
+	 */
+	private function apcuUsable(): bool
+	{
+		return function_exists( 'apcu_enabled' ) && apcu_enabled();
+	}
+
+	/**
 	 * FD-6: Read the cool-down state (APCu or state file).
 	 * Returns array{last_failure_ts:float,consecutive_failures:int} or null when absent.
 	 *
@@ -2385,7 +2491,7 @@ class WPMgr_Object_Cache
 	private function readCooldownState(): ?array
 	{
 		// APCu is preferred: no disk I/O on the hot path.
-		if ( function_exists( 'apcu_fetch' ) ) {
+		if ( $this->apcuUsable() ) {
 			$val = apcu_fetch( 'wpmgr_oc_cooldown' );
 			if ( is_array( $val ) ) {
 				return $val;
@@ -2393,7 +2499,10 @@ class WPMgr_Object_Cache
 			return null;
 		}
 		// Fallback: state file.
-		$path = isset( $this->config['_state_path_override'] )
+		// Security: _state_path_override is only honored in test mode (WPMGR_OC_TEST_STATE_OVERRIDE).
+		// In production the path is always derived from WP_CONTENT_DIR.
+		$overrideActive = defined( 'WPMGR_OC_TEST_STATE_OVERRIDE' ) && WPMGR_OC_TEST_STATE_OVERRIDE === true;
+		$path = ( $overrideActive && isset( $this->config['_state_path_override'] ) )
 			? (string) $this->config['_state_path_override']
 			: $this->cooldownStatePath( $this->config );
 		if ( $path === '' || ! @is_file( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- silent is_file on optional state file; failure => no cooldown
@@ -2415,11 +2524,13 @@ class WPMgr_Object_Cache
 	 */
 	private function writeCooldownState( array $state ): void
 	{
-		if ( function_exists( 'apcu_store' ) ) {
+		if ( $this->apcuUsable() ) {
 			apcu_store( 'wpmgr_oc_cooldown', $state, 600 );
 			return;
 		}
-		$path = isset( $this->config['_state_path_override'] )
+		// Security: _state_path_override is only honored in test mode (WPMGR_OC_TEST_STATE_OVERRIDE).
+		$overrideActive = defined( 'WPMGR_OC_TEST_STATE_OVERRIDE' ) && WPMGR_OC_TEST_STATE_OVERRIDE === true;
+		$path = ( $overrideActive && isset( $this->config['_state_path_override'] ) )
 			? (string) $this->config['_state_path_override']
 			: $this->cooldownStatePath( $this->config );
 		if ( $path === '' ) {
@@ -2498,11 +2609,13 @@ class WPMgr_Object_Cache
 	 */
 	private function clearCooldownState( array $config ): void
 	{
-		if ( function_exists( 'apcu_delete' ) ) {
+		if ( $this->apcuUsable() ) {
 			apcu_delete( 'wpmgr_oc_cooldown' );
 			return;
 		}
-		$path = isset( $this->config['_state_path_override'] )
+		// Security: _state_path_override is only honored in test mode (WPMGR_OC_TEST_STATE_OVERRIDE).
+		$overrideActive = defined( 'WPMGR_OC_TEST_STATE_OVERRIDE' ) && WPMGR_OC_TEST_STATE_OVERRIDE === true;
+		$path = ( $overrideActive && isset( $this->config['_state_path_override'] ) )
 			? (string) $this->config['_state_path_override']
 			: $this->cooldownStatePath( $this->config );
 		if ( $path !== '' && @is_file( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- silent check on optional file

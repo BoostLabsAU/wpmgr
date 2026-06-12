@@ -6,6 +6,21 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-06-12
+
+### Added
+
+- **Object cache: live debug response header.** With the new "Debug response header" setting enabled, front end responses carry an `x-wpmgr-object-cache` header showing the live cache state plus per request hit, miss, read, and write counts and the total Redis wait time. Administrators always receive the header on front end pages while logged in, so the cache can be verified without enabling it for visitors. Pages served by the page cache do not carry the header because WordPress does not run on those responses. The header never includes connection details, key names, or version numbers.
+- **Cross system configuration hash contract.** The agent and the control plane now share a pinned test fixture proving both compute identical configuration hashes, including values containing slashes and special characters where the two JSON encoders previously diverged. This removes a false drift warning for sites connecting to Redis over a unix socket.
+- **End to end stages for the debug header** covering header presence, the disabled default, and the page cache interaction.
+
+### Changed
+
+- The cool down state file path override used by tests is now inert unless a test only constant is defined.
+- Control plane and dashboard: the new setting is available in the object cache configuration dialog (migration m70 applies automatically on boot).
+
+Control plane, web, and agent 0.43.0 with drop-in 2.2.0; existing installs refresh the drop-in automatically after the agent updates.
+
 ## [0.42.2] - 2026-06-12
 
 ### Fixed

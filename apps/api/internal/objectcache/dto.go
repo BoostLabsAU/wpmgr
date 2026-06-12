@@ -39,6 +39,10 @@ type ConfigDTO struct {
 
 	AnalyticsEnabled bool `json:"analytics_enabled"`
 
+	// DebugHeaderEnabled gates the per-request X-WPMgr-Cache debug response
+	// header emitted by the drop-in. False by default.
+	DebugHeaderEnabled bool `json:"debug_header_enabled"`
+
 	LastTestConfigHash string     `json:"last_test_config_hash,omitempty"`
 	LastTestedAt       *time.Time `json:"last_tested_at,omitempty"`
 	// LastTestResult is the stored agent test result (including the server
@@ -92,7 +96,8 @@ type ConfigPutDTO struct {
 	Shared        *bool  `json:"shared,omitempty"`
 	FlushOnFailback *bool `json:"flush_on_failback,omitempty"`
 
-	AnalyticsEnabled *bool `json:"analytics_enabled,omitempty"`
+	AnalyticsEnabled   *bool `json:"analytics_enabled,omitempty"`
+	DebugHeaderEnabled *bool `json:"debug_header_enabled,omitempty"`
 }
 
 // toConfigDTO maps the domain Config to its wire representation.
@@ -120,7 +125,8 @@ func toConfigDTO(c Config) ConfigDTO {
 		FlushStrategy:    orDefault(c.FlushStrategy, "auto"),
 		Shared:           c.Shared,
 		FlushOnFailback:  c.FlushOnFailback,
-		AnalyticsEnabled: c.AnalyticsEnabled,
+		AnalyticsEnabled:   c.AnalyticsEnabled,
+		DebugHeaderEnabled: c.DebugHeaderEnabled,
 		LastTestConfigHash: c.LastTestConfigHash,
 		LastTestedAt:     c.LastTestedAt,
 		LastTestResult:   c.LastTestResultJSON,
@@ -200,6 +206,9 @@ func fromConfigPutDTO(dto ConfigPutDTO, base Config) (Config, string) {
 	}
 	if dto.AnalyticsEnabled != nil {
 		cfg.AnalyticsEnabled = *dto.AnalyticsEnabled
+	}
+	if dto.DebugHeaderEnabled != nil {
+		cfg.DebugHeaderEnabled = *dto.DebugHeaderEnabled
 	}
 	if dto.Enabled != nil {
 		cfg.Enabled = *dto.Enabled

@@ -83,6 +83,12 @@ type ObjectCacheConfigRequest struct {
 
 	// AnalyticsEnabled when false the agent stops pushing the extended stats block.
 	AnalyticsEnabled bool `json:"analytics_enabled"`
+
+	// DebugHeaderEnabled when true the drop-in emits a per-request
+	// x-wpmgr-object-cache response header with cache hit/miss/state details.
+	// Default false (silent in production). Named debug_header_enabled on
+	// the wire to match the CP config column (m70).
+	DebugHeaderEnabled bool `json:"debug_header_enabled"`
 }
 
 // ObjectCacheApplyConfigResult is the agent's response to `objectcache.apply_config`.

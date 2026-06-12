@@ -32796,6 +32796,12 @@ func (s *ObjectCacheConfig) encodeFields(e *jx.Encoder) {
 		e.Bool(s.AnalyticsEnabled)
 	}
 	{
+		if s.DebugHeaderEnabled.Set {
+			e.FieldStart("debug_header_enabled")
+			s.DebugHeaderEnabled.Encode(e)
+		}
+	}
+	{
 		if s.LastTestConfigHash.Set {
 			e.FieldStart("last_test_config_hash")
 			s.LastTestConfigHash.Encode(e)
@@ -32851,7 +32857,7 @@ func (s *ObjectCacheConfig) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfObjectCacheConfig = [32]string{
+var jsonFieldsNameOfObjectCacheConfig = [33]string{
 	0:  "enabled",
 	1:  "scheme",
 	2:  "host",
@@ -32874,16 +32880,17 @@ var jsonFieldsNameOfObjectCacheConfig = [32]string{
 	19: "shared",
 	20: "flush_on_failback",
 	21: "analytics_enabled",
-	22: "last_test_config_hash",
-	23: "last_tested_at",
-	24: "last_test_result",
-	25: "oc_state",
-	26: "oc_latency_ms",
-	27: "oc_last_error_class",
-	28: "oc_used_memory_bytes",
-	29: "oc_hit_ratio_pct",
-	30: "created_at",
-	31: "updated_at",
+	22: "debug_header_enabled",
+	23: "last_test_config_hash",
+	24: "last_tested_at",
+	25: "last_test_result",
+	26: "oc_state",
+	27: "oc_latency_ms",
+	28: "oc_last_error_class",
+	29: "oc_used_memory_bytes",
+	30: "oc_hit_ratio_pct",
+	31: "created_at",
+	32: "updated_at",
 }
 
 // Decode decodes ObjectCacheConfig from json.
@@ -32891,7 +32898,7 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode ObjectCacheConfig to nil")
 	}
-	var requiredBitSet [4]uint8
+	var requiredBitSet [5]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -33147,6 +33154,16 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"analytics_enabled\"")
 			}
+		case "debug_header_enabled":
+			if err := func() error {
+				s.DebugHeaderEnabled.Reset()
+				if err := s.DebugHeaderEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"debug_header_enabled\"")
+			}
 		case "last_test_config_hash":
 			if err := func() error {
 				s.LastTestConfigHash.Reset()
@@ -33178,7 +33195,7 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"last_test_result\"")
 			}
 		case "oc_state":
-			requiredBitSet[3] |= 1 << 1
+			requiredBitSet[3] |= 1 << 2
 			if err := func() error {
 				v, err := d.Str()
 				s.OcState = string(v)
@@ -33190,7 +33207,7 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"oc_state\"")
 			}
 		case "oc_latency_ms":
-			requiredBitSet[3] |= 1 << 2
+			requiredBitSet[3] |= 1 << 3
 			if err := func() error {
 				v, err := d.Int()
 				s.OcLatencyMs = int(v)
@@ -33212,7 +33229,7 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"oc_last_error_class\"")
 			}
 		case "oc_used_memory_bytes":
-			requiredBitSet[3] |= 1 << 4
+			requiredBitSet[3] |= 1 << 5
 			if err := func() error {
 				v, err := d.Int64()
 				s.OcUsedMemoryBytes = int64(v)
@@ -33262,11 +33279,12 @@ func (s *ObjectCacheConfig) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [4]uint8{
+	for i, mask := range [5]uint8{
 		0b10101111,
 		0b11111111,
 		0b00111111,
-		0b00010110,
+		0b00101100,
+		0b00000000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -33539,9 +33557,15 @@ func (s *ObjectCacheConfigPut) encodeFields(e *jx.Encoder) {
 			s.AnalyticsEnabled.Encode(e)
 		}
 	}
+	{
+		if s.DebugHeaderEnabled.Set {
+			e.FieldStart("debug_header_enabled")
+			s.DebugHeaderEnabled.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfObjectCacheConfigPut = [22]string{
+var jsonFieldsNameOfObjectCacheConfigPut = [23]string{
 	0:  "enabled",
 	1:  "scheme",
 	2:  "host",
@@ -33564,6 +33588,7 @@ var jsonFieldsNameOfObjectCacheConfigPut = [22]string{
 	19: "shared",
 	20: "flush_on_failback",
 	21: "analytics_enabled",
+	22: "debug_header_enabled",
 }
 
 // Decode decodes ObjectCacheConfigPut from json.
@@ -33793,6 +33818,16 @@ func (s *ObjectCacheConfigPut) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"analytics_enabled\"")
+			}
+		case "debug_header_enabled":
+			if err := func() error {
+				s.DebugHeaderEnabled.Reset()
+				if err := s.DebugHeaderEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"debug_header_enabled\"")
 			}
 		default:
 			return d.Skip()

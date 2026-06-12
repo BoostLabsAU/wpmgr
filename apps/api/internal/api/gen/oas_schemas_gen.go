@@ -12095,13 +12095,17 @@ type ObjectCacheConfig struct {
 	// Flush all keys when the object cache recovers from a down state.
 	FlushOnFailback  bool `json:"flush_on_failback"`
 	AnalyticsEnabled bool `json:"analytics_enabled"`
+	// When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache
+	// hit/miss/state details. Default false.
+	DebugHeaderEnabled OptBool `json:"debug_header_enabled"`
 	// Non-empty after a passing test; cleared when connection fields change.
 	LastTestConfigHash OptNilString   `json:"last_test_config_hash"`
 	LastTestedAt       OptNilDateTime `json:"last_tested_at"`
 	// The stored result of the most recent connection test, including the server capability report, so
 	// the dashboard can show requirements without re-running a test.
 	LastTestResult OptNilObjectCacheTestResult `json:"last_test_result"`
-	// Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
+	// Live connectivity state from the last heartbeat: '' (unknown/no config), 'disabled', 'connected',
+	// 'degraded', or 'down'.
 	OcState           string        `json:"oc_state"`
 	OcLatencyMs       int           `json:"oc_latency_ms"`
 	OcLastErrorClass  OptNilString  `json:"oc_last_error_class"`
@@ -12219,6 +12223,11 @@ func (s *ObjectCacheConfig) GetFlushOnFailback() bool {
 // GetAnalyticsEnabled returns the value of AnalyticsEnabled.
 func (s *ObjectCacheConfig) GetAnalyticsEnabled() bool {
 	return s.AnalyticsEnabled
+}
+
+// GetDebugHeaderEnabled returns the value of DebugHeaderEnabled.
+func (s *ObjectCacheConfig) GetDebugHeaderEnabled() OptBool {
+	return s.DebugHeaderEnabled
 }
 
 // GetLastTestConfigHash returns the value of LastTestConfigHash.
@@ -12379,6 +12388,11 @@ func (s *ObjectCacheConfig) SetFlushOnFailback(val bool) {
 // SetAnalyticsEnabled sets the value of AnalyticsEnabled.
 func (s *ObjectCacheConfig) SetAnalyticsEnabled(val bool) {
 	s.AnalyticsEnabled = val
+}
+
+// SetDebugHeaderEnabled sets the value of DebugHeaderEnabled.
+func (s *ObjectCacheConfig) SetDebugHeaderEnabled(val OptBool) {
+	s.DebugHeaderEnabled = val
 }
 
 // SetLastTestConfigHash sets the value of LastTestConfigHash.
@@ -12563,6 +12577,9 @@ type ObjectCacheConfigPut struct {
 	Shared           OptBool                              `json:"shared"`
 	FlushOnFailback  OptBool                              `json:"flush_on_failback"`
 	AnalyticsEnabled OptBool                              `json:"analytics_enabled"`
+	// When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache
+	// hit/miss/state details. Default false.
+	DebugHeaderEnabled OptBool `json:"debug_header_enabled"`
 }
 
 // GetEnabled returns the value of Enabled.
@@ -12675,6 +12692,11 @@ func (s *ObjectCacheConfigPut) GetAnalyticsEnabled() OptBool {
 	return s.AnalyticsEnabled
 }
 
+// GetDebugHeaderEnabled returns the value of DebugHeaderEnabled.
+func (s *ObjectCacheConfigPut) GetDebugHeaderEnabled() OptBool {
+	return s.DebugHeaderEnabled
+}
+
 // SetEnabled sets the value of Enabled.
 func (s *ObjectCacheConfigPut) SetEnabled(val OptBool) {
 	s.Enabled = val
@@ -12783,6 +12805,11 @@ func (s *ObjectCacheConfigPut) SetFlushOnFailback(val OptBool) {
 // SetAnalyticsEnabled sets the value of AnalyticsEnabled.
 func (s *ObjectCacheConfigPut) SetAnalyticsEnabled(val OptBool) {
 	s.AnalyticsEnabled = val
+}
+
+// SetDebugHeaderEnabled sets the value of DebugHeaderEnabled.
+func (s *ObjectCacheConfigPut) SetDebugHeaderEnabled(val OptBool) {
+	s.DebugHeaderEnabled = val
 }
 
 type ObjectCacheConfigPutCompression string

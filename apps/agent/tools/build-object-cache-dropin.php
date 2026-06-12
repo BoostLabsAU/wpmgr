@@ -151,7 +151,7 @@ $fileHeader = <<<'HDR'
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.1.1
+ * Version: 2.2.0
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -171,7 +171,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.1', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.2.0', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {

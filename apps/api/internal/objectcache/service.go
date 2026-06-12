@@ -1,6 +1,7 @@
 package objectcache
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -676,8 +677,9 @@ func buildConfigRequest(cfg Config, password string) agentcmd.ObjectCacheConfigR
 		AsyncFlush:       cfg.AsyncFlush,
 		FlushStrategy:    cfg.FlushStrategy,
 		Shared:           cfg.Shared,
-		FlushOnFailback:  cfg.FlushOnFailback,
-		AnalyticsEnabled: cfg.AnalyticsEnabled,
+		FlushOnFailback:    cfg.FlushOnFailback,
+		AnalyticsEnabled:   cfg.AnalyticsEnabled,
+		DebugHeaderEnabled: cfg.DebugHeaderEnabled,
 	}
 }
 
@@ -695,28 +697,37 @@ func computeConfigHash(cfg Config) string {
 	// Build a map with the exact field names the agent uses, sorted.
 	// The agent's fromParams populates these keys only; no password key.
 	m := map[string]any{
-		"analytics_enabled": cfg.AnalyticsEnabled,
-		"async_flush":       cfg.AsyncFlush,
-		"compression":       cfg.Compression,
-		"connect_timeout_ms": cfg.ConnectTimeoutMs,
-		"database":          cfg.Database,
-		"flush_on_failback": cfg.FlushOnFailback,
-		"flush_strategy":    cfg.FlushStrategy,
-		"host":              cfg.Host,
-		"maxttl_seconds":    cfg.MaxTTLSeconds,
-		"port":              cfg.Port,
-		"prefix":            cfg.Prefix,
-		"queryttl_seconds":  cfg.QueryTTLSeconds,
-		"read_timeout_ms":   cfg.ReadTimeoutMs,
-		"retry_count":       cfg.RetryCount,
-		"retry_interval_ms": cfg.RetryIntervalMs,
-		"scheme":            cfg.Scheme,
-		"serializer":        cfg.Serializer,
-		"shared":            cfg.Shared,
-		"socket_path":       cfg.SocketPath,
-		"username":          cfg.Username,
+		"analytics_enabled":   cfg.AnalyticsEnabled,
+		"async_flush":         cfg.AsyncFlush,
+		"compression":         cfg.Compression,
+		"connect_timeout_ms":  cfg.ConnectTimeoutMs,
+		"database":            cfg.Database,
+		"debug_header_enabled": cfg.DebugHeaderEnabled,
+		"flush_on_failback":   cfg.FlushOnFailback,
+		"flush_strategy":      cfg.FlushStrategy,
+		"host":                cfg.Host,
+		"maxttl_seconds":      cfg.MaxTTLSeconds,
+		"port":                cfg.Port,
+		"prefix":              cfg.Prefix,
+		"queryttl_seconds":    cfg.QueryTTLSeconds,
+		"read_timeout_ms":     cfg.ReadTimeoutMs,
+		"retry_count":         cfg.RetryCount,
+		"retry_interval_ms":   cfg.RetryIntervalMs,
+		"scheme":              cfg.Scheme,
+		"serializer":          cfg.Serializer,
+		"shared":              cfg.Shared,
+		"socket_path":         cfg.SocketPath,
+		"username":            cfg.Username,
 	}
-	raw, _ := json.Marshal(m)
+	// Canonical encoding shared with the agent's computeHash: keys sorted
+	// alphabetically, slashes unescaped, no HTML escaping, no trailing
+	// newline. Both sides are pinned by the shared fixture in
+	// apps/agent/tests/fixtures/object-cache-config-hash.json.
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(m)
+	raw := bytes.TrimRight(buf.Bytes(), "\n")
 	h := sha256.Sum256(raw)
 	return hex.EncodeToString(h[:])
 }

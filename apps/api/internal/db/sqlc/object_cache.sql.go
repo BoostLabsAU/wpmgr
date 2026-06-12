@@ -22,7 +22,7 @@ SELECT
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -56,6 +56,7 @@ type GetObjectCacheConfigRow struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -109,6 +110,7 @@ func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (G
 		&i.Shared,
 		&i.FlushOnFailback,
 		&i.AnalyticsEnabled,
+		&i.DebugHeaderEnabled,
 		&i.LastTestConfigHash,
 		&i.LastTestResultJson,
 		&i.LastTestedAt,
@@ -126,7 +128,7 @@ func (q *Queries) GetObjectCacheConfig(ctx context.Context, siteID uuid.UUID) (G
 }
 
 const getObjectCacheConfigWithSecret = `-- name: GetObjectCacheConfigWithSecret :one
-SELECT site_id, tenant_id, enabled, scheme, host, port, socket_path, database, username, password_encrypted, prefix, maxttl_seconds, queryttl_seconds, connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms, serializer, compression, async_flush, flush_strategy, shared, flush_on_failback, analytics_enabled, last_test_config_hash, last_test_result_json, last_tested_at, oc_state, oc_latency_ms, oc_last_error_class, oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift, created_at, updated_at FROM site_object_cache_config
+SELECT site_id, tenant_id, enabled, scheme, host, port, socket_path, database, username, password_encrypted, prefix, maxttl_seconds, queryttl_seconds, connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms, serializer, compression, async_flush, flush_strategy, shared, flush_on_failback, analytics_enabled, last_test_config_hash, last_test_result_json, last_tested_at, oc_state, oc_latency_ms, oc_last_error_class, oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift, debug_header_enabled, created_at, updated_at FROM site_object_cache_config
 WHERE site_id = $1
 `
 
@@ -169,6 +171,7 @@ func (q *Queries) GetObjectCacheConfigWithSecret(ctx context.Context, siteID uui
 		&i.OcUsedMemoryBytes,
 		&i.OcHitRatioPct,
 		&i.OcConfigDrift,
+		&i.DebugHeaderEnabled,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -363,7 +366,7 @@ RETURNING
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -401,6 +404,7 @@ type UpdateObjectCacheEnabledRow struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -445,6 +449,7 @@ func (q *Queries) UpdateObjectCacheEnabled(ctx context.Context, arg UpdateObject
 		&i.Shared,
 		&i.FlushOnFailback,
 		&i.AnalyticsEnabled,
+		&i.DebugHeaderEnabled,
 		&i.LastTestConfigHash,
 		&i.LastTestResultJson,
 		&i.LastTestedAt,
@@ -476,7 +481,7 @@ RETURNING
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -518,6 +523,7 @@ type UpdateObjectCacheHeartbeatStateRow struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -572,6 +578,7 @@ func (q *Queries) UpdateObjectCacheHeartbeatState(ctx context.Context, arg Updat
 		&i.Shared,
 		&i.FlushOnFailback,
 		&i.AnalyticsEnabled,
+		&i.DebugHeaderEnabled,
 		&i.LastTestConfigHash,
 		&i.LastTestResultJson,
 		&i.LastTestedAt,
@@ -601,7 +608,7 @@ RETURNING
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -641,6 +648,7 @@ type UpdateObjectCacheTestResultRow struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -692,6 +700,7 @@ func (q *Queries) UpdateObjectCacheTestResult(ctx context.Context, arg UpdateObj
 		&i.Shared,
 		&i.FlushOnFailback,
 		&i.AnalyticsEnabled,
+		&i.DebugHeaderEnabled,
 		&i.LastTestConfigHash,
 		&i.LastTestResultJson,
 		&i.LastTestedAt,
@@ -715,7 +724,7 @@ INSERT INTO site_object_cache_config (
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -726,10 +735,10 @@ INSERT INTO site_object_cache_config (
     $12, $13,
     $14, $15, $16, $17,
     $18, $19, $20, $21, $22,
-    $23, $24,
-    $25, $26, $27,
-    $28, $29, $30,
-    $31, $32, $33,
+    $23, $24, $25,
+    $26, $27, $28,
+    $29, $30, $31,
+    $32, $33, $34,
     now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
@@ -756,6 +765,7 @@ ON CONFLICT (site_id) DO UPDATE SET
     shared                = EXCLUDED.shared,
     flush_on_failback     = EXCLUDED.flush_on_failback,
     analytics_enabled     = EXCLUDED.analytics_enabled,
+    debug_header_enabled  = EXCLUDED.debug_header_enabled,
     -- Clear the test hash when connection-critical fields changed (signaled by
     -- the service passing EXCLUDED.last_test_config_hash = NULL).
     last_test_config_hash = EXCLUDED.last_test_config_hash,
@@ -774,7 +784,7 @@ RETURNING
     maxttl_seconds, queryttl_seconds,
     connect_timeout_ms, read_timeout_ms, retry_count, retry_interval_ms,
     serializer, compression, async_flush, flush_strategy, shared,
-    flush_on_failback, analytics_enabled,
+    flush_on_failback, analytics_enabled, debug_header_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
     oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
@@ -807,6 +817,7 @@ type UpsertObjectCacheConfigParams struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -842,6 +853,7 @@ type UpsertObjectCacheConfigRow struct {
 	Shared             bool               `json:"shared"`
 	FlushOnFailback    bool               `json:"flush_on_failback"`
 	AnalyticsEnabled   bool               `json:"analytics_enabled"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	LastTestConfigHash *string            `json:"last_test_config_hash"`
 	LastTestResultJson []byte             `json:"last_test_result_json"`
 	LastTestedAt       pgtype.Timestamptz `json:"last_tested_at"`
@@ -888,6 +900,7 @@ func (q *Queries) UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectC
 		arg.Shared,
 		arg.FlushOnFailback,
 		arg.AnalyticsEnabled,
+		arg.DebugHeaderEnabled,
 		arg.LastTestConfigHash,
 		arg.LastTestResultJson,
 		arg.LastTestedAt,
@@ -923,6 +936,7 @@ func (q *Queries) UpsertObjectCacheConfig(ctx context.Context, arg UpsertObjectC
 		&i.Shared,
 		&i.FlushOnFailback,
 		&i.AnalyticsEnabled,
+		&i.DebugHeaderEnabled,
 		&i.LastTestConfigHash,
 		&i.LastTestResultJson,
 		&i.LastTestedAt,

@@ -358,15 +358,29 @@ if [ "${CODEC_EXIT}" -ne 0 ]; then
 fi
 
 # -----------------------------------------------------------------------
-# Step 17: disable stage.
+# Step 17: debug-header stage.
+#
+# (a) Enable OC + set debug_header_enabled true → curl front-end → assert
+#     x-wpmgr-object-cache: state=connected present with plausible counters.
+# (b) Flag off → header absent.
+# (c) With PAGE cache also enabled and warmed, a page-cache HIT response
+#     must NOT carry the object-cache header (two-drop-in interplay pin).
 # -----------------------------------------------------------------------
-echo "[e2e] Step 17: disable..."
+echo "[e2e] Step 17: debug-header..."
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php debug-header
+
+# -----------------------------------------------------------------------
+# Step 18: disable stage.
+# -----------------------------------------------------------------------
+echo "[e2e] Step 18: disable..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
     exec -T wordpress php /usr/local/bin/wpmgr-assert.php disable
 
 # -----------------------------------------------------------------------
-# Step 18: EXIT trap fires (docker compose down -v).
+# Step 19: EXIT trap fires (docker compose down -v).
 # -----------------------------------------------------------------------
 echo "[e2e] All steps passed."
 exit 0
