@@ -6,6 +6,21 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.43.1] - 2026-06-12
+
+### Fixed
+
+- **Object cache: configuration files written by privileged command-line processes are now readable by the web server.** When WP-CLI provisioning ran as root, the 0600 configuration file was unreadable by the web server user. Web requests silently served the cache in array mode while command-line checks reported connected. The configuration and cool-down state writers now align file ownership with the owner of the WordPress core entry file. Caught by the new end-to-end harness.
+- **Object cache: a Redis write failure during PHP shutdown no longer arms a recovery flush.** A failure while the process is already shutting down is not an outage; previously it could persist an outage marker and schedule an unnecessary cache flush at the next boot.
+- **Object cache: the recovery flush deletes its marker before flushing**, closing a window where the flush removed its own coordination lock and a second request could flush again.
+- **Object cache: the cool-down side channel uses APCu only when it is actually enabled** in the running interpreter, fixing silent cool-down loss in command-line contexts.
+
+### Added
+
+- **The end-to-end Docker harness ran green for the first time across all eighteen stages**, including cross-request persistence, the boot recursion guard with descriptor counting, codec fallback against a runtime without igbinary, and the live debug header on a real front-end response. Stage fixes along the way: provisioning runs as the web user, config changes go through the engine writer so opcache is invalidated, and the teardown order respects the plugin autoloader.
+
+Agent 0.43.1 with drop-in 2.2.1; no control plane changes beyond 0.43.0.
+
 ## [0.43.0] - 2026-06-12
 
 ### Added
