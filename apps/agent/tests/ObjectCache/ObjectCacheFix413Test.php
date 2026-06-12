@@ -356,81 +356,72 @@ final class ObjectCacheFix413Test extends TestCase
 	}
 
 	// =========================================================================
-	// FIX 3: stubVersion() on real template and stamped output
+	// FIX 3: artifactVersion() on generated artifact
 	// =========================================================================
 
 	/**
-	 * stubVersion() must return a non-empty version from the REAL stub template.
+	 * artifactVersion() (private) must return a non-empty version from the
+	 * generated drop-in artifact.
 	 */
-	public function test_stub_version_on_real_template(): void
+	public function test_artifact_version_on_generated_artifact(): void
 	{
-		$realStubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		if ( ! is_file( $realStubPath ) ) {
-			$this->markTestSkipped( 'Real stub template not found' );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		if ( ! is_file( $artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
 		}
 
-		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $realStubPath );
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $artifactPath );
 		$ref       = new \ReflectionClass( $installer );
-		$method    = $ref->getMethod( 'stubVersion' );
+		$method    = $ref->getMethod( 'artifactVersion' );
 
 		$version = $method->invoke( $installer );
 
-		$this->assertNotEmpty( $version, 'stubVersion() must return a non-empty version from the real stub template' );
+		$this->assertNotEmpty( $version, 'artifactVersion() must return a non-empty version from the generated artifact' );
 		$this->assertMatchesRegularExpression( '/^\d+\.\d+\.\d+$/', $version, 'Version must match X.Y.Z semver' );
 	}
 
 	/**
-	 * stubVersion() must return a non-empty version from a STAMPED (installed) stub.
-	 *
-	 * After install(), the installer stamps the engine path into the stub. The
-	 * Version header must still be readable because it is within the first 200
-	 * bytes of the template (well inside the 2048-byte read window).
+	 * artifactVersion() must return the version from an INSTALLED (copy) file too.
 	 */
-	public function test_stub_version_on_stamped_output(): void
+	public function test_artifact_version_on_installed_copy(): void
 	{
-		$realStubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		if ( ! is_file( $realStubPath ) ) {
-			$this->markTestSkipped( 'Real stub template not found' );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		if ( ! is_file( $artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
 		}
 
-		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $realStubPath );
+		$installer = new ObjectCacheDropinInstaller( $this->tmpDir, $artifactPath );
 		$result    = $installer->install();
 		$this->assertTrue( $result['ok'], 'install() must succeed: ' . $result['detail'] );
 
-		// The stamped drop-in is now at $tmpDir/object-cache.php.
-		// Create a new installer pointed at the installed file to test stubVersion
-		// on the stamped output.
-		$stampedPath = $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL;
-		$installer2  = new ObjectCacheDropinInstaller( $this->tmpDir, $stampedPath );
-		$ref         = new \ReflectionClass( $installer2 );
-		$method      = $ref->getMethod( 'stubVersion' );
+		$installedPath = $this->tmpDir . '/' . ObjectCacheDropinInstaller::CANONICAL;
+		$installer2    = new ObjectCacheDropinInstaller( $this->tmpDir, $installedPath );
+		$ref           = new \ReflectionClass( $installer2 );
+		$method        = $ref->getMethod( 'artifactVersion' );
 
 		$version = $method->invoke( $installer2 );
 
-		$this->assertNotEmpty( $version, 'stubVersion() must return a non-empty version from a stamped stub' );
-		$this->assertMatchesRegularExpression( '/^\d+\.\d+\.\d+$/', $version, 'Stamped stub version must match X.Y.Z semver' );
+		$this->assertNotEmpty( $version, 'artifactVersion() must return a non-empty version from an installed copy' );
+		$this->assertMatchesRegularExpression( '/^\d+\.\d+\.\d+$/', $version, 'Installed copy version must match X.Y.Z semver' );
 	}
 
 	/**
-	 * The Version header in the real stub template must appear within the first
-	 * 512 bytes (regression guard: the old code read only 512 bytes and missed it).
-	 *
-	 * Post-fix the header is within ~200 bytes; this test guards that it stays
-	 * small so even the old 512-byte reader would find it.
+	 * The Version header in the generated artifact must appear within the first
+	 * 200 bytes (per the Phase A spec).
 	 */
-	public function test_stub_version_header_within_512_bytes(): void
+	public function test_artifact_version_header_within_200_bytes(): void
 	{
-		$realStubPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache.php';
-		if ( ! is_file( $realStubPath ) ) {
-			$this->markTestSkipped( 'Real stub template not found' );
+		$artifactPath = dirname( __DIR__, 2 ) . '/assets/wpmgr-object-cache-dropin.php';
+		if ( ! is_file( $artifactPath ) ) {
+			$this->markTestSkipped( 'Generated artifact not found' );
 		}
 
-		$handle = fopen( $realStubPath, 'r' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- test: reading plugin-controlled file
+		$handle = fopen( $artifactPath, 'r' ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- test: reading plugin-controlled file
 		$this->assertNotFalse( $handle );
-		$first512 = (string) fread( $handle, 512 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- test: streaming read
+		$first200 = (string) fread( $handle, 200 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fread -- test: streaming read
 		fclose( $handle ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose -- test: streaming read
 
-		$this->assertStringContainsString( 'Version:', $first512, 'Version header must appear within the first 512 bytes of the stub template' );
+		$this->assertStringContainsString( 'Version:', $first200, 'Version header must appear within the first 200 bytes of the generated artifact' );
 	}
 
 	// =========================================================================

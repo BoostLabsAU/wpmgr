@@ -87,11 +87,14 @@ type Config struct {
 
 	// Live status fields sourced from the heartbeat. Used for SSE transition
 	// detection without hitting the agent.
-	OCState          OCState
-	OCLatencyMs      int
-	OCLastErrorClass string
+	OCState           OCState
+	OCLatencyMs       int
+	OCLastErrorClass  string
 	OCUsedMemoryBytes int64
-	OCHitRatioPct    *float64
+	OCHitRatioPct     *float64
+	// OCConfigDrift is true when the agent's last heartbeat config_hash differs
+	// from the CP-computed hash of the stored config (indicates live/stored drift).
+	OCConfigDrift bool
 
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -136,11 +139,15 @@ type StatsHistoryResponse struct {
 // HeartbeatBlock is the optional object_cache block the agent appends to its
 // heartbeat push. Every field is optional; absent block = disabled state.
 type HeartbeatBlock struct {
-	State          OCState `json:"state"`
-	LatencyMs      int     `json:"latency_ms"`
-	LastErrorClass string  `json:"last_error_class,omitempty"`
-	UsedMemoryBytes int64  `json:"used_memory_bytes"`
-	HitRatioPct    float64 `json:"hit_ratio_window_pct"`
+	State           OCState `json:"state"`
+	LatencyMs       int     `json:"latency_ms"`
+	LastErrorClass  string  `json:"last_error_class,omitempty"`
+	UsedMemoryBytes int64   `json:"used_memory_bytes"`
+	HitRatioPct     float64 `json:"hit_ratio_window_pct"`
+	// ConfigHash is the sha256 hex of the config file the drop-in is actually
+	// reading, as reported by class-object-cache-heartbeat.php (0.42.0+).
+	// Empty on pre-0.42.0 agents; the drift check is skipped when absent.
+	ConfigHash string `json:"config_hash,omitempty"`
 }
 
 // IngestStatsInput is the agent stats-report optional object_cache block.

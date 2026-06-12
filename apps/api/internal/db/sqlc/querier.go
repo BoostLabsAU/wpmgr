@@ -1079,6 +1079,9 @@ type Querier interface {
 	// Advance the next_db_clean_at timestamp after a clean job is dispatched.
 	// Runs under app.agent (the scheduled-dispatch path is cross-tenant).
 	UpdateNextDBCleanAt(ctx context.Context, arg UpdateNextDBCleanAtParams) error
+	// M69 -- set or clear the oc_config_drift indicator from a heartbeat ingest.
+	// Runs under InAgentTx (agent path). tenant_id in WHERE is defence-in-depth.
+	UpdateObjectCacheDrift(ctx context.Context, arg UpdateObjectCacheDriftParams) error
 	// Enable/disable the object cache feature flag. enable=true is handshake-gated
 	// in the service layer (requires a non-NULL last_test_config_hash matching the
 	// current config). Runs under InTenantTx (operator path).

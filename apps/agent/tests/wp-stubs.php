@@ -202,6 +202,19 @@ if (!function_exists('get_site_option')) {
 // WP conditional functions (conservative defaults)
 // ---------------------------------------------------------------------------
 
+if (!function_exists('is_multisite')) {
+    /**
+     * Whether the current WordPress installation is a multisite network.
+     * Default stub returns false (single-site) for the test environment.
+     *
+     * @return bool
+     */
+    function is_multisite(): bool
+    {
+        return false;
+    }
+}
+
 if (!function_exists('is_singular')) {
     /**
      * Whether the query is for an existing single post of any type.
@@ -272,5 +285,35 @@ if (!class_exists('Redis')) {
 
         /** Serializer: PHP serialize(). */
         public const SERIALIZER_PHP = 1;
+
+        /** Serializer: igbinary (requires the igbinary extension). */
+        public const SERIALIZER_IGBINARY = 2;
+
+        /** Serializer: msgpack (requires the msgpack extension). */
+        public const SERIALIZER_MSGPACK = 3;
+
+        /** Compression: none. */
+        public const COMPRESSION_NONE = 0;
+
+        /** Compression: LZF. */
+        public const COMPRESSION_LZF = 1;
+
+        /** Compression: ZSTD. */
+        public const COMPRESSION_ZSTD = 3;
+
+        /** Compression: LZ4. */
+        public const COMPRESSION_LZ4 = 4;
+
+        /** Option key for read timeout. */
+        public const OPT_READ_TIMEOUT = 11;
+
+        /** Option key for serializer. */
+        public const OPT_SERIALIZER = 1;
+
+        /** Option key for compression. */
+        public const OPT_COMPRESSION = 7;
+
+        /** flushDB async flag for phpredis >= 6.0. */
+        public const FLUSHDB_ASYNC = true;
     }
 }

@@ -2550,6 +2550,9 @@ CREATE TABLE site_object_cache_config (
     oc_last_error_class     text        NOT NULL DEFAULT '',
     oc_used_memory_bytes    bigint      NOT NULL DEFAULT 0,
     oc_hit_ratio_pct        numeric(5,2),
+    -- M69: true when the agent's last heartbeat config_hash differs from the
+    -- CP-computed hash of the stored config (indicates a live/stored drift).
+    oc_config_drift         boolean     NOT NULL DEFAULT false,
     created_at              timestamptz NOT NULL DEFAULT now(),
     updated_at              timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT site_object_cache_config_pkey PRIMARY KEY (site_id),

@@ -22,7 +22,7 @@ SELECT
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password
 FROM site_object_cache_config
@@ -50,7 +50,7 @@ INSERT INTO site_object_cache_config (
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     updated_at
 ) VALUES (
     @site_id, @tenant_id, @enabled, @scheme, @host, @port, @socket_path,
@@ -61,7 +61,7 @@ INSERT INTO site_object_cache_config (
     @flush_on_failback, @analytics_enabled,
     @last_test_config_hash, @last_test_result_json, @last_tested_at,
     @oc_state, @oc_latency_ms, @oc_last_error_class,
-    @oc_used_memory_bytes, @oc_hit_ratio_pct,
+    @oc_used_memory_bytes, @oc_hit_ratio_pct, @oc_config_drift,
     now()
 )
 ON CONFLICT (site_id) DO UPDATE SET
@@ -98,6 +98,7 @@ ON CONFLICT (site_id) DO UPDATE SET
     oc_last_error_class   = EXCLUDED.oc_last_error_class,
     oc_used_memory_bytes  = EXCLUDED.oc_used_memory_bytes,
     oc_hit_ratio_pct      = EXCLUDED.oc_hit_ratio_pct,
+    oc_config_drift       = EXCLUDED.oc_config_drift,
     updated_at            = now()
 RETURNING
     site_id, tenant_id, enabled, scheme, host, port, socket_path,
@@ -108,7 +109,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password;
 
@@ -132,7 +133,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password;
 
@@ -159,7 +160,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password;
 
@@ -180,7 +181,7 @@ RETURNING
     flush_on_failback, analytics_enabled,
     last_test_config_hash, last_test_result_json, last_tested_at,
     oc_state, oc_latency_ms, oc_last_error_class,
-    oc_used_memory_bytes, oc_hit_ratio_pct,
+    oc_used_memory_bytes, oc_hit_ratio_pct, oc_config_drift,
     created_at, updated_at,
     (password_encrypted IS NOT NULL)::boolean AS has_password;
 
@@ -236,3 +237,11 @@ WHERE id IN (
     WHERE h.created_at < @cutoff
     LIMIT 2000
 );
+
+-- name: UpdateObjectCacheDrift :exec
+-- M69 -- set or clear the oc_config_drift indicator from a heartbeat ingest.
+-- Runs under InAgentTx (agent path). tenant_id in WHERE is defence-in-depth.
+UPDATE site_object_cache_config
+SET oc_config_drift = @oc_config_drift,
+    updated_at      = now()
+WHERE site_id = @site_id AND tenant_id = @tenant_id;

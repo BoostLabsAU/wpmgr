@@ -6,6 +6,55 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-06-12
+
+### Fixed
+
+- **Object cache: full behavioral parity audit against the category-leading implementation, with every accepted fix shipping alongside the test that proves it.** Headline corrections: the in-request cache layer is now keyed identically to Redis, eliminating a multisite scenario where switching blogs could serve one site's cached values as another's; counter operations on missing keys now return false exactly as WordPress core does instead of fabricating values; serializer and compression settings the server cannot honor now fail loudly into safe mode with a named cause instead of silently mixing storage formats; the post-outage cache flush is rebuilt around a persisted outage marker and a Redis lock so exactly one request flushes after a genuine recovery and never during normal traffic; and install-mode detection no longer suppresses cache writes during WordPress upgrades.
+- **Sixteen further contract corrections** covering delete-on-missing return values, force-refresh reads on memory-only groups, write-through ordering, key validation, batched-read result ordering, back-compat property access, version-aware flush flags, multisite transient cleanup, and a guard against a performance plugin disabling our drop-in.
+
+### Added
+
+- **Configuration drift detection.** The agent now reports the fingerprint of the configuration file it is actually reading, and the dashboard flags when it diverges from the saved settings, ending the class of silent mismatch between what the control plane believes and what the site runs. Failed configuration pushes to the site now surface as a visible warning instead of being discarded.
+- **Codec capability gate.** Saving a configuration that requests a serializer or compression codec the site's own connection test reported as unavailable is now rejected up front with a clear message.
+- **Named diagnosis for unreadable credentials files and honest cache-flush results in command-line contexts**, plus complete teardown on deactivation and uninstall.
+- **Four new integration-harness stages**: multisite isolation, install-mode writes, file-ownership drift from command-line sessions, and outage-recovery flushing exactly once.
+
+Migration m69 applies automatically on API boot. Agent 0.42.0 with drop-in 2.1.0; existing installs refresh automatically after the agent updates. Security reviewed (verdict ship, no findings).
+
+## [0.41.6] - 2026-06-11
+
+### Fixed
+
+- **Object cache: the cache no longer flushes itself on every request.** The recovery mechanism that clears potentially stale keys after a Redis outage misread its per-request state and treated the first successful operation of every page load as an outage recovery, wiping the entire site keyspace each request. With the cache enabled this made wp-admin dramatically slower than no cache at all: every read missed, every option re-queried the database, and all transients died per request. The flush now fires only after a genuinely recorded outage-to-recovery transition, with regression tests asserting no flush ever happens without a prior failure.
+- **Object cache: non-activation diagnosis is accurate and names the culprit.** The previous cause detection used a leftover substring check that misread the current drop-in and made four causes unreachable. The rewritten diagnosis distinguishes a replaced cache object (reporting the replacing class and file), an incomplete boot, a stale opcode cache, a suppression filter, an early definer (reporting its file), and missing, outdated, or foreign drop-ins, in the correct precedence order.
+
+### Added
+
+- **A real-WordPress integration harness** (docker compose: WordPress, MariaDB, Redis) that installs the built agent zip and asserts what unit tests structurally cannot: the engine actually serving as the active cache, keys surviving across requests (the direct regression net for the per-request flush bug), loose-typed plugin call shapes against the installed drop-in, heartbeat correctness in web and cron contexts, and a negative test for early cache definition. Runs nightly and on demand; not part of the default CI gate.
+
+Agent-only release. Drop-in 2.0.2; existing installs refresh automatically after the agent updates.
+
+## [0.41.5] - 2026-06-11
+
+### Fixed
+
+- **Object cache: a loose-typed cache call can no longer take the site down.** The 0.41.4 self-contained drop-in activated correctly but enforced strict parameter types on the WordPress cache API surface; the first plugin call passing an integer group name (a pattern WordPress core tolerates by casting) became a fatal error on every request. All public cache methods now accept what core accepts and normalize internally, the generated drop-in no longer carries a strict-types declaration, and every cache wrapper catches unexpected errors and degrades to a cache miss instead of crashing the request. The exact call shape that caused the outage is now a permanent regression test that runs against the generated drop-in itself.
+
+Agent-only release. Drop-in version 2.0.1. If your site was affected: delete wp-content/object-cache.php to recover, update the agent, then enable the object cache again.
+
+## [0.41.4] - 2026-06-11
+
+### Changed
+
+- **Object cache: the drop-in is now fully self-contained.** Instead of a small locator file that finds the engine inside the plugin directory at runtime, the installer now ships one generated file containing the complete engine, connection layer, and config loader. The file is produced at build time, byte-identical per release, and has zero runtime dependence on the plugin folder name or location, which removes the entire class of "drop-in present but engine never active" failures the locator design allowed. The encrypted credentials file stays separate and 0600.
+
+### Added
+
+- **Object cache: non-activation now names its cause.** When the drop-in is installed but the engine is not the active cache, the heartbeat reports a specific reason instead of a generic flag: a stale opcode cache, an early cache definition by another component, a suppression filter, an outdated or foreign drop-in, a missing file, or an explicit kill-switch or install-mode bail. The heartbeat also reports the site PHP version and SAPI, and opcache invalidation results are verified and reported rather than silently suppressed.
+
+Agent-only release. Drop-in version 2.0.0; existing installs refresh automatically on the next heartbeat after the agent updates.
+
 ## [0.41.3] - 2026-06-11
 
 ### Changed

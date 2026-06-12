@@ -94,15 +94,39 @@ final class ObjectCacheConfig
 	 *
 	 * @return array<string,mixed>
 	 */
+	/** Sentinel value indicating the file exists but could not be read (H7). */
+	public const LOAD_UNREADABLE = '__config_unreadable__';
+
+	/**
+	 * Load and return the config array. Returns an empty array when the file
+	 * is absent or malformed, and the LOAD_UNREADABLE sentinel as reason when
+	 * the file exists but cannot be read (H7: config_unreadable vs config_empty).
+	 *
+	 * Callers that need to distinguish the two cases can call loadWithReason().
+	 *
+	 * @return array<string,mixed>
+	 */
 	public function load(): array
 	{
+		[ $config ] = $this->loadWithReason();
+		return $config;
+	}
+
+	/**
+	 * Load the config and return [config_array, reason_string].
+	 * reason is one of: '' (success/empty), 'config_empty', 'config_unreadable'.
+	 *
+	 * @return array{0:array<string,mixed>,1:string}
+	 */
+	public function loadWithReason(): array
+	{
 		if ( $this->loaded !== null ) {
-			return $this->loaded;
+			return [ $this->loaded, '' ];
 		}
 
 		if ( $this->filePath === '' || ! @is_file( $this->filePath ) ) {
 			$this->loaded = [];
-			return $this->loaded;
+			return [ $this->loaded, 'config_empty' ];
 		}
 
 		// Permission check: refuse to use a world-readable secrets file.
@@ -116,7 +140,7 @@ final class ObjectCacheConfig
 						error_log( 'WPMgr Object Cache: config file is world-readable; refusing to load.' );
 					}
 					$this->loaded = [];
-					return $this->loaded;
+					return [ $this->loaded, 'config_unreadable' ];
 				}
 			}
 		}
@@ -125,11 +149,18 @@ final class ObjectCacheConfig
 			// phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- path is derived from WP_CONTENT_DIR, always absolute
 			$result = include $this->filePath;
 		} catch ( \Throwable $e ) {
-			$result = false;
+			// H7: include failure (e.g. permission denied, parse error).
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
 		}
 
-		$this->loaded = is_array( $result ) ? $result : [];
-		return $this->loaded;
+		if ( ! is_array( $result ) ) {
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
+		}
+
+		$this->loaded = $result;
+		return [ $this->loaded, '' ];
 	}
 
 	/**

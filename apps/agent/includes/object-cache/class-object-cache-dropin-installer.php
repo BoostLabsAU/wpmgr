@@ -3,13 +3,13 @@
  * ObjectCacheDropinInstaller — manages the object-cache.php drop-in lifecycle
  * in wp-content.
  *
- * Mirrors the page-cache DropinInstaller pattern (install/verify/version/remove +
- * writability probe + foreign detection), but the stub is static (no inlined
- * config; config lives in the 0600 file). The stub is the file
- * assets/wpmgr-object-cache.php from the plugin directory.
+ * Installs the self-contained generated artifact
+ * (assets/wpmgr-object-cache-dropin.php) as wp-content/object-cache.php.
+ * The generated file inlines all engine classes so no path resolution can
+ * fail after installation.
  *
  * Security constraints:
- *   - Foreign object-cache.php (not ours) is never overwritten without a force flag.
+ *   - Foreign object-cache.php (not ours) is never overwritten without force.
  *   - Writability is proven by a real temp-file write probe before any action.
  *   - DISALLOW_FILE_MODS is honored.
  *
@@ -35,11 +35,8 @@ final class ObjectCacheDropinInstaller
 	/** Signature line proving a drop-in on disk is ours. */
 	public const SIGNATURE = 'WPMgr Object Cache drop-in';
 
-	/** Version header string prefix in the stub. */
+	/** Version header string prefix in the artifact. */
 	public const VERSION_PREFIX = 'Version: ';
-
-	/** Placeholder token in the stub template replaced at install time. */
-	public const ENGINE_PATH_PLACEHOLDER = '__WPMGR_OC_ENGINE_PATH__';
 
 	/** Drop-in state: ours and current. */
 	public const STATE_OURS_CURRENT = 'ours-current';
@@ -56,12 +53,12 @@ final class ObjectCacheDropinInstaller
 	/** Absolute path to the wp-content directory. */
 	private string $contentDir;
 
-	/** Absolute path to the stub template file. */
+	/** Absolute path to the generated drop-in artifact. */
 	private string $stubPath;
 
 	/**
 	 * @param string|null $contentDir wp-content path override (for tests).
-	 * @param string|null $stubPath   Stub template path override (for tests).
+	 * @param string|null $stubPath   Generated artifact path override (for tests).
 	 */
 	public function __construct( ?string $contentDir = null, ?string $stubPath = null )
 	{
@@ -77,7 +74,7 @@ final class ObjectCacheDropinInstaller
 			$this->stubPath = $stubPath;
 		} elseif ( defined( 'WPMGR_AGENT_DIR' ) ) {
 			$this->stubPath = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
-				. '/assets/wpmgr-object-cache.php';
+				. '/assets/wpmgr-object-cache-dropin.php';
 		} else {
 			$this->stubPath = '';
 		}
@@ -111,10 +108,9 @@ final class ObjectCacheDropinInstaller
 		if ( strpos( $content, self::SIGNATURE ) === false ) {
 			return self::STATE_FOREIGN;
 		}
-		// Check version.
 		$installedVersion = $this->extractVersion( $content );
-		$stubVersion      = $this->stubVersion();
-		if ( $stubVersion !== '' && $installedVersion !== '' && $installedVersion !== $stubVersion ) {
+		$artifactVersion  = $this->artifactVersion();
+		if ( $artifactVersion !== '' && $installedVersion !== '' && $installedVersion !== $artifactVersion ) {
 			return self::STATE_OURS_OUTDATED;
 		}
 		return self::STATE_OURS_CURRENT;
@@ -144,7 +140,6 @@ final class ObjectCacheDropinInstaller
 		if ( defined( 'DISALLOW_FILE_MODS' ) && constant( 'DISALLOW_FILE_MODS' ) ) {
 			return false;
 		}
-		// Temp-file probe.
 		$tmp = $this->contentDir . '/.wpmgr_oc_probe_' . wp_rand( 100000, 999999 );
 		$ok  = @file_put_contents( $tmp, '1' ) !== false;
 		if ( $ok ) {
@@ -154,81 +149,107 @@ final class ObjectCacheDropinInstaller
 	}
 
 	/**
-	 * Install the object-cache.php stub. Idempotent.
+	 * Install the object-cache.php drop-in. Idempotent.
 	 *
+	 * Copies the self-contained generated artifact directly; no stamping.
 	 * Refuses to overwrite a foreign drop-in unless $force is true.
 	 *
 	 * @param bool $force Overwrite a foreign drop-in.
-	 * @return array{ok:bool,detail:string,foreign_dropin:bool}
+	 * @return array{ok:bool,detail:string,foreign_dropin:bool,opcache_invalidate_ok:bool}
 	 */
 	public function install( bool $force = false ): array
 	{
+		$defaultResult = [
+			'ok'                   => false,
+			'detail'               => '',
+			'foreign_dropin'       => false,
+			'opcache_invalidate_ok' => false,
+		];
+
 		$path = $this->dropinPath();
 		if ( $path === '' ) {
-			return [ 'ok' => false, 'detail' => 'wp-content path unavailable', 'foreign_dropin' => false ];
+			$defaultResult['detail'] = 'wp-content path unavailable';
+			return $defaultResult;
 		}
 
 		if ( $this->stubPath === '' || ! @is_file( $this->stubPath ) ) {
-			return [ 'ok' => false, 'detail' => 'stub template not found', 'foreign_dropin' => false ];
+			$defaultResult['detail'] = 'drop-in artifact not found';
+			return $defaultResult;
 		}
 
 		if ( defined( 'DISALLOW_FILE_MODS' ) && constant( 'DISALLOW_FILE_MODS' ) ) {
-			return [ 'ok' => false, 'detail' => 'DISALLOW_FILE_MODS is set', 'foreign_dropin' => false ];
+			$defaultResult['detail'] = 'DISALLOW_FILE_MODS is set';
+			return $defaultResult;
 		}
 
-		// Foreign drop-in check. Treat an unreadable existing file as foreign:
-		// we cannot confirm it is ours, so we must not overwrite it without $force.
+		// Foreign drop-in check. Treat an unreadable existing file as foreign.
 		if ( @is_file( $path ) ) {
-			$existing = @file_get_contents( $path );
+			$existing  = @file_get_contents( $path );
 			$isForeign = $existing === false
 				|| ( strpos( $existing, self::SIGNATURE ) === false && trim( $existing ) !== '' );
 			if ( $isForeign && ! $force ) {
-				return [
-					'ok'            => false,
+				return array_merge( $defaultResult, [
 					'detail'        => 'another object-cache drop-in is installed; use force to replace',
 					'foreign_dropin' => true,
-				];
+				] );
 			}
 		}
 
 		// Writability check.
 		if ( ! $this->isWritable() ) {
-			return [ 'ok' => false, 'detail' => 'wp-content is not writable', 'foreign_dropin' => false ];
+			$defaultResult['detail'] = 'wp-content is not writable';
+			return $defaultResult;
 		}
 
-		$stub = @file_get_contents( $this->stubPath );
-		if ( $stub === false ) {
-			return [ 'ok' => false, 'detail' => 'could not read stub template', 'foreign_dropin' => false ];
+		$artifact = @file_get_contents( $this->stubPath );
+		if ( $artifact === false ) {
+			$defaultResult['detail'] = 'could not read drop-in artifact';
+			return $defaultResult;
 		}
 
-		// Stamp the absolute engine path into the stub at install time. The stub
-		// template ships with the literal placeholder; we replace it here with the
-		// var_export'd resolved absolute path so the drop-in can locate the engine
-		// even before WordPress has defined plugin-directory constants (which are
-		// not available during wp_start_object_cache()).
-		$stub = $this->stampEnginePath( $stub );
-
-		// Idempotent: byte-identical content.
+		// Idempotent: byte-identical content already installed.
 		if ( @is_file( $path ) ) {
 			$current = @file_get_contents( $path );
-			if ( $current === $stub ) {
-				return [ 'ok' => true, 'detail' => 'already current', 'foreign_dropin' => false ];
+			if ( $current === $artifact ) {
+				return array_merge( $defaultResult, [
+					'ok'                    => true,
+					'detail'                => 'already current',
+					'opcache_invalidate_ok' => true,
+				] );
 			}
 		}
 
-		$result = @file_put_contents( $path, $stub, LOCK_EX );
+		$result = @file_put_contents( $path, $artifact, LOCK_EX );
 		if ( $result === false ) {
-			return [ 'ok' => false, 'detail' => 'write failed', 'foreign_dropin' => false ];
+			$defaultResult['detail'] = 'write failed';
+			return $defaultResult;
 		}
 
-		// Invalidate opcache for the stub and all engine files so stale bytecode
-		// cannot keep executing old code after an agent update or reinstall.
+		// Opcache invalidation for the installed drop-in.
+		$invalidateOk = false;
 		if ( function_exists( 'opcache_invalidate' ) ) {
-			@opcache_invalidate( $path, true );
-			$this->invalidateEngineOpcache();
+			$invalidateOk = opcache_invalidate( $path, true );
 		}
 
-		return [ 'ok' => true, 'detail' => 'installed', 'foreign_dropin' => false ];
+		// Append opcache.restrict_api info when detectable.
+		$opcacheRestrictApi = '';
+		if ( function_exists( 'opcache_get_status' ) && function_exists( 'ini_get' ) ) {
+			$restrictApi = ini_get( 'opcache.restrict_api' ); // phpcs:ignore WordPress.PHP.IniSet.Risky -- ini_get is read-only; no value is set
+			if ( is_string( $restrictApi ) && $restrictApi !== '' ) {
+				$opcacheRestrictApi = $restrictApi;
+			}
+		}
+
+		$ret = [
+			'ok'                    => true,
+			'detail'                => 'installed',
+			'foreign_dropin'        => false,
+			'opcache_invalidate_ok' => $invalidateOk,
+		];
+		if ( $opcacheRestrictApi !== '' ) {
+			$ret['opcache_restrict_api'] = $opcacheRestrictApi;
+		}
+		return $ret;
 	}
 
 	/**
@@ -246,13 +267,12 @@ final class ObjectCacheDropinInstaller
 		if ( $content === false ) {
 			return true;
 		}
-		// Only remove our own drop-in.
 		if ( strpos( $content, self::SIGNATURE ) === false ) {
 			return true; // Foreign: leave it alone.
 		}
 		wp_delete_file( $path );
 		if ( function_exists( 'opcache_invalidate' ) ) {
-			@opcache_invalidate( $path, true );
+			opcache_invalidate( $path, true );
 		}
 		return ! @file_exists( $path );
 	}
@@ -271,7 +291,6 @@ final class ObjectCacheDropinInstaller
 		}
 		$count = 0;
 
-		// Per-site transients.
 		$optionsTable = $wpdb->options ?? '';
 		if ( $optionsTable !== '' ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- no WP API for bulk transient delete; anti-replay / transient purge; caching would defeat the purpose
@@ -287,11 +306,11 @@ final class ObjectCacheDropinInstaller
 	/**
 	 * Auto-refresh the drop-in when it is ours-outdated and wp-content is writable.
 	 *
-	 * Called from the agent's periodic work path (PerfReporter / heartbeat) after
-	 * the object-cache config is confirmed enabled. Never touches a foreign drop-in.
-	 * Returns true when the stub is now current (already was, or successfully refreshed).
+	 * Called from the agent's periodic work path (PerfReporter / heartbeat).
+	 * Never touches a foreign drop-in.
+	 * Returns true when the installed drop-in is now current.
 	 *
-	 * @return bool True when the installed stub is current after this call.
+	 * @return bool True when the installed drop-in is current after this call.
 	 */
 	public function maybeAutoRefresh(): bool
 	{
@@ -302,27 +321,25 @@ final class ObjectCacheDropinInstaller
 		}
 
 		if ( $state !== self::STATE_OURS_OUTDATED ) {
-			// Missing or foreign: do not auto-install/replace.
 			return false;
 		}
 
-		// Outdated ours-stub: refresh it.
 		$result = $this->install();
 		return (bool) $result['ok'];
 	}
 
 	// -------------------------------------------------------------------------
-	// Private helpers
+	// Public helpers (also called from Plugin::maybeInvalidateEngineOpcache)
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Opcache-invalidate the engine file and its two sibling class files.
+	 * Opcache-invalidate the installed drop-in and the in-plugin generated
+	 * artifact. Called on agent version change and after install.
 	 *
-	 * Called after installing/updating the stub so the next request executes
-	 * the freshly-written engine code, not a stale compiled version.
-	 *
-	 * Also exposed as a public method so the plugin boot path can call it
-	 * when it detects a version change (see Plugin::maybeInvalidateEngineOpcache).
+	 * In the self-contained model the engine source files inside the plugin are
+	 * only meaningful to the build tool, not to the runtime. However, invalidating
+	 * them on version change ensures any transient bytecode from the old version
+	 * is cleared immediately.
 	 *
 	 * @return void
 	 */
@@ -331,17 +348,38 @@ final class ObjectCacheDropinInstaller
 		if ( ! function_exists( 'opcache_invalidate' ) ) {
 			return;
 		}
-		$this->invalidateEngineOpcache();
+
+		// Invalidate the installed drop-in in wp-content.
+		$installed = $this->dropinPath();
+		if ( $installed !== '' && @is_file( $installed ) ) {
+			opcache_invalidate( $installed, true );
+		}
+
+		// Invalidate the in-plugin generated artifact.
+		if ( $this->stubPath !== '' && @is_file( $this->stubPath ) ) {
+			opcache_invalidate( $this->stubPath, true );
+		}
+
+		// Invalidate the engine source files (used by build tool; old bytecode
+		// is irrelevant at runtime but harmless to clear on version change).
+		$this->invalidateEngineSourceFiles();
 	}
 
+	// -------------------------------------------------------------------------
+	// Private helpers
+	// -------------------------------------------------------------------------
+
 	/**
-	 * Inner: opcache_invalidate the engine + both sibling class files.
+	 * Opcache-invalidate the three engine source files inside the plugin.
 	 *
 	 * @return void
 	 */
-	private function invalidateEngineOpcache(): void
+	private function invalidateEngineSourceFiles(): void
 	{
-		// Derive the engine directory from the stub path or WPMGR_AGENT_DIR.
+		if ( ! function_exists( 'opcache_invalidate' ) ) {
+			return;
+		}
+
 		$engineDir = '';
 
 		if ( $this->stubPath !== '' ) {
@@ -372,66 +410,9 @@ final class ObjectCacheDropinInstaller
 
 		foreach ( $files as $file ) {
 			if ( @is_file( $file ) ) {
-				@opcache_invalidate( $file, true );
+				opcache_invalidate( $file, true );
 			}
 		}
-	}
-
-	/**
-	 * Stamp the resolved absolute engine path into the stub content.
-	 *
-	 * Replaces the ENGINE_PATH_PLACEHOLDER token with the var_export'd absolute
-	 * path to the engine file, derived from the stub file's own location. The
-	 * engine file lives alongside the stub template inside the plugin tree, so
-	 * we can compute it reliably at install time when WPMGR_AGENT_DIR is defined.
-	 *
-	 * The SIGNATURE check used by state() and isInstalled() does NOT depend on
-	 * the placeholder content, so stamping does not affect foreign-detection.
-	 *
-	 * @param string $stubContent Raw stub template content.
-	 * @return string Stamped content (placeholder replaced with resolved path).
-	 */
-	private function stampEnginePath( string $stubContent ): string
-	{
-		// Derive the engine path from the stub template location. The engine file
-		// lives two directories up from assets/ at:
-		//   <plugin_root>/assets/wpmgr-object-cache.php  (stub template)
-		//   <plugin_root>/includes/object-cache/class-object-cache-engine.php  (engine)
-		$enginePath = '';
-
-		if ( $this->stubPath !== '' ) {
-			$pluginRoot = dirname( dirname( $this->stubPath ) );
-			$candidate  = $pluginRoot . '/includes/object-cache/class-object-cache-engine.php';
-			if ( @is_file( $candidate ) ) {
-				$enginePath = $candidate;
-			}
-		}
-
-		// Also try WPMGR_AGENT_DIR as a direct source of truth.
-		if ( $enginePath === '' && defined( 'WPMGR_AGENT_DIR' ) ) {
-			$candidate = rtrim( (string) constant( 'WPMGR_AGENT_DIR' ), '/\\' )
-				. '/includes/object-cache/class-object-cache-engine.php';
-			if ( @is_file( $candidate ) ) {
-				$enginePath = $candidate;
-			}
-		}
-
-		if ( $enginePath === '' ) {
-			// Cannot resolve at install time; leave the placeholder in place.
-			// Probes 2 and 3 in the stub will still work as fallbacks.
-			return $stubContent;
-		}
-
-		// Use var_export to produce a valid PHP string literal (handles backslashes
-		// on Windows and any unusual characters in the path).
-		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- serializing a file path into a PHP stub file; not a debug/logging use
-		$exported = var_export( $enginePath, true );
-
-		return str_replace(
-			"'" . self::ENGINE_PATH_PLACEHOLDER . "'",
-			$exported,
-			$stubContent
-		);
 	}
 
 	/**
@@ -446,29 +427,23 @@ final class ObjectCacheDropinInstaller
 		if ( $pos === false ) {
 			return '';
 		}
-		$start = $pos + strlen( self::VERSION_PREFIX );
-		$end   = strpos( $content, "\n", $start );
+		$start   = $pos + strlen( self::VERSION_PREFIX );
+		$end     = strpos( $content, "\n", $start );
 		$version = $end !== false ? substr( $content, $start, $end - $start ) : substr( $content, $start );
 		return trim( $version );
 	}
 
 	/**
-	 * Extract the version from the stub template.
-	 *
-	 * Reads 2048 bytes to ensure the Version header is found even if there is
-	 * front-matter above it. The stub template keeps the Version line within the
-	 * first ~200 bytes, but installed stubs may have an engine path stamped in
-	 * before the closing doc-comment tag; 2048 bytes covers all realistic cases.
+	 * Extract the version from the generated artifact (reads first 2048 bytes).
 	 *
 	 * @return string
 	 */
-	private function stubVersion(): string
+	private function artifactVersion(): string
 	{
 		if ( $this->stubPath === '' || ! @is_file( $this->stubPath ) ) {
 			return '';
 		}
-		// Read the first 2048 bytes to locate the Version header cheaply.
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- headless agent; WP_Filesystem not initialized; streaming read of plugin-controlled stub file only
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fopen -- headless agent; WP_Filesystem not initialized; streaming read of plugin-controlled artifact file only
 		$handle = @fopen( $this->stubPath, 'r' );
 		if ( $handle === false ) {
 			return '';

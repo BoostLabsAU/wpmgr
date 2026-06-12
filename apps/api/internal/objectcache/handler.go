@@ -96,8 +96,14 @@ func (h *Handler) putConfig(c *gin.Context) {
 			return
 		}
 		// Agent push failure after a successful store: return 200 with warning.
-		c.Header("X-Agent-Push-Warning", err.Error())
-		c.JSON(http.StatusOK, toConfigDTO(saved))
+		// Surface via both the X-Agent-Push-Warning response header (existing
+		// convention) and the push_warning field on the config DTO so callers
+		// that don't inspect headers can still surface the advisory.
+		warnMsg := capDetail(err.Error())
+		c.Header("X-Agent-Push-Warning", warnMsg)
+		dto := toConfigDTO(saved)
+		dto.PushWarning = warnMsg
+		c.JSON(http.StatusOK, dto)
 		return
 	}
 

@@ -1,526 +1,979 @@
 <?php
 /**
- * WPMgr Object Cache engine — implements the full WordPress wp_cache_* API
- * backed by phpredis with graceful degradation to a pure in-memory array cache.
+ * WPMgr Object Cache drop-in
+ * Version: 2.1.0
  *
- * This file is included from the object-cache.php drop-in stub. It:
- *   1. Loads the supporting classes (autoloader may not be available this early).
- *   2. Builds the config from the 0600 config file.
- *   3. Attempts to connect; on any boot Throwable, falls back to a pure-array
- *      cache so the site never errors.
- *   4. Instantiates the global $wp_object_cache and registers the shutdown hook.
+ * Self-contained object-cache.php drop-in for WordPress. All engine classes are
+ * inlined; no external file resolution can fail after installation.
  *
  * @package WPMgr\Agent\ObjectCache
  */
 
-if ( ! defined( 'ABSPATH' ) ) {
-	exit;
-}
+namespace {
 
-// ---------------------------------------------------------------------------
-// Load supporting classes. Neither the Composer autoloader nor any plugin
-// constant exists at drop-in load time (wp-settings.php includes
-// object-cache.php before plugins), so resolve the siblings from this file's
-// own directory: they always live next to the engine.
-// ---------------------------------------------------------------------------
-
-foreach (
-	[
-		'class-object-cache-config.php',
-		'class-redis-connection.php',
-	] as $wpmgr_oc_dep
-) {
-	$wpmgr_oc_dep_path = __DIR__ . '/' . $wpmgr_oc_dep;
-	if ( @is_file( $wpmgr_oc_dep_path ) ) {
-		require_once $wpmgr_oc_dep_path; // phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- __DIR__-anchored sibling, always absolute
+	if ( ! defined( 'ABSPATH' ) ) {
+		exit; // No direct access.
 	}
-}
 
-unset( $wpmgr_oc_dep, $wpmgr_oc_dep_path );
+	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
+	// whether the drop-in was executed at all and identify early-bail causes.
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.0', 'bail' => null ];
 
-// ---------------------------------------------------------------------------
-// Boot the cache: try Redis, fall back to pure array on any Throwable.
-// ---------------------------------------------------------------------------
+	// PHP floor: the engine uses PHP 8.1 features.
+	if ( PHP_VERSION_ID < 80100 ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'php_floor';
+		return;
+	}
+
+	// H6: WP setup-config bail — the DB is not ready during the initial config wizard.
+	// The old installing bail has been removed: wp_upgrade() flushes and
+	// wp-activate.php invalidations now reach Redis during normal install mode.
+	if ( defined( 'WP_SETUP_CONFIG' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'setup_config';
+		return;
+	}
+
+	// H6: Env kill-switch — operator or host can disable the OC without removing the file.
+	if ( getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) !== false && (bool) getenv( 'WPMGR_OBJECT_CACHE_DISABLED' ) ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch_env';
+		return;
+	}
+
+	// Kill-switch: constant-based disable (pre-existing).
+	if ( defined( 'WPMGR_OBJECT_CACHE_DISABLED' ) && WPMGR_OBJECT_CACHE_DISABLED ) {
+		$GLOBALS['wpmgr_oc_stub']['bail'] = 'killswitch';
+		return;
+	}
+
+	// Success path: all engine classes are inlined below.
+	$GLOBALS['wpmgr_oc_stub']['bail'] = 'engine_inline';
+
+} // end namespace (preamble)
+namespace WPMgr\Agent\ObjectCache {
+
+	if ( ! class_exists( 'WPMgr\\Agent\\ObjectCache\\ObjectCacheConfig', false ) ) {
+		/**
+ * ObjectCacheConfig — loads and persists the object-cache connection config.
+ *
+ * The config lives in wp-content/wpmgr-object-cache-config.php, chmod 0600,
+ * written atomically (tmp + rename). It returns a plain PHP array; no DB round
+ * trips on the hot path.
+ *
+ * Security constraints:
+ *   - 0600 permissions: owner-only read, kept on every write.
+ *   - Atomic write: tmp file + rename so a crash mid-write leaves the old config.
+ *   - Excluded from backups via FilesArchiver DEFAULT_EXCLUDES (exact filename).
+ *   - Excluded from restores via FilesRestorer EXCLUDE_SUBSTRINGS.
+ *   - Path is not user-controllable; always derived from WP_CONTENT_DIR.
+ *   - The secret (Redis password) is stored here and nowhere else on the site.
+ *   - Never echoed back in any response.
+ *   - Tmp file written under umask 0077 so secret bytes are never world-readable.
+ *
+ * @package WPMgr\Agent\ObjectCache
+ */
+
+
 
 /**
- * Returns the global WP Object Cache instance, booting it if necessary.
- *
- * @return \WPMgr_Object_Cache
+ * Loads and persists the object-cache connection config from the dedicated
+ * 0600 PHP config file in wp-content.
  */
-function wpmgr_get_object_cache(): \WPMgr_Object_Cache
+final class ObjectCacheConfig
 {
-	global $wp_object_cache;
-	if ( ! ( $wp_object_cache instanceof \WPMgr_Object_Cache ) ) {
-		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
-		$wp_object_cache = \WPMgr_Object_Cache::boot();
+	/** Filename inside wp-content. */
+	public const FILENAME = 'wpmgr-object-cache-config.php';
+
+	/** Config hash option name (non-autoloaded). */
+	public const OPTION_CONFIG_HASH = 'wpmgr_object_cache_config_hash';
+
+	/** Default max TTL in seconds (7 days, decision D6). */
+	public const DEFAULT_MAXTTL = 604800;
+
+	/** Default query TTL in seconds (24h). */
+	public const DEFAULT_QUERYTTL = 86400;
+
+	/** Default connect timeout in milliseconds. */
+	public const DEFAULT_CONNECT_TIMEOUT_MS = 1000;
+
+	/** Default read timeout in milliseconds. */
+	public const DEFAULT_READ_TIMEOUT_MS = 1000;
+
+	/** Default retry count. */
+	public const DEFAULT_RETRY_COUNT = 3;
+
+	/** Default retry interval base in milliseconds. */
+	public const DEFAULT_RETRY_INTERVAL_MS = 25;
+
+	/** Absolute path to the config file. */
+	private string $filePath;
+
+	/** @var array<string,mixed>|null Loaded config cache. */
+	private ?array $loaded = null;
+
+	/**
+	 * @param string|null $contentDir wp-content path override (for tests).
+	 */
+	public function __construct( ?string $contentDir = null )
+	{
+		if ( $contentDir !== null ) {
+			$base = rtrim( $contentDir, '/\\' );
+		} elseif ( defined( 'WP_CONTENT_DIR' ) ) {
+			$base = rtrim( (string) constant( 'WP_CONTENT_DIR' ), '/\\' );
+		} else {
+			$base = '';
+		}
+		$this->filePath = $base !== '' ? $base . '/' . self::FILENAME : '';
 	}
-	return $wp_object_cache;
-}
 
-// Boot now and install the shutdown hook for stats persist + close.
-global $wp_object_cache;
-// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
-$wp_object_cache = \WPMgr_Object_Cache::boot();
+	/**
+	 * Absolute path to the config file.
+	 *
+	 * @return string
+	 */
+	public function filePath(): string
+	{
+		return $this->filePath;
+	}
 
-register_shutdown_function(
-	static function (): void {
-		global $wp_object_cache;
-		if ( $wp_object_cache instanceof \WPMgr_Object_Cache ) {
-			$wp_object_cache->shutdown();
+	/**
+	 * Load and return the config array. Returns an empty array when the file
+	 * is absent, unreadable, or malformed. Result is memoized per instance.
+	 *
+	 * @return array<string,mixed>
+	 */
+	/** Sentinel value indicating the file exists but could not be read (H7). */
+	public const LOAD_UNREADABLE = '__config_unreadable__';
+
+	/**
+	 * Load and return the config array. Returns an empty array when the file
+	 * is absent or malformed, and the LOAD_UNREADABLE sentinel as reason when
+	 * the file exists but cannot be read (H7: config_unreadable vs config_empty).
+	 *
+	 * Callers that need to distinguish the two cases can call loadWithReason().
+	 *
+	 * @return array<string,mixed>
+	 */
+	public function load(): array
+	{
+		[ $config ] = $this->loadWithReason();
+		return $config;
+	}
+
+	/**
+	 * Load the config and return [config_array, reason_string].
+	 * reason is one of: '' (success/empty), 'config_empty', 'config_unreadable'.
+	 *
+	 * @return array{0:array<string,mixed>,1:string}
+	 */
+	public function loadWithReason(): array
+	{
+		if ( $this->loaded !== null ) {
+			return [ $this->loaded, '' ];
+		}
+
+		if ( $this->filePath === '' || ! @is_file( $this->filePath ) ) {
+			$this->loaded = [];
+			return [ $this->loaded, 'config_empty' ];
+		}
+
+		// Permission check: refuse to use a world-readable secrets file.
+		if ( function_exists( 'fileperms' ) ) {
+			$perms = @fileperms( $this->filePath );
+			if ( $perms !== false ) {
+				// 0600 => 0x8180; allow 0600 and 0640. Reject world-readable (0044).
+				if ( ( $perms & 0x0004 ) !== 0 ) {
+					if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+						// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic
+						error_log( 'WPMgr Object Cache: config file is world-readable; refusing to load.' );
+					}
+					$this->loaded = [];
+					return [ $this->loaded, 'config_unreadable' ];
+				}
+			}
+		}
+
+		try {
+			// phpcs:ignore WordPressVIPMinimum.Files.IncludingFile.NotAbsolutePath -- path is derived from WP_CONTENT_DIR, always absolute
+			$result = include $this->filePath;
+		} catch ( \Throwable $e ) {
+			// H7: include failure (e.g. permission denied, parse error).
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
+		}
+
+		if ( ! is_array( $result ) ) {
+			$this->loaded = [];
+			return [ $this->loaded, 'config_unreadable' ];
+		}
+
+		$this->loaded = $result;
+		return [ $this->loaded, '' ];
+	}
+
+	/**
+	 * Persist a new config to the 0600 file using an atomic tmp+rename write.
+	 * Never stores the password in the hash stored in wp-options.
+	 *
+	 * @param array<string,mixed> $config Config to persist.
+	 * @return bool True on success.
+	 */
+	public function save( array $config ): bool
+	{
+		if ( $this->filePath === '' ) {
+			return false;
+		}
+
+		$dir = dirname( $this->filePath );
+		if ( ! @is_dir( $dir ) ) {
+			return false;
+		}
+
+		// Build PHP source.
+		$export = var_export( $config, true ); // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_var_export -- generating PHP source for config file, not debug output
+		$source = "<?php\n"
+			. "// WPMgr Object Cache connection config.\n"
+			. "defined( 'ABSPATH' ) || exit;\n"
+			. "return " . $export . ";\n";
+
+		// Atomic write: write to a temp file, then rename.
+		$tmp = $this->filePath . '.tmp.' . wp_rand( 100000, 999999 );
+
+		// Narrow the umask so the tmp file is created 0600 at the OS level;
+		// the explicit chmod below is a belt-and-suspenders second layer.
+		// This closes the window between write and chmod (S8).
+		$prevUmask = umask( 0077 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_umask -- headless agent; must bracket secret-file write to ensure 0600 at creation
+		$written   = @file_put_contents( $tmp, $source, LOCK_EX );
+		umask( $prevUmask ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_umask -- restores umask after the secret-file write window
+
+		if ( $written === false ) {
+			return false;
+		}
+
+		// Belt-and-suspenders: explicit chmod in case umask was already overridden
+		// by the SAPI or an earlier call.
+		@chmod( $tmp, 0600 ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- headless agent; WP_Filesystem not initialized; direct chmod required for credential-file security
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic rename; WP_Filesystem::move() is non-atomic; justified per §4 guardrail
+		if ( ! @rename( $tmp, $this->filePath ) ) {
+			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup of a failed rename on a tmp file in the same dir; wp_delete_file() is equivalent for non-attachment files
+			return false;
+		}
+
+		// Invalidate opcache so a credential rotation is not silently served from
+		// stale bytecode on validate_timestamps=0 hosts (S7).
+		if ( function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $this->filePath, true );
+		}
+
+		// Invalidate the memoized load.
+		$this->loaded = null;
+
+		// Persist config hash (password-redacted) to wp-options for drift detection.
+		$this->persistHash( $config );
+
+		return true;
+	}
+
+	/**
+	 * Remove the config file. Idempotent.
+	 *
+	 * @return bool True when the file is absent or successfully removed.
+	 */
+	public function delete(): bool
+	{
+		if ( $this->filePath === '' || ! @is_file( $this->filePath ) ) {
+			return true;
+		}
+		$result = @unlink( $this->filePath ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- wp_delete_file wraps unlink; direct unlink is equivalent for a non-attachment file
+		if ( $result && function_exists( 'opcache_invalidate' ) ) {
+			@opcache_invalidate( $this->filePath, true );
+		}
+		$this->loaded = null;
+		return $result;
+	}
+
+	/**
+	 * Whether the config file exists on disk.
+	 *
+	 * @return bool
+	 */
+	public function exists(): bool
+	{
+		return $this->filePath !== '' && @is_file( $this->filePath );
+	}
+
+	/**
+	 * Compute a SHA-256 config hash (password redacted) for drift detection.
+	 *
+	 * @param array<string,mixed> $config Full config including password.
+	 * @return string Hex hash.
+	 */
+	public function computeHash( array $config ): string
+	{
+		$redacted = $config;
+		unset( $redacted['password'] );
+		ksort( $redacted );
+		return hash( 'sha256', (string) wp_json_encode( $redacted ) );
+	}
+
+	/**
+	 * Persist the config hash to wp-options for CP drift detection.
+	 *
+	 * @param array<string,mixed> $config Config array.
+	 * @return void
+	 */
+	private function persistHash( array $config ): void
+	{
+		if ( function_exists( 'update_option' ) ) {
+			update_option( self::OPTION_CONFIG_HASH, $this->computeHash( $config ), false );
 		}
 	}
-);
 
-// ---------------------------------------------------------------------------
-// WordPress wp_cache_* function bridge.
-// WordPress defines these functions in wp-includes/cache.php ONLY when an
-// object-cache drop-in is NOT present. Since we ARE the drop-in we must
-// define them all here. All names are mandated by the WordPress cache API;
-// they cannot carry a plugin prefix — PrefixAllGlobals is disabled for
-// this bridge section only.
-// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound -- required WordPress object-cache drop-in API; function names are not ours to choose
-// ---------------------------------------------------------------------------
-
-/**
- * Adds data to the cache if the key doesn't already exist.
- *
- * @param int|string $key    Cache key.
- * @param mixed      $data   Data to store.
- * @param mixed      $group  Cache group (any scalar; cast to string internally).
- * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
- * @return bool
- */
-function wp_cache_add( $key, $data, $group = '', $expire = 0 ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->add( $key, $data, $group, $expire );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Adds multiple cache entries.
- *
- * @param array<int|string,mixed> $data   Map of key => value.
- * @param mixed                   $group  Cache group (any scalar; cast to string internally).
- * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
- * @return array<int|string,bool>
- */
-function wp_cache_add_multiple( array $data, $group = '', $expire = 0 ): array
-{
-	try {
-		return wpmgr_get_object_cache()->add_multiple( $data, $group, $expire );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return array_fill_keys( array_keys( $data ), false );
-	}
-}
-
-/**
- * Replaces the cached data only when it already exists.
- *
- * @param int|string $key    Cache key.
- * @param mixed      $data   New data.
- * @param mixed      $group  Cache group (any scalar; cast to string internally).
- * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
- * @return bool
- */
-function wp_cache_replace( $key, $data, $group = '', $expire = 0 ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->replace( $key, $data, $group, $expire );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Saves data to the cache.
- *
- * WP core signature: wp_cache_set( $key, $data, $group = '', $expire = 0 ).
- * The $group parameter is the THIRD argument; $expire is FOURTH.
- * Callers that pass an int as $group (e.g. wp_cache_set($k, $v, 3600)) are
- * treated by WP core as setting group='3600' with expire=0. We match that
- * semantic via scalar normalization in the engine.
- *
- * @param int|string $key    Cache key.
- * @param mixed      $data   Data to store.
- * @param mixed      $group  Cache group (any scalar; cast to string internally).
- * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
- * @return bool
- */
-function wp_cache_set( $key, $data, $group = '', $expire = 0 ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->set( $key, $data, $group, $expire );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Sets multiple cache entries.
- *
- * @param array<int|string,mixed> $data   Map of key => value.
- * @param mixed                   $group  Cache group (any scalar; cast to string internally).
- * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
- * @return array<int|string,bool>
- */
-function wp_cache_set_multiple( array $data, $group = '', $expire = 0 ): array
-{
-	try {
-		return wpmgr_get_object_cache()->set_multiple( $data, $group, $expire );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return array_fill_keys( array_keys( $data ), false );
-	}
-}
-
-/**
- * Retrieves cached data.
- *
- * @param int|string $key   Cache key.
- * @param mixed      $group Cache group (any scalar; cast to string internally).
- * @param bool       $force Force a fresh fetch from the backend.
- * @param bool|null  $found Output: whether the key was found.
- * @return mixed False when not found.
- */
-function wp_cache_get( $key, $group = '', $force = false, &$found = null )
-{
-	try {
-		return wpmgr_get_object_cache()->get( $key, $group, $force, $found );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		$found = false;
-		return false;
-	}
-}
-
-/**
- * Retrieves multiple cached values.
- *
- * @param array<int|string>  $keys  Cache keys.
- * @param mixed              $group Cache group (any scalar; cast to string internally).
- * @param bool               $force Force fetch.
- * @return array<int|string,mixed>
- */
-function wp_cache_get_multiple( $keys, $group = '', $force = false ): array
-{
-	try {
-		return wpmgr_get_object_cache()->get_multiple( $keys, $group, $force );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return array_fill_keys( (array) $keys, false );
-	}
-}
-
-/**
- * Deletes cached data.
- *
- * @param int|string $key   Cache key.
- * @param mixed      $group Cache group (any scalar; cast to string internally).
- * @return bool
- */
-function wp_cache_delete( $key, $group = '' ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->delete( $key, $group );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Deletes multiple cached entries.
- *
- * @param array<int|string> $keys  Cache keys.
- * @param mixed             $group Cache group (any scalar; cast to string internally).
- * @return array<int|string,bool>
- */
-function wp_cache_delete_multiple( array $keys, $group = '' ): array
-{
-	try {
-		return wpmgr_get_object_cache()->delete_multiple( $keys, $group );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return array_fill_keys( $keys, false );
-	}
-}
-
-/**
- * Increments a numeric cache item.
- *
- * @param int|string $key    Cache key.
- * @param int        $offset Amount to increment.
- * @param mixed      $group  Cache group (any scalar; cast to string internally).
- * @return int|false New value or false on failure.
- */
-function wp_cache_incr( $key, $offset = 1, $group = '' )
-{
-	try {
-		return wpmgr_get_object_cache()->incr( $key, $offset, $group );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Decrements a numeric cache item.
- *
- * @param int|string $key    Cache key.
- * @param int        $offset Amount to decrement.
- * @param mixed      $group  Cache group (any scalar; cast to string internally).
- * @return int|false New value or false on failure.
- */
-function wp_cache_decr( $key, $offset = 1, $group = '' )
-{
-	try {
-		return wpmgr_get_object_cache()->decr( $key, $offset, $group );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Flushes the entire object cache.
- *
- * @return bool
- */
-function wp_cache_flush(): bool
-{
-	try {
-		return wpmgr_get_object_cache()->flush();
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Flushes only the in-memory runtime cache (not the persistent backend).
- *
- * @return bool
- */
-function wp_cache_flush_runtime(): bool
-{
-	try {
-		return wpmgr_get_object_cache()->flush_runtime();
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Flushes all entries in a specific cache group.
- *
- * @param mixed $group Cache group (any scalar; cast to string internally).
- * @return bool
- */
-function wp_cache_flush_group( $group ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->flush_group( $group );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Initialises the cache. Called by WordPress on init.
- *
- * @return void
- */
-function wp_cache_init(): void
-{
-	try {
-		wpmgr_get_object_cache()->init();
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-	}
-}
-
-/**
- * Closes the cache connection. Called at shutdown.
- *
- * @return bool
- */
-function wp_cache_close(): bool
-{
-	try {
-		return wpmgr_get_object_cache()->close();
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * Switches the blog context in multisite.
- *
- * @param int $blog_id Blog ID to switch to.
- * @return void
- */
-function wp_cache_switch_to_blog( $blog_id ): void
-{
-	try {
-		wpmgr_get_object_cache()->switch_to_blog( (int) $blog_id );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-	}
-}
-
-/**
- * Adds a list of groups that should share a global namespace.
- *
- * @param array<string>|string $groups Groups to add.
- * @return void
- */
-function wp_cache_add_global_groups( $groups ): void
-{
-	try {
-		wpmgr_get_object_cache()->add_global_groups( (array) $groups );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-	}
-}
-
-/**
- * Adds a list of groups that should not be backed by the persistent cache.
- *
- * @param array<string>|string $groups Groups to add.
- * @return void
- */
-function wp_cache_add_non_persistent_groups( $groups ): void
-{
-	try {
-		wpmgr_get_object_cache()->add_non_persistent_groups( (array) $groups );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-	}
-}
-
-/**
- * Registers groups that should not be prefetched (v2 stub).
- *
- * @param array<string>|string $groups Groups to register.
- * @return void
- */
-function wp_cache_add_non_prefetchable_groups( $groups ): void
-{
-	try {
-		wpmgr_get_object_cache()->add_non_prefetchable_groups( (array) $groups );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-	}
-}
-
-/**
- * Reports whether a specific feature is supported.
- *
- * @param string $feature Feature name.
- * @return bool
- */
-function wp_cache_supports( $feature ): bool
-{
-	try {
-		return wpmgr_get_object_cache()->supports( (string) $feature );
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
-
-/**
- * LOW bridge: wp_cache_remember — get or compute-and-set.
- *
- * @param int|string $key      Cache key.
- * @param mixed      $group    Cache group.
- * @param int        $expire   TTL in seconds.
- * @param callable   $callback Callback to compute the value on miss.
- * @return mixed
- */
-function wp_cache_remember( $key, $group, int $expire, callable $callback )
-{
-	try {
-		$found = false;
-		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
-		if ( $found ) {
-			return $value;
+	/**
+	 * Build a config array from the command request params with safe defaults.
+	 * Validates and clamps all values.
+	 *
+	 * @param array<string,mixed> $params Raw command params.
+	 * @return array<string,mixed>
+	 */
+	public static function fromParams( array $params ): array
+	{
+		$scheme = isset( $params['scheme'] ) && is_string( $params['scheme'] )
+			? $params['scheme'] : 'tcp';
+		if ( ! in_array( $scheme, [ 'tcp', 'unix', 'tls' ], true ) ) {
+			$scheme = 'tcp';
 		}
-		$value = $callback();
-		wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
-		return $value;
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
-	}
-}
 
-/**
- * LOW bridge: wp_cache_sear — get, or set+return if missing (never false).
- *
- * @param int|string $key      Cache key.
- * @param mixed      $group    Cache group.
- * @param int        $expire   TTL in seconds.
- * @param callable   $callback Callback to compute the value on miss.
- * @return mixed
- */
-function wp_cache_sear( $key, $group, int $expire, callable $callback )
-{
-	try {
-		$found = false;
-		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
-		if ( $found ) {
-			return $value;
+		$host = isset( $params['host'] ) && is_string( $params['host'] )
+			? sanitize_text_field( $params['host'] ) : '127.0.0.1';
+
+		$port = isset( $params['port'] ) && is_int( $params['port'] )
+			? (int) $params['port'] : 6379;
+		if ( $port < 1 || $port > 65535 ) {
+			$port = 6379;
 		}
-		$value = $callback();
-		if ( $value !== false ) {
-			wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
+
+		$socketPath = isset( $params['socket_path'] ) && is_string( $params['socket_path'] )
+			? sanitize_text_field( $params['socket_path'] ) : '';
+
+		$database = isset( $params['database'] ) && is_int( $params['database'] )
+			? (int) $params['database'] : 0;
+		if ( $database < 0 || $database > 15 ) {
+			$database = 0;
 		}
-		return $value;
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
+
+		$username = isset( $params['username'] ) && is_string( $params['username'] )
+			? sanitize_text_field( $params['username'] ) : '';
+
+		// Password: not sanitized to preserve exact bytes; stored in 0600 file only.
+		$password = isset( $params['password'] ) && is_string( $params['password'] )
+			? $params['password'] : '';
+
+		$prefix = isset( $params['prefix'] ) && is_string( $params['prefix'] )
+			? sanitize_text_field( $params['prefix'] ) : 'wpmgr';
+		// An empty/whitespace prefix defeats shared-Redis namespacing; SCAN `:*`
+		// would match all keys across every tenant on a shared instance.
+		if ( $prefix === '' ) {
+			$prefix = 'wpmgr';
+		}
+
+		$maxttl = isset( $params['maxttl_seconds'] ) && is_int( $params['maxttl_seconds'] )
+			? (int) $params['maxttl_seconds'] : self::DEFAULT_MAXTTL;
+		if ( $maxttl < 0 ) {
+			$maxttl = self::DEFAULT_MAXTTL;
+		}
+
+		$queryttl = isset( $params['queryttl_seconds'] ) && is_int( $params['queryttl_seconds'] )
+			? (int) $params['queryttl_seconds'] : self::DEFAULT_QUERYTTL;
+		if ( $queryttl < 0 ) {
+			$queryttl = self::DEFAULT_QUERYTTL;
+		}
+
+		$connectTimeoutMs = isset( $params['connect_timeout_ms'] ) && is_int( $params['connect_timeout_ms'] )
+			? (int) $params['connect_timeout_ms'] : self::DEFAULT_CONNECT_TIMEOUT_MS;
+		if ( $connectTimeoutMs < 100 ) {
+			$connectTimeoutMs = 100;
+		}
+		if ( $connectTimeoutMs > 5000 ) {
+			$connectTimeoutMs = 5000;
+		}
+
+		$readTimeoutMs = isset( $params['read_timeout_ms'] ) && is_int( $params['read_timeout_ms'] )
+			? (int) $params['read_timeout_ms'] : self::DEFAULT_READ_TIMEOUT_MS;
+		if ( $readTimeoutMs < 100 ) {
+			$readTimeoutMs = 100;
+		}
+		if ( $readTimeoutMs > 5000 ) {
+			$readTimeoutMs = 5000;
+		}
+
+		$retryCount = isset( $params['retry_count'] ) && is_int( $params['retry_count'] )
+			? (int) $params['retry_count'] : self::DEFAULT_RETRY_COUNT;
+		if ( $retryCount < 0 ) {
+			$retryCount = 0;
+		}
+		if ( $retryCount > 10 ) {
+			$retryCount = 10;
+		}
+
+		$retryIntervalMs = isset( $params['retry_interval_ms'] ) && is_int( $params['retry_interval_ms'] )
+			? (int) $params['retry_interval_ms'] : self::DEFAULT_RETRY_INTERVAL_MS;
+		if ( $retryIntervalMs < 1 ) {
+			$retryIntervalMs = 25;
+		}
+
+		$serializer = isset( $params['serializer'] ) && is_string( $params['serializer'] )
+			? $params['serializer'] : 'php';
+		if ( ! in_array( $serializer, [ 'php', 'igbinary' ], true ) ) {
+			$serializer = 'php';
+		}
+
+		$compression = isset( $params['compression'] ) && is_string( $params['compression'] )
+			? $params['compression'] : 'none';
+		if ( ! in_array( $compression, [ 'none', 'lzf', 'lz4', 'zstd' ], true ) ) {
+			$compression = 'none';
+		}
+
+		$asyncFlush = isset( $params['async_flush'] ) && is_bool( $params['async_flush'] )
+			? $params['async_flush'] : false;
+
+		$flushStrategy = isset( $params['flush_strategy'] ) && is_string( $params['flush_strategy'] )
+			? $params['flush_strategy'] : 'auto';
+		if ( ! in_array( $flushStrategy, [ 'auto', 'flushdb', 'scan' ], true ) ) {
+			$flushStrategy = 'auto';
+		}
+
+		$shared = isset( $params['shared'] ) && is_bool( $params['shared'] )
+			? $params['shared'] : true;
+
+		$flushOnFailback = isset( $params['flush_on_failback'] ) && is_bool( $params['flush_on_failback'] )
+			? $params['flush_on_failback'] : true;
+
+		$analyticsEnabled = isset( $params['analytics_enabled'] ) && is_bool( $params['analytics_enabled'] )
+			? $params['analytics_enabled'] : true;
+
+		return [
+			'scheme'              => $scheme,
+			'host'                => $host,
+			'port'                => $port,
+			'socket_path'         => $socketPath,
+			'database'            => $database,
+			'username'            => $username,
+			'password'            => $password,
+			'prefix'              => $prefix,
+			'maxttl_seconds'      => $maxttl,
+			'queryttl_seconds'    => $queryttl,
+			'connect_timeout_ms'  => $connectTimeoutMs,
+			'read_timeout_ms'     => $readTimeoutMs,
+			'retry_count'         => $retryCount,
+			'retry_interval_ms'   => $retryIntervalMs,
+			'serializer'          => $serializer,
+			'compression'         => $compression,
+			'async_flush'         => $asyncFlush,
+			'flush_strategy'      => $flushStrategy,
+			'shared'              => $shared,
+			'flush_on_failback'   => $flushOnFailback,
+			'analytics_enabled'   => $analyticsEnabled,
+		];
 	}
 }
 
-/**
- * LOW bridge: wp_cache_supports_group_flush — reports group-flush support.
+	}
+
+	if ( ! class_exists( 'WPMgr\\Agent\\ObjectCache\\RedisConnection', false ) ) {
+		/**
+ * RedisConnection — phpredis connection layer for the WPMgr object cache.
  *
- * @return bool
+ * Design commitments (from plan section 3):
+ *   1. pconnect with explicit persistent_id derived from connection identity.
+ *   2. Finite timeouts always (1.0s defaults, CP-tunable).
+ *   3. Coherent retry policy: decorrelated-jitter backoff, AUTH+SELECT inside
+ *      the retried section.
+ *   4. Command-level resilience: retry-once for idempotent reads on timeout.
+ *   5. PING-on-acquire after long idle.
+ *   6. TLS and ACL first-class (v1: single instance + unix socket + TLS).
+ *
+ * @package WPMgr\Agent\ObjectCache
  */
-function wp_cache_supports_group_flush(): bool
-{
-	return wpmgr_get_object_cache()->supports( 'flush_group' );
-}
+
+
 
 /**
- * LOW bridge: wp_cache_reset — resets the in-memory L1 cache (deprecated core alias).
- *
- * @return bool
+ * Manages a phpredis persistent connection with timeouts, retries, and TLS.
  */
-function wp_cache_reset(): bool
+final class RedisConnection
 {
-	try {
-		return wpmgr_get_object_cache()->flush_runtime();
-	} catch ( \Throwable $e ) {
-		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
-		return false;
+	/** Idle threshold in seconds before a PING-on-acquire is issued. */
+	private const PING_AFTER_IDLE_SECONDS = 60;
+
+	/** Maximum jitter sleep in microseconds per retry (cap = connect_timeout). */
+	private const JITTER_BASE_US = 25000;
+
+	/** phpredis client instance; null when not yet connected. */
+	private ?\Redis $redis = null;
+
+	/** Whether we are in a degraded (failed) state for this request. */
+	private bool $degraded = false;
+
+	/**
+	 * Whether markDegraded() has EVER been called on this instance.
+	 * Set by markDegraded(); never cleared by recordSuccess() or acquire().
+	 * Used by the engine to distinguish a genuine recovery (was degraded, now
+	 * healthy) from a request that was healthy all along.
+	 */
+	private bool $wasDegraded = false;
+
+	/** Timestamp of the last successful command. */
+	private float $lastUsed = 0.0;
+
+	/** Number of reconnect attempts made this request. */
+	private int $reconnectAttempts = 0;
+
+	/** @var array<string,mixed> Connection config. */
+	private array $config;
+
+	/**
+	 * @param array<string,mixed> $config Connection config (from ObjectCacheConfig::fromParams()).
+	 */
+	public function __construct( array $config )
+	{
+		$this->config = $config;
+	}
+
+	/**
+	 * Acquire (or re-use) a ready phpredis client.
+	 * Throws on failure after all retries are exhausted.
+	 *
+	 * @return \Redis
+	 * @throws \RuntimeException If the connection cannot be established.
+	 */
+	public function acquire(): \Redis
+	{
+		if ( $this->redis !== null && ! $this->degraded ) {
+			$this->maybeePing();
+			return $this->redis;
+		}
+
+		$this->redis = $this->connect();
+		$this->degraded = false;
+		$this->lastUsed = microtime( true );
+		return $this->redis;
+	}
+
+	/**
+	 * Mark the connection degraded. Subsequent acquire() will reconnect once.
+	 * Also sets the permanent wasDegraded flag so the engine can detect recovery.
+	 *
+	 * @return void
+	 */
+	public function markDegraded(): void
+	{
+		$this->degraded    = true;
+		$this->wasDegraded = true;
+	}
+
+	/**
+	 * Whether markDegraded() has ever been called on this instance.
+	 * Never reset by recordSuccess() — stays true for the lifetime of the object.
+	 * The engine uses this alongside isDegraded() to detect a genuine recovery:
+	 *   wasDegraded() === true  &&  isDegraded() === false  => just recovered.
+	 *
+	 * @return bool
+	 */
+	public function wasDegraded(): bool
+	{
+		return $this->wasDegraded;
+	}
+
+	/**
+	 * Whether the connection is currently in a degraded state.
+	 *
+	 * @return bool
+	 */
+	public function isDegraded(): bool
+	{
+		return $this->degraded;
+	}
+
+	/**
+	 * Whether we have already exhausted our one reconnect attempt this request.
+	 *
+	 * @return bool
+	 */
+	public function reconnectExhausted(): bool
+	{
+		return $this->reconnectAttempts >= 1;
+	}
+
+	/**
+	 * Record that a command succeeded (updates lastUsed).
+	 *
+	 * @return void
+	 */
+	public function recordSuccess(): void
+	{
+		$this->lastUsed = microtime( true );
+		$this->degraded = false;
+	}
+
+	/**
+	 * Close the connection cleanly. No-op when not connected.
+	 *
+	 * @return void
+	 */
+	public function close(): void
+	{
+		if ( $this->redis !== null ) {
+			try {
+				$this->redis->close();
+			} catch ( \Throwable $e ) {
+				// Best-effort close.
+			}
+			$this->redis = null;
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// Private helpers
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Build and return a new phpredis handle with the full configured connection
+	 * flow: pconnect, AUTH, SELECT, capability options.
+	 *
+	 * AUTH and SELECT are inside the retry loop so transient auth failures are
+	 * retried consistently with connect failures.
+	 *
+	 * @return \Redis
+	 * @throws \RuntimeException If all retry attempts fail.
+	 */
+	private function connect(): \Redis
+	{
+		if ( ! extension_loaded( 'redis' ) ) {
+			throw new \RuntimeException( 'phpredis extension not loaded' );
+		}
+
+		$scheme          = (string) ( $this->config['scheme'] ?? 'tcp' );
+		$host            = (string) ( $this->config['host'] ?? '127.0.0.1' );
+		$port            = (int) ( $this->config['port'] ?? 6379 );
+		$socketPath      = (string) ( $this->config['socket_path'] ?? '' );
+		$database        = (int) ( $this->config['database'] ?? 0 );
+		$username        = (string) ( $this->config['username'] ?? '' );
+		$password        = (string) ( $this->config['password'] ?? '' );
+		$connectTimeout  = ( (int) ( $this->config['connect_timeout_ms'] ?? 1000 ) ) / 1000.0;
+		$readTimeout     = ( (int) ( $this->config['read_timeout_ms'] ?? 1000 ) ) / 1000.0;
+		$retryCount      = (int) ( $this->config['retry_count'] ?? 3 );
+		$retryIntervalUs = (int) ( $this->config['retry_interval_ms'] ?? 25 ) * 1000;
+		$serializer      = (string) ( $this->config['serializer'] ?? 'php' );
+		$compression     = (string) ( $this->config['compression'] ?? 'none' );
+
+		// persistent_id derived from connection identity to prevent pooled-socket
+		// database leaks across different configs on the same FPM worker.
+		$prefixVersion = 'v1';
+		$persistentId = hash(
+			'crc32b',
+			implode(
+				'|',
+				[
+					$scheme === 'unix' ? $socketPath : $host,
+					(string) $port,
+					(string) $database,
+					$scheme === 'tls' ? 'tls' : 'plain',
+					$username,
+					$prefixVersion,
+				]
+			)
+		);
+
+		$maxJitterUs = (int) ( $connectTimeout * 1000000 );
+
+		$lastException = null;
+		$attempts = max( 1, $retryCount );
+
+		for ( $attempt = 1; $attempt <= $attempts; $attempt++ ) {
+			// Decorrelated jitter: sleep before retry (not before first attempt).
+			if ( $attempt > 1 ) {
+				// random_int() is always available (PHP 7+) and works at drop-in
+				// load time before WordPress functions are defined; wp_rand() is a
+				// WP wrapper that is not guaranteed to be available this early.
+				$jitter = random_int( 0, min( $retryIntervalUs * $attempt, $maxJitterUs ) );
+				if ( $jitter > 0 ) {
+					usleep( $jitter );
+				}
+			}
+
+			try {
+				$redis = new \Redis();
+
+				if ( $scheme === 'unix' && $socketPath !== '' ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_pconnect -- phpredis API; not a file system operation
+					$redis->pconnect( $socketPath, 0, $connectTimeout, $persistentId );
+				} elseif ( $scheme === 'tls' ) {
+					$context = $this->buildTlsContext();
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_pconnect -- phpredis API; not a file system operation
+					$redis->pconnect( 'tls://' . $host, $port, $connectTimeout, $persistentId, 0, $readTimeout, $context );
+				} else {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_pconnect -- phpredis API; not a file system operation
+					$redis->pconnect( $host, $port, $connectTimeout, $persistentId, 0, $readTimeout );
+				}
+
+				// AUTH and SELECT are inside the retry loop.
+				if ( $password !== '' ) {
+					if ( $username !== '' ) {
+						$redis->auth( [ $username, $password ] );
+					} else {
+						$redis->auth( $password );
+					}
+				}
+
+				// Re-assert SELECT on persistent handles to prevent database leaks.
+				if ( $database !== 0 ) {
+					$redis->select( $database );
+				} else {
+					// Always SELECT 0 on persistent handles (defensive re-SELECT).
+					$redis->select( 0 );
+				}
+
+				// Set phpredis client options (H3: throws on unsupported codec).
+				$this->applyClientOptions( $redis, $serializer, $compression, $readTimeout );
+
+				$this->reconnectAttempts++;
+				return $redis;
+
+			} catch ( \Throwable $e ) {
+				$lastException = $e;
+			}
+		}
+
+		$lastMessage = $lastException !== null ? $lastException->getMessage() : 'unknown error';
+		throw new \RuntimeException(
+			// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message is not browser output; escaping here would corrupt the message text
+			'WPMgr Object Cache: connection failed after ' . $attempts . ' attempts: ' . $lastMessage
+		);
+	}
+
+	/**
+	 * Apply phpredis client options: serializer, compression, read timeout,
+	 * and native retry options when supported.
+	 *
+	 * @param \Redis $redis      Client handle.
+	 * @param string $serializer Serializer: 'php' | 'igbinary'.
+	 * @param string $compression Compression: 'none' | 'lzf' | 'lz4' | 'zstd'.
+	 * @param float  $readTimeout Read timeout in seconds.
+	 * @return void
+	 */
+	/**
+	 * Apply phpredis client options with H3 capability negotiation.
+	 * Throws a RuntimeException when a configured codec is unavailable —
+	 * the boot path will land in array mode with cause 'unsupported_codec'.
+	 *
+	 * @param \Redis  $redis       Client handle.
+	 * @param string  $serializer  Serializer: 'php' | 'igbinary'.
+	 * @param string  $compression Compression: 'none' | 'lzf' | 'lz4' | 'zstd'.
+	 * @param float   $readTimeout Read timeout in seconds.
+	 * @param array<string,mixed>|null $capabilityMap Injectable capability map for tests (H3).
+	 * @return void
+	 * @throws \RuntimeException When a configured codec is not available in the runtime.
+	 */
+	private function applyClientOptions(
+		\Redis $redis,
+		string $serializer,
+		string $compression,
+		float $readTimeout,
+		?array $capabilityMap = null
+	): void {
+		// H3: capability check before applying options.
+		$caps = $capabilityMap ?? self::runtimeCapabilityMap();
+
+		// Serializer.
+		if ( $serializer === 'igbinary' ) {
+			if ( ! ( $caps['igbinary_available'] ?? false ) ) {
+				// H3: configured-but-unsupported codec: throw so boot lands in unsupported_codec mode.
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: serializer igbinary configured but igbinary extension is not loaded (unsupported_codec)'
+				);
+			}
+			$redis->setOption( \Redis::OPT_SERIALIZER, (string) constant( 'Redis::SERIALIZER_IGBINARY' ) );
+		} else {
+			$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
+		}
+
+		// Compression.
+		if ( $compression !== 'none' ) {
+			if ( ! defined( 'Redis::OPT_COMPRESSION' ) ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but OPT_COMPRESSION is not available (unsupported_codec)'
+				);
+			}
+			$compressionMap = [
+				'lzf'  => ( $caps['lzf_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
+				'lz4'  => ( $caps['lz4_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
+				'zstd' => ( $caps['zstd_available'] ?? false ) && defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
+			];
+			$compressionConst = $compressionMap[ $compression ] ?? null;
+			if ( $compressionConst === null ) {
+				throw new \RuntimeException(
+					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
+					'WPMgr Object Cache: compression ' . $compression . ' configured but not available in phpredis (unsupported_codec)'
+				);
+			}
+			$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
+		}
+
+		// Read timeout.
+		if ( $readTimeout > 0 ) {
+			$redis->setOption( \Redis::OPT_READ_TIMEOUT, (string) $readTimeout );
+		}
+
+		// Native retry options (phpredis >= 5.3).
+		if ( defined( 'Redis::OPT_MAX_RETRIES' ) ) {
+			$redis->setOption( constant( 'Redis::OPT_MAX_RETRIES' ), '0' ); // Engine handles its own retries.
+		}
+	}
+
+	/**
+	 * H3: Return a runtime capability map (used as the default for applyClientOptions).
+	 * Separating this from probeCapabilities (which needs a live Redis handle) allows
+	 * the serializer/compression check to happen before any network call.
+	 *
+	 * @return array<string,bool>
+	 */
+	private static function runtimeCapabilityMap(): array
+	{
+		return [
+			'igbinary_available' => defined( 'Redis::SERIALIZER_IGBINARY' ),
+			'lzf_available'      => defined( 'Redis::COMPRESSION_LZF' ),
+			'lz4_available'      => defined( 'Redis::COMPRESSION_LZ4' ),
+			'zstd_available'     => defined( 'Redis::COMPRESSION_ZSTD' ),
+		];
+	}
+
+	/**
+	 * Build the TLS stream context from config.
+	 *
+	 * @return array<string,mixed>
+	 */
+	private function buildTlsContext(): array
+	{
+		$tls = [];
+		if ( isset( $this->config['tls_verify_peer'] ) ) {
+			$tls['verify_peer'] = (bool) $this->config['tls_verify_peer'];
+			$tls['verify_peer_name'] = (bool) $this->config['tls_verify_peer'];
+		}
+		if ( isset( $this->config['tls_cafile'] ) && is_string( $this->config['tls_cafile'] ) ) {
+			$tls['cafile'] = (string) $this->config['tls_cafile'];
+		}
+		if ( isset( $this->config['tls_local_cert'] ) && is_string( $this->config['tls_local_cert'] ) ) {
+			$tls['local_cert'] = (string) $this->config['tls_local_cert'];
+		}
+		if ( isset( $this->config['tls_local_pk'] ) && is_string( $this->config['tls_local_pk'] ) ) {
+			$tls['local_pk'] = (string) $this->config['tls_local_pk'];
+		}
+		return [ 'stream' => $tls ];
+	}
+
+	/**
+	 * Issue a PING-on-acquire when the handle has been idle beyond the threshold.
+	 * Reconnects on failure.
+	 *
+	 * @return void
+	 */
+	private function maybeePing(): void
+	{
+		if ( $this->redis === null ) {
+			return;
+		}
+		$idle = microtime( true ) - $this->lastUsed;
+		if ( $idle < self::PING_AFTER_IDLE_SECONDS ) {
+			return;
+		}
+		try {
+			$this->redis->ping();
+			$this->lastUsed = microtime( true );
+		} catch ( \Throwable $e ) {
+			// Silent: reconnect on next acquire.
+			$this->redis = null;
+			$this->degraded = true;
+		}
+	}
+
+	/**
+	 * Probe extension and server capabilities for the TEST command.
+	 *
+	 * @param \Redis $redis An already-connected client.
+	 * @return array<string,mixed> Capability map matching ObjectCacheCapabilities contract.
+	 */
+	public static function probeCapabilities( \Redis $redis ): array
+	{
+		$phpredisVersion = defined( 'Redis::REDIS_VERSION' )
+			? (string) constant( 'Redis::REDIS_VERSION' )
+			: ( phpversion( 'redis' ) ?: '' );
+
+		$igbinaryAvailable = defined( 'Redis::SERIALIZER_IGBINARY' );
+		$lzfAvailable      = defined( 'Redis::COMPRESSION_LZF' );
+		$lz4Available      = defined( 'Redis::COMPRESSION_LZ4' );
+		$zstdAvailable     = defined( 'Redis::COMPRESSION_ZSTD' );
+		$tlsSupported      = method_exists( $redis, 'connect' ) && defined( 'OPENSSL_VERSION_NUMBER' );
+		$nativeRetryOptions = defined( 'Redis::OPT_MAX_RETRIES' );
+
+		// KEEPTTL support: Redis >= 6.0 (server-side).
+		$keepTtlSupported    = false;
+		$flushAsyncSupported = false;
+		try {
+			$info = $redis->info( 'server' );
+			if ( is_array( $info ) && isset( $info['redis_version'] ) ) {
+				$serverVersion = (string) $info['redis_version'];
+				$vParts = explode( '.', $serverVersion );
+				$major = (int) ( $vParts[0] ?? 0 );
+				$minor = (int) ( $vParts[1] ?? 0 );
+				// KEEPTTL: Redis >= 6.0.
+				if ( $major >= 6 ) {
+					$keepTtlSupported = true;
+				}
+				// FLUSHDB ASYNC: Redis >= 4.0.
+				if ( $major >= 4 || ( $major === 4 && $minor >= 0 ) ) {
+					$flushAsyncSupported = true;
+				}
+			}
+		} catch ( \Throwable $e ) {
+			// Tolerate INFO denial.
+		}
+
+		// Value+metadata reads (stored-false disambiguation): phpredis >= 6.0.
+		$valueMetadataReads = false;
+		if ( $phpredisVersion !== '' ) {
+			$vParts = explode( '.', $phpredisVersion );
+			$major  = (int) ( $vParts[0] ?? 0 );
+			if ( $major >= 6 ) {
+				$valueMetadataReads = true;
+			}
+		}
+
+		return [
+			'phpredis_version'     => $phpredisVersion,
+			'igbinary_available'   => $igbinaryAvailable,
+			'lzf_available'        => $lzfAvailable,
+			'lz4_available'        => $lz4Available,
+			'zstd_available'       => $zstdAvailable,
+			'tls_supported'        => $tlsSupported,
+			'value_metadata_reads' => $valueMetadataReads,
+			'native_retry_options' => $nativeRetryOptions,
+			'keepttl_supported'    => $keepTtlSupported,
+			'flush_async_supported' => $flushAsyncSupported,
+		];
 	}
 }
 
-// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+	}
 
-// ---------------------------------------------------------------------------
+} // end namespace WPMgr\Agent\ObjectCache
+
+namespace {
+
+	if ( ! class_exists( 'WPMgr_Object_Cache', false ) ) {
+		// ---------------------------------------------------------------------------
 // WPMgr_Object_Cache class definition.
 // This class is in the global namespace as WordPress expects it.
 // ---------------------------------------------------------------------------
@@ -2497,3 +2950,507 @@ class WPMgr_Object_Cache
 		}
 	}
 }
+	}
+
+} // end namespace (WPMgr_Object_Cache class)
+
+namespace {
+
+/**
+ * WPMgr Object Cache engine — implements the full WordPress wp_cache_* API
+ * backed by phpredis with graceful degradation to a pure in-memory array cache.
+ *
+ * This file is included from the object-cache.php drop-in stub. It:
+ *   1. Loads the supporting classes (autoloader may not be available this early).
+ *   2. Builds the config from the 0600 config file.
+ *   3. Attempts to connect; on any boot Throwable, falls back to a pure-array
+ *      cache so the site never errors.
+ *   4. Instantiates the global $wp_object_cache and registers the shutdown hook.
+ *
+ * @package WPMgr\Agent\ObjectCache
+ */
+
+// ---------------------------------------------------------------------------
+// Boot the cache: try Redis, fall back to pure array on any Throwable.
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns the global WP Object Cache instance, booting it if necessary.
+ *
+ * @return \WPMgr_Object_Cache
+ */
+function wpmgr_get_object_cache(): \WPMgr_Object_Cache
+{
+	global $wp_object_cache;
+	if ( ! ( $wp_object_cache instanceof \WPMgr_Object_Cache ) ) {
+		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
+		$wp_object_cache = \WPMgr_Object_Cache::boot();
+	}
+	return $wp_object_cache;
+}
+
+// Boot now and install the shutdown hook for stats persist + close.
+global $wp_object_cache;
+// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
+$wp_object_cache = \WPMgr_Object_Cache::boot();
+$GLOBALS['wpmgr_oc_stub']['booted'] = true;
+
+register_shutdown_function(
+	static function (): void {
+		global $wp_object_cache;
+		if ( $wp_object_cache instanceof \WPMgr_Object_Cache ) {
+			$wp_object_cache->shutdown();
+		}
+	}
+);
+
+// ---------------------------------------------------------------------------
+// WordPress wp_cache_* function bridge.
+// WordPress defines these functions in wp-includes/cache.php ONLY when an
+// object-cache drop-in is NOT present. Since we ARE the drop-in we must
+// define them all here. All names are mandated by the WordPress cache API;
+// they cannot carry a plugin prefix — PrefixAllGlobals is disabled for
+// this bridge section only.
+// phpcs:disable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound -- required WordPress object-cache drop-in API; function names are not ours to choose
+// ---------------------------------------------------------------------------
+
+/**
+ * Adds data to the cache if the key doesn't already exist.
+ *
+ * @param int|string $key    Cache key.
+ * @param mixed      $data   Data to store.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
+ * @return bool
+ */
+function wp_cache_add( $key, $data, $group = '', $expire = 0 ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->add( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Adds multiple cache entries.
+ *
+ * @param array<int|string,mixed> $data   Map of key => value.
+ * @param mixed                   $group  Cache group (any scalar; cast to string internally).
+ * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
+ * @return array<int|string,bool>
+ */
+function wp_cache_add_multiple( array $data, $group = '', $expire = 0 ): array
+{
+	try {
+		return wpmgr_get_object_cache()->add_multiple( $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( array_keys( $data ), false );
+	}
+}
+
+/**
+ * Replaces the cached data only when it already exists.
+ *
+ * @param int|string $key    Cache key.
+ * @param mixed      $data   New data.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
+ * @return bool
+ */
+function wp_cache_replace( $key, $data, $group = '', $expire = 0 ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->replace( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Saves data to the cache.
+ *
+ * WP core signature: wp_cache_set( $key, $data, $group = '', $expire = 0 ).
+ * The $group parameter is the THIRD argument; $expire is FOURTH.
+ * Callers that pass an int as $group (e.g. wp_cache_set($k, $v, 3600)) are
+ * treated by WP core as setting group='3600' with expire=0. We match that
+ * semantic via scalar normalization in the engine.
+ *
+ * @param int|string $key    Cache key.
+ * @param mixed      $data   Data to store.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @param mixed      $expire TTL in seconds (any numeric; cast to int internally).
+ * @return bool
+ */
+function wp_cache_set( $key, $data, $group = '', $expire = 0 ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->set( $key, $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Sets multiple cache entries.
+ *
+ * @param array<int|string,mixed> $data   Map of key => value.
+ * @param mixed                   $group  Cache group (any scalar; cast to string internally).
+ * @param mixed                   $expire TTL in seconds (any numeric; cast to int internally).
+ * @return array<int|string,bool>
+ */
+function wp_cache_set_multiple( array $data, $group = '', $expire = 0 ): array
+{
+	try {
+		return wpmgr_get_object_cache()->set_multiple( $data, $group, $expire );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( array_keys( $data ), false );
+	}
+}
+
+/**
+ * Retrieves cached data.
+ *
+ * @param int|string $key   Cache key.
+ * @param mixed      $group Cache group (any scalar; cast to string internally).
+ * @param bool       $force Force a fresh fetch from the backend.
+ * @param bool|null  $found Output: whether the key was found.
+ * @return mixed False when not found.
+ */
+function wp_cache_get( $key, $group = '', $force = false, &$found = null )
+{
+	try {
+		return wpmgr_get_object_cache()->get( $key, $group, $force, $found );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		$found = false;
+		return false;
+	}
+}
+
+/**
+ * Retrieves multiple cached values.
+ *
+ * @param array<int|string>  $keys  Cache keys.
+ * @param mixed              $group Cache group (any scalar; cast to string internally).
+ * @param bool               $force Force fetch.
+ * @return array<int|string,mixed>
+ */
+function wp_cache_get_multiple( $keys, $group = '', $force = false ): array
+{
+	try {
+		return wpmgr_get_object_cache()->get_multiple( $keys, $group, $force );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( (array) $keys, false );
+	}
+}
+
+/**
+ * Deletes cached data.
+ *
+ * @param int|string $key   Cache key.
+ * @param mixed      $group Cache group (any scalar; cast to string internally).
+ * @return bool
+ */
+function wp_cache_delete( $key, $group = '' ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->delete( $key, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Deletes multiple cached entries.
+ *
+ * @param array<int|string> $keys  Cache keys.
+ * @param mixed             $group Cache group (any scalar; cast to string internally).
+ * @return array<int|string,bool>
+ */
+function wp_cache_delete_multiple( array $keys, $group = '' ): array
+{
+	try {
+		return wpmgr_get_object_cache()->delete_multiple( $keys, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return array_fill_keys( $keys, false );
+	}
+}
+
+/**
+ * Increments a numeric cache item.
+ *
+ * @param int|string $key    Cache key.
+ * @param int        $offset Amount to increment.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @return int|false New value or false on failure.
+ */
+function wp_cache_incr( $key, $offset = 1, $group = '' )
+{
+	try {
+		return wpmgr_get_object_cache()->incr( $key, $offset, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Decrements a numeric cache item.
+ *
+ * @param int|string $key    Cache key.
+ * @param int        $offset Amount to decrement.
+ * @param mixed      $group  Cache group (any scalar; cast to string internally).
+ * @return int|false New value or false on failure.
+ */
+function wp_cache_decr( $key, $offset = 1, $group = '' )
+{
+	try {
+		return wpmgr_get_object_cache()->decr( $key, $offset, $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Flushes the entire object cache.
+ *
+ * @return bool
+ */
+function wp_cache_flush(): bool
+{
+	try {
+		return wpmgr_get_object_cache()->flush();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Flushes only the in-memory runtime cache (not the persistent backend).
+ *
+ * @return bool
+ */
+function wp_cache_flush_runtime(): bool
+{
+	try {
+		return wpmgr_get_object_cache()->flush_runtime();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Flushes all entries in a specific cache group.
+ *
+ * @param mixed $group Cache group (any scalar; cast to string internally).
+ * @return bool
+ */
+function wp_cache_flush_group( $group ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->flush_group( $group );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Initialises the cache. Called by WordPress on init.
+ *
+ * @return void
+ */
+function wp_cache_init(): void
+{
+	try {
+		wpmgr_get_object_cache()->init();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
+}
+
+/**
+ * Closes the cache connection. Called at shutdown.
+ *
+ * @return bool
+ */
+function wp_cache_close(): bool
+{
+	try {
+		return wpmgr_get_object_cache()->close();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * Switches the blog context in multisite.
+ *
+ * @param int $blog_id Blog ID to switch to.
+ * @return void
+ */
+function wp_cache_switch_to_blog( $blog_id ): void
+{
+	try {
+		wpmgr_get_object_cache()->switch_to_blog( (int) $blog_id );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
+}
+
+/**
+ * Adds a list of groups that should share a global namespace.
+ *
+ * @param array<string>|string $groups Groups to add.
+ * @return void
+ */
+function wp_cache_add_global_groups( $groups ): void
+{
+	try {
+		wpmgr_get_object_cache()->add_global_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
+}
+
+/**
+ * Adds a list of groups that should not be backed by the persistent cache.
+ *
+ * @param array<string>|string $groups Groups to add.
+ * @return void
+ */
+function wp_cache_add_non_persistent_groups( $groups ): void
+{
+	try {
+		wpmgr_get_object_cache()->add_non_persistent_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
+}
+
+/**
+ * Registers groups that should not be prefetched (v2 stub).
+ *
+ * @param array<string>|string $groups Groups to register.
+ * @return void
+ */
+function wp_cache_add_non_prefetchable_groups( $groups ): void
+{
+	try {
+		wpmgr_get_object_cache()->add_non_prefetchable_groups( (array) $groups );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+	}
+}
+
+/**
+ * Reports whether a specific feature is supported.
+ *
+ * @param string $feature Feature name.
+ * @return bool
+ */
+function wp_cache_supports( $feature ): bool
+{
+	try {
+		return wpmgr_get_object_cache()->supports( (string) $feature );
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_remember — get or compute-and-set.
+ *
+ * @param int|string $key      Cache key.
+ * @param mixed      $group    Cache group.
+ * @param int        $expire   TTL in seconds.
+ * @param callable   $callback Callback to compute the value on miss.
+ * @return mixed
+ */
+function wp_cache_remember( $key, $group, int $expire, callable $callback )
+{
+	try {
+		$found = false;
+		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
+		if ( $found ) {
+			return $value;
+		}
+		$value = $callback();
+		wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
+		return $value;
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_sear — get, or set+return if missing (never false).
+ *
+ * @param int|string $key      Cache key.
+ * @param mixed      $group    Cache group.
+ * @param int        $expire   TTL in seconds.
+ * @param callable   $callback Callback to compute the value on miss.
+ * @return mixed
+ */
+function wp_cache_sear( $key, $group, int $expire, callable $callback )
+{
+	try {
+		$found = false;
+		$value = wpmgr_get_object_cache()->get( $key, $group, false, $found );
+		if ( $found ) {
+			return $value;
+		}
+		$value = $callback();
+		if ( $value !== false ) {
+			wpmgr_get_object_cache()->set( $key, $value, $group, $expire );
+		}
+		return $value;
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+/**
+ * LOW bridge: wp_cache_supports_group_flush — reports group-flush support.
+ *
+ * @return bool
+ */
+function wp_cache_supports_group_flush(): bool
+{
+	return wpmgr_get_object_cache()->supports( 'flush_group' );
+}
+
+/**
+ * LOW bridge: wp_cache_reset — resets the in-memory L1 cache (deprecated core alias).
+ *
+ * @return bool
+ */
+function wp_cache_reset(): bool
+{
+	try {
+		return wpmgr_get_object_cache()->flush_runtime();
+	} catch ( \Throwable $e ) {
+		wpmgr_get_object_cache()->wpmgr_journal_wrapper_error( get_class( $e ) );
+		return false;
+	}
+}
+
+// phpcs:enable WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+
+} // end namespace (boot + wp_cache_* functions)
