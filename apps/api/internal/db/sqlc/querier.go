@@ -349,6 +349,8 @@ type Querier interface {
 	// config row. Used by buildAgentConfigReq to decrypt and build the connections
 	// registry. Runs under InTenantTx.
 	GetConnectionSecretCiphertexts(ctx context.Context, arg GetConnectionSecretCiphertextsParams) ([]GetConnectionSecretCiphertextsRow, error)
+	// Returns the latest clean result for a site (tenant-scoped via RLS).
+	GetDBCleanResult(ctx context.Context, arg GetDBCleanResultParams) (SiteDbCleanResult, error)
 	// Returns the latest scan result for a site (tenant-scoped via RLS).
 	GetDBScanResult(ctx context.Context, arg GetDBScanResultParams) (SiteDbScanResult, error)
 	// Returns up to 366 data points for the trend chart, ordered oldest-first.
@@ -1135,6 +1137,14 @@ type Querier interface {
 	UpsertBackupSchedule(ctx context.Context, arg UpsertBackupScheduleParams) (BackupSchedule, error)
 	// The agent pushes the latest cache gauges; overwritten in place (no history).
 	UpsertCacheStats(ctx context.Context, arg UpsertCacheStatsParams) (SiteCacheStat, error)
+	// ---------------------------------------------------------------------------
+	// site_db_clean_results (M71)
+	// ---------------------------------------------------------------------------
+	// Persists (or refreshes) the latest db_clean result for a site.
+	// Uses UPSERT so there is always at most one row per site.
+	// Called under InTenantTx by HandleDBCleanProgress when done=true.
+	// updated_at is set via now() on the created_at column (mirrors scan pattern).
+	UpsertDBCleanResult(ctx context.Context, arg UpsertDBCleanResultParams) (SiteDbCleanResult, error)
 	// ---------------------------------------------------------------------------
 	// site_db_scan_results (M39)
 	// ---------------------------------------------------------------------------

@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.43.3] - 2026-06-12
+
+### Fixed
+
+- **Database cleanup progress now survives missed events and page refreshes.** Cleanup results are stored server side (migration m71) and a new endpoint reports the active job and the last result, so the page restores state on load and after a stream reconnect. A running cleanup shows correctly after a refresh, and the completion event is published before the watchdog clears so failures still surface. The late frame guard fix applied to scans in 0.43.2 now covers cleanups as well.
+- **Font processing banner can no longer stick.** The banner reconciles against stored per-font statuses on page load and on stream reconnect, clearing itself when the server shows no conversion in flight.
+
+Control plane and web 0.43.3; migration m71 applies automatically on boot; no agent changes. This completes the live update hardening started in 0.43.2: every dashboard surface now recovers from missed events.
+
 ## [0.43.2] - 2026-06-12
 
 ### Fixed

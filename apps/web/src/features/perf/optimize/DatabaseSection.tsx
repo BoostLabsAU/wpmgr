@@ -18,6 +18,7 @@ import { SelectField } from "../components/Field";
 import { SettingRow } from "../components/SettingRow";
 import { useDbCleanSelected } from "../hooks/useCacheStats";
 import { useDbScan, useDbScanHydration } from "../hooks/useDbScan";
+import { useDbCleanHydration } from "../hooks/useDbClean";
 import { useSiteReconnect } from "@/features/sites/use-site-events";
 import { DB_CLEAN_INTERVALS, type PerfConfig } from "../types";
 import {
@@ -154,12 +155,18 @@ export function DatabaseSection({
   // Hydrate from the server on mount so a page refresh shows the last scan
   // result without re-scanning. Returns a stable `hydrate` callback we can
   // reuse on SSE reconnect.
-  const hydrate = useDbScanHydration(siteId);
+  const hydrateScan = useDbScanHydration(siteId);
+
+  // Hydrate the clean store from the server on mount so a page refresh shows
+  // the last clean result without re-cleaning. Returns a stable callback we
+  // can reuse on SSE reconnect to reconcile a missed db.clean.completed frame.
+  const hydrateClean = useDbCleanHydration(siteId);
 
   // When the shared SSE stream reconnects after a drop, re-hydrate so any
-  // db.scan.completed frame missed while the stream was down is reconciled.
-  // `hydrate` is already stable (useCallback inside useDbScanHydration).
-  useSiteReconnect(hydrate);
+  // db.scan.completed or db.clean.completed frame missed while the stream was
+  // down is reconciled.
+  useSiteReconnect(hydrateScan);
+  useSiteReconnect(hydrateClean);
 
   // Categories the operator has DESELECTED in the preview table (inverted set).
   // Default state is "all selected" — the deselected set starts empty.

@@ -126,6 +126,33 @@ func (q *Queries) GetCacheStats(ctx context.Context, siteID uuid.UUID) (SiteCach
 	return i, err
 }
 
+const getDBCleanResult = `-- name: GetDBCleanResult :one
+SELECT site_id, tenant_id, job_id, result_json, rows_deleted, bytes_freed, cleaned_at, created_at FROM site_db_clean_results
+WHERE site_id = $1 AND tenant_id = $2
+`
+
+type GetDBCleanResultParams struct {
+	SiteID   uuid.UUID `json:"site_id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+}
+
+// Returns the latest clean result for a site (tenant-scoped via RLS).
+func (q *Queries) GetDBCleanResult(ctx context.Context, arg GetDBCleanResultParams) (SiteDbCleanResult, error) {
+	row := q.db.QueryRow(ctx, getDBCleanResult, arg.SiteID, arg.TenantID)
+	var i SiteDbCleanResult
+	err := row.Scan(
+		&i.SiteID,
+		&i.TenantID,
+		&i.JobID,
+		&i.ResultJson,
+		&i.RowsDeleted,
+		&i.BytesFreed,
+		&i.CleanedAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getDBScanResult = `-- name: GetDBScanResult :one
 SELECT site_id, tenant_id, job_id, categories_json, tables_json, db_size_bytes, table_count, scanned_at, created_at, orphaned_options_json, orphaned_cron_json, installed_plugins_json FROM site_db_scan_results
 WHERE site_id = $1 AND tenant_id = $2
@@ -1339,6 +1366,65 @@ func (q *Queries) UpsertCacheStats(ctx context.Context, arg UpsertCacheStatsPara
 		&i.PreloadPending,
 		&i.PreloadTotal,
 		&i.ReportedAt,
+	)
+	return i, err
+}
+
+const upsertDBCleanResult = `-- name: UpsertDBCleanResult :one
+
+INSERT INTO site_db_clean_results (
+    site_id, tenant_id, job_id, result_json, rows_deleted, bytes_freed, cleaned_at, created_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, now()
+)
+ON CONFLICT (site_id) DO UPDATE SET
+    tenant_id    = EXCLUDED.tenant_id,
+    job_id       = EXCLUDED.job_id,
+    result_json  = EXCLUDED.result_json,
+    rows_deleted = EXCLUDED.rows_deleted,
+    bytes_freed  = EXCLUDED.bytes_freed,
+    cleaned_at   = EXCLUDED.cleaned_at,
+    created_at   = now()
+RETURNING site_id, tenant_id, job_id, result_json, rows_deleted, bytes_freed, cleaned_at, created_at
+`
+
+type UpsertDBCleanResultParams struct {
+	SiteID      uuid.UUID `json:"site_id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	JobID       string    `json:"job_id"`
+	ResultJson  []byte    `json:"result_json"`
+	RowsDeleted int64     `json:"rows_deleted"`
+	BytesFreed  int64     `json:"bytes_freed"`
+	CleanedAt   time.Time `json:"cleaned_at"`
+}
+
+// ---------------------------------------------------------------------------
+// site_db_clean_results (M71)
+// ---------------------------------------------------------------------------
+// Persists (or refreshes) the latest db_clean result for a site.
+// Uses UPSERT so there is always at most one row per site.
+// Called under InTenantTx by HandleDBCleanProgress when done=true.
+// updated_at is set via now() on the created_at column (mirrors scan pattern).
+func (q *Queries) UpsertDBCleanResult(ctx context.Context, arg UpsertDBCleanResultParams) (SiteDbCleanResult, error) {
+	row := q.db.QueryRow(ctx, upsertDBCleanResult,
+		arg.SiteID,
+		arg.TenantID,
+		arg.JobID,
+		arg.ResultJson,
+		arg.RowsDeleted,
+		arg.BytesFreed,
+		arg.CleanedAt,
+	)
+	var i SiteDbCleanResult
+	err := row.Scan(
+		&i.SiteID,
+		&i.TenantID,
+		&i.JobID,
+		&i.ResultJson,
+		&i.RowsDeleted,
+		&i.BytesFreed,
+		&i.CleanedAt,
+		&i.CreatedAt,
 	)
 	return i, err
 }

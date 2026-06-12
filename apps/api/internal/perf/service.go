@@ -102,11 +102,15 @@ type repository interface {
 	SetActiveDBScanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error
 	ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
 	GetActiveDBScanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBScanState, error)
+	GetActiveDBCleanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBCleanState, error)
 	GetStalledDBCleanJobs(ctx context.Context, cleanThreshold time.Duration) ([]StalledDBCleanJob, error)
 	GetStalledDBScanJobs(ctx context.Context, scanThreshold time.Duration) ([]StalledDBScanJob, error)
 	// M39 — db_scan result persistence.
 	UpsertDBScanResult(ctx context.Context, in DBScanResultInput) error
 	GetDBScanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBScanResult, error)
+	// M71 — db_clean result persistence.
+	UpsertDBCleanResult(ctx context.Context, in DBCleanResultInput) error
+	GetDBCleanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBCleanResult, error)
 	// M42 — DB-size trend history (Phase 3.4).
 	GetDBSizeHistory(ctx context.Context, tenantID, siteID uuid.UUID, since time.Time) ([]DbSizeTrendPoint, error)
 	PruneDBSizeHistory(ctx context.Context, retention time.Duration) (int64, error)
@@ -965,20 +969,26 @@ type DBCleanProgressInput struct {
 // event is still processed — we never 404 on unknown job_id.
 func (s *Service) HandleDBCleanProgress(ctx context.Context, in DBCleanProgressInput) error {
 	if in.Done {
-		// Clear the watchdog columns — job is no longer in-flight.
-		_ = s.repo.ClearActiveDBCleanJob(ctx, in.SiteID)
-
-		// Final push: emit terminal event. If the agent reported state=error, emit
-		// db.clean.failed (the agent's inner shutdown function posts done=true +
-		// state=error on fatal OOM/crash). Otherwise emit db.clean.completed.
+		// Final push: emit terminal event BEFORE clearing the watchdog so that a
+		// failed publish does not leave the job stuck in active state with no rescue
+		// path (mirrors the db.scan.completed ordering fix in DBScan). The watchdog
+		// sweeper needs the columns set until the terminal SSE is published.
 		if in.State == "error" {
 			s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanFailed, map[string]any{
 				"job_id": in.JobID,
 				"detail": in.Detail,
 			})
+			// Clear the watchdog columns only after the terminal event is published.
+			if cErr := s.repo.ClearActiveDBCleanJob(ctx, in.SiteID); cErr != nil {
+				s.logger.Warn("db-clean: failed to clear watchdog after error terminal",
+					slog.String("job_id", in.JobID), slog.String("site_id", in.SiteID.String()), slog.Any("error", cErr))
+			}
 			return nil
 		}
-		s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanCompleted, map[string]any{
+
+		// Persist the clean result so GET /perf/db/clean can serve it without
+		// relying on SSE delivery (mirrors the db_scan result persist in DBScan).
+		completedPayload := map[string]any{
 			"job_id":       in.JobID,
 			"rows_deleted": in.RowsDeleted,
 			"bytes_freed":  in.BytesFreed,
@@ -989,7 +999,33 @@ func (s *Service) HandleDBCleanProgress(ctx context.Context, in DBCleanProgressI
 					"state":        in.State,
 				},
 			},
-		})
+		}
+		resultJSON, jsonErr := json.Marshal(completedPayload["categories"])
+		if jsonErr != nil {
+			resultJSON = []byte("{}")
+		}
+		if uErr := s.repo.UpsertDBCleanResult(ctx, DBCleanResultInput{
+			SiteID:      in.SiteID,
+			TenantID:    in.TenantID,
+			JobID:       in.JobID,
+			ResultJSON:  resultJSON,
+			RowsDeleted: int64(in.RowsDeleted),
+			BytesFreed:  int64(in.BytesFreed),
+			CleanedAt:   time.Now().UTC(),
+		}); uErr != nil {
+			s.logger.Warn("db-clean: failed to persist clean result",
+				slog.String("job_id", in.JobID), slog.String("site_id", in.SiteID.String()), slog.Any("error", uErr))
+		}
+
+		// Emit db.clean.completed AFTER persist but BEFORE clearing the watchdog,
+		// so the ordering is: persist → publish → clear (matches scan invariant).
+		s.publish(ctx, in.TenantID, in.SiteID, site.EventDbCleanCompleted, completedPayload)
+
+		// Clear the watchdog columns — job is no longer in-flight.
+		if cErr := s.repo.ClearActiveDBCleanJob(ctx, in.SiteID); cErr != nil {
+			s.logger.Warn("db-clean: failed to clear watchdog after completion",
+				slog.String("job_id", in.JobID), slog.String("site_id", in.SiteID.String()), slog.Any("error", cErr))
+		}
 		return nil
 	}
 	// Non-final push: emit per-category progress.
@@ -1192,6 +1228,26 @@ func (s *Service) GetLatestScan(ctx context.Context, tenantID, siteID uuid.UUID)
 // treats it as "not active" without returning an error to the client.
 func (s *Service) GetActiveDBScanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBScanState, error) {
 	return s.repo.GetActiveDBScanState(ctx, tenantID, siteID)
+}
+
+// GetActiveDBCleanState returns the in-progress db_clean watchdog state for a
+// site. ErrNotFound (no perf config row) is surfaced to the caller; the handler
+// treats it as "not active" without returning an error to the client.
+func (s *Service) GetActiveDBCleanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBCleanState, error) {
+	return s.repo.GetActiveDBCleanState(ctx, tenantID, siteID)
+}
+
+// GetLatestClean returns the latest stored db_clean result for a site.
+// Returns nil (no error) when no clean has been run yet.
+func (s *Service) GetLatestClean(ctx context.Context, tenantID, siteID uuid.UUID) (*DBCleanResult, error) {
+	result, err := s.repo.GetDBCleanResult(ctx, tenantID, siteID)
+	if err == ErrNotFound {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &result, nil
 }
 
 // ---------------------------------------------------------------------------

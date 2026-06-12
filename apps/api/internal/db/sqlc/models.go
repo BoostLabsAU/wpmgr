@@ -592,6 +592,17 @@ type SiteConnectionHistory struct {
 	Metadata    []byte      `json:"metadata"`
 }
 
+type SiteDbCleanResult struct {
+	SiteID      uuid.UUID `json:"site_id"`
+	TenantID    uuid.UUID `json:"tenant_id"`
+	JobID       string    `json:"job_id"`
+	ResultJson  []byte    `json:"result_json"`
+	RowsDeleted int64     `json:"rows_deleted"`
+	BytesFreed  int64     `json:"bytes_freed"`
+	CleanedAt   time.Time `json:"cleaned_at"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
 type SiteDbScanResult struct {
 	SiteID               uuid.UUID `json:"site_id"`
 	TenantID             uuid.UUID `json:"tenant_id"`
