@@ -31,6 +31,7 @@ import { useSitesLiveSync } from "@/features/sites/use-sites-live";
 import { AutoLoginButton } from "@/features/sites/auto-login-button";
 import { canAutoLogin } from "@/features/sites/use-autologin";
 import {
+  asConnectedSite,
   connectionStateOf,
   isReconnectable,
 } from "@/features/sites/connection-state";
@@ -190,6 +191,7 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
   const hostname = hostnameOf(site.url);
   const adminUrl = `${stripTrailingSlash(site.url)}/wp-admin/`;
   const connectionState = connectionStateOf(site);
+  const disconnectedReason = asConnectedSite(site).disconnected_reason ?? null;
   // pending_enrollment ("Awaiting agent") also gets the code action — the raw
   // enrollment code is shown once, so a stuck-pending site needs a way back to it.
   const canReconnect =
@@ -312,6 +314,7 @@ function SiteShell({ site, siteId }: { site: Site; siteId: string }) {
           <ConnectionStateBadge
             state={connectionState}
             lastSeenAt={site.last_seen_at ?? null}
+            disconnectedReason={disconnectedReason}
           />
           {/* UptimePill renders nothing when no monitor is configured for this
               site, so no conditional guard needed here. */}

@@ -292,7 +292,7 @@ func (r *pgRepo) ListToDegrade(ctx context.Context, cutoff time.Time) ([]SiteRef
 		}
 		out = make([]SiteRef, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, SiteRef{ID: row.ID, TenantID: row.TenantID})
+			out = append(out, SiteRef{ID: row.ID, TenantID: row.TenantID, URL: row.Url})
 		}
 		return nil
 	})
@@ -308,7 +308,7 @@ func (r *pgRepo) ListToDisconnect(ctx context.Context, cutoff time.Time) ([]Site
 		}
 		out = make([]SiteRef, 0, len(rows))
 		for _, row := range rows {
-			out = append(out, SiteRef{ID: row.ID, TenantID: row.TenantID})
+			out = append(out, SiteRef{ID: row.ID, TenantID: row.TenantID, URL: row.Url})
 		}
 		return nil
 	})

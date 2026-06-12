@@ -206,13 +206,17 @@ SELECT tenant_id FROM sites WHERE id = $1;
 
 -- name: ListSitesToDegrade :many
 -- connected sites whose last heartbeat is older than the degrade cutoff.
-SELECT id, tenant_id FROM sites
+-- url is included so the active-verify sweeper can dial the agent without a
+-- secondary tenant-scoped lookup.
+SELECT id, tenant_id, url FROM sites
 WHERE connection_state = 'connected'
   AND (last_seen_at IS NULL OR last_seen_at < $1);
 
 -- name: ListSitesToDisconnect :many
 -- degraded sites whose last heartbeat is older than the disconnect cutoff.
-SELECT id, tenant_id FROM sites
+-- url is included so the active-verify sweeper can dial the agent without a
+-- secondary tenant-scoped lookup.
+SELECT id, tenant_id, url FROM sites
 WHERE connection_state = 'degraded'
   AND (last_seen_at IS NULL OR last_seen_at < $1);
 

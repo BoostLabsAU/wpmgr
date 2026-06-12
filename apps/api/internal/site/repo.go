@@ -102,10 +102,13 @@ type Repo interface {
 	PairingCodeSiteID(ctx context.Context, codeHash string) (uuid.UUID, bool, error)
 }
 
-// SiteRef is the slim (site, tenant) projection the timeout sweeper iterates.
+// SiteRef is the slim (site, tenant, url) projection the timeout sweeper
+// iterates. URL is included so the active-verify sweeper can dial the agent
+// without a secondary tenant-scoped lookup.
 type SiteRef struct {
 	ID       uuid.UUID
 	TenantID uuid.UUID
+	URL      string
 }
 
 // SiteURLHit is the minimal (id, connection_state) projection returned by

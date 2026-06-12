@@ -133,7 +133,8 @@ export const FEATURES: {
           bullets: [
             "Live flip from Awaiting to Connected, no refresh",
             "One-click wp-admin login, no shared passwords",
-            "Stable status badges plus a manual Re-check",
+            "Sweeper dials quiet sites to verify liveness, not just heartbeats",
+            "Accurate badge: unreachable vs idle, never a false disconnect",
           ],
         },
         {
