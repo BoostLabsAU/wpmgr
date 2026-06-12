@@ -110,7 +110,10 @@ type StatsPoint struct {
 	RatioPct         *float64
 	UsedMemoryBytes  int64
 	AvgWaitMs        float64
-	OpsPerSec        int
+	// OpsPerSec is float64 at the domain boundary to accommodate the PHP agent
+	// emitting round($ops/$elapsed, 2) as a fractional JSON number. The repo
+	// rounds to the nearest int32 when writing to the integer DB column.
+	OpsPerSec        float64
 	EvictedKeysDelta int64
 	ConnectedClients int
 	SampledAt        time.Time
@@ -163,7 +166,10 @@ type IngestStatsInput struct {
 	// Server INFO snapshot.
 	UsedMemoryBytes  int64   `json:"used_memory_bytes"`
 	AvgWaitMs        float64 `json:"avg_wait_ms"`
-	OpsPerSec        int     `json:"ops_per_sec"`
+	// OpsPerSec is float64 at the domain boundary because the PHP agent emits
+	// round($ops/$elapsed, 2), which produces a fractional JSON number. The repo
+	// rounds to int32 at the call site (ops_per_sec DB column is integer).
+	OpsPerSec        float64 `json:"ops_per_sec"`
 	EvictedKeysDelta int64   `json:"evicted_keys_delta"`
 	ConnectedClients int     `json:"connected_clients"`
 }

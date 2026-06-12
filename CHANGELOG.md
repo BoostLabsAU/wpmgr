@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.42.2] - 2026-06-12
+
+### Fixed
+
+- **Object cache: dashboard status froze once the cache went live (stats reports rejected).** The agent reports cache operations per second as a JSON number with decimals; the control plane typed the field as an integer and rejected the entire stats report, so the dashboard kept showing the last state from before the cache was enabled. Idle sites passed (whole numbers encode without decimals), which is how it escaped testing. The control plane now accepts the decimal value, and the agent reports a whole number for compatibility with older control planes.
+- **Object cache: a malformed status block can no longer reject the whole stats report.** The block is now decoded separately and skipped with a logged warning, so page cache stats always land even if the object cache block is unparseable. This applies the same tolerant ingest approach used in 0.35.3.
+
+Control plane and agent 0.42.2; the drop-in stays at 2.1.1 (no site-side cache changes). Sites already running agent 0.42.1 are fixed by the control plane update alone.
+
 ## [0.42.1] - 2026-06-12
 
 ### Fixed

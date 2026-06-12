@@ -145,11 +145,14 @@ final class ObjectCacheHeartbeat
 		$sinceTs   = isset( $stats['delta_since_ts'] ) ? (float) $stats['delta_since_ts'] : 0.0;
 
 		$elapsedSec = $sinceTs > 0 ? max( 0.001, microtime( true ) - $sinceTs ) : 0.0;
-		$opsPerSec  = ( $elapsedSec > 0 && $ops > 0 ) ? round( $ops / $elapsedSec, 2 ) : 0.0;
-		$avgWaitMs  = $samples > 0 ? round( $waitMs / $samples, 2 ) : 0.0;
-
-		$opsPerSec = is_finite( $opsPerSec ) ? $opsPerSec : 0.0;
-		$avgWaitMs = is_finite( $avgWaitMs ) ? $avgWaitMs : 0.0;
+		// ops_per_sec: Go CP types this field as int — cast after round() so PHP
+		// always emits a JSON integer, never a float literal. Idle sites (ops=0)
+		// produce 0 which PHP already encodes as an integer, so only busy sites
+		// were affected (round() returned e.g. 823.47 → JSON 823.47 → Go 422).
+		$opsPerSecFloat = ( $elapsedSec > 0 && $ops > 0 ) ? round( $ops / $elapsedSec ) : 0.0;
+		$opsPerSec      = (int) ( is_finite( $opsPerSecFloat ) ? $opsPerSecFloat : 0.0 );
+		$avgWaitMs      = $samples > 0 ? round( $waitMs / $samples, 2 ) : 0.0;
+		$avgWaitMs      = is_finite( $avgWaitMs ) ? $avgWaitMs : 0.0;
 
 		// Reset the delta counters (consume-and-reset).
 		$reset = array_merge( $stats, [

@@ -3,6 +3,7 @@ package objectcache
 import (
 	"context"
 	"errors"
+	"math"
 	"math/big"
 	"time"
 
@@ -277,6 +278,11 @@ func (r *Repo) InsertStatsHistory(ctx context.Context, tenantID uuid.UUID, p Sta
 	avgWaitMs := numericFromFloat64(p.AvgWaitMs)
 
 	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// OpsPerSec arrives as float64 from the domain (the PHP agent emits
+		// round($ops/$elapsed, 2)); the DB column is integer so we round to
+		// nearest before casting. The upper clamp (math.MaxInt32) was already
+		// applied in the handler before building the StatsPoint.
+		opsPerSecI32 := int32(math.Round(p.OpsPerSec))
 		_, err := sqlc.New(tx).InsertObjectCacheStatsHistory(ctx, sqlc.InsertObjectCacheStatsHistoryParams{
 			SiteID:           p.SiteID,
 			TenantID:         p.TenantID,
@@ -285,7 +291,7 @@ func (r *Repo) InsertStatsHistory(ctx context.Context, tenantID uuid.UUID, p Sta
 			RatioPct:         ratioPct,
 			UsedMemoryBytes:  p.UsedMemoryBytes,
 			AvgWaitMs:        avgWaitMs,
-			OpsPerSec:        int32(p.OpsPerSec),
+			OpsPerSec:        opsPerSecI32,
 			EvictedKeysDelta: p.EvictedKeysDelta,
 			ConnectedClients: int32(p.ConnectedClients),
 			SampledAt:        p.SampledAt,
