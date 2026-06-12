@@ -184,6 +184,7 @@ if ( isset( $_GET['wpmgr_e2e_probe'] ) ) {
             'val'            => $val,
             'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
             'engine_state'   => $engineState,
+            'last_error'     => $oc instanceof WPMgr_Object_Cache ? ( $hbStats['last_error_class'] ?? '' ) : '',
             'marker_present' => $markerPresent,
         ] );
         exit;
@@ -198,6 +199,7 @@ if ( isset( $_GET['wpmgr_e2e_probe'] ) ) {
             'val'            => $val,
             'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
             'engine_state'   => $engineState,
+            'last_error'     => $oc instanceof WPMgr_Object_Cache ? ( $hbStats['last_error_class'] ?? '' ) : '',
             'marker_present' => $markerPresent,
         ] );
         exit;
@@ -227,10 +229,14 @@ echo "[e2e] Request 1 engine_state=${ENGINE_STATE_SET} marker_present=${MARKER_A
 # persistence is impossible and the root cause is an ownership/permissions problem on
 # the config file, not a flush issue.
 if [ "${ENGINE_STATE_SET}" != "connected" ]; then
-    echo "[e2e] ERROR: web SAPI engine not connected on request 1 (state=${ENGINE_STATE_SET})." >&2
-    echo "[e2e] The config file is likely unreadable by the web server user." >&2
-    echo "[e2e] Check ownership/permissions of wp-content/wpmgr-object-cache-config.php." >&2
-    echo "[e2e] (When WP-CLI runs as root the file is written 0600 root:root; www-data cannot read it.)" >&2
+    LAST_ERROR_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("last_error","")))' 2>/dev/null || echo 'unknown')"
+    echo "[e2e] ERROR: web SAPI engine not connected on request 1 (state=${ENGINE_STATE_SET}, last_error=${LAST_ERROR_SET})." >&2
+    echo "[e2e] Forensics: wp-content file ownership and cool-down state:" >&2
+    docker compose -f "${COMPOSE_DIR}/docker-compose.yml" --project-name wpmgr-agent-e2e \
+        exec -T wordpress sh -c 'ls -la /var/www/html/wp-content/ | grep -iE "object-cache|wpmgr|oc-state"; echo "--- state file:"; cat /var/www/html/wp-content/.wpmgr-oc-state.json 2>/dev/null || echo "(no state file)"' >&2 || true
+    echo "[e2e] Last WordPress container log lines:" >&2
+    docker compose -f "${COMPOSE_DIR}/docker-compose.yml" --project-name wpmgr-agent-e2e \
+        logs --tail 25 wordpress >&2 || true
     exit 1
 fi
 
