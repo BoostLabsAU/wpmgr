@@ -106,6 +106,9 @@ func (r *fakeRepo) SetActiveDBScanJob(_ context.Context, _ uuid.UUID, _ string, 
 	return nil
 }
 func (r *fakeRepo) ClearActiveDBScanJob(_ context.Context, _ uuid.UUID) error { return nil }
+func (r *fakeRepo) GetActiveDBScanState(_ context.Context, _, _ uuid.UUID) (ActiveDBScanState, error) {
+	return ActiveDBScanState{}, nil
+}
 func (r *fakeRepo) GetStalledDBCleanJobs(_ context.Context, _ time.Duration) ([]StalledDBCleanJob, error) {
 	return nil, nil
 }

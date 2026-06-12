@@ -34,13 +34,13 @@ type EventPublisher interface {
 
 // publishReportCompleted emits a report.completed SSE event with
 // SiteID=uuid.Nil for tenant-wide fan-out. Failures are logged; they never
-// block the report completion path.
+// block the report completion path. ID is left empty so the Publisher mints a
+// ULID (the bus requires lexicographically monotonic IDs — ADR-038).
 func publishReportCompleted(ctx context.Context, pub EventPublisher, tenantID, clientID, reportID uuid.UUID, status string) {
 	if pub == nil {
 		return
 	}
 	ev := site.ConnectionEvent{
-		ID:       newEventID(),
 		Type:     EventReportCompleted,
 		TenantID: tenantID,
 		SiteID:   uuid.Nil, // tenant-wide fan-out
@@ -56,10 +56,4 @@ func publishReportCompleted(ctx context.Context, pub EventPublisher, tenantID, c
 			slog.String("report_id", reportID.String()),
 			slog.Any("error", err))
 	}
-}
-
-// newEventID mints a simple time-based event ID (not ULID to avoid a dep).
-// The site-events bus accepts any monotonic string ID for ?since= replay.
-func newEventID() string {
-	return uuid.New().String()
 }

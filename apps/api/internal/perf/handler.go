@@ -375,7 +375,8 @@ type dbScanBody struct {
 
 // dbScan triggers a synchronous read-only database scan. The agent returns the
 // full per-category result in the ACK body; the CP stores it, emits SSE, and
-// returns the job_id. Operator can poll the GET endpoint for the last result.
+// returns the job_id plus the full result payload in the 200 body. SSE is a
+// hint only — the ACK body is the truth so the UI never hangs on a missed event.
 func (h *Handler) dbScan(c *gin.Context) {
 	p, _ := domain.PrincipalFromContext(c.Request.Context())
 	siteID, ok := parseSiteID(c)
@@ -392,7 +393,7 @@ func (h *Handler) dbScan(c *gin.Context) {
 		}
 	}
 
-	jobID, err := h.svc.DBScan(c.Request.Context(), p.TenantID, siteID, body.Categories)
+	jobID, result, err := h.svc.DBScan(c.Request.Context(), p.TenantID, siteID, body.Categories)
 	if err != nil {
 		if _, isDomain := domain.AsDomain(err); isDomain {
 			httpx.Error(c, err)
@@ -401,7 +402,13 @@ func (h *Handler) dbScan(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"ok": false, "job_id": jobID, "detail": err.Error()})
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID})
+	// Embed the full scan result in the ACK so the browser can render
+	// immediately even if the SSE db.scan.completed frame was missed.
+	c.JSON(http.StatusOK, gin.H{
+		"ok":     true,
+		"job_id": jobID,
+		"result": dbScanResultToGinH(result),
+	})
 }
 
 // getDbScan returns the latest stored db_scan result for a site.
@@ -409,6 +416,8 @@ func (h *Handler) dbScan(c *gin.Context) {
 // Phase 2.1: the response includes both `categories` and `tables` so the web
 // layer can render the Tables tab on page reload (hydration path) without
 // waiting for an SSE db.scan.completed event.
+// The response also includes scan_active/active_job_id/active_started_at so
+// the web can derive its "Scanning..." spinner state on page load.
 func (h *Handler) getDbScan(c *gin.Context) {
 	p, _ := domain.PrincipalFromContext(c.Request.Context())
 	siteID, ok := parseSiteID(c)
@@ -420,39 +429,105 @@ func (h *Handler) getDbScan(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
-	if result == nil {
-		c.JSON(http.StatusOK, gin.H{"result": nil})
+
+	// Read active-scan watchdog state so the web can show/hide the spinner on
+	// page load without relying solely on SSE delivery. ErrNotFound (no perf
+	// config row yet) is treated as "not active" — not an error.
+	activeState, stateErr := h.svc.GetActiveDBScanState(c.Request.Context(), p.TenantID, siteID)
+	if stateErr != nil && stateErr != ErrNotFound {
+		httpx.Error(c, stateErr)
 		return
 	}
-	// Unmarshal the JSONB blobs back to typed values so the response is clean
-	// JSON, not base64-encoded blobs. Fall through to zero values on parse error.
+
+	var activeJobID any   // null when not active
+	var activeStartedAt any // null when not active
+	if activeState.Active {
+		activeJobID = activeState.JobID
+		if !activeState.StartedAt.IsZero() {
+			activeStartedAt = activeState.StartedAt.UTC().Format(time.RFC3339)
+		}
+	}
+
+	if result == nil {
+		c.JSON(http.StatusOK, gin.H{
+			"result":            nil,
+			"scan_active":       activeState.Active,
+			"active_job_id":     activeJobID,
+			"active_started_at": activeStartedAt,
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"result":            dbScanResultToGinH(result),
+		"scan_active":       activeState.Active,
+		"active_job_id":     activeJobID,
+		"active_started_at": activeStartedAt,
+	})
+}
+
+// dbScanResultToGinH converts a DBScanResult (with raw JSONB blobs) into a
+// gin.H map with clean JSON values for the wire response. It is shared by both
+// the POST ACK (dbScan) and the GET response (getDbScan) so the JSON key names
+// are identical on both paths.
+func dbScanResultToGinH(r *DBScanResult) gin.H {
+	if r == nil {
+		return nil
+	}
+	// Unmarshal JSONB blobs back to typed values. Fall through to zero/empty
+	// values on parse error so the response is always well-formed.
 	var categories any
-	if len(result.CategoriesJSON) > 0 {
+	if len(r.CategoriesJSON) > 0 {
 		var m map[string]any
-		if jerr := json.Unmarshal(result.CategoriesJSON, &m); jerr == nil {
+		if jerr := json.Unmarshal(r.CategoriesJSON, &m); jerr == nil {
 			categories = m
 		}
 	}
-	// Phase 2.1: unmarshal per-table inventory; return empty array on error so the
-	// web layer always receives an array (never null) and can render the Tables tab.
 	var tables any = []any{}
-	if len(result.TablesJSON) > 0 {
+	if len(r.TablesJSON) > 0 {
 		var arr []any
-		if jerr := json.Unmarshal(result.TablesJSON, &arr); jerr == nil {
+		if jerr := json.Unmarshal(r.TablesJSON, &arr); jerr == nil {
 			tables = arr
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"result": gin.H{
-			"job_id":        result.JobID,
-			"categories":    categories,
-			"tables":        tables,
-			"db_size_bytes": result.DBSizeBytes,
-			"table_count":   result.TableCount,
-			"scanned_at":    result.ScannedAt.Unix(),
-			"created_at":    result.CreatedAt.Unix(),
-		},
-	})
+	var orphanedOptions any = []any{}
+	if len(r.OrphanedOptionsJSON) > 0 {
+		var arr []any
+		if jerr := json.Unmarshal(r.OrphanedOptionsJSON, &arr); jerr == nil {
+			orphanedOptions = arr
+		}
+	}
+	var orphanedCron any = []any{}
+	if len(r.OrphanedCronJSON) > 0 {
+		var arr []any
+		if jerr := json.Unmarshal(r.OrphanedCronJSON, &arr); jerr == nil {
+			orphanedCron = arr
+		}
+	}
+	var installedPlugins any = []any{}
+	if len(r.InstalledPluginsJSON) > 0 {
+		var arr []any
+		if jerr := json.Unmarshal(r.InstalledPluginsJSON, &arr); jerr == nil {
+			installedPlugins = arr
+		}
+	}
+	h := gin.H{
+		"job_id":            r.JobID,
+		"categories":        categories,
+		"tables":            tables,
+		"orphaned_options":  orphanedOptions,
+		"orphaned_cron":     orphanedCron,
+		"installed_plugins": installedPlugins,
+		"db_size_bytes":     r.DBSizeBytes,
+		"table_count":       r.TableCount,
+		"scanned_at":        r.ScannedAt.Unix(),
+	}
+	// created_at is only populated from the DB path (GET); in the POST ACK path
+	// CreatedAt is zero and we omit it to avoid a confusing epoch timestamp.
+	if !r.CreatedAt.IsZero() {
+		h["created_at"] = r.CreatedAt.Unix()
+	}
+	return h
 }
 
 // ---------------------------------------------------------------------------

@@ -101,6 +101,7 @@ type repository interface {
 	ClearActiveDBCleanJob(ctx context.Context, siteID uuid.UUID) error
 	SetActiveDBScanJob(ctx context.Context, siteID uuid.UUID, jobID string, startedAt time.Time) error
 	ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
+	GetActiveDBScanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBScanState, error)
 	GetStalledDBCleanJobs(ctx context.Context, cleanThreshold time.Duration) ([]StalledDBCleanJob, error)
 	GetStalledDBScanJobs(ctx context.Context, scanThreshold time.Duration) ([]StalledDBScanJob, error)
 	// M39 — db_scan result persistence.
@@ -1018,8 +1019,10 @@ func (s *Service) HandleDBCleanProgress(ctx context.Context, in DBCleanProgressI
 //  2. db.scan.completed — after ok=true ACK (with the full category map)
 //  3. db.scan.failed   — on transport error or ok=false
 //
-// Returns the job_id for correlation.
-func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, categories []string) (string, error) {
+// Returns the job_id and the full scan result (non-nil on success) so the
+// handler can embed both in the 200 ACK body. SSE is a hint only; the ACK is
+// the truth. On error the result pointer is nil.
+func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, categories []string) (string, *DBScanResult, error) {
 	jobID := uuid.New().String()
 
 	s.publish(ctx, tenantID, siteID, site.EventDbScanStarted, map[string]any{
@@ -1035,22 +1038,28 @@ func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, catego
 	}
 
 	if s.agent == nil || s.sites == nil {
-		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		if cErr := s.repo.ClearActiveDBScanJob(ctx, siteID); cErr != nil {
+			s.logger.Warn("db-scan: failed to clear watchdog after missing agent",
+				slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", cErr))
+		}
 		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
 			"job_id": jobID,
 			"detail": "agent client not configured",
 		})
-		return jobID, fmt.Errorf("agent client not configured")
+		return jobID, nil, fmt.Errorf("agent client not configured")
 	}
 
 	siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
 	if lookupErr != nil {
-		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		if cErr := s.repo.ClearActiveDBScanJob(ctx, siteID); cErr != nil {
+			s.logger.Warn("db-scan: failed to clear watchdog after site URL lookup failure",
+				slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", cErr))
+		}
 		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
 			"job_id": jobID,
 			"detail": lookupErr.Error(),
 		})
-		return jobID, lookupErr
+		return jobID, nil, lookupErr
 	}
 
 	// Scan timeout: use 90s when orphan categories are requested (Phase 3.3),
@@ -1069,20 +1078,26 @@ func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, catego
 		Categories: categories,
 	})
 	if perr != nil {
-		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		if cErr := s.repo.ClearActiveDBScanJob(ctx, siteID); cErr != nil {
+			s.logger.Warn("db-scan: failed to clear watchdog after agent transport error",
+				slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", cErr))
+		}
 		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
 			"job_id": jobID,
 			"detail": perr.Error(),
 		})
-		return jobID, perr
+		return jobID, nil, perr
 	}
 	if !res.OK {
-		_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
+		if cErr := s.repo.ClearActiveDBScanJob(ctx, siteID); cErr != nil {
+			s.logger.Warn("db-scan: failed to clear watchdog after agent refusal",
+				slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", cErr))
+		}
 		s.publish(ctx, tenantID, siteID, site.EventDbScanFailed, map[string]any{
 			"job_id": jobID,
 			"detail": res.Detail,
 		})
-		return jobID, fmt.Errorf("db_scan refused by agent: %s", res.Detail)
+		return jobID, nil, fmt.Errorf("db_scan refused by agent: %s", res.Detail)
 	}
 
 	// Persist the scan result for the operator GET endpoint.
@@ -1101,7 +1116,8 @@ func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, catego
 	orphanedCronJSON := marshalJSONArray(res.OrphanedCron)
 	installedPluginsJSON := marshalJSONArray(res.InstalledPlugins)
 
-	_ = s.repo.UpsertDBScanResult(ctx, DBScanResultInput{
+	scannedAt := time.Unix(res.ScannedAt, 0).UTC()
+	if uErr := s.repo.UpsertDBScanResult(ctx, DBScanResultInput{
 		SiteID:               siteID,
 		TenantID:             tenantID,
 		JobID:                jobID,
@@ -1112,15 +1128,16 @@ func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, catego
 		InstalledPluginsJSON: installedPluginsJSON,
 		DBSizeBytes:          res.DBSizeBytes,
 		TableCount:           res.TableCount,
-		ScannedAt:            time.Unix(res.ScannedAt, 0).UTC(),
-	})
+		ScannedAt:            scannedAt,
+	}); uErr != nil {
+		s.logger.Warn("db-scan: failed to persist scan result",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", uErr))
+	}
 
-	// Clear watchdog — scan complete.
-	_ = s.repo.ClearActiveDBScanJob(ctx, siteID)
-
-	// Emit db.scan.completed with the full result so the UI can render all tabs
-	// immediately via SSE without a separate GET round-trip. Phase 3.3 fields
-	// are included so the orphan panel can display without a page reload.
+	// Emit db.scan.completed BEFORE clearing the watchdog so that a failed
+	// publish does not leave the job stuck in active state with no rescue path
+	// (the watchdog sweeper would have to wait for its timeout window). Phase
+	// 3.3 fields are included so the orphan panel can display without a reload.
 	s.publish(ctx, tenantID, siteID, site.EventDbScanCompleted, map[string]any{
 		"job_id":            jobID,
 		"categories":        res.Categories,
@@ -1133,7 +1150,28 @@ func (s *Service) DBScan(ctx context.Context, tenantID, siteID uuid.UUID, catego
 		"scanned_at":        res.ScannedAt,
 	})
 
-	return jobID, nil
+	// Clear watchdog — scan complete.
+	if cErr := s.repo.ClearActiveDBScanJob(ctx, siteID); cErr != nil {
+		s.logger.Warn("db-scan: failed to clear watchdog after completion",
+			slog.String("job_id", jobID), slog.String("site_id", siteID.String()), slog.Any("error", cErr))
+	}
+
+	// Return the full result alongside the job ID so the handler can embed it
+	// directly in the 200 ACK body. SSE is a hint; the ACK is the truth.
+	result := &DBScanResult{
+		SiteID:               siteID,
+		TenantID:             tenantID,
+		JobID:                jobID,
+		CategoriesJSON:       catJSON,
+		TablesJSON:           tablesJSON,
+		OrphanedOptionsJSON:  orphanedOptionsJSON,
+		OrphanedCronJSON:     orphanedCronJSON,
+		InstalledPluginsJSON: installedPluginsJSON,
+		DBSizeBytes:          res.DBSizeBytes,
+		TableCount:           res.TableCount,
+		ScannedAt:            scannedAt,
+	}
+	return jobID, result, nil
 }
 
 // GetLatestScan returns the latest stored db_scan result for a site.
@@ -1147,6 +1185,13 @@ func (s *Service) GetLatestScan(ctx context.Context, tenantID, siteID uuid.UUID)
 		return nil, err
 	}
 	return &result, nil
+}
+
+// GetActiveDBScanState returns the in-progress db_scan watchdog state for a
+// site. ErrNotFound (no perf config row) is surfaced to the caller; the handler
+// treats it as "not active" without returning an error to the client.
+func (s *Service) GetActiveDBScanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBScanState, error) {
+	return s.repo.GetActiveDBScanState(ctx, tenantID, siteID)
 }
 
 // ---------------------------------------------------------------------------
@@ -1718,9 +1763,14 @@ func (s *Service) publish(ctx context.Context, tenantID, siteID uuid.UUID, event
 	if s.events == nil {
 		return
 	}
-	_ = s.events.Publish(ctx, site.ConnectionEvent{
+	if err := s.events.Publish(ctx, site.ConnectionEvent{
 		Type: eventType, TenantID: tenantID, SiteID: siteID, Data: data,
-	})
+	}); err != nil {
+		s.logger.WarnContext(ctx, "perf: failed to publish SSE event",
+			slog.String("event_type", eventType),
+			slog.String("site_id", siteID.String()),
+			slog.Any("error", err))
+	}
 }
 
 func defaultConfig(tenantID, siteID uuid.UUID) Config {

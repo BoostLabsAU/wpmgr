@@ -17,7 +17,8 @@ import { toast } from "@/components/toast";
 import { SelectField } from "../components/Field";
 import { SettingRow } from "../components/SettingRow";
 import { useDbCleanSelected } from "../hooks/useCacheStats";
-import { useDbScan } from "../hooks/useDbScan";
+import { useDbScan, useDbScanHydration } from "../hooks/useDbScan";
+import { useSiteReconnect } from "@/features/sites/use-site-events";
 import { DB_CLEAN_INTERVALS, type PerfConfig } from "../types";
 import {
   useDbCleanStore,
@@ -150,6 +151,16 @@ export function DatabaseSection({
   const resetScan = useDbScanStore((s) => s.reset);
   const resetClean = useDbCleanStore((s) => s.reset);
 
+  // Hydrate from the server on mount so a page refresh shows the last scan
+  // result without re-scanning. Returns a stable `hydrate` callback we can
+  // reuse on SSE reconnect.
+  const hydrate = useDbScanHydration(siteId);
+
+  // When the shared SSE stream reconnects after a drop, re-hydrate so any
+  // db.scan.completed frame missed while the stream was down is reconciled.
+  // `hydrate` is already stable (useCallback inside useDbScanHydration).
+  useSiteReconnect(hydrate);
+
   // Categories the operator has DESELECTED in the preview table (inverted set).
   // Default state is "all selected" — the deselected set starts empty.
   // When a new scan completes (job_id changes) we reset the deselected set.
@@ -215,6 +226,15 @@ export function DatabaseSection({
     const id = window.setTimeout(() => resetClean(siteId), STALE_TIMEOUT_MS);
     return () => window.clearTimeout(id);
   }, [siteId, cleanLive.phase, cleanLive.updatedAt, resetClean]);
+
+  // Stale backstop while a scan is running: if no frame arrives within the
+  // window (matching the control plane watchdog), reset to idle so the
+  // operator can retry instead of facing a spinner that never resolves.
+  useEffect(() => {
+    if (scanLive.phase !== "scanning") return;
+    const id = window.setTimeout(() => resetScan(siteId), STALE_TIMEOUT_MS);
+    return () => window.clearTimeout(id);
+  }, [siteId, scanLive.phase, scanLive.updatedAt, resetScan]);
 
   function runScan() {
     scan.mutate();
