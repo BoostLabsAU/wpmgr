@@ -1,0 +1,58 @@
+name: Plugin Check — wp.org build
+
+on:
+  # Manual trigger: run the authoritative WordPress.org Plugin Check against
+  # the wp.org-identity build (fleet-agent-for-wpmgr) and publish the zip +
+  # report as artifacts for submission.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to stamp into the wp.org zip (MAJOR.MINOR.PATCH)"
+        required: true
+        default: "1.0.0"
+
+jobs:
+  plugincheck:
+    name: wp plugin check (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.3"
+          extensions: zip, sodium, openssl, mysqli
+          coverage: none
+
+      - name: Cache Composer dependencies
+        uses: actions/cache@v4
+        with:
+          path: apps/agent/vendor
+          key: composer-agent-${{ hashFiles('apps/agent/composer.lock') }}
+          restore-keys: composer-agent-
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --no-progress
+        working-directory: apps/agent
+
+      - name: Build wp.org zip
+        run: make agent-zip-wporg VERSION="${{ inputs.version }}"
+
+      - name: Run Plugin Check
+        # shell: bash enables pipefail so the tee cannot mask a failing check.
+        shell: bash
+        run: make agent-plugincheck VERSION="${{ inputs.version }}" | tee plugincheck-report.txt
+
+      - name: Upload zip and report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fleet-agent-for-wpmgr-${{ inputs.version }}
+          path: |
+            release/fleet-agent-for-wpmgr.zip
+            plugincheck-report.txt
+          if-no-files-found: warn
