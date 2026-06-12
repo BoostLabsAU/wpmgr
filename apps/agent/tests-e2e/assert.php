@@ -489,6 +489,7 @@ PHP;
     $cause = $diagnosis['cause'] ?? '';
     $validCauses = [
         'early_definition',
+        'engine_replaced',
         'stale_opcache_suspected',
         'engine_not_loaded',
         'engine_boot_incomplete',
