@@ -508,12 +508,8 @@ PHP;
 // Stage: disable
 // ============================================================================
 if ($stage === 'disable') {
-    // 1. Deactivate and uninstall the plugin.
-    $exit = wp('plugin deactivate ' . escapeshellarg($pluginSlug), $out);
-    // Deactivate may fail if plugin name varies; tolerate.
-    pass('Plugin deactivated (or not found)');
-
-    // 2. Run the drop-in uninstaller via wp eval.
+    // 1. Run the drop-in uninstaller via wp eval WHILE the plugin is still
+    //    active (the installer class needs the plugin autoloader).
     $uninstallCode = <<<'PHP'
 $installer = new WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller();
 $result = $installer->uninstall();
@@ -527,6 +523,11 @@ PHP;
         fail('Uninstall returned not-uninstalled: ' . $out);
     }
     pass('Drop-in uninstalled');
+
+    // 2. Deactivate the plugin now that the uninstaller has run.
+    $exit = wp('plugin deactivate ' . escapeshellarg($pluginSlug), $out);
+    // Deactivate may fail if plugin name varies; tolerate.
+    pass('Plugin deactivated (or not found)');
 
     // 3. Assert object-cache.php is gone from wp-content.
     $dropinPath = '/var/www/html/wp-content/object-cache.php';
