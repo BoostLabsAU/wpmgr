@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"testing"
 	"time"
 
@@ -934,8 +935,9 @@ func TestHeartbeatGarbageStateSkipped(t *testing.T) {
 	}
 }
 
-// Suppress unused import warning for context in the ingest-stats test helper.
+// Suppress unused import warnings for imports used only in specific test helpers.
 var _ = context.Background
+var _ = fmt.Sprintf
 
 // ---------------------------------------------------------------------------
 // Test: M11 config_hash drift detection
@@ -1252,5 +1254,196 @@ func TestCapHashBoundsAt64(t *testing.T) {
 	short := "abc123"
 	if capHash(short) != short {
 		t.Errorf("capHash: short string must pass through unchanged")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: M70 — debug_header_enabled GET/PUT round-trip
+// ---------------------------------------------------------------------------
+
+// TestDebugHeaderEnabledDefaultFalse confirms that defaultConfig returns
+// debug_header_enabled=false (the safe default for production sites).
+func TestDebugHeaderEnabledDefaultFalse(t *testing.T) {
+	cfg := defaultConfig(uuid.New(), uuid.New())
+	if cfg.DebugHeaderEnabled {
+		t.Error("defaultConfig: DebugHeaderEnabled must default to false")
+	}
+}
+
+// TestDebugHeaderEnabledRoundTripViaDTO confirms that setting DebugHeaderEnabled
+// on a Config flows through toConfigDTO with the correct json tag, and that
+// fromConfigPutDTO with a *bool=true sets it on the merged config.
+func TestDebugHeaderEnabledRoundTripViaDTO(t *testing.T) {
+	// GET path: true value is surfaced in the DTO.
+	cfg := defaultConfig(uuid.New(), uuid.New())
+	cfg.DebugHeaderEnabled = true
+	dto := toConfigDTO(cfg)
+	if !dto.DebugHeaderEnabled {
+		t.Error("toConfigDTO: DebugHeaderEnabled true must appear in DTO")
+	}
+
+	// GET path: false value is surfaced in the DTO.
+	cfg2 := defaultConfig(uuid.New(), uuid.New())
+	cfg2.DebugHeaderEnabled = false
+	dto2 := toConfigDTO(cfg2)
+	if dto2.DebugHeaderEnabled {
+		t.Error("toConfigDTO: DebugHeaderEnabled false must appear as false in DTO")
+	}
+
+	// PUT path: *bool=true sets the field.
+	trueVal := true
+	putDTO := ConfigPutDTO{DebugHeaderEnabled: &trueVal}
+	base := defaultConfig(uuid.New(), uuid.New())
+	merged, _ := fromConfigPutDTO(putDTO, base)
+	if !merged.DebugHeaderEnabled {
+		t.Error("fromConfigPutDTO: *bool=true must set DebugHeaderEnabled=true")
+	}
+
+	// PUT path: *bool=false explicitly disables.
+	falseVal := false
+	putDTO2 := ConfigPutDTO{DebugHeaderEnabled: &falseVal}
+	base2 := defaultConfig(uuid.New(), uuid.New())
+	base2.DebugHeaderEnabled = true // start with true to confirm it is overwritten
+	merged2, _ := fromConfigPutDTO(putDTO2, base2)
+	if merged2.DebugHeaderEnabled {
+		t.Error("fromConfigPutDTO: *bool=false must set DebugHeaderEnabled=false")
+	}
+
+	// PUT path: nil preserves the base value (nil-sentinel pattern).
+	putDTO3 := ConfigPutDTO{DebugHeaderEnabled: nil}
+	base3 := defaultConfig(uuid.New(), uuid.New())
+	base3.DebugHeaderEnabled = true
+	merged3, _ := fromConfigPutDTO(putDTO3, base3)
+	if !merged3.DebugHeaderEnabled {
+		t.Error("fromConfigPutDTO: nil must preserve the base DebugHeaderEnabled value")
+	}
+}
+
+// TestDebugHeaderEnabledInBuildConfigRequest confirms that buildConfigRequest
+// propagates DebugHeaderEnabled to the wire struct sent to the agent.
+func TestDebugHeaderEnabledInBuildConfigRequest(t *testing.T) {
+	cfg := defaultConfig(uuid.New(), uuid.New())
+	cfg.DebugHeaderEnabled = true
+
+	req := buildConfigRequest(cfg, "")
+	if !req.DebugHeaderEnabled {
+		t.Error("buildConfigRequest: DebugHeaderEnabled=true must appear in agent wire payload")
+	}
+
+	cfg2 := defaultConfig(uuid.New(), uuid.New())
+	cfg2.DebugHeaderEnabled = false
+	req2 := buildConfigRequest(cfg2, "")
+	if req2.DebugHeaderEnabled {
+		t.Error("buildConfigRequest: DebugHeaderEnabled=false must appear as false in wire payload")
+	}
+}
+
+// TestDebugHeaderEnabledInHash verifies that debug_header_enabled is part of
+// the config hash and that toggling it changes the hash (drift detection fires
+// when the operator enables the header while the agent still has the old config).
+func TestDebugHeaderEnabledInHash(t *testing.T) {
+	cfg := Config{
+		Scheme: "tcp", Host: "127.0.0.1", Port: 6379,
+		Database: 0, Username: "", Prefix: "wpmgr_test",
+		MaxTTLSeconds: 604800, QueryTTLSeconds: 86400,
+		ConnectTimeoutMs: 1000, ReadTimeoutMs: 1000,
+		RetryCount: 3, RetryIntervalMs: 25,
+		Serializer: "php", Compression: "none",
+		FlushStrategy: "auto", Shared: true, FlushOnFailback: true,
+		AnalyticsEnabled: true, DebugHeaderEnabled: false,
+	}
+	hashOff := computeConfigHash(cfg)
+
+	cfg2 := cfg
+	cfg2.DebugHeaderEnabled = true
+	hashOn := computeConfigHash(cfg2)
+
+	if hashOff == hashOn {
+		t.Error("debug_header_enabled must be included in computeConfigHash: toggling it must produce a different hash")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: M70 — cross-language hash contract fixture
+// ---------------------------------------------------------------------------
+
+// TestObjectCacheConfigHashContractFixture loads the shared JSON fixture at
+// apps/agent/tests/fixtures/object-cache-config-hash.json and verifies that
+// computeConfigHash produces the expected sha256 hex for each case.
+// The PHP agent PHPUnit twin (to be added by the agent engineer) runs the same
+// fixture to confirm cross-language parity.
+func TestObjectCacheConfigHashContractFixture(t *testing.T) {
+	// Path relative to this test file (apps/api/internal/objectcache/).
+	fixturePath := "../../../../apps/agent/tests/fixtures/object-cache-config-hash.json"
+
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("cannot read contract fixture %s: %v", fixturePath, err)
+	}
+
+	type fixtureCase struct {
+		Label    string         `json:"label"`
+		Params   map[string]any `json:"params"`
+		Expected string         `json:"expected_hash"`
+	}
+	var fixture struct {
+		Cases []fixtureCase `json:"cases"`
+	}
+	if err := json.Unmarshal(data, &fixture); err != nil {
+		t.Fatalf("fixture JSON parse error: %v", err)
+	}
+	if len(fixture.Cases) == 0 {
+		t.Fatal("fixture has no cases")
+	}
+
+	boolFromAny := func(v any) bool {
+		b, _ := v.(bool)
+		return b
+	}
+	intFromAny := func(v any) int {
+		switch x := v.(type) {
+		case float64:
+			return int(x)
+		case int:
+			return x
+		}
+		return 0
+	}
+	strFromAny := func(v any) string {
+		s, _ := v.(string)
+		return s
+	}
+
+	for _, tc := range fixture.Cases {
+		t.Run(tc.Label, func(t *testing.T) {
+			p := tc.Params
+			cfg := Config{
+				AnalyticsEnabled:   boolFromAny(p["analytics_enabled"]),
+				AsyncFlush:         boolFromAny(p["async_flush"]),
+				Compression:        strFromAny(p["compression"]),
+				ConnectTimeoutMs:   intFromAny(p["connect_timeout_ms"]),
+				Database:           intFromAny(p["database"]),
+				DebugHeaderEnabled: boolFromAny(p["debug_header_enabled"]),
+				FlushOnFailback:    boolFromAny(p["flush_on_failback"]),
+				FlushStrategy:      strFromAny(p["flush_strategy"]),
+				Host:               strFromAny(p["host"]),
+				MaxTTLSeconds:      intFromAny(p["maxttl_seconds"]),
+				Port:               intFromAny(p["port"]),
+				Prefix:             strFromAny(p["prefix"]),
+				QueryTTLSeconds:    intFromAny(p["queryttl_seconds"]),
+				ReadTimeoutMs:      intFromAny(p["read_timeout_ms"]),
+				RetryCount:         intFromAny(p["retry_count"]),
+				RetryIntervalMs:    intFromAny(p["retry_interval_ms"]),
+				Scheme:             strFromAny(p["scheme"]),
+				Serializer:         strFromAny(p["serializer"]),
+				Shared:             boolFromAny(p["shared"]),
+				SocketPath:         strFromAny(p["socket_path"]),
+				Username:           strFromAny(p["username"]),
+			}
+			got := computeConfigHash(cfg)
+			if got != tc.Expected {
+				t.Errorf("hash mismatch for %q:\n  want: %s\n  got:  %s", tc.Label, tc.Expected, got)
+			}
+		})
 	}
 }

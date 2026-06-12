@@ -8120,6 +8120,11 @@ export const ObjectCacheConfigSchema = {
     analytics_enabled: {
       type: "boolean",
     },
+    debug_header_enabled: {
+      type: "boolean",
+      description:
+        "When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache hit/miss/state details. Default false.",
+    },
     last_test_config_hash: {
       type: "string",
       nullable: true,
@@ -8144,7 +8149,7 @@ export const ObjectCacheConfigSchema = {
     oc_state: {
       type: "string",
       description:
-        "Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.",
+        "Live connectivity state from the last heartbeat: '' (unknown/no config), 'disabled', 'connected', 'degraded', or 'down'.",
     },
     oc_latency_ms: {
       type: "integer",
@@ -8247,6 +8252,11 @@ export const ObjectCacheConfigPutSchema = {
     },
     analytics_enabled: {
       type: "boolean",
+    },
+    debug_header_enabled: {
+      type: "boolean",
+      description:
+        "When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache hit/miss/state details. Default false.",
     },
   },
 } as const;

@@ -4452,6 +4452,10 @@ export type ObjectCacheConfig = {
   flush_on_failback: boolean;
   analytics_enabled: boolean;
   /**
+   * When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache hit/miss/state details. Default false.
+   */
+  debug_header_enabled?: boolean;
+  /**
    * Non-empty after a passing test; cleared when connection fields change.
    */
   last_test_config_hash?: string;
@@ -4461,7 +4465,7 @@ export type ObjectCacheConfig = {
    */
   last_test_result?: ObjectCacheTestResult;
   /**
-   * Live connectivity state from the last heartbeat: '' (disabled), 'connected', 'degraded', or 'down'.
+   * Live connectivity state from the last heartbeat: '' (unknown/no config), 'disabled', 'connected', 'degraded', or 'down'.
    */
   oc_state: string;
   oc_latency_ms: number;
@@ -4501,6 +4505,10 @@ export type ObjectCacheConfigPut = {
   shared?: boolean;
   flush_on_failback?: boolean;
   analytics_enabled?: boolean;
+  /**
+   * When true the drop-in emits a per-request x-wpmgr-object-cache response header with cache hit/miss/state details. Default false.
+   */
+  debug_header_enabled?: boolean;
 };
 
 /**

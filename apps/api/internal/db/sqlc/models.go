@@ -725,6 +725,7 @@ type SiteObjectCacheConfig struct {
 	OcUsedMemoryBytes  int64              `json:"oc_used_memory_bytes"`
 	OcHitRatioPct      pgtype.Numeric     `json:"oc_hit_ratio_pct"`
 	OcConfigDrift      bool               `json:"oc_config_drift"`
+	DebugHeaderEnabled bool               `json:"debug_header_enabled"`
 	CreatedAt          time.Time          `json:"created_at"`
 	UpdatedAt          time.Time          `json:"updated_at"`
 }

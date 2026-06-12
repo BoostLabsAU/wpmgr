@@ -1,0 +1,87 @@
+{
+  "_comment": "Cross-language hash contract fixture (M70). Both the Go CP (TestObjectCacheConfigHashContractFixture) and the PHP agent PHPUnit twin must produce the same sha256 hex for the same params. The hash is computed by: (1) build a map of all non-password config keys, (2) ksort / sort keys alphabetically, (3) json_encode / json.Marshal, (4) sha256. Boolean values encode as JSON true/false. Integer values encode as JSON integers (not strings). The 'password' key is excluded.",
+  "_canonicalization": "map keys sorted alphabetically (Go json.Encoder with SetEscapeHTML(false), trailing newline trimmed; PHP ksort + json_encode with JSON_UNESCAPED_SLASHES); booleans as JSON true/false; integers as JSON numbers; slashes NOT escaped; HTML characters NOT escaped; password excluded. Case 3 pins the slash and HTML-character encoding where the default encoders of the two languages diverge.",
+  "cases": [
+    {
+      "label": "baseline — debug_header_enabled=false (default)",
+      "params": {
+        "analytics_enabled": true,
+        "async_flush": false,
+        "compression": "none",
+        "connect_timeout_ms": 1000,
+        "database": 0,
+        "debug_header_enabled": false,
+        "flush_on_failback": true,
+        "flush_strategy": "auto",
+        "host": "127.0.0.1",
+        "maxttl_seconds": 604800,
+        "port": 6379,
+        "prefix": "wpmgr_test",
+        "queryttl_seconds": 86400,
+        "read_timeout_ms": 1000,
+        "retry_count": 3,
+        "retry_interval_ms": 25,
+        "scheme": "tcp",
+        "serializer": "php",
+        "shared": true,
+        "socket_path": "",
+        "username": ""
+      },
+      "expected_hash": "27e61ad7bebff2f0da762ec5f24739c68f6bb44a3a31c8d2667e0b08aa6a8ed9"
+    },
+    {
+      "label": "debug_header_enabled=true — must differ from baseline",
+      "params": {
+        "analytics_enabled": true,
+        "async_flush": false,
+        "compression": "none",
+        "connect_timeout_ms": 1000,
+        "database": 0,
+        "debug_header_enabled": true,
+        "flush_on_failback": true,
+        "flush_strategy": "auto",
+        "host": "127.0.0.1",
+        "maxttl_seconds": 604800,
+        "port": 6379,
+        "prefix": "wpmgr_test",
+        "queryttl_seconds": 86400,
+        "read_timeout_ms": 1000,
+        "retry_count": 3,
+        "retry_interval_ms": 25,
+        "scheme": "tcp",
+        "serializer": "php",
+        "shared": true,
+        "socket_path": "",
+        "username": ""
+      },
+      "expected_hash": "a62fd47d062da1e53059472d6fff2e72ac39a0389569de4040649d9850ce6e6f"
+    },
+    {
+      "label": "unix socket + special characters — pins slash and HTML-char canonicalization across encoders",
+      "params": {
+        "analytics_enabled": true,
+        "async_flush": false,
+        "compression": "none",
+        "connect_timeout_ms": 1000,
+        "database": 0,
+        "debug_header_enabled": true,
+        "flush_on_failback": true,
+        "flush_strategy": "auto",
+        "host": "",
+        "maxttl_seconds": 604800,
+        "port": 0,
+        "prefix": "agency&ops<test>",
+        "queryttl_seconds": 86400,
+        "read_timeout_ms": 1000,
+        "retry_count": 3,
+        "retry_interval_ms": 25,
+        "scheme": "unix",
+        "serializer": "php",
+        "shared": true,
+        "socket_path": "/var/run/redis/redis.sock",
+        "username": ""
+      },
+      "expected_hash": "071437767c6cb808b33de82b340bd46e65ef333d9d3eded37620b82323329b6b"
+    }
+  ]
+}

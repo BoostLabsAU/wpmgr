@@ -12464,6 +12464,11 @@ components:
           description: Flush all keys when the object cache recovers from a down state.
         analytics_enabled:
           type: boolean
+        debug_header_enabled:
+          type: boolean
+          description: >-
+            When true the drop-in emits a per-request x-wpmgr-object-cache response
+            header with cache hit/miss/state details. Default false.
         last_test_config_hash:
           type: string
           nullable: true
@@ -12554,6 +12559,11 @@ components:
           type: boolean
         analytics_enabled:
           type: boolean
+        debug_header_enabled:
+          type: boolean
+          description: >-
+            When true the drop-in emits a per-request x-wpmgr-object-cache response
+            header with cache hit/miss/state details. Default false.
 
     ObjectCacheCapabilities:
       type: object

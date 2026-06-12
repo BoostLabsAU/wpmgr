@@ -273,7 +273,11 @@ final class ObjectCacheConfig
 		$redacted = $config;
 		unset( $redacted['password'] );
 		ksort( $redacted );
-		return hash( 'sha256', (string) wp_json_encode( $redacted ) );
+		// Canonical encoding shared with the control plane hash: keys sorted,
+		// slashes unescaped, no HTML escaping. Plain json_encode keeps the
+		// encoder semantics exact and stays available without WordPress loaded.
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.json_encode_json_encode -- canonical cross-system hash requires exact encoder flags; the WP wrapper escapes slashes
+		return hash( 'sha256', (string) json_encode( $redacted, JSON_UNESCAPED_SLASHES ) );
 	}
 
 	/**
@@ -415,6 +419,9 @@ final class ObjectCacheConfig
 		$analyticsEnabled = isset( $params['analytics_enabled'] ) && is_bool( $params['analytics_enabled'] )
 			? $params['analytics_enabled'] : true;
 
+		$debugHeaderEnabled = isset( $params['debug_header_enabled'] ) && is_bool( $params['debug_header_enabled'] )
+			? $params['debug_header_enabled'] : false;
+
 		return [
 			'scheme'              => $scheme,
 			'host'                => $host,
@@ -436,7 +443,8 @@ final class ObjectCacheConfig
 			'flush_strategy'      => $flushStrategy,
 			'shared'              => $shared,
 			'flush_on_failback'   => $flushOnFailback,
-			'analytics_enabled'   => $analyticsEnabled,
+			'analytics_enabled'     => $analyticsEnabled,
+			'debug_header_enabled'  => $debugHeaderEnabled,
 		];
 	}
 }

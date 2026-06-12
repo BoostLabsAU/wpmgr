@@ -2553,6 +2553,9 @@ CREATE TABLE site_object_cache_config (
     -- M69: true when the agent's last heartbeat config_hash differs from the
     -- CP-computed hash of the stored config (indicates a live/stored drift).
     oc_config_drift         boolean     NOT NULL DEFAULT false,
+    -- M70: when true, the apply_config push includes this flag so the drop-in
+    -- emits a per-request X-WPMgr-Cache debug response header. Default false.
+    debug_header_enabled    boolean     NOT NULL DEFAULT false,
     created_at              timestamptz NOT NULL DEFAULT now(),
     updated_at              timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT site_object_cache_config_pkey PRIMARY KEY (site_id),

@@ -220,6 +220,7 @@ export const FEATURES: {
             "phpredis connection, TLS, ACL, and per-site key prefix",
             "Degrades safely to in-memory cache if Redis is unreachable",
             "Hit ratio, memory, and latency history in the dashboard",
+            "Debug header verifies cache state per request",
           ],
         },
       ],
