@@ -6,8 +6,8 @@
  *   1. Running the builder twice produces byte-identical output.
  *   2. The committed artifact matches a fresh build (same discipline as sqlc).
  *   3. The generated artifact is syntactically valid PHP.
- *   4. The SIGNATURE and Version: 2.1.0 appear within the first 200 bytes.
- *   5. The breadcrumb assignment is present and sets 'v' => '2.1.0'.
+ *   4. The SIGNATURE and Version: 2.1.1 appear within the first 200 bytes.
+ *   5. The breadcrumb assignment is present and sets 'v' => '2.1.1'.
  *   6. All bail gate strings are present (including H6: WP_SETUP_CONFIG + env kill-switch).
  *   7. No wp_installing() bail present (H6).
  *   8. try/finally blocks present for H4 OPT_SERIALIZER restoration.
@@ -138,7 +138,7 @@ final class ObjectCacheDropinBuildTest extends TestCase
 	}
 
 	/**
-	 * Version: 2.1.0 must be in the first 200 bytes.
+	 * Version: 2.1.1 must be in the first 200 bytes.
 	 */
 	public function test_version_in_first_200_bytes(): void
 	{
@@ -147,9 +147,9 @@ final class ObjectCacheDropinBuildTest extends TestCase
 		}
 		$first200 = substr( (string) file_get_contents( $this->artifactPath ), 0, 200 );
 		$this->assertStringContainsString(
-			'Version: 2.1.0',
+			'Version: 2.1.1',
 			$first200,
-			'Version: 2.1.0 must appear within the first 200 bytes'
+			'Version: 2.1.1 must appear within the first 200 bytes'
 		);
 	}
 
@@ -168,7 +168,7 @@ final class ObjectCacheDropinBuildTest extends TestCase
 			'Breadcrumb key wpmgr_oc_stub must be present'
 		);
 		$this->assertStringContainsString(
-			"'v' => '2.1.0'",
+			"'v' => '2.1.1'",
 			$content,
 			'Breadcrumb must set v => 2.1.0'
 		);

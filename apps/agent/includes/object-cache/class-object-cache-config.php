@@ -57,6 +57,13 @@ final class ObjectCacheConfig
 	/** Default retry interval base in milliseconds. */
 	public const DEFAULT_RETRY_INTERVAL_MS = 25;
 
+	/**
+	 * FD-6: Filename for the reconnect cool-down state side channel.
+	 * Lives next to the config file in wp-content, 0600 permissions.
+	 * Holds only {last_failure_ts, consecutive_failures} — no secrets.
+	 */
+	public const STATE_FILENAME = '.wpmgr-oc-state.json';
+
 	/** Absolute path to the config file. */
 	private string $filePath;
 
@@ -373,6 +380,9 @@ final class ObjectCacheConfig
 			? (int) $params['retry_interval_ms'] : self::DEFAULT_RETRY_INTERVAL_MS;
 		if ( $retryIntervalMs < 1 ) {
 			$retryIntervalMs = 25;
+		}
+		if ( $retryIntervalMs > 5000 ) {
+			$retryIntervalMs = 5000;
 		}
 
 		$serializer = isset( $params['serializer'] ) && is_string( $params['serializer'] )

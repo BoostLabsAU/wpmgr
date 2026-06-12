@@ -151,7 +151,7 @@ $fileHeader = <<<'HDR'
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.1.0
+ * Version: 2.1.1
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -171,7 +171,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.0', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.1.1', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -222,25 +222,28 @@ $block3 = "namespace {\n\n"
     . "\t}\n\n"
     . "} // end namespace (WPMgr_Object_Cache class)\n";
 
-// Inject the 'booted' breadcrumb flag immediately after the top-level engine global
-// assignment (the unconditional boot block, NOT inside wpmgr_get_object_cache()).
-// This lets the heartbeat distinguish a complete engine boot (global assigned) from
-// an incomplete boot where an exception cut short the boot code. The flag is set
-// AFTER $wp_object_cache = \WPMgr_Object_Cache::boot(); so it only appears when
-// the boot call itself returned without throwing.
+// Inject the 'booted' breadcrumb flag immediately after the top-level runPostBootTasks()
+// call (the unconditional boot block, NOT inside wpmgr_get_object_cache()).
+// This lets the heartbeat distinguish a complete engine boot (global assigned + post-boot
+// tasks run) from an incomplete boot where an exception cut short the boot code.
 //
-// The comment anchor (phpcs:ignore … MUST assign $wp_object_cache) uniquely
-// identifies the top-level boot call — wpmgr_get_object_cache() has a different
-// inline comment ("object-cache drop-ins MUST assign"), so the pattern is specific.
-$booted_needle   = "// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign \$wp_object_cache; this is the required WP pattern\n\$wp_object_cache = \\WPMgr_Object_Cache::boot();";
-$booted_replacement = "// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign \$wp_object_cache; this is the required WP pattern\n\$wp_object_cache = \\WPMgr_Object_Cache::boot();\n\$GLOBALS['wpmgr_oc_stub']['booted'] = true;";
+// FD-2 anchor: the top-level boot block now has a unique shape:
+//   $wp_object_cache = \WPMgr_Object_Cache::boot();
+//   // FD-2: run post-boot tasks AFTER the global is assigned.
+//   $wp_object_cache->runPostBootTasks();
+// We inject the booted flag after runPostBootTasks() which is the canonical "boot complete"
+// marker. Use the FD-2 comment fragment as the unique anchor (it only appears once, in the
+// top-level block; wpmgr_get_object_cache()'s runPostBootTasks call has a different comment).
+$booted_needle   = "// FD-2: run post-boot tasks AFTER the global is assigned. This is the primary\n// call site. runPostBootTasks() is idempotent; the once-flag ensures H5 runs\n// exactly once even if wpmgr_get_object_cache() is called before this line\n// in some exotic load order.\n\$wp_object_cache->runPostBootTasks();";
+$booted_replacement = "// FD-2: run post-boot tasks AFTER the global is assigned. This is the primary\n// call site. runPostBootTasks() is idempotent; the once-flag ensures H5 runs\n// exactly once even if wpmgr_get_object_cache() is called before this line\n// in some exotic load order.\n\$wp_object_cache->runPostBootTasks();\n\$GLOBALS['wpmgr_oc_stub']['booted'] = true;";
 // Count occurrences: there should be exactly one in $engineFunctionsAndBoot.
 if (substr_count($engineFunctionsAndBoot, $booted_needle) === 1) {
     $engineFunctionsAndBoot = str_replace($booted_needle, $booted_replacement, $engineFunctionsAndBoot);
 } else {
-    // Fallback: use preg_replace with limit=1 on the last occurrence (top-level boot).
+    // Fallback: inject after the unconditional runPostBootTasks call by matching the
+    // primary-call-site comment which is unique to the top-level boot block.
     $engineFunctionsAndBoot = preg_replace(
-        '/(\$wp_object_cache\s*=\s*\\\\WPMgr_Object_Cache::boot\(\)\s*;)(?!\s*\n[^}]*\n\s*\})/',
+        '/(\/\/ call site\. runPostBootTasks\(\) is idempotent[\s\S]*?\$wp_object_cache->runPostBootTasks\(\);)/',
         '$1' . "\n\$GLOBALS['wpmgr_oc_stub']['booted'] = true;",
         $engineFunctionsAndBoot,
         1

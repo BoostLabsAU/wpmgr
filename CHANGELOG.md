@@ -6,6 +6,29 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.42.1] - 2026-06-12
+
+### Fixed
+
+- **Object cache: recursive boot caused file descriptor exhaustion and fatal errors on affected sites (drop-in 2.1.1).** Drop-in 2.1.0 ran its failback safety check before the cache global was assigned. That check called into the WordPress options API, which re-entered the boot path before the global existed, opening a new persistent Redis socket at each recursion level. On affected sites the result was a fatal error on every request and stuck worker processes that required a web server restart even after the drop-in was removed. The boot-time failback check now runs only after the cache global is assigned, and a re-entry guard returns a safe in-memory fallback for any cache call that arrives while boot is still in progress.
+- **Object cache: sockets leaked on failed or aborted connections.** Connections that failed or were abandoned during failback now close explicitly; boot falling back to array mode closes the connection it did not finish.
+- **Object cache: unsupported serializer or compression codec no longer aborts the connection.** When the server cannot honor the configured serializer or compression codec, the engine falls back to the PHP serializer or no compression, reports the effective codec to the dashboard, and the integrity check validates against effective values so stored data is never deserialized with the wrong codec.
+- **Object cache: AUTH and SELECT results are now verified.** A half-established connection can no longer be reported as connected.
+- **Object cache: a per-request connection attempt budget (12) converts any future connection loop into a single degraded request** instead of a site outage.
+- **Object cache: a persisted reconnect cool-down (15 seconds, doubling to 5 minutes) stops a down Redis from being re-dialed on every request.** The dashboard shows the cool-down state.
+- **Object cache: connection retry settings are now bounded** at both the agent and the control plane (retry count 0 to 10, retry interval 1 to 5000 ms).
+
+### Added
+
+- **Object cache: new regression coverage.** An artifact-level boot test fails on any recursive boot. End-to-end harness stages cover descriptor counting and codec fallback.
+
+### Changed
+
+- **Control plane:** object cache config saves now validate retry count and retry interval bounds before persisting.
+- **Web:** readable labels for the reconnect cool-down and connection attempt limit degradation causes; previously raw cause strings are now human-readable throughout the cache status surface.
+
+Agent 0.42.1 with drop-in 2.1.1. If a site was affected by the 2.1.0 boot loop: delete wp-content/object-cache.php, restart PHP or the container to release leaked descriptors, update the agent, then re-enable the object cache. Existing installs that were not affected refresh automatically after the agent updates.
+
 ## [0.42.0] - 2026-06-12
 
 ### Fixed

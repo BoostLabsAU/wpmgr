@@ -33,6 +33,16 @@ final class RedisConnection
 	/** Maximum jitter sleep in microseconds per retry (cap = connect_timeout). */
 	private const JITTER_BASE_US = 25000;
 
+	/**
+	 * FD-5: Maximum pconnect calls allowed per PHP process lifetime.
+	 * Exceeding this threshold causes connect() to throw 'connect_budget_exhausted'
+	 * without dialing, converting any loop bug into one slow request rather than EMFILE.
+	 */
+	private const MAX_DIALS_PER_REQUEST = 12;
+
+	/** FD-5: Per-process pconnect attempt counter. */
+	private static int $dialCount = 0;
+
 	/** phpredis client instance; null when not yet connected. */
 	private ?\Redis $redis = null;
 
@@ -57,6 +67,24 @@ final class RedisConnection
 	private array $config;
 
 	/**
+	 * FD-4: Effective serializer after codec negotiation (may differ from configured value).
+	 * Recorded by applyClientOptions() for use by checkMetadataIntegrity().
+	 */
+	private string $effectiveSerializer = 'php';
+
+	/**
+	 * FD-4: Effective compression after codec negotiation (may differ from configured value).
+	 * Recorded by applyClientOptions() for use by checkMetadataIntegrity().
+	 */
+	private string $effectiveCompression = 'none';
+
+	/**
+	 * FD-4: Non-empty when a codec fallback occurred; describes the cause
+	 * (e.g. 'igbinary_unavailable', 'zstd_unavailable'). Empty on clean connect.
+	 */
+	private string $codecFallbackCause = '';
+
+	/**
 	 * @param array<string,mixed> $config Connection config (from ObjectCacheConfig::fromParams()).
 	 */
 	public function __construct( array $config )
@@ -76,6 +104,16 @@ final class RedisConnection
 		if ( $this->redis !== null && ! $this->degraded ) {
 			$this->maybeePing();
 			return $this->redis;
+		}
+
+		// FD-3b: close the degraded handle before dialing a fresh one.
+		if ( $this->redis !== null ) {
+			try {
+				$this->redis->close();
+			} catch ( \Throwable $closeEx ) {
+				// Best-effort close; proceed to reconnect regardless.
+			}
+			$this->redis = null;
 		}
 
 		$this->redis = $this->connect();
@@ -157,6 +195,58 @@ final class RedisConnection
 		}
 	}
 
+	/**
+	 * FD-4: Return the effective serializer after codec negotiation.
+	 * May differ from the configured value when a fallback occurred.
+	 *
+	 * @return string
+	 */
+	public function effectiveSerializer(): string
+	{
+		return $this->effectiveSerializer;
+	}
+
+	/**
+	 * FD-4: Return the effective compression after codec negotiation.
+	 * May differ from the configured value when a fallback occurred.
+	 *
+	 * @return string
+	 */
+	public function effectiveCompression(): string
+	{
+		return $this->effectiveCompression;
+	}
+
+	/**
+	 * FD-4: Return the codec fallback cause, or '' when no fallback occurred.
+	 *
+	 * @return string
+	 */
+	public function codecFallbackCause(): string
+	{
+		return $this->codecFallbackCause;
+	}
+
+	/**
+	 * FD-5: Return the current per-process dial count (for tests).
+	 *
+	 * @return int
+	 */
+	public static function getDialCount(): int
+	{
+		return self::$dialCount;
+	}
+
+	/**
+	 * FD-5: Reset the per-process dial count (for tests only).
+	 *
+	 * @return void
+	 */
+	public static function resetDialCount(): void
+	{
+		self::$dialCount = 0;
+	}
+
 	// -------------------------------------------------------------------------
 	// Private helpers
 	// -------------------------------------------------------------------------
@@ -215,19 +305,26 @@ final class RedisConnection
 		$attempts = max( 1, $retryCount );
 
 		for ( $attempt = 1; $attempt <= $attempts; $attempt++ ) {
-			// Decorrelated jitter: sleep before retry (not before first attempt).
-			if ( $attempt > 1 ) {
-				// random_int() is always available (PHP 7+) and works at drop-in
-				// load time before WordPress functions are defined; wp_rand() is a
-				// WP wrapper that is not guaranteed to be available this early.
-				$jitter = random_int( 0, min( $retryIntervalUs * $attempt, $maxJitterUs ) );
-				if ( $jitter > 0 ) {
-					usleep( $jitter );
-				}
+			// FD-5: enforce the per-process dial budget BEFORE dialing.
+			if ( self::$dialCount >= self::MAX_DIALS_PER_REQUEST ) {
+				throw new \RuntimeException( 'connect_budget_exhausted' );
 			}
 
 			try {
+				// FD-7: jitter inside the per-attempt try so an exotic Throwable
+				// from random_int (e.g. on exotic platforms) does not abort the loop.
+				if ( $attempt > 1 ) {
+					// random_int() is always available (PHP 7+) and works at drop-in
+					// load time before WordPress functions are defined; wp_rand() is a
+					// WP wrapper that is not guaranteed to be available this early.
+					$jitter = random_int( 0, min( $retryIntervalUs * $attempt, $maxJitterUs ) );
+					if ( $jitter > 0 ) {
+						usleep( $jitter );
+					}
+				}
+
 				$redis = new \Redis();
+				self::$dialCount++;
 
 				if ( $scheme === 'unix' && $socketPath !== '' ) {
 					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_pconnect -- phpredis API; not a file system operation
@@ -242,30 +339,60 @@ final class RedisConnection
 				}
 
 				// AUTH and SELECT are inside the retry loop.
+				// Scenario-c hardening: check return values explicitly; some builds
+				// return false instead of throwing on auth/select failure.
 				if ( $password !== '' ) {
 					if ( $username !== '' ) {
-						$redis->auth( [ $username, $password ] );
+						$authResult = $redis->auth( [ $username, $password ] );
 					} else {
-						$redis->auth( $password );
+						$authResult = $redis->auth( $password );
+					}
+					if ( $authResult !== true ) {
+						throw new \RuntimeException( 'Redis AUTH failed (returned false)' );
 					}
 				}
 
 				// Re-assert SELECT on persistent handles to prevent database leaks.
 				if ( $database !== 0 ) {
-					$redis->select( $database );
+					$selectResult = $redis->select( $database );
 				} else {
 					// Always SELECT 0 on persistent handles (defensive re-SELECT).
-					$redis->select( 0 );
+					$selectResult = $redis->select( 0 );
+				}
+				if ( $selectResult !== true ) {
+					throw new \RuntimeException( 'Redis SELECT failed (returned false)' );
 				}
 
-				// Set phpredis client options (H3: throws on unsupported codec).
+				// Set phpredis client options with graceful codec fallback (FD-4).
 				$this->applyClientOptions( $redis, $serializer, $compression, $readTimeout );
 
 				$this->reconnectAttempts++;
 				return $redis;
 
 			} catch ( \Throwable $e ) {
+				// FD-3a: explicitly close the handle before retrying so the FD is
+				// not stranded. Nested try/catch so a close failure does not mask
+				// the original exception.
+				if ( isset( $redis ) ) {
+					try {
+						$redis->close();
+					} catch ( \Throwable $closeEx ) {
+						// Best-effort close; proceed to next attempt.
+					}
+				}
+
+				// FD-7: journal each failed attempt (WP_DEBUG-gated).
+				if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic
+					error_log( 'WPMgr Object Cache: connect attempt ' . $attempt . '/' . $attempts . ' failed [' . get_class( $e ) . ']: ' . $e->getMessage() );
+				}
+
 				$lastException = $e;
+
+				// budget_exhausted is terminal: do not retry further.
+				if ( $e->getMessage() === 'connect_budget_exhausted' ) {
+					break;
+				}
 			}
 		}
 
@@ -287,17 +414,18 @@ final class RedisConnection
 	 * @return void
 	 */
 	/**
-	 * Apply phpredis client options with H3 capability negotiation.
-	 * Throws a RuntimeException when a configured codec is unavailable —
-	 * the boot path will land in array mode with cause 'unsupported_codec'.
+	 * FD-4: Apply phpredis client options with graceful codec fallback.
+	 * Unlike the previous H3 approach, this NEVER throws after a successful
+	 * pconnect. Instead, unsupported serializers fall back to SERIALIZER_PHP and
+	 * unsupported compression falls back to none. The effective values are
+	 * recorded on $this for use by checkMetadataIntegrity().
 	 *
 	 * @param \Redis  $redis       Client handle.
 	 * @param string  $serializer  Serializer: 'php' | 'igbinary'.
 	 * @param string  $compression Compression: 'none' | 'lzf' | 'lz4' | 'zstd'.
 	 * @param float   $readTimeout Read timeout in seconds.
-	 * @param array<string,mixed>|null $capabilityMap Injectable capability map for tests (H3).
+	 * @param array<string,mixed>|null $capabilityMap Injectable capability map for tests.
 	 * @return void
-	 * @throws \RuntimeException When a configured codec is not available in the runtime.
 	 */
 	private function applyClientOptions(
 		\Redis $redis,
@@ -306,45 +434,69 @@ final class RedisConnection
 		float $readTimeout,
 		?array $capabilityMap = null
 	): void {
-		// H3: capability check before applying options.
+		// FD-4: capability check before applying options.
 		$caps = $capabilityMap ?? self::runtimeCapabilityMap();
 
-		// Serializer.
+		// Serializer: fall back to PHP on any unavailability or setOption failure.
+		$resolvedSerializer = 'php';
 		if ( $serializer === 'igbinary' ) {
-			if ( ! ( $caps['igbinary_available'] ?? false ) ) {
-				// H3: configured-but-unsupported codec: throw so boot lands in unsupported_codec mode.
-				throw new \RuntimeException(
-					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
-					'WPMgr Object Cache: serializer igbinary configured but igbinary extension is not loaded (unsupported_codec)'
-				);
+			if ( ( $caps['igbinary_available'] ?? false ) ) {
+				$setResult = $redis->setOption( \Redis::OPT_SERIALIZER, (string) constant( 'Redis::SERIALIZER_IGBINARY' ) );
+				if ( $setResult !== false ) {
+					$resolvedSerializer = 'igbinary';
+				} else {
+					// setOption returned false: igbinary unavailable at runtime.
+					$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
+					if ( $this->codecFallbackCause === '' ) {
+						$this->codecFallbackCause = 'igbinary_setOption_failed';
+					}
+				}
+			} else {
+				// igbinary extension not loaded: fall back silently.
+				$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
+				if ( $this->codecFallbackCause === '' ) {
+					$this->codecFallbackCause = 'igbinary_unavailable';
+				}
 			}
-			$redis->setOption( \Redis::OPT_SERIALIZER, (string) constant( 'Redis::SERIALIZER_IGBINARY' ) );
 		} else {
 			$redis->setOption( \Redis::OPT_SERIALIZER, (string) \Redis::SERIALIZER_PHP );
 		}
+		$this->effectiveSerializer = $resolvedSerializer;
 
-		// Compression.
+		// Compression: fall back to none on any unavailability or setOption failure.
+		$resolvedCompression = 'none';
 		if ( $compression !== 'none' ) {
 			if ( ! defined( 'Redis::OPT_COMPRESSION' ) ) {
-				throw new \RuntimeException(
-					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
-					'WPMgr Object Cache: compression ' . $compression . ' configured but OPT_COMPRESSION is not available (unsupported_codec)'
-				);
+				// OPT_COMPRESSION constant absent: fall back to none.
+				if ( $this->codecFallbackCause === '' ) {
+					$this->codecFallbackCause = $compression . '_opt_unavailable';
+				}
+			} else {
+				$compressionMap = [
+					'lzf'  => ( $caps['lzf_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
+					'lz4'  => ( $caps['lz4_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
+					'zstd' => ( $caps['zstd_available'] ?? false ) && defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
+				];
+				$compressionConst = $compressionMap[ $compression ] ?? null;
+				if ( $compressionConst !== null ) {
+					$setResult = $redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
+					if ( $setResult !== false ) {
+						$resolvedCompression = $compression;
+					} else {
+						// setOption returned false: fall back to none.
+						if ( $this->codecFallbackCause === '' ) {
+							$this->codecFallbackCause = $compression . '_setOption_failed';
+						}
+					}
+				} else {
+					// Codec constant not defined or unavailable: fall back to none.
+					if ( $this->codecFallbackCause === '' ) {
+						$this->codecFallbackCause = $compression . '_unavailable';
+					}
+				}
 			}
-			$compressionMap = [
-				'lzf'  => ( $caps['lzf_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZF' ) ? constant( 'Redis::COMPRESSION_LZF' ) : null,
-				'lz4'  => ( $caps['lz4_available'] ?? false ) && defined( 'Redis::COMPRESSION_LZ4' ) ? constant( 'Redis::COMPRESSION_LZ4' ) : null,
-				'zstd' => ( $caps['zstd_available'] ?? false ) && defined( 'Redis::COMPRESSION_ZSTD' ) ? constant( 'Redis::COMPRESSION_ZSTD' ) : null,
-			];
-			$compressionConst = $compressionMap[ $compression ] ?? null;
-			if ( $compressionConst === null ) {
-				throw new \RuntimeException(
-					// phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- exception message, not browser output
-					'WPMgr Object Cache: compression ' . $compression . ' configured but not available in phpredis (unsupported_codec)'
-				);
-			}
-			$redis->setOption( constant( 'Redis::OPT_COMPRESSION' ), (string) $compressionConst );
 		}
+		$this->effectiveCompression = $resolvedCompression;
 
 		// Read timeout.
 		if ( $readTimeout > 0 ) {
@@ -417,8 +569,13 @@ final class RedisConnection
 			$this->redis->ping();
 			$this->lastUsed = microtime( true );
 		} catch ( \Throwable $e ) {
-			// Silent: reconnect on next acquire.
-			$this->redis = null;
+			// FD-3c: close the handle before nulling so the FD is not stranded.
+			try {
+				$this->redis->close();
+			} catch ( \Throwable $closeEx ) {
+				// Best-effort close.
+			}
+			$this->redis    = null;
 			$this->degraded = true;
 		}
 	}
