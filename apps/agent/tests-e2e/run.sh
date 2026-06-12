@@ -124,7 +124,7 @@ done
 echo "[e2e] Step 5: provision..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress php /usr/local/bin/wpmgr-assert.php provision
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php provision
 
 # -----------------------------------------------------------------------
 # Step 6: assert-cli stage.
@@ -132,7 +132,7 @@ docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
 echo "[e2e] Step 6: assert-cli..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress php /usr/local/bin/wpmgr-assert.php assert-cli
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php assert-cli
 
 # -----------------------------------------------------------------------
 # Step 7: CROSS-REQUEST PERSISTENCE (FIX A direct regression net).
@@ -153,37 +153,54 @@ PROBE_MU_PLUGIN="$(cat <<'MUEOF'
 /**
  * E2E cross-request persistence probe.
  * Responds to ?wpmgr_e2e_probe=1 with a JSON body.
+ *
+ * The response includes:
+ *   - 'engine_state'   — live state from getHeartbeatStats()['state'] (connected/
+ *                        degraded/down/disabled). A non-connected state means the
+ *                        web SAPI booted in array mode (e.g. config_unreadable due
+ *                        to a root:root ownership trap) and persistence cannot work.
+ *   - 'marker_present' — whether the outage failback marker is set in wp-options
+ *                        (forensics for spurious flush between requests).
  */
 if ( isset( $_GET['wpmgr_e2e_probe'] ) ) {
     $action = sanitize_key( $_GET['wpmgr_e2e_probe'] );
+    $oc = $GLOBALS['wp_object_cache'] ?? null;
+    $engineState = null;
+    if ( $oc instanceof WPMgr_Object_Cache ) {
+        $hbStats = $oc->getHeartbeatStats();
+        $engineState = $hbStats['state'] ?? null;
+    }
+    $markerPresent = class_exists( 'WPMgr_Object_Cache' )
+        ? ( get_option( WPMgr_Object_Cache::FAILBACK_MARKER_OPTION, false ) !== false )
+        : null;
     if ( $action === 'set' ) {
         wp_cache_set( 'e2e_persist', 'x', 'e2e', 300 );
         $found = false;
         $val   = wp_cache_get( 'e2e_persist', 'e2e', false, $found );
-        $stats = $GLOBALS['wp_object_cache'] instanceof WPMgr_Object_Cache
-            ? $GLOBALS['wp_object_cache']->getHeartbeatStats()
-            : [];
         header( 'Content-Type: application/json' );
         echo wp_json_encode( [
-            'action'    => 'set',
-            'found'     => $found,
-            'val'       => $val,
-            'hit_count' => $stats['hit_count'] ?? ( $GLOBALS['wp_object_cache']->cache_hits ?? -1 ),
+            'action'         => 'set',
+            'found'          => $found,
+            'val'            => $val,
+            'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
+            'engine_state'   => $engineState,
+            'last_error'     => $oc instanceof WPMgr_Object_Cache ? ( $hbStats['last_error_class'] ?? '' ) : '',
+            'marker_present' => $markerPresent,
         ] );
         exit;
     }
     if ( $action === 'get' ) {
         $found = false;
         $val   = wp_cache_get( 'e2e_persist', 'e2e', false, $found );
-        $stats = $GLOBALS['wp_object_cache'] instanceof WPMgr_Object_Cache
-            ? $GLOBALS['wp_object_cache']->getHeartbeatStats()
-            : [];
         header( 'Content-Type: application/json' );
         echo wp_json_encode( [
-            'action'    => 'get',
-            'found'     => $found,
-            'val'       => $val,
-            'hit_count' => $GLOBALS['wp_object_cache']->cache_hits ?? -1,
+            'action'         => 'get',
+            'found'          => $found,
+            'val'            => $val,
+            'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
+            'engine_state'   => $engineState,
+            'last_error'     => $oc instanceof WPMgr_Object_Cache ? ( $hbStats['last_error_class'] ?? '' ) : '',
+            'marker_present' => $markerPresent,
         ] );
         exit;
     }
@@ -194,7 +211,7 @@ MUEOF
 # Write the mu-plugin inside the container.
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress bash -c \
+    exec -T -u www-data wordpress bash -c \
     "mkdir -p /var/www/html/wp-content/mu-plugins && cat > /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php" \
     <<< "${PROBE_MU_PLUGIN}"
 
@@ -204,10 +221,38 @@ RESP1="$(docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     exec -T wordpress curl -s 'http://localhost/?wpmgr_e2e_probe=set')"
 echo "[e2e] Probe set response: ${RESP1}"
 SET_FOUND="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("found","")).lower())' 2>/dev/null || echo 'error')"
+ENGINE_STATE_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("engine_state","unknown")))' 2>/dev/null || echo 'unknown')"
+MARKER_AFTER_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("marker_present","unknown")).lower())' 2>/dev/null || echo 'unknown')"
+echo "[e2e] Request 1 engine_state=${ENGINE_STATE_SET} marker_present=${MARKER_AFTER_SET}"
+
+# Assert state=connected first: if the web engine is degraded/disabled, cross-request
+# persistence is impossible and the root cause is an ownership/permissions problem on
+# the config file, not a flush issue.
+if [ "${ENGINE_STATE_SET}" != "connected" ]; then
+    LAST_ERROR_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("last_error","")))' 2>/dev/null || echo 'unknown')"
+    echo "[e2e] ERROR: web SAPI engine not connected on request 1 (state=${ENGINE_STATE_SET}, last_error=${LAST_ERROR_SET})." >&2
+    echo "[e2e] Forensics: wp-content file ownership and cool-down state:" >&2
+    docker compose -f "${COMPOSE_DIR}/docker-compose.yml" --project-name wpmgr-agent-e2e \
+        exec -T wordpress sh -c 'ls -la /var/www/html/wp-content/ | grep -iE "object-cache|wpmgr|oc-state"; echo "--- state file:"; cat /var/www/html/wp-content/.wpmgr-oc-state.json 2>/dev/null || echo "(no state file)"' >&2 || true
+    echo "[e2e] Last WordPress container log lines:" >&2
+    docker compose -f "${COMPOSE_DIR}/docker-compose.yml" --project-name wpmgr-agent-e2e \
+        logs --tail 25 wordpress >&2 || true
+    exit 1
+fi
+
 if [ "${SET_FOUND}" != "true" ]; then
     echo "[e2e] ERROR: Set+get in same request must find the value; got found=${SET_FOUND}" >&2
     exit 1
 fi
+
+# Forensics: read the DB directly between request 1 and request 2 to surface
+# whether an outage marker was written by the request-1 shutdown path.
+# This is diagnostic only (non-fatal) — it explains a found=false failure.
+echo "[e2e] Forensics: reading outage marker state between requests..."
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T -u www-data wordpress php /usr/local/bin/wpmgr-assert.php outage-failback-forensics \
+    || echo "[e2e] WARN: forensics stage returned non-zero (non-fatal)"
 
 # Request 2: get the value (cross-request persistence).
 RESP2="$(docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
@@ -216,10 +261,14 @@ RESP2="$(docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
 echo "[e2e] Probe get response: ${RESP2}"
 GET_FOUND="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("found","")).lower())' 2>/dev/null || echo 'error')"
 HIT_COUNT="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("hit_count",0))' 2>/dev/null || echo '0')"
+ENGINE_STATE_GET="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("engine_state","unknown")))' 2>/dev/null || echo 'unknown')"
+MARKER_AFTER_GET="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("marker_present","unknown")).lower())' 2>/dev/null || echo 'unknown')"
+echo "[e2e] Request 2 engine_state=${ENGINE_STATE_GET} marker_present=${MARKER_AFTER_GET}"
 
 if [ "${GET_FOUND}" != "true" ]; then
-    echo "[e2e] ERROR: Cross-request persistence FAILED (FIX A regression): found=${GET_FOUND}." >&2
-    echo "[e2e] This means the failback flush fired between requests and wiped the cache." >&2
+    echo "[e2e] ERROR: value did not persist across requests (FIX A regression): found=${GET_FOUND}." >&2
+    echo "[e2e] Forensics: engine_state_req1=${ENGINE_STATE_SET} engine_state_req2=${ENGINE_STATE_GET}" >&2
+    echo "[e2e]            marker_after_set=${MARKER_AFTER_SET} marker_after_get=${MARKER_AFTER_GET}" >&2
     exit 1
 fi
 if [ "${HIT_COUNT}" -le 0 ] 2>/dev/null; then
@@ -230,7 +279,7 @@ echo "[e2e] PASS: Cross-request persistence: found=true, hit_count=${HIT_COUNT}"
 # Remove the probe mu-plugin.
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
-    exec -T wordpress rm -f /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php
+    exec -T -u www-data wordpress rm -f /var/www/html/wp-content/mu-plugins/e2e-persist-probe.php
 
 # -----------------------------------------------------------------------
 # Step 8: Drop-in freshness guard.

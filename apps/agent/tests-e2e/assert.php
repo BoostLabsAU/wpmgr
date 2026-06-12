@@ -16,7 +16,8 @@
  *   multisite-check  — (multisite container) switch_to_blog isolation + global group invariant.
  *   installing-check — WP_INSTALLING defined; assert wp_cache_set reaches Redis (H6).
  *   cli-uid-check    — non-owner uid wp cache flush returns non-zero + Redis key survives (H7).
- *   outage-failback  — sentinel key, stop redis, request, start redis, request; assert flush (H5).
+ *   outage-failback          — sentinel key, stop redis, request, start redis, request; assert flush (H5).
+ *   outage-failback-forensics — read DB marker state between outage requests; diagnostic only (non-fatal).
  *   fd-bomb          — boot on fresh worker; assert /proc/self/fd delta < 10 (FD-1/FD-2).
  *   codec-fallback   — push igbinary config into igbinary-less container; assert serializer_effective=php (FD-4).
  *   disable          — uninstall drop-in + config, assert clean (extended teardown asserts).
@@ -488,6 +489,7 @@ PHP;
     $cause = $diagnosis['cause'] ?? '';
     $validCauses = [
         'early_definition',
+        'engine_replaced',
         'stale_opcache_suspected',
         'engine_not_loaded',
         'engine_boot_incomplete',
@@ -506,12 +508,8 @@ PHP;
 // Stage: disable
 // ============================================================================
 if ($stage === 'disable') {
-    // 1. Deactivate and uninstall the plugin.
-    $exit = wp('plugin deactivate ' . escapeshellarg($pluginSlug), $out);
-    // Deactivate may fail if plugin name varies; tolerate.
-    pass('Plugin deactivated (or not found)');
-
-    // 2. Run the drop-in uninstaller via wp eval.
+    // 1. Run the drop-in uninstaller via wp eval WHILE the plugin is still
+    //    active (the installer class needs the plugin autoloader).
     $uninstallCode = <<<'PHP'
 $installer = new WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller();
 $result = $installer->uninstall();
@@ -525,6 +523,11 @@ PHP;
         fail('Uninstall returned not-uninstalled: ' . $out);
     }
     pass('Drop-in uninstalled');
+
+    // 2. Deactivate the plugin now that the uninstaller has run.
+    $exit = wp('plugin deactivate ' . escapeshellarg($pluginSlug), $out);
+    // Deactivate may fail if plugin name varies; tolerate.
+    pass('Plugin deactivated (or not found)');
 
     // 3. Assert object-cache.php is gone from wp-content.
     $dropinPath = '/var/www/html/wp-content/object-cache.php';
@@ -751,6 +754,51 @@ PHP;
 }
 
 // ============================================================================
+// Stage: outage-failback-forensics
+// ============================================================================
+if ($stage === 'outage-failback-forensics') {
+    // Cross-request persistence forensics: called from run.sh between request 1
+    // (which fires during the Redis outage) and request 2 (first healthy boot).
+    // Reads the DB directly via wp option get to report whether the outage marker
+    // is present, and emits a line that run.sh captures in the test log.
+    //
+    // This stage is intentionally non-fatal: it is purely diagnostic. The actual
+    // pass/fail for the cross-request persistence assertion lives in run.sh.
+    $markerReadCode = <<<'PHP'
+$markerOption = WPMgr_Object_Cache::FAILBACK_MARKER_OPTION;
+$marker = get_option($markerOption, false);
+echo json_encode([
+    'marker_present' => ($marker !== false),
+    'marker_value'   => is_string($marker) ? $marker : null,
+    'checked_at'     => microtime(true),
+]);
+PHP;
+    $exit = wp('eval ' . escapeshellarg($markerReadCode), $out);
+    if ($exit !== 0) {
+        // Non-fatal: print the failure and exit 0 so run.sh continues.
+        fwrite(STDERR, "WARN [outage-failback-forensics]: wp eval failed (exit={$exit}): {$out}\n");
+        echo json_encode(['marker_present' => null, 'error' => 'eval_failed']) . "\n";
+        exit(0);
+    }
+    $forensics = json_decode(trim($out), true);
+    if (!is_array($forensics)) {
+        echo json_encode(['marker_present' => null, 'raw' => $out]) . "\n";
+        exit(0);
+    }
+    echo json_encode($forensics) . "\n";
+    $present = $forensics['marker_present'] ?? null;
+    if ($present === true) {
+        pass(sprintf(
+            'outage-failback-forensics: outage marker IS present between requests (marker_ts=%s) — failback flush expected on next healthy boot',
+            $forensics['marker_value'] ?? 'unknown'
+        ));
+    } else {
+        pass('outage-failback-forensics: outage marker is absent between requests (no flush will fire)');
+    }
+    exit(0);
+}
+
+// ============================================================================
 // Stage: fd-bomb
 // ============================================================================
 if ($stage === 'fd-bomb') {
@@ -839,41 +887,25 @@ if ($stage === 'codec-fallback') {
     //   2. serializer_effective = php (fallback confirmed).
     //   3. The site continues to serve HTTP 200.
 
-    // Read the current config path from WordPress constants.
-    $configPathCode = 'echo defined("WP_CONTENT_DIR") ? WP_CONTENT_DIR . "/.wpmgr-oc-config.json" : "";';
-    $configPathExit = wp('eval ' . escapeshellarg($configPathCode), $configPath);
-    $configPath = trim($configPath);
-    if ($configPathExit !== 0 || $configPath === '') {
-        fail('codec-fallback: could not resolve config path via WP_CONTENT_DIR');
-    }
-
-    // Read current config.
-    $readExit = run('cat ' . escapeshellarg($configPath), $currentConfig);
-    if ($readExit !== 0) {
-        // Config may not exist if Redis was never set up; treat as skip.
-        fwrite(STDERR, "SKIP [codec-fallback]: config file not found at {$configPath}; skipping (Redis not provisioned).\n");
+    // Read the current config via the engine loader, then write it back with
+    // serializer=igbinary through the engine writer (atomic + opcache invalidate).
+    $readConfigCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig(); echo json_encode($cfg->load());';
+    $readExit = wp('eval ' . escapeshellarg($readConfigCode), $currentConfig);
+    $config = json_decode(trim((string) $currentConfig), true);
+    if ($readExit !== 0 || !is_array($config) || $config === []) {
+        fwrite(STDERR, "SKIP [codec-fallback]: config not loadable; skipping (Redis not provisioned).\n");
         exit(0);
     }
 
-    $config = json_decode($currentConfig, true);
-    if (! is_array($config)) {
-        fwrite(STDERR, "SKIP [codec-fallback]: config not valid JSON; skipping.\n");
-        exit(0);
-    }
-
-    // Inject igbinary as the requested serializer.
     $originalSerializer = $config['serializer'] ?? 'php';
     $config['serializer'] = 'igbinary';
-    $patchedConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-
-    // Write patched config (0600, preserve owner).
-    $writeCmd = 'bash -c ' . escapeshellarg(
-        'echo ' . escapeshellarg($patchedConfig) . ' > ' . escapeshellarg($configPath) .
-        ' && chmod 600 ' . escapeshellarg($configPath)
-    );
-    $writeExit = run($writeCmd, $writeOut);
-    if ($writeExit !== 0) {
-        fail('codec-fallback: failed to write patched config: ' . $writeOut);
+    $b64 = base64_encode((string) json_encode($config));
+    $writeCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+        . '$c = json_decode(base64_decode("' . $b64 . '"), true);'
+        . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+    $writeExit = wp('eval ' . escapeshellarg($writeCode), $writeOut);
+    if ($writeExit !== 0 || strpos((string) $writeOut, 'saved') === false) {
+        fail('codec-fallback: failed to write patched config via engine writer: ' . (string) $writeOut);
     }
 
     // Trigger a fresh boot by calling WP-CLI (new PHP worker = fresh static state).
@@ -886,7 +918,7 @@ if (! $oc instanceof WPMgr_Object_Cache) {
 }
 $stats = $oc->getHeartbeatStats();
 echo json_encode([
-    'status'               => $stats['status'] ?? 'unknown',
+    'status'               => $stats['state'] ?? 'unknown',
     'serializer_effective' => $stats['serializer_effective'] ?? 'unknown',
     'codec_fallback'       => $stats['codec_fallback'] ?? '',
     'is_array_mode'        => $oc->isArrayMode(),
@@ -896,12 +928,11 @@ PHP;
 
     // Restore original serializer regardless of outcome.
     $config['serializer'] = $originalSerializer;
-    $restoredConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-    $restoreCmd = 'bash -c ' . escapeshellarg(
-        'echo ' . escapeshellarg($restoredConfig) . ' > ' . escapeshellarg($configPath) .
-        ' && chmod 600 ' . escapeshellarg($configPath)
-    );
-    run($restoreCmd, $restoreOut);
+    $restoreB64 = base64_encode((string) json_encode($config));
+    $restoreCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+        . '$c = json_decode(base64_decode("' . $restoreB64 . '"), true);'
+        . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+    wp('eval ' . escapeshellarg($restoreCode), $restoreOut);
 
     if ($hbExit !== 0) {
         fail('codec-fallback: WP-CLI eval failed after patching config: ' . $hbOut);
@@ -979,13 +1010,25 @@ PHP;
         fail('debug-header: config JSON was not an array: ' . $configJson);
     }
 
-    // Helper: write the config with debug_header_enabled set to a given value.
+    // Helper: write the config through the engine's own writer so the change
+    // gets the production path: atomic write, 0600, ownership alignment, and
+    // opcache invalidation (a raw file write is served stale by opcache).
     $writeConfig = static function (array $cfg, bool $debugEnabled, string $configPath): void {
+        unset($configPath);
         $cfg['debug_header_enabled'] = $debugEnabled;
-        $phpArray = var_export($cfg, true);
-        $src = "<?php\ndefined( 'ABSPATH' ) || exit;\nreturn {$phpArray};\n";
-        file_put_contents($configPath, $src);
-        chmod($configPath, 0600);
+        $b64  = base64_encode((string) json_encode($cfg));
+        $code = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+              . '$c = json_decode(base64_decode("' . $b64 . '"), true);'
+              . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+        $exit = wp('eval ' . escapeshellarg($code), $out);
+        if ($exit !== 0 || strpos((string) $out, 'saved') === false) {
+            fail('debug-header: config save via engine writer failed: ' . (string) $out);
+        }
+        // The save ran in the CLI SAPI; the web SAPI's opcache revalidates the
+        // config file on its own clock (default 2s). Wait it out so the next
+        // front-end request reads the fresh config. Production is unaffected:
+        // real config pushes arrive via web requests in the same SAPI.
+        sleep(3);
     };
 
     // -----------------------------------------------------------------------
@@ -1079,5 +1122,5 @@ PHP;
 }
 
 // Unknown stage.
-fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, fd-bomb, codec-fallback, debug-header, disable\n");
+fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, outage-failback-forensics, fd-bomb, codec-fallback, debug-header, disable\n");
 exit(1);

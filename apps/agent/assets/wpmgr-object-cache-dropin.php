@@ -1,7 +1,7 @@
 <?php
 /**
  * WPMgr Object Cache drop-in
- * Version: 2.2.0
+ * Version: 2.2.1
  *
  * Self-contained object-cache.php drop-in for WordPress. All engine classes are
  * inlined; no external file resolution can fail after installation.
@@ -17,7 +17,7 @@ namespace {
 
 	// Breadcrumb: set immediately after ABSPATH guard so the heartbeat can detect
 	// whether the drop-in was executed at all and identify early-bail causes.
-	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.2.0', 'bail' => null ];
+	$GLOBALS['wpmgr_oc_stub'] = [ 'v' => '2.2.1', 'bail' => null ];
 
 	// PHP floor: the engine uses PHP 8.1 features.
 	if ( PHP_VERSION_ID < 80100 ) {
@@ -264,6 +264,32 @@ final class ObjectCacheConfig
 		if ( ! @rename( $tmp, $this->filePath ) ) {
 			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup of a failed rename on a tmp file in the same dir; wp_delete_file() is equivalent for non-attachment files
 			return false;
+		}
+
+		// Ownership alignment: when a privileged process writes the config (a
+		// command line provisioning step), the 0600 file is unreadable by the web
+		// server user and the web SAPI silently runs the cache in array mode.
+		// The target owner is whoever owns the WordPress core entry file the web
+		// server demonstrably serves (ABSPATH/index.php), falling back to the
+		// containing directory. The chown attempt is unconditional: it only
+		// succeeds when this process is privileged, and fails silently otherwise.
+		try {
+			$refFile = defined( 'ABSPATH' ) ? constant( 'ABSPATH' ) . 'index.php' : '';
+			$ref     = ( $refFile !== '' && @is_file( $refFile ) ) ? $refFile : dirname( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort reference probe
+			$owner   = @fileowner( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chown
+			$group   = @filegroup( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chgrp
+			$current = @fileowner( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort current-owner probe
+			if ( $owner !== false && $owner !== 0 && $owner !== $current ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort ownership alignment; never fatal
+				@chown( $this->filePath, $owner );
+				if ( $group !== false ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort group alignment; never fatal
+					@chgrp( $this->filePath, $group );
+				}
+			}
+		} catch ( \Throwable $_ ) {
+			// Best-effort: chown/chgrp failed; the file remains as written but
+			// save() still succeeds so the config is persisted.
 		}
 
 		// Invalidate opcache so a credential rotation is not silently served from
@@ -1178,7 +1204,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.43.0';
+	public const ENGINE_VERSION = '0.43.1';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -1310,6 +1336,16 @@ class WPMgr_Object_Cache
 
 	/** @var bool Whether we already ran the failback flush this boot. */
 	private bool $failbackFlushed = false;
+
+	/**
+	 * True once the PHP-shutdown path has entered shutdown().
+	 * A Redis failure that occurs during persistStats() at shutdown is not
+	 * an actionable outage — the process is dying. When this flag is set,
+	 * redisOp()'s error handler skips both markDegraded-side
+	 * persistOutageMarker() and the marker write, while still degrading
+	 * in-memory so the fallback path executes gracefully.
+	 */
+	private bool $inShutdown = false;
 
 	/** @var array<string,mixed> Loaded config array. */
 	private array $config = [];
@@ -2283,6 +2319,9 @@ class WPMgr_Object_Cache
 	 */
 	public function shutdown(): void
 	{
+		// Mark the shutdown path so that any Redis failure inside persistStats()
+		// does not write a spurious outage marker (the process is already dying).
+		$this->inShutdown = true;
 		try {
 			$this->persistStats();
 		} catch ( \Throwable $e ) {
@@ -2817,9 +2856,13 @@ class WPMgr_Object_Cache
 			$this->journalError( get_class( $e ), $e->getMessage() );
 
 			// H5: persist the outage marker immediately on first degradation.
+			// Exception: skip the marker write during PHP shutdown (process is
+			// dying; a Redis failure in persistStats is not an actionable outage).
 			if ( $this->connection !== null && ! $this->connection->isDegraded() ) {
 				$this->connection->markDegraded();
-				$this->persistOutageMarker();
+				if ( ! $this->inShutdown ) {
+					$this->persistOutageMarker();
+				}
 			} elseif ( $this->connection !== null ) {
 				$this->connection->markDegraded();
 			}
@@ -3120,6 +3163,29 @@ class WPMgr_Object_Cache
 		umask( $prev );
 		if ( $written !== false ) {
 			@rename( $tmp, $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic move; WP_Filesystem::move() is non-atomic
+
+			// Ownership alignment: a privileged writer (command line provisioning)
+			// leaves the state file unreadable by the web server user. Target the
+			// owner of the WordPress core entry file the web server serves; the
+			// chown attempt only succeeds for privileged processes and fails
+			// silently otherwise. Never blocks the state write.
+			try {
+				$refFile = defined( 'ABSPATH' ) ? constant( 'ABSPATH' ) . 'index.php' : '';
+				$ref     = ( $refFile !== '' && @is_file( $refFile ) ) ? $refFile : dirname( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort reference probe
+				$owner   = @fileowner( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure skips chown
+				$group   = @filegroup( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure skips chgrp
+				$current = @fileowner( $path ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort current-owner probe
+				if ( $owner !== false && $owner !== 0 && $owner !== $current ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort ownership alignment; never fatal
+					@chown( $path, $owner );
+					if ( $group !== false ) {
+						// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort group alignment; never fatal
+						@chgrp( $path, $group );
+					}
+				}
+			} catch ( \Throwable $_ ) {
+				// Best-effort: chown/chgrp failed; state file still written.
+			}
 		} else {
 			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup tmp file on failure
 		}
@@ -3208,6 +3274,14 @@ class WPMgr_Object_Cache
 	 */
 	private function persistOutageMarker(): void
 	{
+		// Skip during PHP shutdown: the process is dying and this is not an
+		// actionable outage. The guard in redisOp() prevents reaching here in
+		// the normal code path; this inner guard makes the contract testable
+		// even when the method is called directly (e.g. from reflection-based
+		// unit tests that set $inShutdown = true).
+		if ( $this->inShutdown ) {
+			return;
+		}
 		if ( ! function_exists( 'update_option' ) ) {
 			return;
 		}
@@ -3257,8 +3331,21 @@ class WPMgr_Object_Cache
 
 		$this->failbackFlushed = true;
 		try {
-			$this->executeFlush( 'all' );
+			// H5 FIX: delete the marker BEFORE flushing. FLUSHDB wipes the NX
+			// lock key written above; if the marker delete happened after the
+			// flush it would be racing against the now-absent lock, allowing a
+			// second healthy-boot request to see the marker and flush again.
 			delete_option( self::FAILBACK_MARKER_OPTION );
+			$this->executeFlush( 'all' );
+			// WP_DEBUG forensics: log when a failback flush actually fires so the
+			// E2E container log reveals whether and why a flush occurred.
+			if ( defined( 'WP_DEBUG' ) && WP_DEBUG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic journal; not shipped to end-users
+				error_log( sprintf(
+					'wpmgr-object-cache: failback flush executed (marker_ts=%s)',
+					is_string( $marker ) ? $marker : 'unknown'
+				) );
+			}
 		} catch ( \Throwable $e ) {
 			$this->journalError( 'failback_flush_failed', $e->getMessage() );
 		}

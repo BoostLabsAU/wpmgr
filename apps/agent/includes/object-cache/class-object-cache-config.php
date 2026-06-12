@@ -219,6 +219,32 @@ final class ObjectCacheConfig
 			return false;
 		}
 
+		// Ownership alignment: when a privileged process writes the config (a
+		// command line provisioning step), the 0600 file is unreadable by the web
+		// server user and the web SAPI silently runs the cache in array mode.
+		// The target owner is whoever owns the WordPress core entry file the web
+		// server demonstrably serves (ABSPATH/index.php), falling back to the
+		// containing directory. The chown attempt is unconditional: it only
+		// succeeds when this process is privileged, and fails silently otherwise.
+		try {
+			$refFile = defined( 'ABSPATH' ) ? constant( 'ABSPATH' ) . 'index.php' : '';
+			$ref     = ( $refFile !== '' && @is_file( $refFile ) ) ? $refFile : dirname( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort reference probe
+			$owner   = @fileowner( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chown
+			$group   = @filegroup( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chgrp
+			$current = @fileowner( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort current-owner probe
+			if ( $owner !== false && $owner !== 0 && $owner !== $current ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort ownership alignment; never fatal
+				@chown( $this->filePath, $owner );
+				if ( $group !== false ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort group alignment; never fatal
+					@chgrp( $this->filePath, $group );
+				}
+			}
+		} catch ( \Throwable $_ ) {
+			// Best-effort: chown/chgrp failed; the file remains as written but
+			// save() still succeeds so the config is persisted.
+		}
+
 		// Invalidate opcache so a credential rotation is not silently served from
 		// stale bytecode on validate_timestamps=0 hosts (S7).
 		if ( function_exists( 'opcache_invalidate' ) ) {
