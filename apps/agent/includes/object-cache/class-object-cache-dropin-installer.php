@@ -291,7 +291,9 @@ final class ObjectCacheDropinInstaller
 		}
 		$count = 0;
 
-		$optionsTable = $wpdb->options ?? '';
+		// Identifier defense in depth: $wpdb->options is a trusted core property,
+		// but escape it anyway so static analysis can verify the query.
+		$optionsTable = esc_sql( $wpdb->options ?? '' );
 		if ( $optionsTable !== '' ) {
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- no WP API for bulk transient delete; anti-replay / transient purge; caching would defeat the purpose
 			$count += (int) $wpdb->query(

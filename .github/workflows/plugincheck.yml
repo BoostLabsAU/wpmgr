@@ -43,9 +43,14 @@ jobs:
         run: make agent-zip-wporg VERSION="${{ inputs.version }}"
 
       - name: Run Plugin Check
+        # Runs the check runner directly against the zip built in the previous
+        # step (make agent-plugincheck would rebuild the vendor tree, which
+        # fights the composer cache on CI runners).
         # shell: bash enables pipefail so the tee cannot mask a failing check.
         shell: bash
-        run: make agent-plugincheck VERSION="${{ inputs.version }}" | tee plugincheck-report.txt
+        run: |
+          chmod +x tools/plugincheck/run.sh
+          PLUGIN_ZIP="$PWD/release/fleet-agent-for-wpmgr.zip" ./tools/plugincheck/run.sh | tee plugincheck-report.txt
 
       - name: Upload zip and report
         if: always()
