@@ -4,6 +4,7 @@ import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { toast } from "@/components/toast";
 import {
   useSiteEvents,
+  useSiteReconnect,
   type SiteEvent,
 } from "@/features/sites/use-site-events";
 import { type OrphanItemKind } from "./useOrphanDelete";
@@ -611,4 +612,26 @@ export function usePerfEvents(siteId: string): void {
   );
 
   useSiteEvents(handler);
+
+  // On SSE reconnect, invalidate all TanStack Query state that is backed by a
+  // live server endpoint. This covers every perf surface that was relying on
+  // a missed SSE frame to drive a refresh (object-cache status pill, RUCSS
+  // results, cache stats, font results, RUM summary). Zustand-only stores
+  // (preload, rucss-store, db-scan, db-clean, fonts-store) require their own
+  // domain-specific re-hydration (handled in DatabaseSection for db-scan; the
+  // others only display transient progress and self-timeout via their stale-
+  // backstops, so they are acceptable as noted in the audit table).
+  const reconnectHandler = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: perfKeys.config(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.stats(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.rucss(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.fonts(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.objectCacheConfig(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.objectCacheStats(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.cacheHealth(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.rumSummary(siteId) });
+    void qc.invalidateQueries({ queryKey: perfKeys.rum(siteId) });
+  }, [siteId, qc]);
+
+  useSiteReconnect(reconnectHandler);
 }

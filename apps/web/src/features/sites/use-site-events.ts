@@ -200,6 +200,9 @@ export function parseStateChanged(ev: SiteEvent): StateChangedData | null {
 
 export type SiteEventHandler = (event: SiteEvent) => void;
 
+/** Called whenever the shared stream successfully reconnects after a drop. */
+export type ReconnectHandler = () => void;
+
 // ---------------------------------------------------------------------------
 // Module-level shared EventSource
 // ---------------------------------------------------------------------------
@@ -209,11 +212,20 @@ const BACKOFF_BASE_MS = 1000;
 const BACKOFF_CAP_MS = 30000;
 
 const handlers = new Set<SiteEventHandler>();
+/** Subscribers that want a callback when the stream reconnects after a drop. */
+const reconnectHandlers = new Set<ReconnectHandler>();
 let source: EventSource | null = null;
 let lastEventId: string | null = null;
 let retryCount = 0;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let visibilityBound = false;
+/**
+ * True once the stream has made at least one successful open. When a
+ * subsequent open fires after an error we treat it as a reconnect and notify
+ * all `reconnectHandlers` so they can re-hydrate any server-state that may
+ * have changed while the stream was down.
+ */
+let hasOpenedOnce = false;
 
 function dispatch(event: SiteEvent): void {
   lastEventId = event.id;
@@ -287,6 +299,18 @@ function openSource(): void {
 
   es.onopen = () => {
     retryCount = 0; // healthy connection — reset backoff
+    if (hasOpenedOnce) {
+      // A subsequent open after a previous drop: notify reconnect subscribers
+      // so they can re-hydrate any state they may have missed while offline.
+      for (const rh of reconnectHandlers) {
+        try {
+          rh();
+        } catch {
+          // A throwing reconnect handler must not break the others.
+        }
+      }
+    }
+    hasOpenedOnce = true;
   };
 
   // Named events: attach the same frame handler to every known type. We also
@@ -337,6 +361,8 @@ function maybeStop(): void {
   }
   // Keep `lastEventId` so a later subscriber within the replay window can
   // resume rather than cold-start.
+  // Reset the reconnect sentinel so the next subscriber gets a fresh lifecycle.
+  hasOpenedOnce = false;
 }
 
 /**
@@ -352,6 +378,24 @@ export function useSiteEvents(handler: SiteEventHandler): void {
     return () => {
       handlers.delete(handler);
       maybeStop();
+    };
+  }, [handler]);
+}
+
+/**
+ * Subscribe to the shared stream reconnect signal. The callback fires whenever
+ * the EventSource successfully re-opens after a previous drop (e.g. after a
+ * 900 s LB cut or an API deploy). Use it to re-hydrate any server-state that
+ * may have changed while the stream was down and frames were being lost.
+ *
+ * The first open (cold start) does NOT fire the callback — only subsequent
+ * re-opens do. On unmount the subscription is automatically removed.
+ */
+export function useSiteReconnect(handler: ReconnectHandler): void {
+  useEffect(() => {
+    reconnectHandlers.add(handler);
+    return () => {
+      reconnectHandlers.delete(handler);
     };
   }, [handler]);
 }

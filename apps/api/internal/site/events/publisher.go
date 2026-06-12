@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -35,16 +36,38 @@ func NewPublisher(pool *db.Pool, clock domain.Clock) *Publisher {
 	return &Publisher{pool: pool, clock: clock}
 }
 
-// Publish mints the event_id (if the caller left it empty), persists the event
-// under the tenant's RLS scope, and fires NOTIFY in the same transaction so a
-// committed row is always announced. The event's ID and TS are filled in on the
-// supplied ev for the caller's convenience (e.g. so an SSE replay cursor lines
-// up), but Publish is one-way — failures are returned, not retried.
+// isValidULID reports whether s is a well-formed ULID: exactly 26 characters
+// drawn from the Crockford base32 alphabet. ULIDs always begin with '0' or '1'
+// (the timestamp epoch keeps the first character in that range for decades), so
+// a UUIDv4 (lower-case hex with dashes, starting with a random byte) will fail
+// here and be replaced. The check is intentionally strict: any non-ULID cursor
+// that reaches the SSE bus — including a caller-supplied UUID — poisons the
+// dedupe comparator and must be rejected at the choke point.
+func isValidULID(s string) bool {
+	if len(s) != 26 {
+		return false
+	}
+	return strings.IndexFunc(s, func(r rune) bool {
+		return strings.IndexRune("0123456789ABCDEFGHJKMNPQRSTVWXYZ", r) < 0
+	}) == -1
+}
+
+// Publish mints the event_id (if the caller left it empty or supplied a
+// non-ULID value), persists the event under the tenant's RLS scope, and fires
+// NOTIFY in the same transaction so a committed row is always announced. The
+// event's ID and TS are filled in on the supplied ev for the caller's
+// convenience (e.g. so an SSE replay cursor lines up), but Publish is one-way
+// — failures are returned, not retried.
+//
+// Enforcement: any caller-supplied ID that is not a valid ULID (including an
+// empty string or a UUIDv4) is REPLACED with a freshly minted ULID. This makes
+// lexicographic monotonicity of event IDs an unbreakable invariant regardless
+// of future callers — see ADR-038.
 func (p *Publisher) Publish(ctx context.Context, ev site.ConnectionEvent) error {
 	if ev.TenantID == uuid.Nil {
 		return domain.Validation("event_tenant_required", "connection event requires a tenant_id")
 	}
-	if ev.ID == "" {
+	if !isValidULID(ev.ID) {
 		ev.ID = NewULID(p.clock.Now())
 	}
 	if ev.TS.IsZero() {

@@ -157,6 +157,15 @@ func (h *Handler) stream(c *gin.Context) {
 	if since == "" {
 		since = c.GetHeader("Last-Event-ID")
 	}
+	// Self-heal poisoned cursors: if the inbound cursor is not a valid ULID
+	// (e.g. a UUIDv4 from a caller that pre-set IDs before the enforcement fix
+	// in publisher.go), treat it as absent so the client gets the full live
+	// stream without a replay attempt and without poisoning the dedupe
+	// comparator. Long-lived tabs holding a UUID cursor recover without a
+	// forced reload — see ADR-038.
+	if !isValidULID(since) {
+		since = ""
+	}
 	lastSent := since
 	if since != "" {
 		replayed, err := h.replay(ctx, tenantID, since)

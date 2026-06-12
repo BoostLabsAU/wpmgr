@@ -287,7 +287,6 @@ func (s *Service) Test(ctx context.Context, tenantID, siteID uuid.UUID, password
 
 	// Publish SSE event.
 	_ = s.publisher.Publish(ctx, site.ConnectionEvent{
-		ID:       uuid.New().String(),
 		Type:     site.EventObjectCacheTestCompleted,
 		TenantID: tenantID,
 		SiteID:   siteID,
@@ -413,7 +412,6 @@ func (s *Service) Flush(ctx context.Context, input FlushInput) (string, error) {
 	}
 
 	_ = s.publisher.Publish(ctx, site.ConnectionEvent{
-		ID:       uuid.New().String(),
 		Type:     site.EventObjectCacheFlushed,
 		TenantID: input.TenantID,
 		SiteID:   input.SiteID,
@@ -520,7 +518,6 @@ func (s *Service) IngestHeartbeat(ctx context.Context, tenantID, siteID uuid.UUI
 
 	if string(block.State) != string(prevState) {
 		_ = s.publisher.Publish(ctx, site.ConnectionEvent{
-			ID:       uuid.New().String(),
 			Type:     site.EventObjectCacheStatusChanged,
 			TenantID: updated.TenantID,
 			SiteID:   siteID,
@@ -534,7 +531,6 @@ func (s *Service) IngestHeartbeat(ctx context.Context, tenantID, siteID uuid.UUI
 		})
 	} else {
 		_ = s.publisher.Publish(ctx, site.ConnectionEvent{
-			ID:       uuid.New().String(),
 			Type:     site.EventObjectCacheStatsUpdated,
 			TenantID: updated.TenantID,
 			SiteID:   siteID,
@@ -609,7 +605,6 @@ func (s *Service) pushApplyConfig(ctx context.Context, tenantID, siteID uuid.UUI
 		return fmt.Errorf("objectcache: apply_config rejected: %s", result.Detail)
 	}
 	_ = s.publisher.Publish(ctx, site.ConnectionEvent{
-		ID:       uuid.New().String(),
 		Type:     site.EventObjectCacheConfigApplied,
 		TenantID: tenantID,
 		SiteID:   siteID,

@@ -434,6 +434,40 @@ func (r *Repo) ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
 	})
 }
 
+// ActiveDBScanState holds the watchdog columns read from site_perf_config for
+// the GET /perf/db/scan response. Active is true when a scan is in progress.
+type ActiveDBScanState struct {
+	Active    bool
+	JobID     string    // "" when Active is false
+	StartedAt time.Time // zero when Active is false
+}
+
+// GetActiveDBScanState reads the active_db_scan_job_id and
+// active_db_scan_started watchdog columns from site_perf_config for a single
+// site. Returns ErrNotFound when the site has no perf config row yet (i.e. the
+// perf suite has never been configured). The state is read under InTenantTx so
+// RLS scopes it to the calling tenant.
+func (r *Repo) GetActiveDBScanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBScanState, error) {
+	row, found, err := r.getConfigRow(ctx, tenantID, siteID)
+	if err != nil {
+		if err == ErrNotFound {
+			return ActiveDBScanState{}, ErrNotFound
+		}
+		return ActiveDBScanState{}, err
+	}
+	if !found {
+		return ActiveDBScanState{}, ErrNotFound
+	}
+	if row.ActiveDbScanJobID == nil {
+		return ActiveDBScanState{}, nil
+	}
+	return ActiveDBScanState{
+		Active:    true,
+		JobID:     *row.ActiveDbScanJobID,
+		StartedAt: row.ActiveDbScanStarted.Time,
+	}, nil
+}
+
 // StalledDBCleanJob is a minimal view returned by the watchdog sweep.
 type StalledDBCleanJob struct {
 	SiteID   uuid.UUID

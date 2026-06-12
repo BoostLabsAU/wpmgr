@@ -159,7 +159,10 @@ export const useDbScanStore = create<DbScanState>((set) => ({
     set((s) => {
       const prev = s.bySite[siteId] ?? { ...IDLE };
       // Discard stale frames: if job_id doesn't match the in-flight scan, drop.
-      if (prev.job_id !== null && prev.job_id !== job_id) return s;
+      // The empty string is the optimistic sentinel set by useDbScan before the
+      // real job_id is known; treat it like null so the ACK result and a
+      // completed frame arriving after a missed started frame are accepted.
+      if (prev.job_id !== null && prev.job_id !== "" && prev.job_id !== job_id) return s;
       return {
         bySite: {
           ...s.bySite,
@@ -182,7 +185,8 @@ export const useDbScanStore = create<DbScanState>((set) => ({
   failScan: (siteId, job_id, detail) =>
     set((s) => {
       const prev = s.bySite[siteId] ?? { ...IDLE };
-      if (prev.job_id !== null && prev.job_id !== job_id) return s;
+      // Same sentinel handling as completeScan: "" matches any job.
+      if (prev.job_id !== null && prev.job_id !== "" && prev.job_id !== job_id) return s;
       return {
         bySite: {
           ...s.bySite,

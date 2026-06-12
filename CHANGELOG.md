@@ -6,6 +6,17 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.43.2] - 2026-06-12
+
+### Fixed
+
+- **Live updates silently stopped for tenants with a connected object cache (critical).** The event stream protocol requires time-sortable event identifiers, but object cache events minted a different identifier format that sorts after every normal identifier. One delivered object cache event advanced the stream cursor past all future events, so database scan results, backup progress, and connection changes stopped arriving; reconnecting made it permanent because the browser echoed the poisoned cursor. The publisher now enforces the correct identifier format for every event regardless of caller, the stream treats an invalid cursor as a fresh start so affected browser tabs self-heal, and the white-label report event had the same defect fixed.
+- **Database scan results now return directly in the scan response** instead of relying only on a live event, and the page loads stored results on mount and after any stream reconnect. A running scan survives a page refresh, a scan stuck without updates resets after three minutes, and a result arriving after a missed start event is no longer discarded.
+- **Live update hardening across the dashboard:** all performance surfaces backed by server queries now refresh automatically when the event stream reconnects, closing the missed event gap for the object cache pill, cache statistics, font results, and real user monitoring summaries.
+- **Scan bookkeeping failures are now logged** instead of silently discarded, and the completion event is published before the watchdog clears so a failed publish still triggers the failure rescue.
+
+Control plane and web 0.43.2; no agent changes.
+
 ## [0.43.1] - 2026-06-12
 
 ### Fixed
