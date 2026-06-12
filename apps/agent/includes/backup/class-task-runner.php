@@ -698,10 +698,14 @@ final class TaskRunner
             return (string) wp_remote_retrieve_body($response);
         }
 
-        // Fallback: file_get_contents with a short timeout (also handles file:// URLs
-        // used by ADR-051 e2e tests).
-        $ctx  = stream_context_create(['http' => ['timeout' => 60]]);
-        $body = @file_get_contents($url, false, $ctx);
+        // Fallback: only file:// URLs are permitted here. This path exists
+        // exclusively for the ADR-051 e2e tests, which feed local fixture
+        // archives as file:// URIs. Any other scheme returns null — if
+        // wp_remote_get is unavailable we cannot make remote HTTP requests.
+        if (!str_starts_with($url, 'file://')) {
+            return null;
+        }
+        $body = @file_get_contents($url); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- file:// local path only; wp_remote_get does not support file:// URIs; used solely for ADR-051 e2e tests
         return $body === false ? null : $body;
     }
 
