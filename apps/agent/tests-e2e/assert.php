@@ -16,7 +16,8 @@
  *   multisite-check  — (multisite container) switch_to_blog isolation + global group invariant.
  *   installing-check — WP_INSTALLING defined; assert wp_cache_set reaches Redis (H6).
  *   cli-uid-check    — non-owner uid wp cache flush returns non-zero + Redis key survives (H7).
- *   outage-failback  — sentinel key, stop redis, request, start redis, request; assert flush (H5).
+ *   outage-failback          — sentinel key, stop redis, request, start redis, request; assert flush (H5).
+ *   outage-failback-forensics — read DB marker state between outage requests; diagnostic only (non-fatal).
  *   fd-bomb          — boot on fresh worker; assert /proc/self/fd delta < 10 (FD-1/FD-2).
  *   codec-fallback   — push igbinary config into igbinary-less container; assert serializer_effective=php (FD-4).
  *   disable          — uninstall drop-in + config, assert clean (extended teardown asserts).
@@ -751,6 +752,51 @@ PHP;
 }
 
 // ============================================================================
+// Stage: outage-failback-forensics
+// ============================================================================
+if ($stage === 'outage-failback-forensics') {
+    // Cross-request persistence forensics: called from run.sh between request 1
+    // (which fires during the Redis outage) and request 2 (first healthy boot).
+    // Reads the DB directly via wp option get to report whether the outage marker
+    // is present, and emits a line that run.sh captures in the test log.
+    //
+    // This stage is intentionally non-fatal: it is purely diagnostic. The actual
+    // pass/fail for the cross-request persistence assertion lives in run.sh.
+    $markerReadCode = <<<'PHP'
+$markerOption = WPMgr_Object_Cache::FAILBACK_MARKER_OPTION;
+$marker = get_option($markerOption, false);
+echo json_encode([
+    'marker_present' => ($marker !== false),
+    'marker_value'   => is_string($marker) ? $marker : null,
+    'checked_at'     => microtime(true),
+]);
+PHP;
+    $exit = wp('eval ' . escapeshellarg($markerReadCode), $out);
+    if ($exit !== 0) {
+        // Non-fatal: print the failure and exit 0 so run.sh continues.
+        fwrite(STDERR, "WARN [outage-failback-forensics]: wp eval failed (exit={$exit}): {$out}\n");
+        echo json_encode(['marker_present' => null, 'error' => 'eval_failed']) . "\n";
+        exit(0);
+    }
+    $forensics = json_decode(trim($out), true);
+    if (!is_array($forensics)) {
+        echo json_encode(['marker_present' => null, 'raw' => $out]) . "\n";
+        exit(0);
+    }
+    echo json_encode($forensics) . "\n";
+    $present = $forensics['marker_present'] ?? null;
+    if ($present === true) {
+        pass(sprintf(
+            'outage-failback-forensics: outage marker IS present between requests (marker_ts=%s) — failback flush expected on next healthy boot',
+            $forensics['marker_value'] ?? 'unknown'
+        ));
+    } else {
+        pass('outage-failback-forensics: outage marker is absent between requests (no flush will fire)');
+    }
+    exit(0);
+}
+
+// ============================================================================
 // Stage: fd-bomb
 // ============================================================================
 if ($stage === 'fd-bomb') {
@@ -1079,5 +1125,5 @@ PHP;
 }
 
 // Unknown stage.
-fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, fd-bomb, codec-fallback, debug-header, disable\n");
+fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, outage-failback-forensics, fd-bomb, codec-fallback, debug-header, disable\n");
 exit(1);

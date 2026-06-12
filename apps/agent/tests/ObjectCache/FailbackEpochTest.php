@@ -8,6 +8,8 @@
  *   - NX loss (another process holds the lock) → no flush.
  *   - The mid-request degrade→recover trigger is absent from the engine source.
  *   - persistOutageMarker() is called on first degradation.
+ *   - 0.43.1: Redis failure during shutdown() does NOT write the outage marker.
+ *   - 0.43.1: delete_option(marker) is called BEFORE executeFlush in maybeFailbackFlushOnBoot.
  *
  * These tests run in array mode (no live Redis) and verify the H5 logic through
  * observable effects on $GLOBALS options and the engine source structure.
@@ -19,6 +21,8 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Tests\ObjectCache;
 
+use Brain\Monkey;
+use Brain\Monkey\Functions;
 use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
 /**
@@ -35,12 +39,37 @@ final class FailbackEpochTest extends TestCase
 	/** @var int Flush call counter. */
 	private int $flushCalls = 0;
 
+	/** @var array<string> Log of update_option keys written (for spy assertions). */
+	private array $updatedOptionKeys = [];
+
 	protected function set_up(): void
 	{
 		parent::set_up();
-		$this->options   = [];
-		$this->flushCalls = 0;
-		$this->oc        = \WPMgr_Object_Cache::boot();
+		Monkey\setUp();
+		$this->options           = [];
+		$this->flushCalls        = 0;
+		$this->updatedOptionKeys = [];
+		$this->oc                = \WPMgr_Object_Cache::boot();
+
+		// Wire up option store stubs so Brain Monkey intercepts these calls.
+		Functions\when( 'get_option' )->alias(
+			fn( $k, $d = false ) => $this->options[ $k ] ?? $d
+		);
+		Functions\when( 'update_option' )->alias( function ( $k, $v ) {
+			$this->options[ $k ]       = $v;
+			$this->updatedOptionKeys[] = $k;
+			return true;
+		} );
+		Functions\when( 'delete_option' )->alias( function ( $k ) {
+			unset( $this->options[ $k ] );
+			return true;
+		} );
+	}
+
+	protected function tear_down(): void
+	{
+		Monkey\tearDown();
+		parent::tear_down();
 	}
 
 	// -------------------------------------------------------------------------
@@ -182,6 +211,129 @@ final class FailbackEpochTest extends TestCase
 			'wpmgr_oc_outage_marker',
 			$content,
 			'Lifecycle ownedOptions() must include the failback marker option for clean uninstall (H5/H8)'
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// 0.43.1 FIX 1: Redis failure during shutdown() must NOT persist outage marker
+	// -------------------------------------------------------------------------
+
+	/**
+	 * test_redis_failure_during_shutdown_does_not_persist_outage_marker
+	 *
+	 * When $inShutdown = true (set at the top of shutdown()) and a Redis-side
+	 * Throwable propagates through redisOp(), persistOutageMarker() must be
+	 * suppressed so that update_option(FAILBACK_MARKER_OPTION, ...) is never
+	 * called. The process is dying; writing a marker at that point would cause
+	 * a spurious failback flush on the very next healthy-boot request.
+	 *
+	 * Strategy: use ReflectionClass to forcibly set $inShutdown = true, then
+	 * invoke persistOutageMarker() directly. Assert the marker option key is
+	 * never written to the option store.
+	 */
+	public function test_redis_failure_during_shutdown_does_not_persist_outage_marker(): void
+	{
+		$oc  = \WPMgr_Object_Cache::boot();
+		$ref = new \ReflectionClass( $oc );
+
+		// Force $inShutdown = true, simulating that shutdown() has entered.
+		$shutdownProp = $ref->getProperty( 'inShutdown' );
+		$shutdownProp->setValue( $oc, true );
+
+		// Invoke persistOutageMarker() directly.
+		$markerMethod = $ref->getMethod( 'persistOutageMarker' );
+		$markerMethod->invoke( $oc );
+
+		// The marker option must NOT have been written.
+		$this->assertNotContains(
+			\WPMgr_Object_Cache::FAILBACK_MARKER_OPTION,
+			$this->updatedOptionKeys,
+			'persistOutageMarker() must not call update_option(FAILBACK_MARKER_OPTION) when $inShutdown is true'
+		);
+		$this->assertArrayNotHasKey(
+			\WPMgr_Object_Cache::FAILBACK_MARKER_OPTION,
+			$this->options,
+			'wpmgr_oc_outage_marker must not be present in the option store when called from shutdown path'
+		);
+	}
+
+	/**
+	 * Counterpart: outside the shutdown path ($inShutdown = false), persistOutageMarker()
+	 * MUST write the marker. Pins the non-regression of the normal (mid-request) path.
+	 */
+	public function test_non_shutdown_path_still_persists_outage_marker(): void
+	{
+		$oc  = \WPMgr_Object_Cache::boot();
+		$ref = new \ReflectionClass( $oc );
+
+		// $inShutdown defaults to false — do not set it; verify default is correct.
+		$shutdownProp = $ref->getProperty( 'inShutdown' );
+		$this->assertFalse(
+			$shutdownProp->getValue( $oc ),
+			'$inShutdown must default to false so the normal degradation path still writes the marker'
+		);
+
+		// Invoke persistOutageMarker() without entering shutdown.
+		$markerMethod = $ref->getMethod( 'persistOutageMarker' );
+		$markerMethod->invoke( $oc );
+
+		// The marker option MUST have been written.
+		$this->assertContains(
+			\WPMgr_Object_Cache::FAILBACK_MARKER_OPTION,
+			$this->updatedOptionKeys,
+			'persistOutageMarker() must call update_option(FAILBACK_MARKER_OPTION) when $inShutdown is false (normal path)'
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// 0.43.1 FIX 2: delete_option(marker) happens BEFORE executeFlush in
+	// maybeFailbackFlushOnBoot — source ordering assertion
+	// -------------------------------------------------------------------------
+
+	/**
+	 * test_marker_deleted_before_flush_in_source
+	 *
+	 * FLUSHDB wipes the Redis NX lock that guards exactly-once semantics; if the
+	 * marker delete happened AFTER the flush, a concurrent healthy-boot request
+	 * that sees the marker before the delete could win a second NX lock and flush
+	 * again. The fix reverses the order: delete_option first, then executeFlush.
+	 *
+	 * This is a source-order assertion. We find the byte offsets of both calls
+	 * inside maybeFailbackFlushOnBoot and assert that delete_option precedes
+	 * executeFlush.
+	 */
+	public function test_marker_deleted_before_flush_in_source(): void
+	{
+		$enginePath = dirname( __DIR__, 2 ) . '/includes/object-cache/class-object-cache-engine.php';
+		$this->assertFileExists( $enginePath );
+		$content = (string) file_get_contents( $enginePath );
+
+		// Locate the maybeFailbackFlushOnBoot method body.
+		$methodStart = strpos( $content, 'private function maybeFailbackFlushOnBoot' );
+		$this->assertNotFalse(
+			$methodStart,
+			'maybeFailbackFlushOnBoot() must exist in the engine source'
+		);
+
+		// Find the next closing-brace at method depth to bound the search.
+		// A safe upper bound: look 3000 chars past the method start.
+		$methodBody = substr( $content, $methodStart, 3000 );
+
+		$deletePos = strpos( $methodBody, 'delete_option(' );
+		$flushPos  = strpos( $methodBody, 'executeFlush(' );
+
+		$this->assertNotFalse(
+			$deletePos,
+			'delete_option() must be present in maybeFailbackFlushOnBoot()'
+		);
+		$this->assertNotFalse(
+			$flushPos,
+			'executeFlush() must be present in maybeFailbackFlushOnBoot()'
+		);
+		$this->assertLessThan(
+			$flushPos,
+			$deletePos,
+			'delete_option(FAILBACK_MARKER_OPTION) must appear BEFORE executeFlush() in maybeFailbackFlushOnBoot() — marker must be cleared before the flush wipes the NX lock'
 		);
 	}
 }
