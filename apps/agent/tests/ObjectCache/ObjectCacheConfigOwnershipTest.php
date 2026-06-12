@@ -121,8 +121,8 @@ final class ObjectCacheConfigOwnershipTest extends TestCase
 	// -------------------------------------------------------------------------
 
 	/**
-	 * save() source must contain the root-uid (posix_geteuid() === 0) chown branch
-	 * that uses fileowner(dirname(...)) as the target owner.
+	 * save() source must contain the ownership-alignment chown branch
+	 * that targets the owner of the WordPress core entry file.
 	 *
 	 * The E2E harness (WP-CLI running as root) is the real behavioral proof; this
 	 * assertion ensures the branch is never accidentally removed by a refactor.
@@ -134,21 +134,15 @@ final class ObjectCacheConfigOwnershipTest extends TestCase
 		);
 
 		$this->assertStringContainsString(
-			'posix_geteuid',
+			"'index.php'",
 			$src,
-			'save() source must reference posix_geteuid for root-uid detection'
+			'save() source must reference the core entry file as the ownership target'
 		);
 
 		$this->assertStringContainsString(
 			'fileowner',
 			$src,
-			'save() source must call fileowner() to read the parent directory owner'
-		);
-
-		$this->assertStringContainsString(
-			'dirname( $this->filePath )',
-			$src,
-			'save() must derive the parent directory from $this->filePath for fileowner()'
+			'save() source must call fileowner() to read the reference owner'
 		);
 
 		$this->assertStringContainsString(
@@ -186,13 +180,8 @@ final class ObjectCacheConfigOwnershipTest extends TestCase
 		);
 
 		// Grab source from the method onwards (up to next public/private function).
-		$methodSrc = substr( $src, (int) $methodPos, 2000 );
+		$methodSrc = substr( $src, (int) $methodPos, 3500 );
 
-		$this->assertStringContainsString(
-			'posix_geteuid',
-			$methodSrc,
-			'writeCooldownState() must reference posix_geteuid for root-uid detection'
-		);
 
 		$this->assertStringContainsString(
 			'fileowner',
@@ -234,9 +223,9 @@ final class ObjectCacheConfigOwnershipTest extends TestCase
 		$src = (string) file_get_contents( $artifactPath );
 
 		$this->assertStringContainsString(
-			'posix_geteuid',
+			"'index.php'",
 			$src,
-			'Drop-in artifact must contain the posix_geteuid root-uid branch'
+			'Drop-in artifact must reference the core entry file as the ownership target'
 		);
 
 		$this->assertStringContainsString(

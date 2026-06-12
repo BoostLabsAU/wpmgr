@@ -219,29 +219,30 @@ final class ObjectCacheConfig
 			return false;
 		}
 
-		// Root-uid ownership alignment: when the process runs as root (e.g. a WP-CLI
-		// provisioning step in a Docker harness), the written file is owned by root
-		// and unreadable by the web server user (www-data). Align owner+group to
-		// match the containing directory so the web SAPI can read the config.
-		// Best-effort only — never fail the save over a chown error.
-		// phpcs:ignore Generic.PHP.DeprecatedFunctions.Deprecated -- posix_geteuid is the correct function; not deprecated
-		if ( function_exists( 'posix_geteuid' ) && posix_geteuid() === 0 ) {
-			try {
-				$parentDir = dirname( $this->filePath );
-				$dirOwner  = @fileowner( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chown
-				$dirGroup  = @filegroup( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chgrp
-				if ( $dirOwner !== false ) {
-					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid ownership alignment; never fatal
-					@chown( $this->filePath, $dirOwner );
+		// Ownership alignment: when a privileged process writes the config (a
+		// command line provisioning step), the 0600 file is unreadable by the web
+		// server user and the web SAPI silently runs the cache in array mode.
+		// The target owner is whoever owns the WordPress core entry file the web
+		// server demonstrably serves (ABSPATH/index.php), falling back to the
+		// containing directory. The chown attempt is unconditional: it only
+		// succeeds when this process is privileged, and fails silently otherwise.
+		try {
+			$refFile = defined( 'ABSPATH' ) ? constant( 'ABSPATH' ) . 'index.php' : '';
+			$ref     = ( $refFile !== '' && @is_file( $refFile ) ) ? $refFile : dirname( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort reference probe
+			$owner   = @fileowner( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chown
+			$group   = @filegroup( $ref ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chgrp
+			$current = @fileowner( $this->filePath ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort current-owner probe
+			if ( $owner !== false && $owner !== 0 && $owner !== $current ) {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort ownership alignment; never fatal
+				@chown( $this->filePath, $owner );
+				if ( $group !== false ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort group alignment; never fatal
+					@chgrp( $this->filePath, $group );
 				}
-				if ( $dirGroup !== false ) {
-					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid group alignment; never fatal
-					@chgrp( $this->filePath, $dirGroup );
-				}
-			} catch ( \Throwable $_ ) {
-				// Best-effort: chown/chgrp failed; the file remains root-owned but
-				// save() still succeeds so the config is written.
 			}
+		} catch ( \Throwable $_ ) {
+			// Best-effort: chown/chgrp failed; the file remains as written but
+			// save() still succeeds so the config is persisted.
 		}
 
 		// Invalidate opcache so a credential rotation is not silently served from
