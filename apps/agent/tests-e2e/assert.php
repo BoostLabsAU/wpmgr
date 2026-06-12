@@ -886,41 +886,25 @@ if ($stage === 'codec-fallback') {
     //   2. serializer_effective = php (fallback confirmed).
     //   3. The site continues to serve HTTP 200.
 
-    // Read the current config path from WordPress constants.
-    $configPathCode = 'echo defined("WP_CONTENT_DIR") ? WP_CONTENT_DIR . "/.wpmgr-oc-config.json" : "";';
-    $configPathExit = wp('eval ' . escapeshellarg($configPathCode), $configPath);
-    $configPath = trim($configPath);
-    if ($configPathExit !== 0 || $configPath === '') {
-        fail('codec-fallback: could not resolve config path via WP_CONTENT_DIR');
-    }
-
-    // Read current config.
-    $readExit = run('cat ' . escapeshellarg($configPath), $currentConfig);
-    if ($readExit !== 0) {
-        // Config may not exist if Redis was never set up; treat as skip.
-        fwrite(STDERR, "SKIP [codec-fallback]: config file not found at {$configPath}; skipping (Redis not provisioned).\n");
+    // Read the current config via the engine loader, then write it back with
+    // serializer=igbinary through the engine writer (atomic + opcache invalidate).
+    $readConfigCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig(); echo json_encode($cfg->load());';
+    $readExit = wp('eval ' . escapeshellarg($readConfigCode), $currentConfig);
+    $config = json_decode(trim((string) $currentConfig), true);
+    if ($readExit !== 0 || !is_array($config) || $config === []) {
+        fwrite(STDERR, "SKIP [codec-fallback]: config not loadable; skipping (Redis not provisioned).\n");
         exit(0);
     }
 
-    $config = json_decode($currentConfig, true);
-    if (! is_array($config)) {
-        fwrite(STDERR, "SKIP [codec-fallback]: config not valid JSON; skipping.\n");
-        exit(0);
-    }
-
-    // Inject igbinary as the requested serializer.
     $originalSerializer = $config['serializer'] ?? 'php';
     $config['serializer'] = 'igbinary';
-    $patchedConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-
-    // Write patched config (0600, preserve owner).
-    $writeCmd = 'bash -c ' . escapeshellarg(
-        'echo ' . escapeshellarg($patchedConfig) . ' > ' . escapeshellarg($configPath) .
-        ' && chmod 600 ' . escapeshellarg($configPath)
-    );
-    $writeExit = run($writeCmd, $writeOut);
-    if ($writeExit !== 0) {
-        fail('codec-fallback: failed to write patched config: ' . $writeOut);
+    $b64 = base64_encode((string) json_encode($config));
+    $writeCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+        . '$c = json_decode(base64_decode("' . $b64 . '"), true);'
+        . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+    $writeExit = wp('eval ' . escapeshellarg($writeCode), $writeOut);
+    if ($writeExit !== 0 || strpos((string) $writeOut, 'saved') === false) {
+        fail('codec-fallback: failed to write patched config via engine writer: ' . (string) $writeOut);
     }
 
     // Trigger a fresh boot by calling WP-CLI (new PHP worker = fresh static state).
@@ -933,7 +917,7 @@ if (! $oc instanceof WPMgr_Object_Cache) {
 }
 $stats = $oc->getHeartbeatStats();
 echo json_encode([
-    'status'               => $stats['status'] ?? 'unknown',
+    'status'               => $stats['state'] ?? 'unknown',
     'serializer_effective' => $stats['serializer_effective'] ?? 'unknown',
     'codec_fallback'       => $stats['codec_fallback'] ?? '',
     'is_array_mode'        => $oc->isArrayMode(),
@@ -943,12 +927,11 @@ PHP;
 
     // Restore original serializer regardless of outcome.
     $config['serializer'] = $originalSerializer;
-    $restoredConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
-    $restoreCmd = 'bash -c ' . escapeshellarg(
-        'echo ' . escapeshellarg($restoredConfig) . ' > ' . escapeshellarg($configPath) .
-        ' && chmod 600 ' . escapeshellarg($configPath)
-    );
-    run($restoreCmd, $restoreOut);
+    $restoreB64 = base64_encode((string) json_encode($config));
+    $restoreCode = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+        . '$c = json_decode(base64_decode("' . $restoreB64 . '"), true);'
+        . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+    wp('eval ' . escapeshellarg($restoreCode), $restoreOut);
 
     if ($hbExit !== 0) {
         fail('codec-fallback: WP-CLI eval failed after patching config: ' . $hbOut);
@@ -1026,13 +1009,20 @@ PHP;
         fail('debug-header: config JSON was not an array: ' . $configJson);
     }
 
-    // Helper: write the config with debug_header_enabled set to a given value.
+    // Helper: write the config through the engine's own writer so the change
+    // gets the production path: atomic write, 0600, ownership alignment, and
+    // opcache invalidation (a raw file write is served stale by opcache).
     $writeConfig = static function (array $cfg, bool $debugEnabled, string $configPath): void {
+        unset($configPath);
         $cfg['debug_header_enabled'] = $debugEnabled;
-        $phpArray = var_export($cfg, true);
-        $src = "<?php\ndefined( 'ABSPATH' ) || exit;\nreturn {$phpArray};\n";
-        file_put_contents($configPath, $src);
-        chmod($configPath, 0600);
+        $b64  = base64_encode((string) json_encode($cfg));
+        $code = '$cfg = new WPMgr\Agent\ObjectCache\ObjectCacheConfig();'
+              . '$c = json_decode(base64_decode("' . $b64 . '"), true);'
+              . 'echo $cfg->save($c) ? "saved" : "save-failed";';
+        $exit = wp('eval ' . escapeshellarg($code), $out);
+        if ($exit !== 0 || strpos((string) $out, 'saved') === false) {
+            fail('debug-header: config save via engine writer failed: ' . (string) $out);
+        }
     };
 
     // -----------------------------------------------------------------------
