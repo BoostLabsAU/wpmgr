@@ -36,6 +36,8 @@ var canonicalOperatorRoutes = []string{
 	"POST   /api/v1/sites/:siteId/perf/cache/enable",
 	"POST   /api/v1/sites/:siteId/perf/cache/disable",
 	"POST   /api/v1/sites/:siteId/perf/db/clean",
+	// M71 — db_clean pull-truth endpoint (watchdog state + last result).
+	"GET    /api/v1/sites/:siteId/perf/db/clean",
 	// M39 Phase 2 — db_scan (trigger + latest result).
 	"POST   /api/v1/sites/:siteId/perf/db/scan",
 	"GET    /api/v1/sites/:siteId/perf/db/scan",

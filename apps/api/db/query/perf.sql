@@ -443,6 +443,35 @@ WHERE id IN (
 );
 
 -- ---------------------------------------------------------------------------
+-- site_db_clean_results (M71)
+-- ---------------------------------------------------------------------------
+
+-- name: UpsertDBCleanResult :one
+-- Persists (or refreshes) the latest db_clean result for a site.
+-- Uses UPSERT so there is always at most one row per site.
+-- Called under InTenantTx by HandleDBCleanProgress when done=true.
+-- updated_at is set via now() on the created_at column (mirrors scan pattern).
+INSERT INTO site_db_clean_results (
+    site_id, tenant_id, job_id, result_json, rows_deleted, bytes_freed, cleaned_at, created_at
+) VALUES (
+    @site_id, @tenant_id, @job_id, @result_json, @rows_deleted, @bytes_freed, @cleaned_at, now()
+)
+ON CONFLICT (site_id) DO UPDATE SET
+    tenant_id    = EXCLUDED.tenant_id,
+    job_id       = EXCLUDED.job_id,
+    result_json  = EXCLUDED.result_json,
+    rows_deleted = EXCLUDED.rows_deleted,
+    bytes_freed  = EXCLUDED.bytes_freed,
+    cleaned_at   = EXCLUDED.cleaned_at,
+    created_at   = now()
+RETURNING *;
+
+-- name: GetDBCleanResult :one
+-- Returns the latest clean result for a site (tenant-scoped via RLS).
+SELECT * FROM site_db_clean_results
+WHERE site_id = @site_id AND tenant_id = @tenant_id;
+
+-- ---------------------------------------------------------------------------
 -- P3.7 — Fleet / Portfolio DB Health aggregate (tenant-level, no site_id param)
 -- ---------------------------------------------------------------------------
 

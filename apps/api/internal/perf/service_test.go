@@ -109,6 +109,9 @@ func (r *fakeRepo) ClearActiveDBScanJob(_ context.Context, _ uuid.UUID) error { 
 func (r *fakeRepo) GetActiveDBScanState(_ context.Context, _, _ uuid.UUID) (ActiveDBScanState, error) {
 	return ActiveDBScanState{}, nil
 }
+func (r *fakeRepo) GetActiveDBCleanState(_ context.Context, _, _ uuid.UUID) (ActiveDBCleanState, error) {
+	return ActiveDBCleanState{}, nil
+}
 func (r *fakeRepo) GetStalledDBCleanJobs(_ context.Context, _ time.Duration) ([]StalledDBCleanJob, error) {
 	return nil, nil
 }
@@ -118,6 +121,10 @@ func (r *fakeRepo) GetStalledDBScanJobs(_ context.Context, _ time.Duration) ([]S
 func (r *fakeRepo) UpsertDBScanResult(_ context.Context, _ DBScanResultInput) error { return nil }
 func (r *fakeRepo) GetDBScanResult(_ context.Context, _, _ uuid.UUID) (DBScanResult, error) {
 	return DBScanResult{}, ErrNotFound
+}
+func (r *fakeRepo) UpsertDBCleanResult(_ context.Context, _ DBCleanResultInput) error { return nil }
+func (r *fakeRepo) GetDBCleanResult(_ context.Context, _, _ uuid.UUID) (DBCleanResult, error) {
+	return DBCleanResult{}, ErrNotFound
 }
 
 // M42 — DB-size history stubs.

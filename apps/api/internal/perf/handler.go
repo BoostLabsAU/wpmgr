@@ -77,6 +77,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.POST("/perf/cache/disable", authz.RequirePermission(authz.PermSiteCacheManage), h.disable)
 
 	g.POST("/perf/db/clean", authz.RequirePermission(authz.PermSiteCacheManage), h.dbClean)
+	g.GET("/perf/db/clean", authz.RequirePermission(authz.PermSiteRead), h.getDbClean)
 	g.POST("/perf/db/scan", authz.RequirePermission(authz.PermSiteCacheManage), h.dbScan)
 	g.GET("/perf/db/scan", authz.RequirePermission(authz.PermSiteRead), h.getDbScan)
 	// M42 Phase 3.4 — DB-size trend history + growth summary.
@@ -361,6 +362,91 @@ func (h *Handler) dbClean(c *gin.Context) {
 	}
 	h.record(c, p, audit.ActionDbCleaned, siteID, map[string]any{"job_id": jobID})
 	c.JSON(http.StatusOK, gin.H{"ok": true, "job_id": jobID})
+}
+
+// ---------------------------------------------------------------------------
+// db clean GET (M71) — pull-truth endpoint
+// ---------------------------------------------------------------------------
+
+// getDbClean returns the watchdog state and the latest stored db_clean result
+// for a site (M71). It mirrors getDbScan exactly:
+//
+//   - clean_active / active_job_id / active_started_at come from the watchdog
+//     columns on site_perf_config (stamped by DBClean / cleared by HandleDBCleanProgress).
+//   - last_result is the most-recently persisted clean result, or null when no
+//     clean has completed yet.
+//
+// JSON field names (web builds against these; do not rename):
+//
+//	clean_active       bool
+//	active_job_id      string | null
+//	active_started_at  RFC3339 | null
+//	last_result        object | null
+//	  job_id           string
+//	  rows_deleted     number
+//	  bytes_freed      number
+//	  result           object  (per-category {rows_deleted,bytes_freed,state} map)
+//	  cleaned_at       RFC3339
+func (h *Handler) getDbClean(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.GetLatestClean(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Read active-clean watchdog state so the web can show/hide the spinner on
+	// page load without relying solely on SSE delivery. ErrNotFound (no perf
+	// config row yet) is treated as "not active" — not an error.
+	activeState, stateErr := h.svc.GetActiveDBCleanState(c.Request.Context(), p.TenantID, siteID)
+	if stateErr != nil && stateErr != ErrNotFound {
+		httpx.Error(c, stateErr)
+		return
+	}
+
+	var activeJobID any    // null when not active
+	var activeStartedAt any // null when not active
+	if activeState.Active {
+		activeJobID = activeState.JobID
+		if !activeState.StartedAt.IsZero() {
+			activeStartedAt = activeState.StartedAt.UTC().Format(time.RFC3339)
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"clean_active":       activeState.Active,
+		"active_job_id":      activeJobID,
+		"active_started_at":  activeStartedAt,
+		"last_result":        dbCleanResultToGinH(result),
+	})
+}
+
+// dbCleanResultToGinH converts a DBCleanResult into a gin.H map for the wire
+// response. Returns nil when result is nil (no clean run yet — serialises as
+// JSON null). Shared by getDbClean.
+func dbCleanResultToGinH(r *DBCleanResult) gin.H {
+	if r == nil {
+		return nil
+	}
+	var resultMap any = map[string]any{}
+	if len(r.ResultJSON) > 0 {
+		var m map[string]any
+		if jerr := json.Unmarshal(r.ResultJSON, &m); jerr == nil {
+			resultMap = m
+		}
+	}
+	return gin.H{
+		"job_id":       r.JobID,
+		"rows_deleted": r.RowsDeleted,
+		"bytes_freed":  r.BytesFreed,
+		"result":       resultMap,
+		"cleaned_at":   r.CleanedAt.UTC().Format(time.RFC3339),
+	}
 }
 
 // ---------------------------------------------------------------------------

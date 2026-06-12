@@ -1534,6 +1534,32 @@ CREATE POLICY site_db_scan_results_agent ON site_db_scan_results
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
 
+-- site_db_clean_results — latest db_clean output per site (M71).
+-- One row per site, upserted on every completed clean run. Holds the structured
+-- per-category result from the final done=true progress push so GET /perf/db/clean
+-- can serve the last-run summary without relying on SSE delivery.
+CREATE TABLE IF NOT EXISTS site_db_clean_results (
+    site_id      uuid        NOT NULL,
+    tenant_id    uuid        NOT NULL,
+    job_id       text        NOT NULL,
+    result_json  jsonb       NOT NULL DEFAULT '{}',
+    rows_deleted bigint      NOT NULL DEFAULT 0,
+    bytes_freed  bigint      NOT NULL DEFAULT 0,
+    cleaned_at   timestamptz NOT NULL,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_db_clean_results_pkey PRIMARY KEY (site_id)
+);
+CREATE INDEX IF NOT EXISTS site_db_clean_results_tenant_idx
+    ON site_db_clean_results (tenant_id);
+ALTER TABLE site_db_clean_results ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_db_clean_results FORCE ROW LEVEL SECURITY;
+CREATE POLICY site_db_clean_results_tenant_isolation ON site_db_clean_results
+    USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+CREATE POLICY site_db_clean_results_agent ON site_db_clean_results
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
 -- site_cache_hit_ratio_history — M52 / #162: append-only hit-ratio trend.
 -- One row per cache-stats report cycle when the agent supplies a non-zero delta.
 -- Mirrors site_db_size_history RLS EXACTLY.

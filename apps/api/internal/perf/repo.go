@@ -856,6 +856,122 @@ type DBScanResult struct {
 	CreatedAt            time.Time
 }
 
+// ---------------------------------------------------------------------------
+// site_db_clean_results (M71)
+// ---------------------------------------------------------------------------
+
+// DBCleanResultInput carries the parameters for upserting a clean result.
+// It is assembled from the final done=true progress push in HandleDBCleanProgress.
+type DBCleanResultInput struct {
+	SiteID      uuid.UUID
+	TenantID    uuid.UUID
+	JobID       string
+	// ResultJSON is the per-category {rows_deleted, bytes_freed, state} map
+	// serialised as JSONB. nil/empty defaults to '{}'.
+	ResultJSON  []byte
+	RowsDeleted int64
+	BytesFreed  int64
+	CleanedAt   time.Time
+}
+
+// DBCleanResult is the model returned from a clean result lookup.
+type DBCleanResult struct {
+	SiteID      uuid.UUID
+	TenantID    uuid.UUID
+	JobID       string
+	ResultJSON  []byte
+	RowsDeleted int64
+	BytesFreed  int64
+	CleanedAt   time.Time
+	CreatedAt   time.Time
+}
+
+// UpsertDBCleanResult persists (or refreshes) the latest db_clean result.
+// Operator write path via InTenantTx (the clean is operator- or CP-triggered;
+// the result is stored on behalf of the authenticated tenant).
+func (r *Repo) UpsertDBCleanResult(ctx context.Context, in DBCleanResultInput) error {
+	resultJSON := in.ResultJSON
+	if len(resultJSON) == 0 {
+		resultJSON = []byte("{}")
+	}
+	return r.pool.InTenantTx(ctx, in.TenantID, func(tx pgx.Tx) error {
+		_, qerr := sqlc.New(tx).UpsertDBCleanResult(ctx, sqlc.UpsertDBCleanResultParams{
+			SiteID:      in.SiteID,
+			TenantID:    in.TenantID,
+			JobID:       in.JobID,
+			ResultJson:  resultJSON,
+			RowsDeleted: in.RowsDeleted,
+			BytesFreed:  in.BytesFreed,
+			CleanedAt:   in.CleanedAt,
+		})
+		return qerr
+	})
+}
+
+// GetDBCleanResult returns the latest clean result for a site.
+// Returns ErrNotFound when no clean has been run yet.
+func (r *Repo) GetDBCleanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBCleanResult, error) {
+	var out DBCleanResult
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row, qerr := sqlc.New(tx).GetDBCleanResult(ctx, sqlc.GetDBCleanResultParams{
+			SiteID:   siteID,
+			TenantID: tenantID,
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		out = DBCleanResult{
+			SiteID:      row.SiteID,
+			TenantID:    row.TenantID,
+			JobID:       row.JobID,
+			ResultJSON:  row.ResultJson,
+			RowsDeleted: row.RowsDeleted,
+			BytesFreed:  row.BytesFreed,
+			CleanedAt:   row.CleanedAt,
+			CreatedAt:   row.CreatedAt,
+		}
+		return nil
+	})
+	if err != nil {
+		return DBCleanResult{}, err
+	}
+	return out, nil
+}
+
+// ActiveDBCleanState holds the watchdog columns read from site_perf_config for
+// the GET /perf/db/clean response. Active is true when a clean is in progress.
+type ActiveDBCleanState struct {
+	Active    bool
+	JobID     string    // "" when Active is false
+	StartedAt time.Time // zero when Active is false
+}
+
+// GetActiveDBCleanState reads the active_db_clean_job_id and
+// active_db_clean_started watchdog columns from site_perf_config for a single
+// site. Returns ErrNotFound when the site has no perf config row yet (i.e. the
+// perf suite has never been configured). The state is read under InTenantTx so
+// RLS scopes it to the calling tenant.
+func (r *Repo) GetActiveDBCleanState(ctx context.Context, tenantID, siteID uuid.UUID) (ActiveDBCleanState, error) {
+	row, found, err := r.getConfigRow(ctx, tenantID, siteID)
+	if err != nil {
+		return ActiveDBCleanState{}, err
+	}
+	if !found {
+		return ActiveDBCleanState{}, ErrNotFound
+	}
+	if row.ActiveDbCleanJobID == nil {
+		return ActiveDBCleanState{}, nil
+	}
+	return ActiveDBCleanState{
+		Active:    true,
+		JobID:     *row.ActiveDbCleanJobID,
+		StartedAt: row.ActiveDbCleanStarted.Time,
+	}, nil
+}
+
 // GetDBScanResult returns the latest scan result for a site.
 // Returns ErrNotFound when no scan has been run yet.
 func (r *Repo) GetDBScanResult(ctx context.Context, tenantID, siteID uuid.UUID) (DBScanResult, error) {

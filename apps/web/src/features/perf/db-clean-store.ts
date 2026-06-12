@@ -172,7 +172,11 @@ export const useDbCleanStore = create<DbCleanState>((set) => ({
   completeJob: (siteId, job_id, rows_deleted, bytes_freed, categories) =>
     set((s) => {
       const prev = s.bySite[siteId] ?? { ...IDLE };
-      if (prev.job_id !== null && prev.job_id !== job_id) return s;
+      // Same sentinel handling as dbScanStore: "" is the optimistic sentinel set
+      // by the mutation's onMutate before the real job_id is known. Treat it like
+      // null so a completeJob arriving after a missed startJob is accepted, and so
+      // the hydration path (which passes "" for historical results) is not blocked.
+      if (prev.job_id !== null && prev.job_id !== "" && prev.job_id !== job_id) return s;
 
       // Merge final category summary from the completed payload (authoritative).
       const merged: Record<string, CategoryProgress> = { ...prev.categories };
@@ -203,7 +207,10 @@ export const useDbCleanStore = create<DbCleanState>((set) => ({
   failJob: (siteId, job_id, detail) =>
     set((s) => {
       const prev = s.bySite[siteId] ?? { ...IDLE };
-      if (prev.job_id !== null && prev.job_id !== job_id) return s;
+      // Same sentinel handling as completeJob: "" matches any job so a failJob
+      // arriving after a missed startJob (or from the hydration stale-timeout
+      // path) correctly transitions the store out of its stuck state.
+      if (prev.job_id !== null && prev.job_id !== "" && prev.job_id !== job_id) return s;
       return {
         bySite: {
           ...s.bySite,

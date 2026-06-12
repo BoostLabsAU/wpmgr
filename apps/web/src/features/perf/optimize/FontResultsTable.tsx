@@ -19,8 +19,10 @@ import { Badge } from "@/components/ui/badge";
 
 import { formatBytes } from "../format";
 import { useFontResults } from "../hooks/useFontResults";
+import { useFontsBannerHydration } from "../hooks/useFontsBannerHydration";
 import { useFontsStore, selectFonts, type FontRowPhase } from "../fonts-store";
 import { FontsLiveIndicator } from "./FontsLiveIndicator";
+import { useSiteReconnect } from "@/features/sites/use-site-events";
 import type { FontResult } from "../types";
 
 // Font results table: one row per discovered self-hosted font, showing the
@@ -154,6 +156,15 @@ export function FontResultsTable({
   // page=0 explicitly to match the hook signature.
   const results = useFontResults(siteId, 0);
   const fontStates = useFontsStore((s) => selectFonts(s, siteId).fontStates);
+
+  // On mount and on SSE reconnect, reconcile the live banner against the query
+  // cache: if the banner is active but no fonts are still pending in the DB,
+  // clear the banner and invalidate the query so the table reflects server truth.
+  // This closes the gap where a missed font.completed leaves a converting banner
+  // showing indefinitely (the 120 s stale backstop in FontsLiveIndicator is the
+  // primary guard; this is the secondary reconciliation on reconnect).
+  const reconcileBanner = useFontsBannerHydration(siteId);
+  useSiteReconnect(reconcileBanner);
 
   const items = results.data ?? [];
 
