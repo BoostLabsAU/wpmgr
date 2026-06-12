@@ -266,6 +266,31 @@ final class ObjectCacheConfig
 			return false;
 		}
 
+		// Root-uid ownership alignment: when the process runs as root (e.g. a WP-CLI
+		// provisioning step in a Docker harness), the written file is owned by root
+		// and unreadable by the web server user (www-data). Align owner+group to
+		// match the containing directory so the web SAPI can read the config.
+		// Best-effort only — never fail the save over a chown error.
+		// phpcs:ignore Generic.PHP.DeprecatedFunctions.Deprecated -- posix_geteuid is the correct function; not deprecated
+		if ( function_exists( 'posix_geteuid' ) && posix_geteuid() === 0 ) {
+			try {
+				$parentDir = dirname( $this->filePath );
+				$dirOwner  = @fileowner( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chown
+				$dirGroup  = @filegroup( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure means we skip chgrp
+				if ( $dirOwner !== false ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid ownership alignment; never fatal
+					@chown( $this->filePath, $dirOwner );
+				}
+				if ( $dirGroup !== false ) {
+					// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid group alignment; never fatal
+					@chgrp( $this->filePath, $dirGroup );
+				}
+			} catch ( \Throwable $_ ) {
+				// Best-effort: chown/chgrp failed; the file remains root-owned but
+				// save() still succeeds so the config is written.
+			}
+		}
+
 		// Invalidate opcache so a credential rotation is not silently served from
 		// stale bytecode on validate_timestamps=0 hosts (S7).
 		if ( function_exists( 'opcache_invalidate' ) ) {
@@ -3137,6 +3162,28 @@ class WPMgr_Object_Cache
 		umask( $prev );
 		if ( $written !== false ) {
 			@rename( $tmp, $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic move; WP_Filesystem::move() is non-atomic
+
+			// Root-uid ownership alignment: match the containing directory's owner+group
+			// so a root-written state file remains readable by the web server user.
+			// Best-effort only — never block the state write over a chown error.
+			// phpcs:ignore Generic.PHP.DeprecatedFunctions.Deprecated -- posix_geteuid is the correct function; not deprecated
+			if ( function_exists( 'posix_geteuid' ) && posix_geteuid() === 0 ) {
+				try {
+					$parentDir = dirname( $path );
+					$dirOwner  = @fileowner( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure skips chown
+					$dirGroup  = @filegroup( $parentDir ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure skips chgrp
+					if ( $dirOwner !== false ) {
+						// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chown,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid ownership alignment; never fatal
+						@chown( $path, $dirOwner );
+					}
+					if ( $dirGroup !== false ) {
+						// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chgrp,WordPress.PHP.NoSilencedErrors.Discouraged -- headless agent; WP_Filesystem not initialised; best-effort root-uid group alignment; never fatal
+						@chgrp( $path, $dirGroup );
+					}
+				} catch ( \Throwable $_ ) {
+					// Best-effort: chown/chgrp failed; state file still written.
+				}
+			}
 		} else {
 			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup tmp file on failure
 		}

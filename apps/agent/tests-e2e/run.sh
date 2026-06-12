@@ -154,27 +154,36 @@ PROBE_MU_PLUGIN="$(cat <<'MUEOF'
  * E2E cross-request persistence probe.
  * Responds to ?wpmgr_e2e_probe=1 with a JSON body.
  *
- * The response includes 'marker_present' so the harness can detect a spurious
- * outage marker written between requests (0.43.1 FIX 1 / FIX 3 forensics).
+ * The response includes:
+ *   - 'engine_state'   — live state from getHeartbeatStats()['state'] (connected/
+ *                        degraded/down/disabled). A non-connected state means the
+ *                        web SAPI booted in array mode (e.g. config_unreadable due
+ *                        to a root:root ownership trap) and persistence cannot work.
+ *   - 'marker_present' — whether the outage failback marker is set in wp-options
+ *                        (forensics for spurious flush between requests).
  */
 if ( isset( $_GET['wpmgr_e2e_probe'] ) ) {
     $action = sanitize_key( $_GET['wpmgr_e2e_probe'] );
-    $markerPresent = ( defined( 'WPMgr_Object_Cache::FAILBACK_MARKER_OPTION' ) || class_exists( 'WPMgr_Object_Cache' ) )
+    $oc = $GLOBALS['wp_object_cache'] ?? null;
+    $engineState = null;
+    if ( $oc instanceof WPMgr_Object_Cache ) {
+        $hbStats = $oc->getHeartbeatStats();
+        $engineState = $hbStats['state'] ?? null;
+    }
+    $markerPresent = class_exists( 'WPMgr_Object_Cache' )
         ? ( get_option( WPMgr_Object_Cache::FAILBACK_MARKER_OPTION, false ) !== false )
         : null;
     if ( $action === 'set' ) {
         wp_cache_set( 'e2e_persist', 'x', 'e2e', 300 );
         $found = false;
         $val   = wp_cache_get( 'e2e_persist', 'e2e', false, $found );
-        $stats = $GLOBALS['wp_object_cache'] instanceof WPMgr_Object_Cache
-            ? $GLOBALS['wp_object_cache']->getHeartbeatStats()
-            : [];
         header( 'Content-Type: application/json' );
         echo wp_json_encode( [
             'action'         => 'set',
             'found'          => $found,
             'val'            => $val,
-            'hit_count'      => $stats['hit_count'] ?? ( $GLOBALS['wp_object_cache']->cache_hits ?? -1 ),
+            'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
+            'engine_state'   => $engineState,
             'marker_present' => $markerPresent,
         ] );
         exit;
@@ -182,15 +191,13 @@ if ( isset( $_GET['wpmgr_e2e_probe'] ) ) {
     if ( $action === 'get' ) {
         $found = false;
         $val   = wp_cache_get( 'e2e_persist', 'e2e', false, $found );
-        $stats = $GLOBALS['wp_object_cache'] instanceof WPMgr_Object_Cache
-            ? $GLOBALS['wp_object_cache']->getHeartbeatStats()
-            : [];
         header( 'Content-Type: application/json' );
         echo wp_json_encode( [
             'action'         => 'get',
             'found'          => $found,
             'val'            => $val,
-            'hit_count'      => $GLOBALS['wp_object_cache']->cache_hits ?? -1,
+            'hit_count'      => $oc instanceof WPMgr_Object_Cache ? ( $oc->cache_hits ?? -1 ) : -1,
+            'engine_state'   => $engineState,
             'marker_present' => $markerPresent,
         ] );
         exit;
@@ -212,8 +219,21 @@ RESP1="$(docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     exec -T wordpress curl -s 'http://localhost/?wpmgr_e2e_probe=set')"
 echo "[e2e] Probe set response: ${RESP1}"
 SET_FOUND="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("found","")).lower())' 2>/dev/null || echo 'error')"
+ENGINE_STATE_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("engine_state","unknown")))' 2>/dev/null || echo 'unknown')"
 MARKER_AFTER_SET="$(echo "${RESP1}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("marker_present","unknown")).lower())' 2>/dev/null || echo 'unknown')"
-echo "[e2e] Outage marker after request 1 (set): marker_present=${MARKER_AFTER_SET}"
+echo "[e2e] Request 1 engine_state=${ENGINE_STATE_SET} marker_present=${MARKER_AFTER_SET}"
+
+# Assert state=connected first: if the web engine is degraded/disabled, cross-request
+# persistence is impossible and the root cause is an ownership/permissions problem on
+# the config file, not a flush issue.
+if [ "${ENGINE_STATE_SET}" != "connected" ]; then
+    echo "[e2e] ERROR: web SAPI engine not connected on request 1 (state=${ENGINE_STATE_SET})." >&2
+    echo "[e2e] The config file is likely unreadable by the web server user." >&2
+    echo "[e2e] Check ownership/permissions of wp-content/wpmgr-object-cache-config.php." >&2
+    echo "[e2e] (When WP-CLI runs as root the file is written 0600 root:root; www-data cannot read it.)" >&2
+    exit 1
+fi
+
 if [ "${SET_FOUND}" != "true" ]; then
     echo "[e2e] ERROR: Set+get in same request must find the value; got found=${SET_FOUND}" >&2
     exit 1
@@ -235,13 +255,14 @@ RESP2="$(docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
 echo "[e2e] Probe get response: ${RESP2}"
 GET_FOUND="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("found","")).lower())' 2>/dev/null || echo 'error')"
 HIT_COUNT="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("hit_count",0))' 2>/dev/null || echo '0')"
+ENGINE_STATE_GET="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("engine_state","unknown")))' 2>/dev/null || echo 'unknown')"
 MARKER_AFTER_GET="$(echo "${RESP2}" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(str(d.get("marker_present","unknown")).lower())' 2>/dev/null || echo 'unknown')"
-echo "[e2e] Outage marker at request 2 (get): marker_present=${MARKER_AFTER_GET}"
+echo "[e2e] Request 2 engine_state=${ENGINE_STATE_GET} marker_present=${MARKER_AFTER_GET}"
 
 if [ "${GET_FOUND}" != "true" ]; then
-    echo "[e2e] ERROR: Cross-request persistence FAILED (FIX A regression): found=${GET_FOUND}." >&2
-    echo "[e2e] This means the failback flush fired between requests and wiped the cache." >&2
-    echo "[e2e] Forensics: marker_after_set=${MARKER_AFTER_SET} marker_after_get=${MARKER_AFTER_GET}" >&2
+    echo "[e2e] ERROR: value did not persist across requests (FIX A regression): found=${GET_FOUND}." >&2
+    echo "[e2e] Forensics: engine_state_req1=${ENGINE_STATE_SET} engine_state_req2=${ENGINE_STATE_GET}" >&2
+    echo "[e2e]            marker_after_set=${MARKER_AFTER_SET} marker_after_get=${MARKER_AFTER_GET}" >&2
     exit 1
 fi
 if [ "${HIT_COUNT}" -le 0 ] 2>/dev/null; then
