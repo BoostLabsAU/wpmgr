@@ -45,6 +45,13 @@ unset( $wpmgr_oc_dep, $wpmgr_oc_dep_path );
 /**
  * Returns the global WP Object Cache instance, booting it if necessary.
  *
+ * FD-1: If boot() is currently in progress (detected via the static guard),
+ * the shared array-mode fallback is returned without re-entering boot().
+ * This prevents get_option -> wp_cache_get -> here -> boot() recursion.
+ *
+ * FD-2: After a lazy boot (global was unset when called), runPostBootTasks()
+ * is called so the H5 marker check still runs for lazily booted instances.
+ *
  * @return \WPMgr_Object_Cache
  */
 function wpmgr_get_object_cache(): \WPMgr_Object_Cache
@@ -53,6 +60,9 @@ function wpmgr_get_object_cache(): \WPMgr_Object_Cache
 	if ( ! ( $wp_object_cache instanceof \WPMgr_Object_Cache ) ) {
 		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
 		$wp_object_cache = \WPMgr_Object_Cache::boot();
+		// FD-2: run post-boot tasks after global is assigned so the H5 marker
+		// check can call get_option -> wp_cache_get without recursive boot.
+		$wp_object_cache->runPostBootTasks();
 	}
 	return $wp_object_cache;
 }
@@ -61,6 +71,11 @@ function wpmgr_get_object_cache(): \WPMgr_Object_Cache
 global $wp_object_cache;
 // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- object-cache drop-ins MUST assign $wp_object_cache; this is the required WP pattern
 $wp_object_cache = \WPMgr_Object_Cache::boot();
+// FD-2: run post-boot tasks AFTER the global is assigned. This is the primary
+// call site. runPostBootTasks() is idempotent; the once-flag ensures H5 runs
+// exactly once even if wpmgr_get_object_cache() is called before this line
+// in some exotic load order.
+$wp_object_cache->runPostBootTasks();
 
 register_shutdown_function(
 	static function (): void {
@@ -550,7 +565,7 @@ class WPMgr_Object_Cache
 	// -------------------------------------------------------------------------
 
 	/** Version of this engine class. Included in every heartbeat block. */
-	public const ENGINE_VERSION = '0.42.0';
+	public const ENGINE_VERSION = '0.42.1';
 
 	// -------------------------------------------------------------------------
 	// Feature advertisement (wp_cache_supports).
@@ -605,6 +620,23 @@ class WPMgr_Object_Cache
 
 	/** Redis key suffix for the failback-flush NX lock (H5). */
 	private const FAILBACK_LOCK_SUFFIX = '__wpmgr_oc_failback_lock__';
+
+	/**
+	 * FD-1: Set to true while boot() is on the call stack.
+	 * Prevents recursive boot() calls from creating new Redis connections.
+	 */
+	private static bool $bootInProgress = false;
+
+	/**
+	 * FD-1: Shared array-mode fallback instance returned during a recursive boot.
+	 * Never connects, cheap to construct; persists for the request lifetime.
+	 */
+	private static ?self $bootFallback = null;
+
+	/**
+	 * FD-2: Once-flag so runPostBootTasks() is idempotent across multiple callers.
+	 */
+	private bool $postBootTasksRan = false;
 
 	/** @var \WPMgr\Agent\ObjectCache\RedisConnection|null Redis connection (null in array-only mode). */
 	private ?\WPMgr\Agent\ObjectCache\RedisConnection $connection = null;
@@ -707,82 +739,177 @@ class WPMgr_Object_Cache
 	 * Boot the cache: load config, connect, return the instance.
 	 * On any Throwable during boot, return an array-mode instance.
 	 *
+	 * Post-boot invariant: this method makes ZERO WordPress function calls.
+	 * The H5 outage-marker check (maybeFailbackFlushOnBoot / runPostBootTasks)
+	 * is deferred to the include footer AFTER the global assignment so that
+	 * get_option -> wp_cache_get -> wpmgr_get_object_cache -> boot() recursion
+	 * cannot occur (FD-2 root fix).
+	 *
 	 * @return self
 	 */
 	public static function boot(): self
 	{
-		$instance = new self();
-		$instance->globalGroups         = array_flip( self::DEFAULT_GLOBAL_GROUPS );
-		$instance->nonPersistentGroups  = array_flip( self::DEFAULT_NON_PERSISTENT );
-
-		// H1: Capture multisite state at boot. switch_to_blog() becomes a no-op on single-site.
-		$instance->isMultisite = function_exists( 'is_multisite' ) && is_multisite();
-
-		// Set the current blog ID from WordPress globals when available.
-		if ( isset( $GLOBALS['blog_id'] ) ) {
-			$instance->blogId = (int) $GLOBALS['blog_id'];
+		// FD-1: structural non-reentrance guard.
+		// If boot() is called again while already on the call stack (e.g. via
+		// get_option -> wp_cache_get -> wpmgr_get_object_cache -> boot()), return
+		// the shared array-mode fallback without connecting or assigning the global.
+		if ( self::$bootInProgress ) {
+			if ( self::$bootFallback === null ) {
+				self::$bootFallback = new self();
+				self::$bootFallback->globalGroups        = array_flip( self::DEFAULT_GLOBAL_GROUPS );
+				self::$bootFallback->nonPersistentGroups = array_flip( self::DEFAULT_NON_PERSISTENT );
+				self::$bootFallback->bootArrayMode( 'boot_reentrance' );
+			}
+			// LOW-2: reset the in-memory L1 cache and request counters each time
+			// the fallback is returned to a reentrant caller. The static instance
+			// persists across requests in long-lived workers; resetting here ensures
+			// one request's L1 entries can never bleed into another request's reads
+			// should a future boot-time WP call reintroduce this code path.
+			self::$bootFallback->cache        = [];
+			self::$bootFallback->cache_hits   = 0;
+			self::$bootFallback->cache_misses = 0;
+			self::$bootFallback->hits         = 0;
+			self::$bootFallback->misses       = 0;
+			return self::$bootFallback;
 		}
 
+		self::$bootInProgress = true;
 		try {
-			// Load config from the 0600 file.
-			if ( ! class_exists( 'WPMgr\Agent\ObjectCache\ObjectCacheConfig' ) ) {
-				// Supporting classes not loaded (e.g. engine loaded standalone).
-				$instance->bootArrayMode( 'classes_missing' );
-				return $instance;
+			$instance = new self();
+			$instance->globalGroups         = array_flip( self::DEFAULT_GLOBAL_GROUPS );
+			$instance->nonPersistentGroups  = array_flip( self::DEFAULT_NON_PERSISTENT );
+
+			// H1: Capture multisite state at boot. switch_to_blog() becomes a no-op on single-site.
+			$instance->isMultisite = function_exists( 'is_multisite' ) && is_multisite();
+
+			// Set the current blog ID from WordPress globals when available.
+			if ( isset( $GLOBALS['blog_id'] ) ) {
+				$instance->blogId = (int) $GLOBALS['blog_id'];
 			}
 
-			$configLoader = new \WPMgr\Agent\ObjectCache\ObjectCacheConfig();
-			[ $config, $reason ] = $configLoader->loadWithReason();
+			try {
+				// Load config from the 0600 file.
+				if ( ! class_exists( 'WPMgr\Agent\ObjectCache\ObjectCacheConfig' ) ) {
+					// Supporting classes not loaded (e.g. engine loaded standalone).
+					$instance->bootArrayMode( 'classes_missing' );
+					return $instance;
+				}
 
-			if ( $config === [] ) {
-				// H7: distinguish config_unreadable from config_empty.
-				$instance->bootArrayMode( $reason !== '' ? $reason : 'config_empty' );
-				return $instance;
+				$configLoader = new \WPMgr\Agent\ObjectCache\ObjectCacheConfig();
+				[ $config, $reason ] = $configLoader->loadWithReason();
+
+				if ( $config === [] ) {
+					// H7: distinguish config_unreadable from config_empty.
+					$instance->bootArrayMode( $reason !== '' ? $reason : 'config_empty' );
+					return $instance;
+				}
+
+				$instance->config     = $config;
+				$instance->prefix     = isset( $config['prefix'] ) && is_string( $config['prefix'] )
+					? $instance->sanitizePrefix( (string) $config['prefix'] )
+					: 'wpmgr';
+				$instance->maxttl     = isset( $config['maxttl_seconds'] ) ? (int) $config['maxttl_seconds'] : 604800;
+				$instance->queryttl   = isset( $config['queryttl_seconds'] ) ? (int) $config['queryttl_seconds'] : 86400;
+				$instance->asyncFlush = isset( $config['async_flush'] ) && (bool) $config['async_flush'];
+				$instance->flushStrategy = isset( $config['flush_strategy'] ) && is_string( $config['flush_strategy'] )
+					? (string) $config['flush_strategy'] : 'auto';
+				$instance->shared        = ! isset( $config['shared'] ) || (bool) $config['shared'];
+				$instance->flushOnFailback = ! isset( $config['flush_on_failback'] ) || (bool) $config['flush_on_failback'];
+
+				// FD-6: check persisted reconnect cool-down before dialing.
+				$cooldownResult = $instance->checkCooldown( $config );
+				if ( $cooldownResult !== null ) {
+					// Inside the backoff window: skip connect entirely, land in array mode.
+					$instance->bootArrayMode( $cooldownResult );
+					return $instance;
+				}
+
+				// Connect.
+				$instance->connection = new \WPMgr\Agent\ObjectCache\RedisConnection( $config );
+				$instance->redis      = $instance->connection->acquire();
+
+				// FD-6: successful connect clears the failure state.
+				$instance->clearCooldownState( $config );
+
+				// Probe KEEPTTL support.
+				$caps = \WPMgr\Agent\ObjectCache\RedisConnection::probeCapabilities( $instance->redis );
+				$instance->keepttlSupported = (bool) ( $caps['keepttl_supported'] ?? false );
+
+				// M8: phpredis 6 FLUSHDB flag gate — already handled in executeFlush.
+
+				// FD-4: Metadata integrity uses EFFECTIVE codec values from the connection.
+				$instance->checkMetadataIntegrity( $config );
+
+				// H5: maybeFailbackFlushOnBoot() is intentionally NOT called here.
+				// It is deferred to runPostBootTasks() which is called by the include
+				// footer AFTER $wp_object_cache is assigned. Calling it inside boot()
+				// caused get_option -> wp_cache_get -> wpmgr_get_object_cache -> boot()
+				// infinite recursion with FD accumulation (FD-2 root fix).
+
+			} catch ( \Throwable $e ) {
+				// FD-6: persist cool-down state on boot connect failure.
+				// LOW-1: wrap in a best-effort try/catch — writeCooldownState's
+				// random_int() can throw on a CSPRNG-less platform, and any
+				// exception here must not escape into the unwrapped include-footer
+				// call before WP finishes loading.
+				if ( isset( $config ) && $config !== [] ) {
+					try {
+						$instance->recordCooldownFailure( $config );
+					} catch ( \Throwable $_ ) {
+						// Best-effort: cool-down write failed; swallow and proceed
+						// to array-mode so WP still loads.
+					}
+				}
+				$instance->bootArrayMode( $e->getMessage() );
 			}
 
-			$instance->config     = $config;
-			$instance->prefix     = isset( $config['prefix'] ) && is_string( $config['prefix'] )
-				? $instance->sanitizePrefix( (string) $config['prefix'] )
-				: 'wpmgr';
-			$instance->maxttl     = isset( $config['maxttl_seconds'] ) ? (int) $config['maxttl_seconds'] : 604800;
-			$instance->queryttl   = isset( $config['queryttl_seconds'] ) ? (int) $config['queryttl_seconds'] : 86400;
-			$instance->asyncFlush = isset( $config['async_flush'] ) && (bool) $config['async_flush'];
-			$instance->flushStrategy = isset( $config['flush_strategy'] ) && is_string( $config['flush_strategy'] )
-				? (string) $config['flush_strategy'] : 'auto';
-			$instance->shared        = ! isset( $config['shared'] ) || (bool) $config['shared'];
-			$instance->flushOnFailback = ! isset( $config['flush_on_failback'] ) || (bool) $config['flush_on_failback'];
-
-			// Connect.
-			$instance->connection = new \WPMgr\Agent\ObjectCache\RedisConnection( $config );
-			$instance->redis      = $instance->connection->acquire();
-
-			// Probe KEEPTTL support.
-			$caps = \WPMgr\Agent\ObjectCache\RedisConnection::probeCapabilities( $instance->redis );
-			$instance->keepttlSupported = (bool) ( $caps['keepttl_supported'] ?? false );
-
-			// M8: phpredis 6 FLUSHDB flag gate — already handled in executeFlush.
-
-			// Metadata integrity check.
-			$instance->checkMetadataIntegrity( $config );
-
-			// H5: On healthy boot, if an outage marker exists, attempt NX-lock failback flush.
-			$instance->maybeFailbackFlushOnBoot();
-
-		} catch ( \Throwable $e ) {
-			$instance->bootArrayMode( $e->getMessage() );
+			return $instance;
+		} finally {
+			self::$bootInProgress = false;
 		}
+	}
 
-		return $instance;
+	/**
+	 * FD-2: Run post-boot tasks that require the global $wp_object_cache to be
+	 * assigned first. Idempotent: the once-flag ensures it runs exactly once per
+	 * instance even if called from both the include footer and the lazy bridge.
+	 *
+	 * Currently performs the H5 outage-marker check (maybeFailbackFlushOnBoot).
+	 * Safe to call after $wp_object_cache = \WPMgr_Object_Cache::boot() because
+	 * by that point the global is set, so get_option -> wp_cache_get ->
+	 * wpmgr_get_object_cache() finds the instance and returns it immediately
+	 * (instanceof check passes) without triggering boot() again.
+	 *
+	 * @return void
+	 */
+	public function runPostBootTasks(): void
+	{
+		if ( $this->postBootTasksRan ) {
+			return;
+		}
+		$this->postBootTasksRan = true;
+		// H5: check for outage marker and attempt NX-lock failback flush.
+		$this->maybeFailbackFlushOnBoot();
 	}
 
 	/**
 	 * Enter array-only mode (graceful degradation).
+	 *
+	 * FD-3d: Close any stranded connection/redis handle before nulling them so
+	 * no FD is left in the per-process pool in an unusable state.
 	 *
 	 * @param string $reason Reason for the fallback (logged when WP_DEBUG is on).
 	 * @return void
 	 */
 	private function bootArrayMode( string $reason ): void
 	{
+		// FD-3d: close the connection through RedisConnection.close() so the FD is
+		// returned to the pool rather than leaked. Keep shutdown() no-op for HEALTHY
+		// handles (pooling design unchanged); this close only fires on the failed path.
+		if ( $this->connection !== null ) {
+			$this->connection->close();
+		}
+
 		$this->arrayMode  = true;
 		$this->redis      = null;
 		$this->connection = null;
@@ -1773,6 +1900,16 @@ class WPMgr_Object_Cache
 			'engine_version'     => self::ENGINE_VERSION,
 		];
 
+		// FD-4: surface effective codec values and fallback cause for diagnostics.
+		if ( $this->connection !== null ) {
+			$stats['serializer_effective']   = $this->connection->effectiveSerializer();
+			$stats['compression_effective']  = $this->connection->effectiveCompression();
+			$codecFallback = $this->connection->codecFallbackCause();
+			if ( $codecFallback !== '' ) {
+				$stats['codec_fallback'] = $codecFallback;
+			}
+		}
+
 		// used_memory_bytes: attempt a live INFO query (best-effort, no extra cost
 		// if INFO is denied or throws).
 		if ( $this->redis !== null && ! $this->arrayMode ) {
@@ -2215,6 +2352,164 @@ class WPMgr_Object_Cache
 		}
 	}
 
+	// -------------------------------------------------------------------------
+	// FD-6: Reconnect cool-down side channel
+	// -------------------------------------------------------------------------
+
+	/**
+	 * FD-6: Derive the absolute path to the state file.
+	 * Lives next to the config file in wp-content.
+	 *
+	 * @param array<string,mixed> $config Loaded config (unused directly; reserved for future scoping).
+	 * @return string Absolute path, or '' when WP_CONTENT_DIR is unavailable.
+	 */
+	private function cooldownStatePath( array $config ): string
+	{
+		if ( ! class_exists( 'WPMgr\Agent\ObjectCache\ObjectCacheConfig' ) ) {
+			return '';
+		}
+		$configLoader = new \WPMgr\Agent\ObjectCache\ObjectCacheConfig();
+		$configDir    = dirname( $configLoader->filePath() );
+		if ( $configDir === '' || $configDir === '.' ) {
+			return '';
+		}
+		return $configDir . '/' . \WPMgr\Agent\ObjectCache\ObjectCacheConfig::STATE_FILENAME;
+	}
+
+	/**
+	 * FD-6: Read the cool-down state (APCu or state file).
+	 * Returns array{last_failure_ts:float,consecutive_failures:int} or null when absent.
+	 *
+	 * @return array<string,mixed>|null
+	 */
+	private function readCooldownState(): ?array
+	{
+		// APCu is preferred: no disk I/O on the hot path.
+		if ( function_exists( 'apcu_fetch' ) ) {
+			$val = apcu_fetch( 'wpmgr_oc_cooldown' );
+			if ( is_array( $val ) ) {
+				return $val;
+			}
+			return null;
+		}
+		// Fallback: state file.
+		$path = isset( $this->config['_state_path_override'] )
+			? (string) $this->config['_state_path_override']
+			: $this->cooldownStatePath( $this->config );
+		if ( $path === '' || ! @is_file( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- silent is_file on optional state file; failure => no cooldown
+			return null;
+		}
+		$raw = @file_get_contents( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_get_contents_file_get_contents -- state file; WP_Filesystem not available at drop-in time
+		if ( $raw === false ) {
+			return null;
+		}
+		$decoded = json_decode( $raw, true );
+		return is_array( $decoded ) ? $decoded : null;
+	}
+
+	/**
+	 * FD-6: Write the cool-down state atomically.
+	 *
+	 * @param array<string,mixed> $state State to persist.
+	 * @return void
+	 */
+	private function writeCooldownState( array $state ): void
+	{
+		if ( function_exists( 'apcu_store' ) ) {
+			apcu_store( 'wpmgr_oc_cooldown', $state, 600 );
+			return;
+		}
+		$path = isset( $this->config['_state_path_override'] )
+			? (string) $this->config['_state_path_override']
+			: $this->cooldownStatePath( $this->config );
+		if ( $path === '' ) {
+			return;
+		}
+		$json = (string) json_encode( $state );
+		// Atomic write: tmp file + rename with random suffix to avoid collisions.
+		$tmp = $path . '.tmp.' . random_int( 1000000, 9999999 );
+		$prev = umask( 0077 );
+		$written = @file_put_contents( $tmp, $json ); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- state file; WP_Filesystem not available at drop-in time; atomic via tmp+rename
+		umask( $prev );
+		if ( $written !== false ) {
+			@rename( $tmp, $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic move; WP_Filesystem::move() is non-atomic
+		} else {
+			@unlink( $tmp ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- cleanup tmp file on failure
+		}
+	}
+
+	/**
+	 * FD-6: Check whether the reconnect cool-down is active.
+	 * Returns a cause string ('cooldown') when inside the backoff window,
+	 * null when the boot should proceed normally.
+	 *
+	 * @param array<string,mixed> $config Loaded config.
+	 * @return string|null 'cooldown' when inside the window, null otherwise.
+	 */
+	private function checkCooldown( array $config ): ?string
+	{
+		$state = $this->readCooldownState();
+		if ( $state === null ) {
+			return null;
+		}
+		$lastFailure  = (float) ( $state['last_failure_ts'] ?? 0.0 );
+		$consecutive  = (int) ( $state['consecutive_failures'] ?? 0 );
+		if ( $lastFailure <= 0.0 || $consecutive <= 0 ) {
+			return null;
+		}
+		// 15s doubling per consecutive failure, capped at 300s.
+		$backoff = min( 15 * (int) pow( 2, $consecutive - 1 ), 300 );
+		// Use time() directly: boot runs before WP; current_time() is unavailable.
+		$elapsed = time() - (int) $lastFailure;
+		// MEDIUM-1: fail OPEN on implausible elapsed — a large-negative value signals
+		// a future timestamp (backward NTP step, VM snapshot restore, or tampered
+		// state file). Treat as no cool-down so we never enter permanent silent
+		// array-mode. A non-positive last_failure_ts is already rejected above.
+		if ( $elapsed < 0 ) {
+			return null;
+		}
+		if ( $elapsed < $backoff ) {
+			return 'cooldown';
+		}
+		return null;
+	}
+
+	/**
+	 * FD-6: Record a boot connect failure into the cool-down state.
+	 *
+	 * @param array<string,mixed> $config Loaded config.
+	 * @return void
+	 */
+	private function recordCooldownFailure( array $config ): void
+	{
+		$existing    = $this->readCooldownState();
+		$consecutive = isset( $existing['consecutive_failures'] ) ? (int) $existing['consecutive_failures'] + 1 : 1;
+		$this->writeCooldownState( [
+			'last_failure_ts'    => (float) time(),
+			'consecutive_failures' => $consecutive,
+		] );
+	}
+
+	/**
+	 * FD-6: Clear the cool-down state after a successful connect.
+	 *
+	 * @param array<string,mixed> $config Loaded config.
+	 * @return void
+	 */
+	private function clearCooldownState( array $config ): void
+	{
+		if ( function_exists( 'apcu_delete' ) ) {
+			apcu_delete( 'wpmgr_oc_cooldown' );
+			return;
+		}
+		$path = isset( $this->config['_state_path_override'] )
+			? (string) $this->config['_state_path_override']
+			: $this->cooldownStatePath( $this->config );
+		if ( $path !== '' && @is_file( $path ) ) { // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- silent check on optional file
+			@unlink( $path ); // phpcs:ignore WordPress.WP.AlternativeFunctions.unlink_unlink -- state file cleanup
+		}
+	}
+
 	/**
 	 * H5: Persist an outage marker to wp-options immediately on first degradation.
 	 * This ensures the next healthy boot knows a flush is needed, even if the
@@ -2310,9 +2605,16 @@ class WPMgr_Object_Cache
 
 		$metaKey = $this->metadataKey();
 
-		// Effective codecs: what the client actually applied (probed from the handle).
-		$effectiveSerializer  = $config['serializer'] ?? 'php';
-		$effectiveCompression = $config['compression'] ?? 'none';
+		// FD-4: use EFFECTIVE codec values post-fallback from the connection, not
+		// the configured (requested) values. This ensures checkMetadataIntegrity
+		// detects igbinary->php or zstd->none transitions correctly and performs
+		// a one-time flush on the transition instead of serving unreadable blobs.
+		$effectiveSerializer  = ( $this->connection !== null )
+			? $this->connection->effectiveSerializer()
+			: ( $config['serializer'] ?? 'php' );
+		$effectiveCompression = ( $this->connection !== null )
+			? $this->connection->effectiveCompression()
+			: ( $config['compression'] ?? 'none' );
 
 		// H4: always use try/finally to restore OPT_SERIALIZER.
 		$savedSerializer = $this->redis->getOption( \Redis::OPT_SERIALIZER );

@@ -792,6 +792,16 @@ func validateConfig(input UpdateConfigInput) error {
 	if cfg.MaxTTLSeconds < 0 {
 		return domain.Validation("invalid_maxttl", "maxttl_seconds must be non-negative")
 	}
+	if cfg.RetryCount < 0 || cfg.RetryCount > 10 {
+		return domain.Validation("invalid_retry_count", "retry_count must be between 0 and 10")
+	}
+	// RetryIntervalMs == 0 is the zero-value sentinel meaning "use stored/default"
+	// (the handler fills it from the base config via orDefaultInt before calling here).
+	// Only validate the upper bound when explicitly set (a negative value after
+	// orDefaultInt would be a bug; we guard against that too via < 0 check).
+	if cfg.RetryIntervalMs < 0 || cfg.RetryIntervalMs > 5000 {
+		return domain.Validation("invalid_retry_interval_ms", "retry_interval_ms must be between 1 and 5000")
+	}
 	// Validate the key prefix. The agent falls back to 'wpmgr' on empty/invalid
 	// prefixes; an empty or whitespace-only prefix sent from the CP would defeat
 	// shared-Redis namespacing and make SCAN-based flush delete a neighbour's keys.

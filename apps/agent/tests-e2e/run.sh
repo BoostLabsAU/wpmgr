@@ -19,8 +19,10 @@
 # 12.  installing-check stage (H6: WP_INSTALLING must not block cache).
 # 13.  cli-uid-check stage (H7: non-owner flush fails loudly).
 # 14.  outage-failback stage (H5: persisted epoch + NX lock marker check).
-# 15.  disable stage (extended: assert drop-in + config absent).
-# 16.  EXIT trap: docker compose down -v.
+# 15.  fd-bomb stage (FD-1/FD-2: boot recursion guard — fd delta < 10 on fresh worker).
+# 16.  codec-fallback stage (FD-4: igbinary not available falls back to php serializer).
+# 17.  disable stage (extended: assert drop-in + config absent).
+# 18.  EXIT trap: docker compose down -v.
 #
 # Usage:
 #   PLUGIN_ZIP=/path/to/fleet-agent-for-wpmgr.zip ./tests-e2e/run.sh
@@ -325,15 +327,46 @@ docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     exec -T wordpress php /usr/local/bin/wpmgr-assert.php outage-failback
 
 # -----------------------------------------------------------------------
-# Step 15: disable stage.
+# Step 15: fd-bomb stage (FD-1/FD-2 boot recursion guard).
+#
+# Boots the object cache on a fresh PHP worker and asserts that the open
+# file descriptor delta stays < 10.  A large delta would indicate that
+# boot() is spawning multiple RedisConnection instances (recursion guard
+# not firing).
 # -----------------------------------------------------------------------
-echo "[e2e] Step 15: disable..."
+echo "[e2e] Step 15: fd-bomb (FD-1/FD-2 recursion guard)..."
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php fd-bomb
+
+# -----------------------------------------------------------------------
+# Step 16: codec-fallback stage (FD-4 igbinary -> php fallback).
+#
+# Patches the object-cache config to request igbinary, boots in a fresh
+# worker, and asserts serializer_effective=php when igbinary is absent.
+# The site must serve HTTP 200 throughout (no fatal on codec mismatch).
+# -----------------------------------------------------------------------
+echo "[e2e] Step 16: codec-fallback (FD-4 igbinary->php fallback)..."
+CODEC_EXIT=0
+docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
+    --project-name wpmgr-agent-e2e \
+    exec -T wordpress php /usr/local/bin/wpmgr-assert.php codec-fallback || CODEC_EXIT=$?
+
+if [ "${CODEC_EXIT}" -ne 0 ]; then
+    echo "[e2e] ERROR: codec-fallback failed with exit ${CODEC_EXIT}" >&2
+    exit 1
+fi
+
+# -----------------------------------------------------------------------
+# Step 17: disable stage.
+# -----------------------------------------------------------------------
+echo "[e2e] Step 17: disable..."
 docker compose -f "${COMPOSE_DIR}/docker-compose.yml" \
     --project-name wpmgr-agent-e2e \
     exec -T wordpress php /usr/local/bin/wpmgr-assert.php disable
 
 # -----------------------------------------------------------------------
-# Step 16: EXIT trap fires (docker compose down -v).
+# Step 18: EXIT trap fires (docker compose down -v).
 # -----------------------------------------------------------------------
 echo "[e2e] All steps passed."
 exit 0

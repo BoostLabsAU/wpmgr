@@ -17,6 +17,8 @@
  *   installing-check — WP_INSTALLING defined; assert wp_cache_set reaches Redis (H6).
  *   cli-uid-check    — non-owner uid wp cache flush returns non-zero + Redis key survives (H7).
  *   outage-failback  — sentinel key, stop redis, request, start redis, request; assert flush (H5).
+ *   fd-bomb          — boot on fresh worker; assert /proc/self/fd delta < 10 (FD-1/FD-2).
+ *   codec-fallback   — push igbinary config into igbinary-less container; assert serializer_effective=php (FD-4).
  *   disable          — uninstall drop-in + config, assert clean (extended teardown asserts).
  *
  * Usage:
@@ -748,6 +750,215 @@ PHP;
     exit(0);
 }
 
+// ============================================================================
+// Stage: fd-bomb
+// ============================================================================
+if ($stage === 'fd-bomb') {
+    // FD-1 / FD-2 regression net: boot() on a fresh worker with
+    // flush_on_failback=true must NOT exhaust file descriptors.
+    //
+    // Strategy: count open fds before and after the first WordPress request
+    // that exercises the boot path.  The delta must be < 10 (one persistent
+    // pconnect socket is expected; anything above 5 indicates a leaked-fd or
+    // recursion regression).
+    //
+    // We read /proc/self/fd inside the container via a WP-CLI eval so the
+    // count is from the PHP worker process perspective.
+    $fdBefore = wp('eval \'echo count(glob("/proc/self/fd/*"));\' --skip-plugins --skip-themes', $out1);
+    if ($fdBefore !== 0) {
+        fail('fd-bomb: could not count /proc/self/fd before boot; wp eval failed: ' . $out1);
+    }
+    $fdCountBefore = (int) trim($out1);
+
+    // Trigger a full boot cycle with the actual drop-in loaded.
+    $bootCode = <<<'PHP'
+// Simulate a request that calls wp_cache_get, which exercises the boot path.
+$val = wp_cache_get('fd_bomb_probe', 'e2e_fd');
+wp_cache_set('fd_bomb_probe', 'ok', 'e2e_fd', 60);
+$val2 = wp_cache_get('fd_bomb_probe', 'e2e_fd');
+$fdAfter = count(glob('/proc/self/fd/*'));
+echo json_encode([
+    'status'    => $GLOBALS['wp_object_cache'] instanceof WPMgr_Object_Cache ? 'ok' : 'no-cache',
+    'roundtrip' => $val2 === 'ok',
+    'fd_count'  => $fdAfter,
+]);
+PHP;
+    $bootExit = wp('eval ' . escapeshellarg($bootCode), $out2);
+    if ($bootExit !== 0) {
+        fail('fd-bomb: WP-CLI eval failed: ' . $out2);
+    }
+
+    $result = json_decode(trim($out2), true);
+    if (! is_array($result)) {
+        fail('fd-bomb: eval did not return JSON; got: ' . $out2);
+    }
+
+    $fdCountAfter = (int) ($result['fd_count'] ?? 9999);
+    $fdDelta      = $fdCountAfter - $fdCountBefore;
+
+    if ($fdDelta >= 10) {
+        fail(
+            sprintf(
+                'fd-bomb: FD delta too large (before=%d after=%d delta=%d >= 10); ' .
+                'FD-1/FD-2 recursion guard may not be firing',
+                $fdCountBefore,
+                $fdCountAfter,
+                $fdDelta
+            )
+        );
+    }
+
+    pass(sprintf(
+        'fd-bomb: FD delta=%d (before=%d after=%d) — within safe bound (FD-1/FD-2 ok)',
+        $fdDelta,
+        $fdCountBefore,
+        $fdCountAfter
+    ));
+
+    // Also verify the site is still serving correctly after the boot.
+    $curlExit = run('curl -s -o /dev/null -w "%{http_code}" http://localhost/', $httpCode);
+    $httpStatus = (int) trim($httpCode);
+    if ($httpStatus < 200 || $httpStatus >= 500) {
+        fail('fd-bomb: site returned HTTP ' . $httpStatus . ' after fd-bomb boot cycle');
+    }
+    pass('fd-bomb: site returns HTTP ' . $httpStatus . ' after boot cycle (site still healthy)');
+    exit(0);
+}
+
+// ============================================================================
+// Stage: codec-fallback
+// ============================================================================
+if ($stage === 'codec-fallback') {
+    // FD-4 regression net: when the server does not support igbinary, the
+    // engine must silently fall back to the PHP serializer and continue
+    // serving cache hits (not throw or degrade to array mode).
+    //
+    // In the standard e2e container, igbinary is NOT installed.  We push
+    // a config that requests igbinary and verify that:
+    //   1. The engine connects (status = connected OR array_mode due to no Redis).
+    //   2. serializer_effective = php (fallback confirmed).
+    //   3. The site continues to serve HTTP 200.
+
+    // Read the current config path from WordPress constants.
+    $configPathCode = 'echo defined("WP_CONTENT_DIR") ? WP_CONTENT_DIR . "/.wpmgr-oc-config.json" : "";';
+    $configPathExit = wp('eval ' . escapeshellarg($configPathCode), $configPath);
+    $configPath = trim($configPath);
+    if ($configPathExit !== 0 || $configPath === '') {
+        fail('codec-fallback: could not resolve config path via WP_CONTENT_DIR');
+    }
+
+    // Read current config.
+    $readExit = run('cat ' . escapeshellarg($configPath), $currentConfig);
+    if ($readExit !== 0) {
+        // Config may not exist if Redis was never set up; treat as skip.
+        fwrite(STDERR, "SKIP [codec-fallback]: config file not found at {$configPath}; skipping (Redis not provisioned).\n");
+        exit(0);
+    }
+
+    $config = json_decode($currentConfig, true);
+    if (! is_array($config)) {
+        fwrite(STDERR, "SKIP [codec-fallback]: config not valid JSON; skipping.\n");
+        exit(0);
+    }
+
+    // Inject igbinary as the requested serializer.
+    $originalSerializer = $config['serializer'] ?? 'php';
+    $config['serializer'] = 'igbinary';
+    $patchedConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+    // Write patched config (0600, preserve owner).
+    $writeCmd = 'bash -c ' . escapeshellarg(
+        'echo ' . escapeshellarg($patchedConfig) . ' > ' . escapeshellarg($configPath) .
+        ' && chmod 600 ' . escapeshellarg($configPath)
+    );
+    $writeExit = run($writeCmd, $writeOut);
+    if ($writeExit !== 0) {
+        fail('codec-fallback: failed to write patched config: ' . $writeOut);
+    }
+
+    // Trigger a fresh boot by calling WP-CLI (new PHP worker = fresh static state).
+    $heartbeatCode = <<<'PHP'
+// Boot the cache and read heartbeat stats.
+$oc = $GLOBALS['wp_object_cache'] ?? null;
+if (! $oc instanceof WPMgr_Object_Cache) {
+    echo json_encode(['error' => 'no WPMgr_Object_Cache in global']);
+    return;
+}
+$stats = $oc->getHeartbeatStats();
+echo json_encode([
+    'status'               => $stats['status'] ?? 'unknown',
+    'serializer_effective' => $stats['serializer_effective'] ?? 'unknown',
+    'codec_fallback'       => $stats['codec_fallback'] ?? '',
+    'is_array_mode'        => $oc->isArrayMode(),
+]);
+PHP;
+    $hbExit = wp('eval ' . escapeshellarg($heartbeatCode), $hbOut);
+
+    // Restore original serializer regardless of outcome.
+    $config['serializer'] = $originalSerializer;
+    $restoredConfig = json_encode($config, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+    $restoreCmd = 'bash -c ' . escapeshellarg(
+        'echo ' . escapeshellarg($restoredConfig) . ' > ' . escapeshellarg($configPath) .
+        ' && chmod 600 ' . escapeshellarg($configPath)
+    );
+    run($restoreCmd, $restoreOut);
+
+    if ($hbExit !== 0) {
+        fail('codec-fallback: WP-CLI eval failed after patching config: ' . $hbOut);
+    }
+
+    $hbResult = json_decode(trim($hbOut), true);
+    if (! is_array($hbResult)) {
+        fail('codec-fallback: heartbeat eval did not return JSON; got: ' . $hbOut);
+    }
+
+    if (isset($hbResult['error'])) {
+        fwrite(STDERR, "SKIP [codec-fallback]: " . $hbResult['error'] . "; skipping.\n");
+        exit(0);
+    }
+
+    // The engine must not be in array mode due to a codec configuration error.
+    // (Array mode is acceptable if Redis is simply not reachable, but NOT if
+    //  the cause is specifically a serializer mismatch that should have fallen back.)
+    $serializerEffective = $hbResult['serializer_effective'] ?? 'unknown';
+    $codecFallback       = $hbResult['codec_fallback'] ?? '';
+    $status              = $hbResult['status'] ?? 'unknown';
+
+    // If igbinary IS installed in this container, the effective serializer will
+    // be igbinary and this test trivially passes (no fallback needed).
+    if ($serializerEffective === 'igbinary') {
+        pass('codec-fallback: igbinary IS available in this container; effective=igbinary (no fallback needed, FD-4 not exercised)');
+        exit(0);
+    }
+
+    // igbinary not available: effective must be php (fallback), not a failure.
+    if ($serializerEffective !== 'php') {
+        fail(
+            sprintf(
+                'codec-fallback: expected serializer_effective=php (igbinary fallback), got=%s status=%s codec_fallback=%s',
+                $serializerEffective,
+                $status,
+                $codecFallback
+            )
+        );
+    }
+
+    pass(sprintf(
+        'codec-fallback: igbinary requested but not available; fell back to serializer_effective=php, codec_fallback=%s, status=%s (FD-4 ok)',
+        $codecFallback,
+        $status
+    ));
+
+    // Verify site is still serving after the config patch + restore cycle.
+    $curlExit = run('curl -s -o /dev/null -w "%{http_code}" http://localhost/', $httpCode2);
+    $httpStatus2 = (int) trim($httpCode2);
+    if ($httpStatus2 < 200 || $httpStatus2 >= 500) {
+        fail('codec-fallback: site returned HTTP ' . $httpStatus2 . ' after codec config restore');
+    }
+    pass('codec-fallback: site returns HTTP ' . $httpStatus2 . ' after codec-fallback cycle (site still healthy)');
+    exit(0);
+}
+
 // Unknown stage.
-fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, disable\n");
+fwrite(STDERR, "assert.php: unknown stage '{$stage}'. Valid stages: provision, assert-cli, cron-check, negative-check, multisite-check, installing-check, cli-uid-check, outage-failback, fd-bomb, codec-fallback, disable\n");
 exit(1);

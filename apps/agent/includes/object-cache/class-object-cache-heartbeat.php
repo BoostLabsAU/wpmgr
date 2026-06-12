@@ -114,6 +114,16 @@ final class ObjectCacheHeartbeat
 				'php_sapi'             => $phpSapi,
 				'config_hash'          => is_string( $configHash ) ? $configHash : '',
 			];
+			// FD-4: pass through effective codec fields and fallback cause when present.
+			if ( isset( $liveStats['serializer_effective'] ) ) {
+				$block['serializer_effective'] = (string) $liveStats['serializer_effective'];
+			}
+			if ( isset( $liveStats['compression_effective'] ) ) {
+				$block['compression_effective'] = (string) $liveStats['compression_effective'];
+			}
+			if ( isset( $liveStats['codec_fallback'] ) ) {
+				$block['codec_fallback'] = (string) $liveStats['codec_fallback'];
+			}
 			if ( $earlyDefiner !== '' ) {
 				$block['early_definer'] = substr( $earlyDefiner, 0, 64 );
 			}
@@ -170,6 +180,16 @@ final class ObjectCacheHeartbeat
 			'php_sapi'             => $phpSapi,
 			'config_hash'          => is_string( $configHash ) ? $configHash : '',
 		];
+		// FD-4: pass through effective codec fields and fallback cause when present.
+		if ( isset( $liveStats['serializer_effective'] ) ) {
+			$block['serializer_effective'] = (string) $liveStats['serializer_effective'];
+		}
+		if ( isset( $liveStats['compression_effective'] ) ) {
+			$block['compression_effective'] = (string) $liveStats['compression_effective'];
+		}
+		if ( isset( $liveStats['codec_fallback'] ) ) {
+			$block['codec_fallback'] = (string) $liveStats['codec_fallback'];
+		}
 		if ( $earlyDefiner !== '' ) {
 			$block['early_definer'] = substr( $earlyDefiner, 0, 64 );
 		}

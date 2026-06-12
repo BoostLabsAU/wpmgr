@@ -65,6 +65,9 @@ final class FilesRestorer
         // Object-cache credentials file: never restore from a backup archive;
         // the live credential must remain intact across a restore.
         'wpmgr-object-cache-config.php',
+        // FD-6: Object-cache cool-down state file; must not be restored from
+        // a backup so a stale window cannot suppress Redis on a healthy site.
+        '.wpmgr-oc-state.json',
     ];
 
     /** Emit a progress event every N extracted entries. */

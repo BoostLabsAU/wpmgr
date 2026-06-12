@@ -95,6 +95,10 @@ final class FilesArchiver
         // Object-cache credentials file: contains the plaintext Redis password;
         // must never be packed into a backup archive.
         'wpmgr-object-cache-config.php',
+        // FD-6: Object-cache reconnect cool-down state file (timestamps/counters,
+        // no secrets). Excluded so a restored backup does not replay a stale
+        // cool-down window that could suppress Redis on a healthy site.
+        '.wpmgr-oc-state.json',
     ];
 
     /**

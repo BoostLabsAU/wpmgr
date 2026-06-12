@@ -87,6 +87,123 @@ function isAgentSufficient(version: string | undefined): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Error-class (cause) vocabulary
+// ---------------------------------------------------------------------------
+
+interface CauseEntry {
+  label: string;
+  description: string;
+}
+
+const CAUSE_VOCAB: Record<string, CauseEntry> = {
+  // --- live engine causes (set inside the drop-in on boot) ---
+  config_empty: {
+    label: "Configuration missing",
+    description:
+      "No Redis connection settings have been saved yet. Configure the object cache to get started.",
+  },
+  config_unreadable: {
+    label: "Configuration unreadable",
+    description:
+      "The engine could not read its configuration file. Check file permissions or re-save the configuration.",
+  },
+  classes_missing: {
+    label: "PHP extension not loaded",
+    description:
+      "The phpredis extension is not available in this PHP environment. Install and enable phpredis to use the object cache.",
+  },
+  unsupported_codec: {
+    label: "Unsupported serializer or compression",
+    description:
+      "The configured serializer or compression codec is not available in this PHP environment. Switch to a supported option in the configuration.",
+  },
+  cooldown: {
+    label: "Reconnect cool-down",
+    description:
+      "The connection is in a temporary retry cool-down after recent failures. The site is serving from the in-request array cache and will reconnect automatically.",
+  },
+  connect_budget_exhausted: {
+    label: "Connection attempt limit reached",
+    description:
+      "The engine reached its per-request connection attempt limit and degraded safely for this request. It will retry on the next request.",
+  },
+  // --- heartbeat / non-activation causes (Phase B diagnosis) ---
+  engine_not_loaded: {
+    label: "Engine not loaded",
+    description:
+      "The drop-in is present but the engine class was not registered. This usually indicates an incomplete activation.",
+  },
+  engine_boot_incomplete: {
+    label: "Engine boot incomplete",
+    description:
+      "The drop-in loaded but the engine did not finish initialising. Re-enabling the object cache or flushing the OPcache should resolve this.",
+  },
+  engine_replaced: {
+    label: "Engine replaced",
+    description:
+      "A different object-cache implementation is active in place of the WPMgr engine. Disable the other plugin or drop-in before enabling the object cache here.",
+  },
+  dropin_missing: {
+    label: "Drop-in not installed",
+    description:
+      "The object-cache drop-in file is missing from wp-content. Enable the object cache to reinstall it.",
+  },
+  dropin_outdated: {
+    label: "Drop-in outdated",
+    description:
+      "The installed drop-in is from an older agent version. Re-enabling the object cache will update it to the current version.",
+  },
+  foreign_dropin: {
+    label: "Third-party drop-in active",
+    description:
+      "A drop-in installed by another plugin is loaded. Remove or deactivate it before enabling the WPMgr object cache.",
+  },
+  stale_opcache_suspected: {
+    label: "OPcache may be serving stale code",
+    description:
+      "The drop-in file was updated but the PHP OPcache appears to be serving the previous version. Flushing the OPcache should restore normal operation.",
+  },
+  filter_suppressed: {
+    label: "Cache suppressed by filter",
+    description:
+      "A WordPress filter is disabling object caching at runtime. Check for plugins or code that return false from the enable_wp_debug_mode or wp_using_ext_object_cache filters.",
+  },
+  early_definition: {
+    label: "Cache class defined too early",
+    description:
+      "Another plugin or must-use plugin defined the WP_Object_Cache class before the drop-in loaded. Deactivate conflicting plugins or adjust load order.",
+  },
+  bail_php_floor: {
+    label: "PHP version too old",
+    description:
+      "The server's PHP version does not meet the minimum requirement for the object cache engine. Update PHP to use this feature.",
+  },
+  bail_installing: {
+    label: "WordPress install in progress",
+    description:
+      "WordPress is in installation mode. The object cache will activate automatically once the site is fully installed.",
+  },
+  bail_killswitch: {
+    label: "Cache disabled by constant",
+    description:
+      "The WPMGR_OBJECT_CACHE_DISABLE constant is set, preventing the engine from loading. Remove or set it to false to re-enable.",
+  },
+};
+
+/**
+ * Returns a human-readable label for a raw cause string from the agent.
+ * Unknown causes fall back to a title-cased version of the raw string so
+ * no information is lost and no raw identifier leaks unformatted into the UI.
+ */
+function formatCauseLabel(cause: string): string {
+  return CAUSE_VOCAB[cause]?.label ?? cause.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function formatCauseDescription(cause: string): string | undefined {
+  return CAUSE_VOCAB[cause]?.description;
+}
+
+// ---------------------------------------------------------------------------
 // Status helpers
 // ---------------------------------------------------------------------------
 
@@ -192,8 +309,11 @@ function StatusHeader({
           ) : null}
 
           {(oc_state === "degraded" || oc_state === "down") && oc_last_error_class ? (
-            <span className="text-xs text-destructive">
-              Last error: {oc_last_error_class}
+            <span
+              className="text-xs text-destructive"
+              title={formatCauseDescription(oc_last_error_class)}
+            >
+              {formatCauseLabel(oc_last_error_class)}
             </span>
           ) : null}
         </div>

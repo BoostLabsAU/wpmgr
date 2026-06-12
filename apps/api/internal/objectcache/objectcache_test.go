@@ -676,6 +676,64 @@ func TestValidateConfigEmptyPrefixAllowed(t *testing.T) {
 	}
 }
 
+// TestValidateConfigRetryBounds verifies that retry_count and retry_interval_ms
+// are bounded to prevent worker pile-up while Redis is unavailable.
+//
+// retry_count: [0,10]. 0 means "no retries" (valid explicit value).
+// retry_interval_ms: 0 is the zero-value sentinel meaning "use stored/default"
+// (the handler fills it via orDefaultInt before validateConfig runs); negative
+// values and values > 5000 are rejected.
+func TestValidateConfigRetryBounds(t *testing.T) {
+	// Helper: build a minimal valid config with the given retry fields.
+	cfg := func(retryCount, retryIntervalMs int) UpdateConfigInput {
+		return UpdateConfigInput{
+			Config: Config{
+				Scheme:          "tcp",
+				Port:            6379,
+				RetryCount:      retryCount,
+				RetryIntervalMs: retryIntervalMs,
+			},
+		}
+	}
+
+	rejectCases := []struct {
+		name            string
+		retryCount      int
+		retryIntervalMs int
+	}{
+		{"retry_count -1", -1, 25},
+		{"retry_count 11", 11, 25},
+		{"retry_interval_ms -1", 3, -1},
+		{"retry_interval_ms 5001", 3, 5001},
+	}
+	for _, tc := range rejectCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateConfig(cfg(tc.retryCount, tc.retryIntervalMs)); err == nil {
+				t.Fatalf("expected validation error for %s", tc.name)
+			}
+		})
+	}
+
+	acceptCases := []struct {
+		name            string
+		retryCount      int
+		retryIntervalMs int
+	}{
+		{"retry_count 0 (boundary)", 0, 25},
+		{"retry_count 10 (boundary)", 10, 25},
+		{"retry_interval_ms 0 (zero sentinel)", 3, 0},
+		{"retry_interval_ms 1 (boundary)", 3, 1},
+		{"retry_interval_ms 5000 (boundary)", 3, 5000},
+	}
+	for _, tc := range acceptCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateConfig(cfg(tc.retryCount, tc.retryIntervalMs)); err != nil {
+				t.Fatalf("unexpected validation error for %s: %v", tc.name, err)
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Test: Bug 1 — last_test_result propagation through toConfigDTO
 // ---------------------------------------------------------------------------
