@@ -317,3 +317,20 @@ if (!class_exists('Redis')) {
         public const FLUSHDB_ASYNC = true;
     }
 }
+
+if (!function_exists('esc_sql')) {
+    /**
+     * Escapes data for use in a MySQL query — passthrough stub for tests.
+     *
+     * Real WP delegates to $wpdb->_escape(); for test purposes the inputs are
+     * plugin-derived identifiers with no escapable characters, so returning
+     * the value unchanged preserves the behavior under test.
+     *
+     * @param string|array $data Data to escape.
+     * @return string|array
+     */
+    function esc_sql($data)
+    {
+        return $data;
+    }
+}
