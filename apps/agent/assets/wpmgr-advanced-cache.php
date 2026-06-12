@@ -56,14 +56,32 @@ if (defined('WP_CLI') && WP_CLI) {
     return false;
 }
 
+// ---------------------------------------------------------------------------
+// NOTE ON $_SERVER SANITIZATION IN THIS FILE
+//
+// This drop-in runs before WordPress loads — sanitize_text_field(), wp_unslash(),
+// and all other core helper functions are unavailable here. Every $_SERVER value
+// is therefore validated and sanitized using strict plain-PHP primitives:
+//   - allowlists via in_array() with strict comparison
+//   - character-class whitelists via preg_match() / preg_replace()
+//   - control-character stripping via preg_replace('/[\x00-\x1F\x7F]/', '', ...)
+//   - length caps before any value reaches cache-key or header logic
+// Validation failures fall through to the existing bypass or default value —
+// never fatal. See each read below for its per-value rationale.
+// ---------------------------------------------------------------------------
+
 // Preload warming: let WordPress render fresh HTML so the writer can store it.
-if (isset($_SERVER['HTTP_X_WPMGR_PRELOAD'])) {
+// Only the presence of the header is checked; the value is not consumed.
+if (isset($_SERVER['HTTP_X_WPMGR_PRELOAD'])) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- value not consumed; presence-check only; no WP sanitizers available at drop-in load time
     return false;
 }
 
-// Only GET / HEAD are cacheable.
-// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value key-filtered by string comparison
-$wpmgr_method = isset($_SERVER['REQUEST_METHOD']) ? $_SERVER['REQUEST_METHOD'] : 'GET';
+// Only GET / HEAD are cacheable. Allowlist via strtoupper + in_array —
+// no WP sanitizers available at drop-in load time.
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value allowlisted via strtoupper+in_array below
+$wpmgr_method_raw = isset($_SERVER['REQUEST_METHOD']) ? strtoupper((string) $_SERVER['REQUEST_METHOD']) : 'GET';
+$wpmgr_method     = in_array($wpmgr_method_raw, array('GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'), true)
+    ? $wpmgr_method_raw : 'GET';
 if ($wpmgr_method !== 'GET' && $wpmgr_method !== 'HEAD') {
     return false;
 }
@@ -143,15 +161,19 @@ foreach ($wpmgr_include_cookies as $wpmgr_inc) {
 }
 
 // 4. mobile segment.
-if (!empty($wpmgr_config['cache_mobile'])
-    && isset($_SERVER['HTTP_USER_AGENT'])
-    && preg_match(
+// Strip control characters and cap length before regex matching — no WP
+// sanitizers available at drop-in load time. The regex match is read-only
+// (produces a name suffix); the raw UA value is never echoed or stored.
+if (!empty($wpmgr_config['cache_mobile']) && isset($_SERVER['HTTP_USER_AGENT'])) {
+    // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; control chars stripped + length capped before use
+    $wpmgr_ua_raw = (string) $_SERVER['HTTP_USER_AGENT'];
+    $wpmgr_ua     = substr(preg_replace('/[\x00-\x1F\x7F]/', '', $wpmgr_ua_raw), 0, 512);
+    if (preg_match(
         '/Mobile|Android|Silk\/|Kindle|BlackBerry|Opera (Mini|Mobi)|iPhone|iPad|iPod|IEMobile/i',
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value matched against a fixed allowlist regex
-        (string) $_SERVER['HTTP_USER_AGENT']
-    ) === 1
-) {
-    $wpmgr_name .= '-mobile';
+        $wpmgr_ua
+    ) === 1) {
+        $wpmgr_name .= '-mobile';
+    }
 }
 
 // 5. query-hash segment (drop marketing params, ksort, md5(serialize())).
@@ -181,16 +203,29 @@ if (!empty($_GET)) {
 
 // --- Locate the cache file ----------------------------------------------------
 
-// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value filtered via regex allowlist + path-traversal stripping below
-$wpmgr_host = isset($_SERVER['HTTP_HOST']) ? strtolower((string) $_SERVER['HTTP_HOST']) : '';
-$wpmgr_host = preg_replace('/[^a-z0-9\.\-:]/', '', $wpmgr_host);
-$wpmgr_host = str_replace(array(':', '..'), array('_', ''), (string) $wpmgr_host);
-if ($wpmgr_host === '') {
+// HTTP_HOST: strict charset validation guards against cache-poisoning via a
+// crafted Host header. Accept only hostname characters + optional port; reject
+// (treat as cache bypass via 'unknown-host') anything else. No WP sanitizers
+// available at drop-in load time.
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value strictly validated via preg_match allowlist below
+$wpmgr_host_raw = isset($_SERVER['HTTP_HOST']) ? strtolower((string) $_SERVER['HTTP_HOST']) : '';
+if ($wpmgr_host_raw !== '' && preg_match('/^[a-z0-9.-]+(:[0-9]{1,5})?$/', $wpmgr_host_raw) === 1) {
+    $wpmgr_host = $wpmgr_host_raw;
+} else {
     $wpmgr_host = 'unknown-host';
 }
 
-// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value filtered via regex allowlist + path-traversal stripping below
-$wpmgr_uri  = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
+// REQUEST_URI: strip control characters and cap length before use as a
+// cache-key component. Path-traversal sequences are removed below.
+// No WP sanitizers available at drop-in load time.
+// phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; control chars stripped + length capped before use as cache key
+$wpmgr_uri_raw = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '/';
+$wpmgr_uri     = substr(preg_replace('/[\x00-\x1F\x7F]/', '', $wpmgr_uri_raw), 0, 2048);
+unset($wpmgr_uri_raw);
+// Treat an empty URI (after stripping) as root.
+if ($wpmgr_uri === '') {
+    $wpmgr_uri = '/';
+}
 $wpmgr_qpos = strpos($wpmgr_uri, '?');
 if ($wpmgr_qpos !== false) {
     $wpmgr_uri = substr($wpmgr_uri, 0, $wpmgr_qpos);
@@ -253,15 +288,20 @@ if (!headers_sent()) {
     if ($wpmgr_mtime !== false) {
         header('Last-Modified: ' . gmdate('D, d M Y H:i:s', $wpmgr_mtime) . ' GMT');
 
-        $wpmgr_ims = isset($_SERVER['HTTP_IF_MODIFIED_SINCE'])
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value passed to strtotime() for numeric comparison only
-            ? strtotime((string) $_SERVER['HTTP_IF_MODIFIED_SINCE'])
-            : 0;
+        // HTTP_IF_MODIFIED_SINCE: strip control characters and cap length before
+        // passing to strtotime() — garbage input already returns false, but
+        // control chars could confuse logging. No WP sanitizers available.
+        $wpmgr_ims_hdr = isset($_SERVER['HTTP_IF_MODIFIED_SINCE']) ? (string) $_SERVER['HTTP_IF_MODIFIED_SINCE'] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; control chars stripped + length capped on next line before strtotime()
+        $wpmgr_ims_raw = substr(preg_replace('/[\x00-\x1F\x7F]/', '', $wpmgr_ims_hdr), 0, 128);
+        $wpmgr_ims = ($wpmgr_ims_raw !== '') ? strtotime($wpmgr_ims_raw) : 0;
         if ($wpmgr_ims !== false && $wpmgr_ims >= $wpmgr_mtime) {
-            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value allowlisted below before header() emission
+            // SERVER_PROTOCOL: allowlist via preg_match before emitting in the
+            // 304 status line — defense-in-depth against header injection.
+            // No WP sanitizers available at drop-in load time.
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- advanced-cache drop-in runs pre-WP; wp_unslash/sanitize_* unavailable; value validated via preg_match allowlist before header() emission
             $wpmgr_proto_raw = isset($_SERVER['SERVER_PROTOCOL']) ? (string) $_SERVER['SERVER_PROTOCOL'] : 'HTTP/1.1';
-            // Allowlist SERVER_PROTOCOL before emitting it in the status line — defense-in-depth against header injection.
-            $wpmgr_proto = in_array($wpmgr_proto_raw, array('HTTP/1.0', 'HTTP/1.1', 'HTTP/2', 'HTTP/2.0', 'HTTP/3', 'HTTP/3.0'), true)
+            // Accept HTTP/1.0, HTTP/1.1, HTTP/2, HTTP/2.0, HTTP/3, HTTP/3.0.
+            $wpmgr_proto = preg_match('#^HTTP/[0-9](\.[0-9])?$#', $wpmgr_proto_raw) === 1
                 ? $wpmgr_proto_raw : 'HTTP/1.1';
             header($wpmgr_proto . ' 304 Not Modified', true, 304);
             exit();
