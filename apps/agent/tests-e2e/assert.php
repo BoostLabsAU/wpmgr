@@ -1023,6 +1023,11 @@ PHP;
         if ($exit !== 0 || strpos((string) $out, 'saved') === false) {
             fail('debug-header: config save via engine writer failed: ' . (string) $out);
         }
+        // The save ran in the CLI SAPI; the web SAPI's opcache revalidates the
+        // config file on its own clock (default 2s). Wait it out so the next
+        // front-end request reads the fresh config. Production is unaffected:
+        // real config pushes arrive via web requests in the same SAPI.
+        sleep(3);
     };
 
     // -----------------------------------------------------------------------
