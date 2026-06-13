@@ -389,6 +389,28 @@ final class CacheManager
     }
 
     /**
+     * Silently reinstall the advanced-cache.php drop-in when its on-disk version
+     * is older than the template version. Called on every boot (plugins_loaded)
+     * so agent updates propagate to the drop-in on idle sites that never trigger
+     * a manual enable/disable or applyConfig cycle.
+     *
+     * Idempotent: a no-op when the installed version already matches the template,
+     * when the drop-in is absent, or when the drop-in belongs to another plugin.
+     *
+     * @return void
+     */
+    public function maybeRefreshDropin(): void
+    {
+        if (!$this->config()->enabled) {
+            return; // page caching is off — nothing to refresh
+        }
+        if (!$this->dropin->needsRefresh()) {
+            return;
+        }
+        $this->dropin->install($this->config()->toDropinArray());
+    }
+
+    /**
      * Apply a new config: persist it, re-render the drop-in, re-evaluate the
      * .htaccess mobile flag, and re-arm the refresh cron. Used by perf.config.update.
      *

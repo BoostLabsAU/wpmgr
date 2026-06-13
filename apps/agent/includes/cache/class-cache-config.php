@@ -35,6 +35,18 @@ final class CacheConfig
     public int $refreshInterval;
 
     /**
+     * P4a: whether the drop-in fires a WP-Cron loopback kick on cache HITs.
+     * Default true — keeps WP-Cron alive on page-cached idle sites.
+     */
+    public bool $cronKickEnabled;
+
+    /**
+     * P4a: minimum seconds between loopback cron kicks on cache HITs.
+     * Default 60 — one kick per minute maximum; never less than 10.
+     */
+    public int $cronKickInterval;
+
+    /**
      * Extra cache-varying query params (operator additions to the include list).
      *
      * @var list<string>
@@ -95,11 +107,13 @@ final class CacheConfig
      */
     public function __construct(array $data = [])
     {
-        $this->enabled         = (bool) ($data['enabled'] ?? false);
-        $this->cacheLoggedIn   = (bool) ($data['cache_logged_in'] ?? false);
-        $this->cacheMobile     = (bool) ($data['cache_mobile'] ?? false);
-        $this->autoPurge       = (bool) ($data['auto_purge'] ?? true);
-        $this->refreshInterval = max(0, (int) ($data['refresh_interval'] ?? 0));
+        $this->enabled           = (bool) ($data['enabled'] ?? false);
+        $this->cacheLoggedIn     = (bool) ($data['cache_logged_in'] ?? false);
+        $this->cacheMobile       = (bool) ($data['cache_mobile'] ?? false);
+        $this->autoPurge         = (bool) ($data['auto_purge'] ?? true);
+        $this->refreshInterval   = max(0, (int) ($data['refresh_interval'] ?? 0));
+        $this->cronKickEnabled   = isset($data['cron_kick_enabled']) ? (bool) $data['cron_kick_enabled'] : true;
+        $this->cronKickInterval  = isset($data['cron_kick_interval']) ? max(10, (int) $data['cron_kick_interval']) : 60;
 
         $this->operatorIncludeQueries = self::stringList($data['include_queries'] ?? []);
         $this->operatorIncludeCookies = self::stringList($data['include_cookies'] ?? []);
@@ -164,6 +178,11 @@ final class CacheConfig
             // Baked probe result: the drop-in can read this for diagnostics; the
             // PHP write path reads it live from the option (same source of truth).
             'woo_supported'         => $wooSupported,
+            // P4a: WP-Cron loopback kick on cache HITs — keeps WP-Cron alive on
+            // fully page-cached idle sites where no PHP-booting visitor traffic
+            // exists. Baked in so the drop-in reads it without any DB/WP calls.
+            'cron_kick_enabled'     => $this->cronKickEnabled,
+            'cron_kick_interval'    => $this->cronKickInterval,
         ];
     }
 
@@ -175,19 +194,22 @@ final class CacheConfig
     public function toArray(): array
     {
         return [
-            'enabled'          => $this->enabled,
-            'cache_logged_in'  => $this->cacheLoggedIn,
-            'cache_mobile'     => $this->cacheMobile,
-            'auto_purge'       => $this->autoPurge,
-            'refresh_interval' => $this->refreshInterval,
+            'enabled'           => $this->enabled,
+            'cache_logged_in'   => $this->cacheLoggedIn,
+            'cache_mobile'      => $this->cacheMobile,
+            'auto_purge'        => $this->autoPurge,
+            'refresh_interval'  => $this->refreshInterval,
             // Persist the OPERATOR-configured lists, not the preset-folded effective
             // ones, so a save→load round-trip never bakes auto-detected i18n/currency
             // presets into stored config (they are re-derived live on each load).
-            'include_queries'  => $this->operatorIncludeQueries,
-            'include_cookies'  => $this->operatorIncludeCookies,
+            'include_queries'       => $this->operatorIncludeQueries,
+            'include_cookies'       => $this->operatorIncludeCookies,
             'bypass_urls'           => $this->bypassUrls,
             'bypass_cookies'        => $this->bypassCookies,
             'woo_cacheable_session' => $this->wooCacheableSession,
+            // P4a: cron kick settings (persisted so the CP can configure them).
+            'cron_kick_enabled'     => $this->cronKickEnabled,
+            'cron_kick_interval'    => $this->cronKickInterval,
         ];
     }
 

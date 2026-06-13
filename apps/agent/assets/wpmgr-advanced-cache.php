@@ -28,6 +28,14 @@
  * @package WPMgr\Agent\Cache
  */
 
+/**
+ * Drop-in version — bumped whenever the installed content changes structurally.
+ * DropinInstaller compares this constant in the template against the string it
+ * finds in the on-disk copy; a mismatch triggers a transparent reinstall so
+ * existing sites always run the current drop-in logic without manual intervention.
+ */
+define('WPMGR_PAGE_CACHE_DROPIN_VERSION', '0.45.0');
+
 if (!defined('ABSPATH')) {
     exit; // No direct access.
 }
@@ -38,6 +46,88 @@ if (!defined('WP_CACHE')) {
 
 // The live config is inlined here at install time.
 $wpmgr_config = CONFIG_TO_REPLACE; // phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+
+// ---------------------------------------------------------------------------
+// WP-Cron kick helper — P4a: keep WP-Cron running on fully page-cached sites.
+//
+// On a cache HIT WordPress never boots, so WP-Cron never gets the chance to
+// spawn. This function fires a single fire-and-forget loopback to wp-cron.php
+// when the kick marker file is stale (older than $interval seconds) or absent.
+//
+// Design constraints:
+//   - ZERO DB calls. The overdue check is a single stat() on a marker file.
+//   - The visitor response is flushed BEFORE the socket is opened; the kick
+//     is best-effort and never holds the worker if the loopback is slow.
+//   - The marker is touched BEFORE the socket connect to prevent concurrent
+//     HITs within the same window from stampeding (benign race accepted).
+//   - Every timeout is bounded; all errors are silently swallowed.
+//   - Host is derived from the already-sanitised $wpmgr_host (validated via
+//     /^[a-z0-9.-]+(:[0-9]{1,5})?$/ earlier in this file) — never from raw
+//     superglobals.
+//   - Disabled when $wpmgr_config['cron_kick_enabled'] is explicitly false.
+// ---------------------------------------------------------------------------
+
+/**
+ * Decide whether a WP-Cron loopback kick is overdue and, if so, fire one.
+ *
+ * Extracted as a named function so it can be called from all HIT exit points
+ * (full body, 304, HEAD) and tested in isolation without running the drop-in.
+ *
+ * @param string $markerFile Absolute path to the throttle-marker file.
+ * @param int    $interval   Minimum seconds between kicks.
+ * @param string $host       Already-validated hostname (+ optional :port).
+ * @param string $scheme     'https' or 'http'.
+ * @return bool True when a kick was fired (marker was stale/absent), false otherwise.
+ */
+function wpmgr_cron_kick_if_overdue(string $markerFile, int $interval, string $host, string $scheme): bool // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound -- drop-in runs in global scope pre-WP; wpmgr_ prefix applied
+{
+    // ---- Overdue check: single stat(), zero DB --------------------------------
+    $now   = time();
+    $mtime = @filemtime($markerFile);
+    if ($mtime !== false && ($now - $mtime) < $interval) {
+        return false; // marker fresh — no kick
+    }
+
+    // ---- Mark immediately to prevent concurrent stampede ----------------------
+    // Touch the marker BEFORE the socket connect. A benign race (two concurrent
+    // HITs both see stale and both touch) is accepted — the worst case is two
+    // cron calls within the same second, which is harmless.
+    $markerDir = dirname($markerFile);
+    if (!@is_dir($markerDir)) {
+        @mkdir($markerDir, 0755, true); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir,WordPress.Security.PluginDirectoryWrite.PluginDirectoryWrite -- advanced-cache drop-in runs pre-WP; wp_mkdir_p unavailable; writes to wp-content/cache/wpmgr
+    }
+    @file_put_contents($markerFile, (string) $now); // phpcs:ignore PluginCheck.CodeAnalysis.WriteFile.PluginDirectoryWrite -- writes to wp-content/cache/wpmgr, a persistent install target outside the plugin folder
+
+    // ---- Fire a non-blocking loopback to wp-cron.php -------------------------
+    // Host is already validated (/^[a-z0-9.-]+(:[0-9]{1,5})?$/) earlier in the
+    // drop-in. We reuse it verbatim; never parse raw superglobals here.
+    // Strip any :port suffix for the TCP connect; use the full value in Host:.
+    $hostOnly = (string) preg_replace('/:[0-9]{1,5}$/', '', $host);
+    $port     = ($scheme === 'https') ? 443 : 80;
+    if (preg_match('/:([0-9]{1,5})$/', $host, $m) === 1) {
+        $port = (int) $m[1];
+    }
+    $cronPath = '/wp-cron.php?doing_wp_cron=' . $now;
+    $request  = 'GET ' . $cronPath . ' HTTP/1.1' . "\r\n"
+        . 'Host: ' . $hostOnly . "\r\n"
+        . 'Connection: close' . "\r\n"
+        . 'User-Agent: WPMgr-CronKick/1.0' . "\r\n\r\n";
+
+    try {
+        $connectHost = ($scheme === 'https') ? 'ssl://' . $hostOnly : $hostOnly;
+        // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fsockopen -- pre-WP drop-in; WP_HTTP not loaded; fsockopen is the only non-blocking loopback primitive available at this execution stage; fire-and-forget cron kick
+        $sock = @fsockopen($connectHost, $port, $errno, $errstr, 1.0);
+        if ($sock !== false) {
+            @stream_set_timeout($sock, 1); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort; failure is intentionally ignored
+            @fwrite($sock, $request); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fwrite,WordPress.PHP.NoSilencedErrors.Discouraged -- fire-and-forget write; no response read
+            @fclose($sock); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_fclose,WordPress.PHP.NoSilencedErrors.Discouraged -- close immediately; no response read
+        }
+    } catch (\Throwable $e) { // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch -- best-effort; kick failure must never affect the served page
+        // Swallow — kick failure must never affect the served page.
+    }
+
+    return true;
+}
 
 if (!is_array($wpmgr_config)) {
     return false;
@@ -246,6 +336,18 @@ $wpmgr_file = rtrim($wpmgr_content, '/\\')
 $wpmgr_metrics_dir = rtrim($wpmgr_content, '/\\') . '/cache/wpmgr/.metrics';
 $wpmgr_tally_hour  = gmdate('YmdH');
 
+// --- Cron-kick config (resolved once; used only on a HIT below) ---------------
+// Read from the baked-in config so no DB/WP calls are needed at runtime.
+// cron_kick_enabled defaults true; cron_kick_interval defaults 60 seconds.
+$wpmgr_cron_kick_enabled  = !isset($wpmgr_config['cron_kick_enabled']) || (bool) $wpmgr_config['cron_kick_enabled'];
+$wpmgr_cron_kick_interval = isset($wpmgr_config['cron_kick_interval']) ? max(10, (int) $wpmgr_config['cron_kick_interval']) : 60;
+$wpmgr_cron_kick_marker   = rtrim($wpmgr_content, '/\\') . '/cache/wpmgr/.wpmgr-cron-kick';
+// Detect scheme from HTTPS server variable (same approach WordPress core uses
+// internally before it fully boots). Already sanitised host ($wpmgr_host) is
+// reused verbatim — no additional superglobal reads.
+$wpmgr_cron_kick_scheme = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== '' && $_SERVER['HTTPS'] !== 'off') // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash,WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- presence/value check only; 'off' guard; no WP sanitizers available at drop-in load time
+    ? 'https' : 'http';
+
 if (!is_file($wpmgr_file)) {
     // MISS — append one line to the hour-bucket miss file, then hand back to WordPress.
     // One file_put_contents per miss: no DB, no WP calls, no flock.
@@ -304,6 +406,16 @@ if (!headers_sent()) {
             $wpmgr_proto = preg_match('#^HTTP/[0-9](\.[0-9])?$#', $wpmgr_proto_raw) === 1
                 ? $wpmgr_proto_raw : 'HTTP/1.1';
             header($wpmgr_proto . ' 304 Not Modified', true, 304);
+            // 304 is a HIT — fire the cron kick after the response headers are
+            // committed. No body to flush, so the kick happens immediately.
+            if ($wpmgr_cron_kick_enabled && $wpmgr_host !== 'unknown-host') {
+                wpmgr_cron_kick_if_overdue(
+                    $wpmgr_cron_kick_marker,
+                    $wpmgr_cron_kick_interval,
+                    $wpmgr_host,
+                    $wpmgr_cron_kick_scheme
+                );
+            }
             exit();
         }
     }
@@ -313,8 +425,38 @@ if (!headers_sent()) {
 
 // HEAD requests get headers only.
 if ($wpmgr_method === 'HEAD') {
+    // HEAD is a HIT — fire the cron kick after headers are committed.
+    if ($wpmgr_cron_kick_enabled && $wpmgr_host !== 'unknown-host') {
+        wpmgr_cron_kick_if_overdue(
+            $wpmgr_cron_kick_marker,
+            $wpmgr_cron_kick_interval,
+            $wpmgr_host,
+            $wpmgr_cron_kick_scheme
+        );
+    }
     exit();
 }
 
+// Flush the cached page body to the visitor FIRST, then fire the cron kick
+// as a best-effort background action. The visitor's response is complete
+// before the socket is even opened.
 readfile($wpmgr_file); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_readfile -- advanced-cache drop-in streams the cached body before WordPress is loaded; readfile is the canonical low-memory emit
+
+// Flush to the client before the loopback kick so the visitor never waits.
+if (function_exists('fastcgi_finish_request')) {
+    @fastcgi_finish_request(); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort FPM flush; failure falls back to ob_end_flush below
+} else {
+    @ob_end_flush(); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- best-effort flush; not all SAPI/OB setups support this
+    flush();
+}
+
+// Fire the WP-Cron loopback kick after the response has been handed off.
+if ($wpmgr_cron_kick_enabled && $wpmgr_host !== 'unknown-host') {
+    wpmgr_cron_kick_if_overdue(
+        $wpmgr_cron_kick_marker,
+        $wpmgr_cron_kick_interval,
+        $wpmgr_host,
+        $wpmgr_cron_kick_scheme
+    );
+}
 exit();

@@ -602,6 +602,14 @@ final class Plugin
         $this->errorMonitor->install();
         $this->muInstaller->install();
 
+        // P4a — page-cache drop-in self-heal on version mismatch. When the
+        // installed advanced-cache.php carries an older WPMGR_PAGE_CACHE_DROPIN_VERSION
+        // than the template, silently reinstall it with the current config so
+        // existing sites get the new cron-kick logic without requiring a manual
+        // cache enable/disable cycle. Idempotent: needsRefresh() short-circuits
+        // to false when the installed version already matches the template.
+        $this->cacheManager->maybeRefreshDropin();
+
         // S2 — install login-protection hooks when mode != disabled. The call
         // is idempotent (static guard inside LoginProtection::install). We also
         // install the WAF mu-plugin so the early IP-deny gate is armed on the

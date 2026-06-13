@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-06-13
+
+### Added
+
+- **Agent: page-cache drop-in now nudges WP-Cron on cache hits.** On a cache hit the drop-in stats the cron marker file; if it is more than 60 seconds stale, the cached page is flushed to the visitor first, then a fire-and-forget loopback GET to `wp-cron.php` fires with a 1-second timeout. The decision is a single filesystem stat with no database work, keeping the cache-hit fast path intact. Same-host only; the drop-in self-heals to this version on next boot.
+- **Control plane: low-frequency cron-kick pass.** A separate sweep GETs `wp-cron.php` on every connected site at a configurable interval (default every 5 minutes, tunable via environment). It records no metrics and never changes connection or health state, so uptime and latency numbers are unaffected. Reuses the existing SSRF-hardened HTTP client.
+
+Control plane, web, and agent 0.45.0; no migration. Builds on the active reachability verification shipped in 0.44.0: connected idle sites stay connected (0.44.0) and their scheduled work actually runs (0.45.0).
+
 ## [0.44.0] - 2026-06-12
 
 ### Fixed

@@ -40,6 +40,13 @@ final class DropinInstaller
     /** Signature line proving a drop-in on disk is ours (safe to overwrite/remove). */
     public const SIGNATURE = 'WPMgr Page Cache drop-in';
 
+    /**
+     * Constant name embedded in the template that carries the drop-in version.
+     * DropinInstaller reads this from the on-disk copy and from the template to
+     * detect a version mismatch and trigger a transparent reinstall.
+     */
+    public const VERSION_CONSTANT = 'WPMGR_PAGE_CACHE_DROPIN_VERSION';
+
     /** Absolute path to the wp-content directory. */
     private string $contentDir;
 
@@ -102,6 +109,74 @@ final class DropinInstaller
             return '';
         }
         return $this->contentDir . '/' . $this->dropinFilename();
+    }
+
+    /**
+     * Extract the WPMGR_PAGE_CACHE_DROPIN_VERSION string from a PHP source blob.
+     *
+     * Looks for a define() call of the form:
+     *   define('WPMGR_PAGE_CACHE_DROPIN_VERSION', '1.2.3');
+     *
+     * Returns an empty string when the constant is absent.
+     *
+     * @param string $source PHP source to search.
+     * @return string Version string or ''.
+     */
+    public function extractVersion(string $source): string
+    {
+        if (preg_match(
+            "/define\(\s*'" . preg_quote(self::VERSION_CONSTANT, '/') . "'\s*,\s*'([^']+)'\s*\)/",
+            $source,
+            $m
+        ) === 1) {
+            return $m[1];
+        }
+        return '';
+    }
+
+    /**
+     * Whether the installed drop-in version differs from the template version.
+     *
+     * Returns false (no refresh needed) in any of these cases:
+     *   - The template is unreadable.
+     *   - The template carries no version constant.
+     *   - The installed drop-in is absent (will be written by install() anyway).
+     *   - The installed drop-in is foreign (we never touch a foreign file).
+     *   - The installed and template versions match.
+     *
+     * Returns true only when we can confirm our drop-in is on disk AND its
+     * version constant is older than the template.
+     *
+     * @return bool
+     */
+    public function needsRefresh(): bool
+    {
+        $path = $this->dropinPath();
+        if ($path === '' || !@is_file($path)) {
+            return false; // nothing installed — install() handles first write
+        }
+        if ($this->templatePath === '' || !@is_file($this->templatePath)) {
+            return false; // can't read template — can't compare
+        }
+
+        $installed = @file_get_contents($path);
+        if ($installed === false || strpos($installed, self::SIGNATURE) === false) {
+            return false; // absent or foreign — never touch
+        }
+
+        $template = @file_get_contents($this->templatePath);
+        if ($template === false) {
+            return false;
+        }
+
+        $templateVersion  = $this->extractVersion($template);
+        $installedVersion = $this->extractVersion($installed);
+
+        if ($templateVersion === '' || $installedVersion === '') {
+            return false; // one side has no version — cannot compare safely
+        }
+
+        return $installedVersion !== $templateVersion;
     }
 
     /**

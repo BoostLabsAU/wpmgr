@@ -277,7 +277,7 @@ final class ObjectCacheFix416Test extends TestCase
 	}
 
 	/**
-	 * C3: ENGINE_VERSION constant in artifact must be '0.44.0' (updated from 0.43.1 in ping/liveness feature).
+	 * C3: ENGINE_VERSION constant in artifact must be '0.45.0' (updated from 0.44.0 in P4a cron-kick feature).
 	 */
 	public function test_artifact_engine_version_is_0416(): void
 	{
@@ -286,9 +286,9 @@ final class ObjectCacheFix416Test extends TestCase
 		}
 		$content = (string) file_get_contents( $this->artifactPath );
 		$this->assertStringContainsString(
-			"ENGINE_VERSION = '0.44.0'",
+			"ENGINE_VERSION = '0.45.0'",
 			$content,
-			"ENGINE_VERSION constant must be '0.44.0' in the artifact (0.44.0 ping/liveness feature)"
+			"ENGINE_VERSION constant must be '0.45.0' in the artifact (0.45.0 P4a cron-kick feature)"
 		);
 	}
 
