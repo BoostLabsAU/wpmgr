@@ -740,6 +740,33 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	uptimeSvc := uptime.NewService(uptimeRepo, metricsStore, uptimeSiteAdapter)
 	uptimeH := uptime.NewHandler(uptimeSvc, auditRec)
 
+	// P4b — cron kick: periodically fire a GET to wp-cron.php for all enrolled
+	// sites so fully page-cached sites boot PHP and drain WP-Cron even with zero
+	// PHP-booting organic traffic. Reuses the SSRF-hardened ssrfClient (ADR-009).
+	// Disabled via WPMGR_CRON_KICK_ENABLED=false.
+	var cronKickWorker *uptime.CronKicker
+	var cronKickInterval time.Duration
+	if cfg.Uptime.CronKickEnabled {
+		cronKickWorker = uptime.NewCronKicker(
+			uptimeRepo,
+			ssrfClient,
+			cfg.Uptime.CronKickTimeout,
+			cfg.Uptime.CronKickConcurrency,
+		)
+		cronKickWorker.SetLogger(logger)
+		cronKickInterval = cfg.Uptime.CronKickInterval
+		if cronKickInterval <= 0 {
+			cronKickInterval = 5 * time.Minute
+		}
+		logger.Info("uptime cron kick enabled",
+			slog.Duration("interval", cronKickInterval),
+			slog.Duration("timeout", cfg.Uptime.CronKickTimeout),
+			slog.Int("concurrency", cfg.Uptime.CronKickConcurrency),
+		)
+	} else {
+		logger.Info("uptime cron kick disabled (WPMGR_CRON_KICK_ENABLED=false)")
+	}
+
 	// ADR-037 Sprint 2 — diagnostics + php-error monitor repo. Built here
 	// (before River) so the phpErrorsGCWorker can be registered at River start.
 	// The service, handler, and enqueuer wiring continues after River starts.
@@ -1153,6 +1180,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m64 — report generation + schedule-scan workers (nil when S3 not configured).
 		reportGenerateWorker:     reportGenerateWorker,
 		reportScheduleScanWorker: reportScheduleScanWorker,
+		// P4b — cron kick (nil when WPMGR_CRON_KICK_ENABLED=false).
+		cronKickWorker:   cronKickWorker,
+		cronKickInterval: cronKickInterval,
 	})
 	if err != nil {
 		return err
@@ -2002,6 +2032,10 @@ type riverDeps struct {
 	// Both are nil when object storage is not configured (reports require S3).
 	reportGenerateWorker     *reportpkg.GenerateWorker
 	reportScheduleScanWorker *reportpkg.ScheduleScanWorker
+	// P4b — cron kick: best-effort wp-cron.php GET for fully page-cached sites.
+	// nil when WPMGR_CRON_KICK_ENABLED=false.
+	cronKickWorker   *uptime.CronKicker
+	cronKickInterval time.Duration
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2345,6 +2379,23 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics, river.NewPeriodicJob(
 			river.PeriodicInterval(5*time.Minute),
 			func() (river.JobArgs, *river.InsertOpts) { return reportpkg.ScheduleScanArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+
+	// P4b — cron kick: periodically GET wp-cron.php for all enrolled sites so
+	// fully page-cached sites boot PHP and drain their WP-Cron queue. Nil when
+	// WPMGR_CRON_KICK_ENABLED=false. Feeds NO metrics; does not affect
+	// health_status or connection_state.
+	if d.cronKickWorker != nil {
+		river.AddWorker(workers, d.cronKickWorker)
+		kickInterval := d.cronKickInterval
+		if kickInterval <= 0 {
+			kickInterval = 5 * time.Minute
+		}
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(kickInterval),
+			func() (river.JobArgs, *river.InsertOpts) { return uptime.CronKickArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
 	}

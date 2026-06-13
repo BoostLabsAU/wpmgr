@@ -127,6 +127,23 @@ type UptimeConfig struct {
 	// DownThreshold is the number of consecutive DOWN checks that fires a downtime
 	// alert (default 2 — "down > 2 consecutive checks" means the 3rd consecutive).
 	DownThreshold int `koanf:"down_threshold"`
+
+	// CronKickEnabled enables the low-frequency cron-kick pass (P4b). When true
+	// (the default) the CP periodically fires a GET to each enrolled site's
+	// wp-cron.php so that fully page-cached sites boot PHP and drain WP-Cron even
+	// with zero PHP-booting organic traffic. Set WPMGR_CRON_KICK_ENABLED=false to
+	// disable (e.g. in environments where the page-cache drop-in is not deployed or
+	// where the active-verify cadence is already sufficient).
+	CronKickEnabled bool `koanf:"cron_kick_enabled"`
+	// CronKickInterval is how often the cron-kick periodic job fires.
+	// Default 5m. Env: WPMGR_CRON_KICK_INTERVAL.
+	CronKickInterval time.Duration `koanf:"cron_kick_interval"`
+	// CronKickTimeout bounds a single site kick GET. Default 5s.
+	// Env: WPMGR_CRON_KICK_TIMEOUT.
+	CronKickTimeout time.Duration `koanf:"cron_kick_timeout"`
+	// CronKickConcurrency caps how many concurrent kicks fire per pass.
+	// Default 10. Env: WPMGR_CRON_KICK_CONCURRENCY.
+	CronKickConcurrency int `koanf:"cron_kick_concurrency"`
 }
 
 // S3Config holds the S3-compatible object-storage configuration (ADR-010).
@@ -409,6 +426,10 @@ func defaults() map[string]any {
 		"uptime.probe_concurrency":      10,
 		"uptime.alert_interval":         "60s",
 		"uptime.down_threshold":         2,
+		"uptime.cron_kick_enabled":      true,
+		"uptime.cron_kick_interval":     "5m",
+		"uptime.cron_kick_timeout":      "5s",
+		"uptime.cron_kick_concurrency":  10,
 		"autologin.require_2fa_step_up":    false,
 		"conn.degrade_after":                "300s",
 		"conn.degrade_miss_threshold":       3,
@@ -507,6 +528,18 @@ func mapEnvKey(k string) string {
 	// WPMGR_SWEEP_VERIFY_CONCURRENCY -> conn.verify_concurrency.
 	case k == "sweep_verify_concurrency":
 		return "conn.verify_concurrency"
+	// WPMGR_CRON_KICK_ENABLED -> uptime.cron_kick_enabled (P4b).
+	case k == "cron_kick_enabled":
+		return "uptime.cron_kick_enabled"
+	// WPMGR_CRON_KICK_INTERVAL -> uptime.cron_kick_interval.
+	case k == "cron_kick_interval":
+		return "uptime.cron_kick_interval"
+	// WPMGR_CRON_KICK_TIMEOUT -> uptime.cron_kick_timeout.
+	case k == "cron_kick_timeout":
+		return "uptime.cron_kick_timeout"
+	// WPMGR_CRON_KICK_CONCURRENCY -> uptime.cron_kick_concurrency.
+	case k == "cron_kick_concurrency":
+		return "uptime.cron_kick_concurrency"
 	default:
 		return k
 	}
