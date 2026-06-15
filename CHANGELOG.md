@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.48.1] - 2026-06-15
+
+### Fixed
+
+- **A locked backup can no longer be deleted.** Locking a snapshot already exempted it from retention pruning, but a manual delete still removed it, so the lock only protected against the auto-pruner. The delete path now refuses a locked snapshot ("this backup is locked; unlock it before deleting") the same way it already refuses an in-progress or chain-depended-on one. In the dashboard, deleting a locked backup opens a short explanation with an "Unlock to delete" action instead of failing at a server error, so a lock now genuinely protects the backup end to end.
+
+Control plane plus dashboard at 0.48.1; no migration, no agent change.
+
 ## [0.48.0] - 2026-06-15
 
 ### Added

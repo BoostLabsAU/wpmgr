@@ -1699,6 +1699,14 @@ func (s *Service) DeleteSnapshotForUser(ctx context.Context, tenantID, snapshotI
 			"this backup is still running; cancel it before deleting")
 	}
 
+	// Lock guard (m49): a locked snapshot is exempt from retention GC AND from
+	// manual deletion. The operator must explicitly unlock before deleting, so a
+	// lock genuinely protects the backup (not just from the auto-pruner).
+	if snap.Locked {
+		return domain.Validation("snapshot_locked",
+			"this backup is locked; unlock it before deleting")
+	}
+
 	// Chain-safety: never orphan a dependent increment. If this snapshot anchors
 	// or sits mid-chain (i.e. a sibling exists at a HIGHER generation in the same
 	// chain), refuse — the dependents would become unrestorable.

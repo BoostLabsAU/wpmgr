@@ -24,6 +24,14 @@ import { StatusChip } from "@/components/status/status-chip";
 import type { StatusTone } from "@/components/status/status-dot";
 import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
 import {
+  Dialog,
+  DialogBody,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
   useBackups,
   useCreateBackup,
   useDeleteBackup,
@@ -691,6 +699,9 @@ function SnapshotLockToggle({
  *     chain-safe and refuses to delete a base/mid-chain increment that still has
  *     dependents, surfacing that as an inline error in the confirm dialog (we
  *     don't have the chain tip locally to pre-disable it — task #180).
+ *   - A LOCKED snapshot cannot be deleted (the server returns "snapshot_locked").
+ *     Clicking Delete on it opens a warning that explains the lock and offers to
+ *     unlock first, rather than dead-ending the operator at a server error.
  */
 function BackupRowActions({
   snapshot,
@@ -699,18 +710,23 @@ function BackupRowActions({
   snapshot: BackupSnapshot;
   siteId: string;
 }) {
-  const [confirm, setConfirm] = useState<null | "cancel" | "delete">(null);
+  const [confirm, setConfirm] = useState<null | "cancel" | "delete" | "locked">(
+    null,
+  );
   const del = useDeleteBackup(snapshot.id, siteId);
   const cancel = useCancelBackup(snapshot.id, siteId);
+  const unlock = useUnlockBackup(snapshot.id, siteId);
 
   const isInFlight =
     snapshot.status === "running" || snapshot.status === "pending";
+  const isLocked = snapshot.locked === true;
   const shortId = snapshot.id.slice(0, 8);
 
   function close() {
     setConfirm(null);
     del.reset();
     cancel.reset();
+    unlock.reset();
   }
 
   return (
@@ -728,7 +744,7 @@ function BackupRowActions({
           variant="outline"
           size="sm"
           className="text-destructive-subtle-fg"
-          onClick={() => setConfirm("delete")}
+          onClick={() => setConfirm(isLocked ? "locked" : "delete")}
         >
           Delete
         </Button>
@@ -774,6 +790,54 @@ function BackupRowActions({
         isPending={del.isPending}
         errorMessage={del.isError ? del.error.message : null}
       />
+
+      <Dialog
+        open={confirm === "locked"}
+        onClose={unlock.isPending ? () => {} : close}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>This backup is locked</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <p className="text-sm text-foreground">
+              A locked backup is protected: retention never prunes it and it
+              cannot be deleted. To remove it, unlock it first, then delete.
+            </p>
+            {unlock.isError ? (
+              <p
+                role="alert"
+                className="rounded-md border border-[var(--color-destructive)]/40 bg-[var(--color-destructive)]/10 p-2 text-sm text-[var(--color-destructive)]"
+              >
+                {unlock.error.message}
+              </p>
+            ) : null}
+          </DialogBody>
+          <DialogFooter className="pt-2">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={close}
+              disabled={unlock.isPending}
+            >
+              Keep locked
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              className="text-destructive-subtle-fg"
+              onClick={() =>
+                unlock.mutate(undefined, {
+                  onSuccess: () => setConfirm("delete"),
+                })
+              }
+              disabled={unlock.isPending}
+            >
+              {unlock.isPending ? "Unlocking…" : "Unlock to delete"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
