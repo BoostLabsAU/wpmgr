@@ -84,19 +84,25 @@ type FleetStatusCounts struct {
 }
 
 // FleetStatusItem is the per-site row in the fleet status response.
+// JSON field names are pinned to the frontend FleetStatusItem contract in
+// apps/web/src/features/fleet/fleet-types.ts — do not rename without
+// updating both sides.
 type FleetStatusItem struct {
 	SiteID          uuid.UUID       `json:"site_id"`
-	SiteName        string          `json:"site_name"`
-	SiteURL         string          `json:"site_url"`
-	Status          FleetSiteStatus `json:"status"`
-	UptimePct7d     float64         `json:"uptime_pct_7d"`
-	AvgLatencyMs7d  float64         `json:"avg_latency_ms_7d"`
-	LatestTotalMs   *float64        `json:"latest_total_ms,omitempty"`
-	LastProbeAt     *time.Time      `json:"last_probe_at,omitempty"`
-	TLSExpiry       *time.Time      `json:"tls_expiry,omitempty"`
-	InIncident      bool            `json:"in_incident"`
+	Name            string          `json:"name"`
+	URL             string          `json:"url"`
 	ConnectionState string          `json:"connection_state"`
 	HealthStatus    string          `json:"health_status"`
+	Status          FleetSiteStatus `json:"status"`
+	Up              *bool           `json:"up"`
+	LastProbeAt     *time.Time      `json:"last_probe_at"`
+	UptimePct7d     float64         `json:"uptime_pct_7d"`
+	AvgLatencyMs    *float64        `json:"avg_latency_ms"`
+	TLSExpiry       *time.Time      `json:"tls_expiry"`
+	LatencySparkline []float64      `json:"latency_sparkline"`
+	// InIncident is kept for internal use (summary counting) but not needed
+	// by the frontend contract — retained for the service-layer logic.
+	InIncident bool `json:"in_incident"`
 }
 
 // FleetStatusResponse is the response body for GET /api/v1/fleet/status.

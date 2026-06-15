@@ -256,17 +256,24 @@ ORDER BY s.name ASC
 				return domain.Internal("fleet_uptime_scan_failed", "failed to scan fleet uptime row").WithCause(err)
 			}
 			item := FleetStatusItem{
-				SiteID:          siteID,
-				SiteName:        siteName,
-				SiteURL:         siteURL,
-				ConnectionState: connectionState,
-				HealthStatus:    healthStatus,
-				UptimePct7d:     uptimePct7d,
-				AvgLatencyMs7d:  avgLatencyMs7d,
-				InIncident:      inIncident,
+				SiteID:           siteID,
+				Name:             siteName,
+				URL:              siteURL,
+				ConnectionState:  connectionState,
+				HealthStatus:     healthStatus,
+				UptimePct7d:      uptimePct7d,
+				InIncident:       inIncident,
+				LatencySparkline: []float64{},
+			}
+			// avg_latency_ms: null when no successful probe in the 7-day window
+			// (avgLatencyMs7d == 0.0 from COALESCE means no data), so only set
+			// a non-nil pointer when there is actual data.
+			if avgLatencyMs7d > 0 {
+				v := avgLatencyMs7d
+				item.AvgLatencyMs = &v
 			}
 			if upVal != nil {
-				item.LatestTotalMs = totalMs
+				item.Up = upVal
 				if probedAt.Valid {
 					t := probedAt.Time
 					item.LastProbeAt = &t

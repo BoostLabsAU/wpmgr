@@ -54,6 +54,64 @@ function colMeta(raw: unknown): ColMeta {
 }
 
 // ---------------------------------------------------------------------------
+// Column width computation
+//
+// Given an ordered list of meta.width values (percentages like "28%" or
+// undefined), derive a resolved width per column so header and body always
+// share identical geometry under table-layout:fixed.
+//
+// Algorithm:
+//   1. Sum the explicit percentage widths.
+//   2. Distribute the remainder equally across columns that have no width.
+//   3. Return one string per column in the same order.
+// ---------------------------------------------------------------------------
+
+function resolveColWidths(rawWidths: Array<string | undefined>): string[] {
+  const total = rawWidths.length;
+  if (total === 0) return [];
+
+  let fixedSum = 0;
+  let freeCount = 0;
+
+  for (const w of rawWidths) {
+    if (w) {
+      // Accept "28%", "10%", etc.  Non-percentage values are passed through as-is
+      // and not counted against the free pool.
+      const pct = parseFloat(w);
+      if (!Number.isNaN(pct) && w.trim().endsWith("%")) {
+        fixedSum += pct;
+      }
+    } else {
+      freeCount++;
+    }
+  }
+
+  const freeShare =
+    freeCount > 0
+      ? Math.max(0, (100 - fixedSum) / freeCount)
+      : 0;
+
+  return rawWidths.map((w) => {
+    if (w) return w;
+    return `${freeShare.toFixed(4)}%`;
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Module-level ref: the table component slot is stateless (Virtuoso creates it
+// once as a stable element type) so we thread column widths through a ref that
+// VirtuosoTable reads synchronously during render. This avoids prop-drilling
+// through the TableComponents slot API which does not support extra props.
+//
+// Assumption: React's synchronous render model guarantees that FleetTable
+// writes colWidthsRef.current before its VirtuosoTable child reads it in the
+// same render pass. The three fleet dashboards each render exactly one
+// FleetTable at a time, so there is no cross-instance collision.
+// ---------------------------------------------------------------------------
+
+const colWidthsRef: { current: string[] } = { current: [] };
+
+// ---------------------------------------------------------------------------
 // Virtuoso component slots (hoisted to avoid re-creation on parent render)
 // ---------------------------------------------------------------------------
 
@@ -73,14 +131,25 @@ const VirtuosoScroller = forwardRef<
 
 function VirtuosoTable({
   style,
+  children,
   ...props
 }: TableHTMLAttributes<HTMLTableElement>) {
+  const widths = colWidthsRef.current;
   return (
     <table
       {...props}
       style={{ ...style, borderCollapse: "collapse", tableLayout: "fixed" }}
       className="w-full min-w-[640px] text-sm"
-    />
+    >
+      {widths.length > 0 && (
+        <colgroup>
+          {widths.map((w, i) => (
+            <col key={i} style={{ width: w }} />
+          ))}
+        </colgroup>
+      )}
+      {children}
+    </table>
   );
 }
 
@@ -185,6 +254,16 @@ export function FleetTable<TData extends object>({
   const rows = table.getRowModel().rows;
 
   // ---------------------------------------------------------------------------
+  // Derive resolved column widths and write them to the module-level ref so
+  // VirtuosoTable can render the <colgroup> synchronously. This must happen
+  // before Virtuoso renders the table element on this cycle.
+  // ---------------------------------------------------------------------------
+
+  const leafColumns = table.getAllLeafColumns();
+  const rawWidths = leafColumns.map((col) => colMeta(col.columnDef.meta).width);
+  colWidthsRef.current = resolveColWidths(rawWidths);
+
+  // ---------------------------------------------------------------------------
   // Virtuoso slot components bound to current table instance. Hoisted into a
   // stable ref so Virtuoso doesn't see new component objects on each render.
   // ---------------------------------------------------------------------------
@@ -196,6 +275,11 @@ export function FleetTable<TData extends object>({
   // Virtuoso always sees the same function reference and does not unmount/remount
   // the sticky header on every parent re-render (which would cause scroll-to-top
   // flicker on sort).
+  //
+  // Width style is omitted from <th> because the <colgroup> already locks the
+  // geometry under table-layout:fixed. The colgroup is the single source of
+  // truth; th/td widths would only redundantly repeat it and could desync if
+  // the two lists diverged.
   const FixedHeader = useCallback(function FixedHeaderInner() {
     return (
       <thead className="bg-[var(--color-card)]">
@@ -217,7 +301,6 @@ export function FleetTable<TData extends object>({
                         ? "descending"
                         : undefined
                   }
-                  style={{ width: meta?.width }}
                   className={cn(
                     "px-3 py-2.5 text-left text-xs font-medium text-[var(--color-muted-foreground)]",
                     meta?.numeric && "text-right",
@@ -314,7 +397,6 @@ export function FleetTable<TData extends object>({
               return (
                 <td
                   key={cell.id}
-                  style={{ width: meta?.width }}
                   className={cn(
                     "px-3 py-2.5 text-sm text-[var(--color-foreground)]",
                     meta?.numeric && "text-right tabular-nums font-mono",

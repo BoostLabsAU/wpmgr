@@ -515,9 +515,9 @@ function PerformancePage() {
         <HeadlineStrip sitesReporting={0} sitesTotal={0} fleetPassPct={null} loading />
       ) : isError ? null : (
         <HeadlineStrip
-          sitesReporting={data.sites_reporting}
-          sitesTotal={data.sites_total}
-          fleetPassPct={data.fleet_pass_pct}
+          sitesReporting={data.sites_reporting ?? 0}
+          sitesTotal={data.sites_total ?? 0}
+          fleetPassPct={data.fleet_pass_pct ?? null}
           loading={false}
         />
       )}
@@ -550,7 +550,7 @@ function PerformancePage() {
             onRetry={() => void refetch()}
             retryLabel="Reload RUM data"
           />
-        ) : data.sites_reporting === 0 ? (
+        ) : (data.sites_reporting ?? 0) === 0 ? (
           <div className="rounded-lg border border-[var(--color-border)] px-5 py-10 text-center">
             <Activity
               aria-hidden="true"
@@ -564,9 +564,9 @@ function PerformancePage() {
           </div>
         ) : (
           <FleetTable<FleetRumOffender>
-            data={data.worst_offenders}
+            data={data.worst_offenders ?? []}
             columns={offenderColumns}
-            height={Math.min(480, Math.max(200, data.worst_offenders.length * 52 + 44))}
+            height={Math.min(480, Math.max(200, (data.worst_offenders ?? []).length * 52 + 44))}
             ariaLabel="Worst CWV offenders"
             defaultSorting={[{ id: "lcp_p75", desc: true }]}
             emptyState={
@@ -578,14 +578,14 @@ function PerformancePage() {
         )}
 
         {/* 28-day trend — small multiples for LCP / INP / CLS */}
-        {!isPending && !isError && data.trend.length >= 2 && (
+        {!isPending && !isError && (data.trend ?? []).length >= 2 && (
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             {TREND_METRICS.map((m) => (
               <div
                 key={m}
                 className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] px-4 py-3"
               >
-                <FleetCwvTrendChart trend={data.trend} metric={m} windowDays={windowDays} />
+                <FleetCwvTrendChart trend={data.trend ?? []} metric={m} windowDays={windowDays} />
               </div>
             ))}
           </div>

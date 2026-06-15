@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.47.1] - 2026-06-15
+
+### Fixed
+
+- **Performance dashboard no longer errors out.** The fleet Core Web Vitals endpoint now returns the per-metric object and the daily trend the dashboard expects, so the page renders instead of showing "Something went wrong".
+- **Fleet uptime shows site names and latency again.** The fleet status endpoint field names now match the dashboard, so the Site column is populated and average latency reads correctly instead of "NaN ms".
+- **Fleet table columns line up.** The shared fleet table now pins column widths with a column group, so the sticky header and the rows align across the uptime, backup, and performance tables.
+
+Added JSON-shape contract tests for both fleet endpoints and defensive guards in the dashboards so a future field rename fails the build rather than reaching the browser. Control plane plus dashboard at 0.47.1; no migration, no agent change.
+
 ## [0.47.0] - 2026-06-15
 
 ### Added
