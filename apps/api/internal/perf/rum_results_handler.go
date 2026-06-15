@@ -466,43 +466,59 @@ func emptyTrendResponse(windowDays, minSampleCount int) RumTrendResponse {
 // Fleet RUM aggregate  GET /api/v1/perf/rum/fleet
 // ---------------------------------------------------------------------------
 
-// FleetRumMetricSummary is the p75 + distribution for one Core Web Vital in
-// the fleet aggregate (device-collapsed, cross-site).
-type FleetRumMetricSummary struct {
-	Metric      string           `json:"metric"`
-	P75Ms       float64          `json:"p75_ms"`
-	SampleCount int64            `json:"sample_count"`
-	Rating      string           `json:"rating"`
-	Suppressed  bool             `json:"suppressed"`
-	GoodPct     int              `json:"good_pct"`
-	NiPct       int              `json:"ni_pct"`
-	PoorPct     int              `json:"poor_pct"`
-	Distribution *RumDistribution `json:"distribution,omitempty"`
+// fleetRumMetric is the per-metric summary in the fleet aggregate.
+// JSON field names are pinned to the frontend FleetRumMetric contract in
+// apps/web/src/features/fleet/fleet-types.ts.
+type fleetRumMetric struct {
+	P75         *float64 `json:"p75"`
+	GoodPct     *float64 `json:"good_pct"`
+	NiPct       *float64 `json:"ni_pct"`
+	PoorPct     *float64 `json:"poor_pct"`
+	SampleCount int64    `json:"sample_count"`
 }
 
-// FleetRumTrendPoint is one day's fleet aggregate p75.
-type FleetRumTrendPoint struct {
-	Day         string  `json:"day"`
-	P75Ms       float64 `json:"p75_ms"`
-	SampleCount int64   `json:"sample_count"`
-	Suppressed  bool    `json:"suppressed"`
+// fleetPerMetric is the fixed per_metric object in FleetRumResponse.
+// All five keys are always present (zero-value metric when no data).
+type fleetPerMetric struct {
+	LCP  fleetRumMetric `json:"lcp"`
+	INP  fleetRumMetric `json:"inp"`
+	CLS  fleetRumMetric `json:"cls"`
+	FCP  fleetRumMetric `json:"fcp"`
+	TTFB fleetRumMetric `json:"ttfb"`
 }
 
-// FleetRumWorstOffender is a site with a poor fleet CWV rating.
-type FleetRumWorstOffender struct {
-	SiteID uuid.UUID `json:"site_id"`
-	P75Ms  float64   `json:"p75_ms"`
-	Rating string    `json:"rating"`
+// fleetRumWorstOffender is a site with poor CWV p75 ratings.
+// JSON field names are pinned to the frontend FleetRumOffender contract.
+type fleetRumWorstOffender struct {
+	SiteID        uuid.UUID `json:"site_id"`
+	Name          string    `json:"name"`
+	URL           string    `json:"url"`
+	LCPP75        *float64  `json:"lcp_p75"`
+	INPP75        *float64  `json:"inp_p75"`
+	CLSP75        *float64  `json:"cls_p75"`
+	OverallRating string    `json:"overall_rating"`
+	SampleCount   int64     `json:"sample_count"`
+}
+
+// fleetRumTrendPoint is one day's fleet-level p75 values for the three
+// LWV Core metrics. JSON field names are pinned to FleetRumTrendPoint.
+type fleetRumTrendPoint struct {
+	Date   string   `json:"date"`
+	LCPP75 *float64 `json:"lcp_p75"`
+	INPP75 *float64 `json:"inp_p75"`
+	CLSP75 *float64 `json:"cls_p75"`
 }
 
 // FleetRumResponse is the response body for GET /api/v1/perf/rum/fleet.
+// JSON field names are pinned to the frontend FleetRumResponse contract in
+// apps/web/src/features/fleet/fleet-types.ts.
 type FleetRumResponse struct {
-	WindowDays     int                              `json:"window_days"`
-	SitesReporting int                              `json:"sites_reporting"`
-	SitesTotal     int                              `json:"sites_total"`
-	FleetPassPct   float64                          `json:"fleet_pass_pct"` // pct of sites with good LCP p75
-	Metrics        map[string]FleetRumMetricSummary `json:"metrics"`        // keyed by metric name
-	WorstOffenders []FleetRumWorstOffender          `json:"worst_offenders"`
+	SitesReporting int                    `json:"sites_reporting"`
+	SitesTotal     int                    `json:"sites_total"`
+	FleetPassPct   *float64               `json:"fleet_pass_pct"`
+	PerMetric      fleetPerMetric         `json:"per_metric"`
+	WorstOffenders []fleetRumWorstOffender `json:"worst_offenders"`
+	Trend          []fleetRumTrendPoint   `json:"trend"`
 }
 
 // rumFleet handles GET /api/v1/perf/rum/fleet.
@@ -511,6 +527,8 @@ type FleetRumResponse struct {
 //
 //	window_days — 1-365, default 28.
 //	device      — desktop | mobile | tablet | all (default all).
+//
+// Response shape is pinned to FleetRumResponse / fleet-types.ts.
 func (h *Handler) rumFleet(c *gin.Context) {
 	p, _ := domain.PrincipalFromContext(c.Request.Context())
 
@@ -523,16 +541,19 @@ func (h *Handler) rumFleet(c *gin.Context) {
 	}
 	deviceFilter := c.Query("device") // empty or "all" = no device filter
 
-	if h.rum == nil || h.rum.GetHourlyRollupsForSites == nil {
-		// Degrade gracefully when the RUM store is not wired.
-		c.JSON(http.StatusOK, FleetRumResponse{
-			WindowDays:     windowDays,
+	emptyResp := func(sitesTotal int) FleetRumResponse {
+		return FleetRumResponse{
 			SitesReporting: 0,
-			SitesTotal:     0,
-			FleetPassPct:   0,
-			Metrics:        map[string]FleetRumMetricSummary{},
-			WorstOffenders: []FleetRumWorstOffender{},
-		})
+			SitesTotal:     sitesTotal,
+			FleetPassPct:   nil,
+			PerMetric:      fleetPerMetric{},
+			WorstOffenders: []fleetRumWorstOffender{},
+			Trend:          []fleetRumTrendPoint{},
+		}
+	}
+
+	if h.rum == nil || h.rum.GetHourlyRollupsForSites == nil {
+		c.JSON(http.StatusOK, emptyResp(0))
 		return
 	}
 
@@ -551,64 +572,67 @@ func (h *Handler) rumFleet(c *gin.Context) {
 		return
 	}
 
+	if len(rollups) == 0 {
+		c.JSON(http.StatusOK, emptyResp(len(siteIDs)))
+		return
+	}
+
 	// Track which sites reported data.
 	reportingSites := make(map[uuid.UUID]struct{})
 	for _, r := range rollups {
 		reportingSites[r.SiteID] = struct{}{}
 	}
 
-	// Accumulate per-metric device-collapsed buckets across all sites.
-	// For the fleet aggregate we collapse both site and device (as the user
-	// can filter by device via the ?device= param but cross-site comparison
-	// needs a single p75 per metric).
-	type metricAcc struct {
+	// perSiteMetricAcc accumulates bucket histogram data per (siteID, metric).
+	type siteMetricKey struct {
+		siteID uuid.UUID
+		metric string
+	}
+	type bucketAcc struct {
 		counts      []int64
 		sampleCount int64
 		maxVal      int32
-		// bySite accumulates sums per site for worst-offenders (LCP only for now).
-		bySite map[uuid.UUID]*struct {
-			counts      []int64
-			sampleCount int64
-			maxVal      int32
-		}
 	}
-	acc := make(map[string]*metricAcc)
+
+	// Fleet-level acc per metric (all sites + devices collapsed).
+	fleetAcc := make(map[string]*bucketAcc)
+	// Per-site per-metric acc (for worst-offenders: we track all 3 CWV metrics).
+	siteAcc := make(map[siteMetricKey]*bucketAcc)
+	// Per-(metric, day) acc for trend (hourly rollups bucketed to UTC days).
+	type trendKey struct {
+		metric string
+		day    string // "YYYY-MM-DD"
+	}
+	trendAcc := make(map[trendKey]*bucketAcc)
 
 	for _, r := range rollups {
 		// Apply device filter.
 		if deviceFilter != "" && deviceFilter != "all" && r.Device != deviceFilter {
 			continue
 		}
-		ma, ok := acc[r.Metric]
+
+		// Fleet-level accumulation.
+		fa, ok := fleetAcc[r.Metric]
 		if !ok {
-			ma = &metricAcc{
-				counts: make([]int64, rum.NumBuckets),
-				bySite: make(map[uuid.UUID]*struct {
-					counts      []int64
-					sampleCount int64
-					maxVal      int32
-				}),
-			}
-			acc[r.Metric] = ma
+			fa = &bucketAcc{counts: make([]int64, rum.NumBuckets)}
+			fleetAcc[r.Metric] = fa
 		}
-		ma.sampleCount += r.SampleCount
-		if r.MaxValue > ma.maxVal {
-			ma.maxVal = r.MaxValue
+		fa.sampleCount += r.SampleCount
+		if r.MaxValue > fa.maxVal {
+			fa.maxVal = r.MaxValue
 		}
-		for i, c := range r.BucketCounts {
+		for i, cnt := range r.BucketCounts {
 			if i < rum.NumBuckets {
-				ma.counts[i] += int64(c)
+				fa.counts[i] += int64(cnt)
 			}
 		}
-		// Per-site accumulation for worst-offenders.
-		sa, ok := ma.bySite[r.SiteID]
+
+		// Per-site per-metric accumulation (worst-offenders need lcp/inp/cls).
+		smk := siteMetricKey{siteID: r.SiteID, metric: r.Metric}
+		sa, ok := siteAcc[smk]
 		if !ok {
-			sa = &struct {
-				counts      []int64
-				sampleCount int64
-				maxVal      int32
-			}{counts: make([]int64, rum.NumBuckets)}
-			ma.bySite[r.SiteID] = sa
+			sa = &bucketAcc{counts: make([]int64, rum.NumBuckets)}
+			siteAcc[smk] = sa
 		}
 		sa.sampleCount += r.SampleCount
 		if r.MaxValue > sa.maxVal {
@@ -619,91 +643,205 @@ func (h *Handler) rumFleet(c *gin.Context) {
 				sa.counts[i] += int64(cnt)
 			}
 		}
+
+		// Trend accumulation: bucket hourly rollups into UTC days.
+		// Only track the three trend metrics: lcp, inp, cls.
+		if r.Metric == "lcp" || r.Metric == "inp" || r.Metric == "cls" {
+			// r.HourBucket is already a time.Time from the rum.HourlyRollup.
+			// We extract the UTC date from BucketHour.
+			dayStr := r.BucketHour.UTC().Format("2006-01-02")
+			tk := trendKey{metric: r.Metric, day: dayStr}
+			ta, ok := trendAcc[tk]
+			if !ok {
+				ta = &bucketAcc{counts: make([]int64, rum.NumBuckets)}
+				trendAcc[tk] = ta
+			}
+			ta.sampleCount += r.SampleCount
+			if r.MaxValue > ta.maxVal {
+				ta.maxVal = r.MaxValue
+			}
+			for i, cnt := range r.BucketCounts {
+				if i < rum.NumBuckets {
+					ta.counts[i] += int64(cnt)
+				}
+			}
+		}
 	}
 
 	const minSampleCount = 30
-	metrics := make(map[string]FleetRumMetricSummary, len(acc))
-	var lcpGoodSites, lcpTotalSites int
 
-	for metric, ma := range acc {
-		suppressed := ma.sampleCount < int64(minSampleCount)
-		p75 := float64(0)
-		if !suppressed {
-			p75 = rum.InterpolateP75FromCounts(ma.counts, ma.sampleCount, ma.maxVal)
+	// buildMetric converts a fleet-level bucket accumulator to a fleetRumMetric.
+	buildMetric := func(metric string, fa *bucketAcc) fleetRumMetric {
+		if fa == nil || fa.sampleCount < int64(minSampleCount) {
+			return fleetRumMetric{SampleCount: 0}
 		}
-		ms := FleetRumMetricSummary{
-			Metric:      metric,
-			P75Ms:       p75,
-			SampleCount: ma.sampleCount,
-			Suppressed:  suppressed,
+		p75 := rum.InterpolateP75FromCounts(fa.counts, fa.sampleCount, fa.maxVal)
+		dist := foldBucketsIntoDistribution(metric, fa.counts)
+		var goodPct, niPct, poorPct *float64
+		if dist != nil {
+			gp := float64(dist.GoodPct)
+			np := float64(dist.NeedsImprovementPct)
+			pp := float64(dist.PoorPct)
+			goodPct = &gp
+			niPct = &np
+			poorPct = &pp
 		}
-		if !suppressed {
-			ms.Rating = cwvRating(metric, p75)
-			ms.Distribution = foldBucketsIntoDistribution(metric, ma.counts)
-			if ms.Distribution != nil {
-				ms.GoodPct = ms.Distribution.GoodPct
-				ms.NiPct = ms.Distribution.NeedsImprovementPct
-				ms.PoorPct = ms.Distribution.PoorPct
-			}
-		}
-		metrics[metric] = ms
-
-		// Fleet-pass-pct: fraction of reporting sites with "good" LCP p75.
-		if metric == "lcp" {
-			for siteID, sa := range ma.bySite {
-				if sa.sampleCount < int64(minSampleCount) {
-					continue
-				}
-				_ = siteID
-				lcpTotalSites++
-				siteP75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
-				if cwvRating("lcp", siteP75) == "good" {
-					lcpGoodSites++
-				}
-			}
+		return fleetRumMetric{
+			P75:         &p75,
+			GoodPct:     goodPct,
+			NiPct:       niPct,
+			PoorPct:     poorPct,
+			SampleCount: fa.sampleCount,
 		}
 	}
 
-	// Worst offenders: sites with poor LCP p75, sorted descending by p75.
-	var worstOffenders []FleetRumWorstOffender
-	if lcpAcc, ok := acc["lcp"]; ok {
-		for siteID, sa := range lcpAcc.bySite {
-			if sa.sampleCount < int64(minSampleCount) {
+	perMetric := fleetPerMetric{
+		LCP:  buildMetric("lcp", fleetAcc["lcp"]),
+		INP:  buildMetric("inp", fleetAcc["inp"]),
+		CLS:  buildMetric("cls", fleetAcc["cls"]),
+		FCP:  buildMetric("fcp", fleetAcc["fcp"]),
+		TTFB: buildMetric("ttfb", fleetAcc["ttfb"]),
+	}
+
+	// Fleet-pass-pct: fraction of reporting sites with "good" LCP p75.
+	var fleetPassPct *float64
+	var lcpGoodSites, lcpTotalSites int
+	for smk, sa := range siteAcc {
+		if smk.metric != "lcp" {
+			continue
+		}
+		if sa.sampleCount < int64(minSampleCount) {
+			continue
+		}
+		lcpTotalSites++
+		siteP75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
+		if cwvRating("lcp", siteP75) == "good" {
+			lcpGoodSites++
+		}
+	}
+	if lcpTotalSites > 0 {
+		v := float64(lcpGoodSites) / float64(lcpTotalSites) * 100
+		fleetPassPct = &v
+	}
+
+	// Worst offenders: collect unique sites with poor/needs-improvement LCP,
+	// joined with their inp/cls p75 values.
+	type offenderAcc struct {
+		lcpP75  float64
+		inpP75  *float64
+		clsP75  *float64
+		samples int64
+		rating  string
+	}
+	offenderMap := make(map[uuid.UUID]*offenderAcc)
+	for smk, sa := range siteAcc {
+		if smk.metric != "lcp" {
+			continue
+		}
+		if sa.sampleCount < int64(minSampleCount) {
+			continue
+		}
+		p75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
+		rating := cwvRating("lcp", p75)
+		// normalise: frontend expects "needs-improvement" (hyphen), not underscore
+		if rating == "needs_improvement" {
+			rating = "needs-improvement"
+		}
+		if rating == "poor" || rating == "needs-improvement" {
+			offenderMap[smk.siteID] = &offenderAcc{
+				lcpP75:  p75,
+				samples: sa.sampleCount,
+				rating:  rating,
+			}
+		}
+	}
+	// Enrich offenders with inp/cls p75 values.
+	for smk, sa := range siteAcc {
+		oa, isOffender := offenderMap[smk.siteID]
+		if !isOffender {
+			continue
+		}
+		if sa.sampleCount < int64(minSampleCount) {
+			continue
+		}
+		p75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
+		switch smk.metric {
+		case "inp":
+			oa.inpP75 = &p75
+		case "cls":
+			oa.clsP75 = &p75
+		}
+	}
+
+	worstOffenders := make([]fleetRumWorstOffender, 0, len(offenderMap))
+	for siteID, oa := range offenderMap {
+		lcpP75 := oa.lcpP75
+		worstOffenders = append(worstOffenders, fleetRumWorstOffender{
+			SiteID:        siteID,
+			Name:          "", // name/url not available without N+1 lookup; frontend tolerates empty
+			URL:           "",
+			LCPP75:        &lcpP75,
+			INPP75:        oa.inpP75,
+			CLSP75:        oa.clsP75,
+			OverallRating: oa.rating,
+			SampleCount:   oa.samples,
+		})
+	}
+	sort.Slice(worstOffenders, func(i, j int) bool {
+		// Sort by LCP p75 descending (worst first).
+		li, lj := float64(0), float64(0)
+		if worstOffenders[i].LCPP75 != nil {
+			li = *worstOffenders[i].LCPP75
+		}
+		if worstOffenders[j].LCPP75 != nil {
+			lj = *worstOffenders[j].LCPP75
+		}
+		return li > lj
+	})
+	if len(worstOffenders) > 10 {
+		worstOffenders = worstOffenders[:10]
+	}
+
+	// Build trend: one point per day with lcp_p75/inp_p75/cls_p75.
+	// Collect all days across the three trend metrics, then join.
+	trendDays := make(map[string]struct{})
+	for tk := range trendAcc {
+		trendDays[tk.day] = struct{}{}
+	}
+	sortedDays := make([]string, 0, len(trendDays))
+	for d := range trendDays {
+		sortedDays = append(sortedDays, d)
+	}
+	sort.Strings(sortedDays)
+
+	trend := make([]fleetRumTrendPoint, 0, len(sortedDays))
+	for _, day := range sortedDays {
+		pt := fleetRumTrendPoint{Date: day}
+		for _, metric := range []string{"lcp", "inp", "cls"} {
+			ta := trendAcc[trendKey{metric: metric, day: day}]
+			if ta == nil || ta.sampleCount < int64(minSampleCount) {
 				continue
 			}
-			siteP75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
-			rating := cwvRating("lcp", siteP75)
-			if rating == "poor" || rating == "needs_improvement" {
-				worstOffenders = append(worstOffenders, FleetRumWorstOffender{
-					SiteID: siteID,
-					P75Ms:  siteP75,
-					Rating: rating,
-				})
+			p75 := rum.InterpolateP75FromCounts(ta.counts, ta.sampleCount, ta.maxVal)
+			switch metric {
+			case "lcp":
+				pt.LCPP75 = &p75
+			case "inp":
+				pt.INPP75 = &p75
+			case "cls":
+				pt.CLSP75 = &p75
 			}
 		}
-		sort.Slice(worstOffenders, func(i, j int) bool {
-			return worstOffenders[i].P75Ms > worstOffenders[j].P75Ms
-		})
-		if len(worstOffenders) > 10 {
-			worstOffenders = worstOffenders[:10]
-		}
-	}
-	if worstOffenders == nil {
-		worstOffenders = []FleetRumWorstOffender{}
-	}
-
-	fleetPassPct := float64(0)
-	if lcpTotalSites > 0 {
-		fleetPassPct = float64(lcpGoodSites) / float64(lcpTotalSites) * 100
+		trend = append(trend, pt)
 	}
 
 	c.JSON(http.StatusOK, FleetRumResponse{
-		WindowDays:     windowDays,
 		SitesReporting: len(reportingSites),
 		SitesTotal:     len(siteIDs),
 		FleetPassPct:   fleetPassPct,
-		Metrics:        metrics,
+		PerMetric:      perMetric,
 		WorstOffenders: worstOffenders,
+		Trend:          trend,
 	})
 }
 
