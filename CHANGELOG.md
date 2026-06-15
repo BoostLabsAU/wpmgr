@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.47.2] - 2026-06-15
+
+### Fixed
+
+- **Fleet table columns now align.** The shared fleet table was rebuilt as a single sticky table with a column group driving column widths, so the header and the rows share one geometry and cannot drift apart (the previous virtualized header could desync from the body). Affects the uptime, backup, and performance tables.
+
+### Changed
+
+- **Performance dashboard brings back per-site Core Web Vitals behind a site filter.** A site selector in the header switches scope: "All sites" shows the fleet aggregate, and picking a site shows that site's full per-site detail (LCP, INP, CLS, FCP, TTFB p75 with distribution bars, the 28-day trend, and the per-URL breakdown). The fleet Core Web Vitals table now lists every reporting site sorted by LCP and each row drills into that site. The selected site, device, and window are kept in the URL.
+
+Dashboard only; no control plane, migration, or agent change.
+
 ## [0.47.1] - 2026-06-15
 
 ### Fixed

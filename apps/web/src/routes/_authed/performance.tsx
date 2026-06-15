@@ -1,20 +1,29 @@
 // /performance — fleet-wide performance dashboard.
 //
-// Redesigned in 0.44.x to aggregate across all sites (fleet-first) rather
-// than requiring a single-site <select>.
+// Scope selector: "All sites" shows the fleet aggregate; selecting a specific
+// site shows the full per-site RUM detail (CWV cards + trend + URL breakdown).
+// The ?site=<siteId> search param persists the scope alongside ?device and
+// ?window, so links are shareable and survive refresh.
 //
-// Layout:
+// Fleet scope layout:
 //   1. Headline strip — sites reporting / fleet CWV pass-rate
-//   2. Worst-offenders FleetTable sortable by LCP/INP/CLS with inline
-//      RumDistributionBar per row + p75 sparkline
+//   2. Sites by Core Web Vitals FleetTable (all reporting sites, sorted LCP p75
+//      worst-first). Rows are clickable: click sets ?site=<id>.
 //   3. Fleet 28-day CWV trend (recharts, threshold reference lines)
 //   4. DB health aggregate (existing FleetDbHealthPanel)
 //
-// Device and window are URL search params (shareable links).
-// Drill a row -> per-site RUM detail at /sites/$siteId/optimize.
+// Per-site scope layout (composes existing components unchanged):
+//   1. Back breadcrumb / "Viewing: <site name>" sub-header
+//   2. FleetRumPanel — CWV p75 cards + distribution bars + trend charts (reused)
+//   3. RumResultsTable — per-URL/device breakdown table (reused)
+//
+// Device and window are URL search params (shareable links). The device tab
+// also feeds the per-site RUM views (FleetRumPanel manages its own device state
+// internally, so the outer device param is the initial/default for the fleet
+// trend only; per-site panels have their own tab).
 
-import { useCallback } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { useCallback, useId } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { z } from "zod";
 import {
   AreaChart,
@@ -34,6 +43,7 @@ import {
   Monitor,
   Smartphone,
   Tablet,
+  ChevronLeft,
 } from "lucide-react";
 import type { ColumnDef } from "@tanstack/react-table";
 
@@ -41,6 +51,8 @@ import { PageHeader } from "@/components/shared/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 import { FleetDbHealthPanel } from "@/features/perf/optimize/FleetDbHealthPanel";
+import { FleetRumPanel } from "@/features/perf/optimize/FleetRumPanel";
+import { RumResultsTable } from "@/features/perf/optimize/RumResultsTable";
 import { RumDistributionBar } from "@/features/perf/optimize/RumDistributionBar";
 import { FleetTable } from "@/features/fleet/FleetTable";
 import type { FleetRumOffender } from "@/features/fleet/fleet-types";
@@ -49,15 +61,17 @@ import {
   DEFAULT_WINDOW_DAYS,
   type DeviceFilter,
 } from "@/features/fleet/use-fleet-rum";
+import { useSites } from "@/features/sites/use-sites";
 import { cn } from "@/lib/utils";
 
 // ---------------------------------------------------------------------------
-// Route — validate search params so device + window are shareable
+// Route — validate search params so device + window + site are shareable
 // ---------------------------------------------------------------------------
 
 const searchSchema = z.object({
   device: z.enum(["all", "desktop", "mobile", "tablet"]).optional().default("all"),
   window: z.coerce.number().min(1).max(365).optional().default(DEFAULT_WINDOW_DAYS),
+  site: z.string().optional(),
 });
 
 export const Route = createFileRoute("/_authed/performance")({
@@ -150,6 +164,54 @@ function DeviceTabs({ value, onChange }: DeviceTabsProps) {
 }
 
 // ---------------------------------------------------------------------------
+// Site scope selector
+// ---------------------------------------------------------------------------
+
+interface SiteScopeSelectorProps {
+  value: string | undefined;
+  onChange: (siteId: string | undefined) => void;
+}
+
+function SiteScopeSelector({ value, onChange }: SiteScopeSelectorProps) {
+  const selectId = useId();
+  const { data: sites = [], isPending } = useSites();
+
+  return (
+    <div className="flex items-center gap-2">
+      <label
+        htmlFor={selectId}
+        className="shrink-0 text-xs text-[var(--color-muted-foreground)]"
+      >
+        Site
+      </label>
+      <select
+        id={selectId}
+        value={value ?? ""}
+        onChange={(e) => {
+          const v = e.target.value;
+          onChange(v === "" ? undefined : v);
+        }}
+        disabled={isPending}
+        aria-label="Filter by site"
+        className={cn(
+          "h-8 min-w-[160px] max-w-[240px] appearance-none rounded-md border border-[var(--color-border)]",
+          "bg-[var(--color-background)] px-2.5 py-1 text-xs text-[var(--color-foreground)]",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-1",
+          "disabled:cursor-not-allowed disabled:opacity-50",
+        )}
+      >
+        <option value="">All sites</option>
+        {sites.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name || s.url}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Headline strip
 // ---------------------------------------------------------------------------
 
@@ -224,24 +286,27 @@ function HeadlineStrip({
 }
 
 // ---------------------------------------------------------------------------
-// Worst-offenders table columns
+// All-sites CWV table columns
 // ---------------------------------------------------------------------------
 
-function buildOffenderColumns(windowDays: number): ColumnDef<FleetRumOffender>[] {
+function buildSiteColumns(
+  windowDays: number,
+  onRowClick: (row: FleetRumOffender) => void,
+): ColumnDef<FleetRumOffender>[] {
   return [
     {
       id: "name",
       header: "Site",
       accessorFn: (row) => row.name,
-      meta: { width: "30%" },
+      meta: { width: "28%" },
       cell: ({ row }) => (
-        <Link
-          to="/sites/$siteId/optimize"
-          params={{ siteId: row.original.site_id }}
-          className="font-medium text-[var(--color-foreground)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-1"
+        <button
+          type="button"
+          onClick={() => onRowClick(row.original)}
+          className="font-medium text-[var(--color-foreground)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-1 text-left"
         >
           {row.original.name || row.original.url}
-        </Link>
+        </button>
       ),
     },
     {
@@ -314,13 +379,8 @@ function buildOffenderColumns(windowDays: number): ColumnDef<FleetRumOffender>[]
       id: "distribution",
       header: `${windowDays}d distribution`,
       enableSorting: false,
-      meta: { width: "18%" },
+      meta: { width: "20%" },
       cell: ({ row }) => {
-        // Approximate distribution from the overall rating and p75 values.
-        // The fleet endpoint provides per-metric aggregated good_pct etc.;
-        // for the per-row inline bar we render a simplified 3-band bar from the
-        // row's overall_rating as a visual hint. The full per-metric distribution
-        // is available on the per-site detail page.
         const r = row.original.overall_rating;
         const goodPct = r === "good" ? 75 : r === "needs-improvement" ? 40 : 10;
         const poorPct = r === "poor" ? 60 : r === "needs-improvement" ? 15 : 5;
@@ -481,35 +541,68 @@ function FleetCwvTrendChart({ trend, metric, windowDays }: FleetCwvTrendChartPro
 }
 
 // ---------------------------------------------------------------------------
-// Main page
+// Per-site RUM detail panel
 // ---------------------------------------------------------------------------
 
-function PerformancePage() {
-  const { device, window: windowDays } = Route.useSearch();
-  const navigate = useNavigate({ from: Route.fullPath });
+interface PerSiteRumViewProps {
+  siteId: string;
+  siteName: string;
+  onBack: () => void;
+}
 
-  const setDevice = useCallback(
-    (d: DeviceFilter) => {
-      void navigate({ search: (prev) => ({ ...prev, device: d }) });
-    },
-    [navigate],
+function PerSiteRumView({ siteId, siteName, onBack }: PerSiteRumViewProps) {
+  return (
+    <section aria-labelledby="per-site-rum-heading" className="space-y-6">
+      {/* Back affordance + sub-header */}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded text-xs text-[var(--color-muted-foreground)]",
+            "transition-colors hover:text-[var(--color-foreground)]",
+            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-1",
+          )}
+          aria-label="Back to all sites"
+        >
+          <ChevronLeft aria-hidden="true" className="size-3.5" />
+          All sites
+        </button>
+        <span aria-hidden="true" className="text-xs text-[var(--color-border)]">/</span>
+        <span
+          id="per-site-rum-heading"
+          className="text-xs font-medium text-[var(--color-foreground)]"
+        >
+          {siteName || siteId}
+        </span>
+      </div>
+
+      {/* Per-site CWV cards + distribution bars + trend charts (FleetRumPanel) */}
+      <FleetRumPanel siteId={siteId} siteName={siteName} />
+
+      {/* Per-URL/device breakdown table (RumResultsTable) */}
+      <RumResultsTable siteId={siteId} perSite />
+    </section>
   );
+}
 
-  const { data, isPending, isError, error, refetch } = useFleetRum(
-    windowDays,
-    device,
-  );
+// ---------------------------------------------------------------------------
+// Fleet view
+// ---------------------------------------------------------------------------
 
-  const offenderColumns = buildOffenderColumns(windowDays);
+interface FleetRumViewProps {
+  device: DeviceFilter;
+  windowDays: number;
+  onDrillSite: (siteId: string) => void;
+}
+
+function FleetRumView({ device, windowDays, onDrillSite }: FleetRumViewProps) {
+  const { data, isPending, isError, error, refetch } = useFleetRum(windowDays, device);
+
+  const siteColumns = buildSiteColumns(windowDays, (row) => onDrillSite(row.site_id));
 
   return (
-    <section aria-labelledby="performance-heading" className="space-y-6">
-      <PageHeader
-        title="Performance"
-        subline="Fleet-wide Core Web Vitals and database health across all connected sites"
-        actions={<DeviceTabs value={device} onChange={setDevice} />}
-      />
-
+    <>
       {/* Fleet headline strip */}
       {isPending ? (
         <HeadlineStrip sitesReporting={0} sitesTotal={0} fleetPassPct={null} loading />
@@ -533,7 +626,7 @@ function PerformancePage() {
             Core Web Vitals
           </h2>
           <span className="text-xs text-[var(--color-muted-foreground)]">
-            Worst offenders, sorted by LCP
+            Sites by Core Web Vitals, sorted by LCP
           </span>
         </div>
 
@@ -565,13 +658,14 @@ function PerformancePage() {
         ) : (
           <FleetTable<FleetRumOffender>
             data={data.worst_offenders ?? []}
-            columns={offenderColumns}
-            height={Math.min(480, Math.max(200, (data.worst_offenders ?? []).length * 52 + 44))}
-            ariaLabel="Worst CWV offenders"
+            columns={siteColumns}
+            height={Math.min(520, Math.max(200, (data.worst_offenders ?? []).length * 52 + 44))}
+            ariaLabel="Sites by Core Web Vitals"
             defaultSorting={[{ id: "lcp_p75", desc: true }]}
+            onRowClick={(row) => onDrillSite(row.site_id)}
             emptyState={
               <p className="text-center text-sm text-[var(--color-muted-foreground)]">
-                All sites are passing Core Web Vitals.
+                No RUM data to display for this filter.
               </p>
             }
           />
@@ -594,6 +688,71 @@ function PerformancePage() {
 
       {/* Database health aggregate (existing panel) */}
       <FleetDbHealthPanel />
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main page
+// ---------------------------------------------------------------------------
+
+function PerformancePage() {
+  const { device, window: windowDays, site: selectedSiteId } = Route.useSearch();
+  const navigate = useNavigate({ from: Route.fullPath });
+
+  const setDevice = useCallback(
+    (d: DeviceFilter) => {
+      void navigate({ search: (prev) => ({ ...prev, device: d }) });
+    },
+    [navigate],
+  );
+
+  const setSite = useCallback(
+    (siteId: string | undefined) => {
+      void navigate({ search: (prev) => ({ ...prev, site: siteId }) });
+    },
+    [navigate],
+  );
+
+  // Resolve site name for breadcrumb when a site is selected.
+  const { data: sites = [] } = useSites();
+  const selectedSite = selectedSiteId
+    ? sites.find((s) => s.id === selectedSiteId)
+    : undefined;
+  const siteName = selectedSite?.name ?? selectedSite?.url ?? selectedSiteId ?? "";
+
+  const isPerSite = Boolean(selectedSiteId);
+
+  return (
+    <section aria-labelledby="performance-heading" className="space-y-6">
+      <PageHeader
+        title="Performance"
+        subline={
+          isPerSite
+            ? `Site-level Core Web Vitals for ${siteName || (selectedSiteId ?? "")}`
+            : "Fleet-wide Core Web Vitals and database health across all connected sites"
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-3">
+            <SiteScopeSelector value={selectedSiteId} onChange={setSite} />
+            <DeviceTabs value={device} onChange={setDevice} />
+          </div>
+        }
+      />
+
+      {isPerSite && selectedSiteId ? (
+        <PerSiteRumView
+          siteId={selectedSiteId}
+          siteName={siteName}
+          onBack={() => setSite(undefined)}
+        />
+      ) : (
+        <FleetRumView
+          device={device}
+          windowDays={windowDays}
+          onDrillSite={(siteId) => setSite(siteId)}
+        />
+      )}
     </section>
   );
 }
