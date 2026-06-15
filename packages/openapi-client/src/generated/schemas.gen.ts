@@ -6600,7 +6600,14 @@ export const EmailLogDetailSchema = {
 export const EmailStatsByDaySchema = {
   type: "object",
   description: "One day's aggregate email stats.",
-  required: ["day", "total", "sent_count", "failed_count"],
+  required: [
+    "day",
+    "total",
+    "sent_count",
+    "failed_count",
+    "bounced_count",
+    "complained_count",
+  ],
   properties: {
     day: {
       type: "string",
@@ -6617,6 +6624,17 @@ export const EmailStatsByDaySchema = {
     failed_count: {
       type: "integer",
       format: "int64",
+    },
+    bounced_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of emails with status=bounced on this day.",
+    },
+    complained_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of emails with status=complained (spam complaint) on this day.",
     },
   },
 } as const;
@@ -6652,6 +6670,8 @@ export const EmailStatsSchema = {
     "total",
     "sent_count",
     "failed_count",
+    "bounced_count",
+    "complained_count",
     "provider_count",
     "by_day",
     "by_provider",
@@ -6668,6 +6688,16 @@ export const EmailStatsSchema = {
     failed_count: {
       type: "integer",
       format: "int64",
+    },
+    bounced_count: {
+      type: "integer",
+      format: "int64",
+      description: "Total bounced emails in the range.",
+    },
+    complained_count: {
+      type: "integer",
+      format: "int64",
+      description: "Total spam complaints in the range.",
     },
     provider_count: {
       type: "integer",
@@ -6691,6 +6721,109 @@ export const EmailStatsSchema = {
       items: {
         $ref: "#/components/schemas/EmailStatsByProvider",
       },
+    },
+  },
+} as const;
+
+export const SiteDeliveryItemSchema = {
+  type: "object",
+  description:
+    "Per-site deliverability aggregate for the GET /email/deliverability\ndashboard. `bounce_rate` and `complaint_rate` are expressed as a\npercentage (0–100). Frontend reputation thresholds:\n  bounce_rate: warn ≥2%, danger ≥5%\n  complaint_rate: warn ≥0.05%, danger ≥0.1%\n",
+  required: [
+    "site_id",
+    "site_name",
+    "site_url",
+    "provider",
+    "total",
+    "sent_count",
+    "failed_count",
+    "bounced_count",
+    "complained_count",
+    "bounce_rate",
+    "complaint_rate",
+    "sparkline",
+  ],
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_name: {
+      type: "string",
+    },
+    site_url: {
+      type: "string",
+    },
+    provider: {
+      type: "string",
+      description:
+        "Active email provider for this site (empty when unconfigured).",
+    },
+    total: {
+      type: "integer",
+      format: "int64",
+    },
+    sent_count: {
+      type: "integer",
+      format: "int64",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+    },
+    bounced_count: {
+      type: "integer",
+      format: "int64",
+    },
+    complained_count: {
+      type: "integer",
+      format: "int64",
+    },
+    bounce_rate: {
+      type: "number",
+      format: "float",
+      description: "bounced/total*100 (0 when total=0).",
+    },
+    complaint_rate: {
+      type: "number",
+      format: "float",
+      description: "complained/total*100 (0 when total=0).",
+    },
+    last_sent_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+      description:
+        "When the most recent successfully-sent email was dispatched. Null when no sent email in the window.",
+    },
+    sparkline: {
+      type: "array",
+      items: {
+        type: "integer",
+        format: "int64",
+      },
+      description:
+        "Daily sent counts across the window, oldest→newest. Always [] never null.",
+    },
+  },
+} as const;
+
+export const DeliverabilityReportSchema = {
+  type: "object",
+  description:
+    "Response for GET /email/deliverability. Contains per-site deliverability aggregates sorted by bounce_rate DESC then total DESC (riskiest first).\n",
+  required: ["window_days", "items"],
+  properties: {
+    window_days: {
+      type: "integer",
+      description: "The window used for the query (clamped 1–365).",
+    },
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/SiteDeliveryItem",
+      },
+      description: "Per-site rows. Always [] never null.",
     },
   },
 } as const;

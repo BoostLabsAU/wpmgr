@@ -12855,6 +12855,157 @@ func (s *Server) handleGetFleetDbHealthRequest(args [0]string, argsEscaped bool,
 	}
 }
 
+// handleGetFleetEmailDeliverabilityRequest handles getFleetEmailDeliverability operation.
+//
+// Returns per-site deliverability aggregates for a rolling window.
+// Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+// The `window` query parameter controls the look-back period in days
+// (default 30, clamped to [1, 365]).
+// Org-scope only (site-collaborators are blocked).
+// Requires `site.email.manage` permission.
+// **Reputation thresholds (for frontend colouring):**
+// - `bounce_rate` warn ≥2%, danger ≥5%
+// - `complaint_rate` warn ≥0.05%, danger ≥0.1%.
+//
+// GET /api/v1/email/deliverability
+func (s *Server) handleGetFleetEmailDeliverabilityRequest(args [0]string, argsEscaped bool, w http.ResponseWriter, r *http.Request) {
+	statusWriter := &codeRecorder{ResponseWriter: w}
+	w = statusWriter
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetEmailDeliverability"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.HTTPRouteKey.String("/api/v1/email/deliverability"),
+	}
+	// Add attributes from config.
+	otelAttrs = append(otelAttrs, s.cfg.Attributes...)
+
+	// Start a span for this request.
+	ctx, span := s.cfg.Tracer.Start(r.Context(), GetFleetEmailDeliverabilityOperation,
+		trace.WithAttributes(otelAttrs...),
+		serverSpanKind,
+	)
+	defer span.End()
+
+	// Add Labeler to context.
+	labeler := &Labeler{attrs: otelAttrs}
+	ctx = contextWithLabeler(ctx, labeler)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		elapsedDuration := time.Since(startTime)
+
+		attrSet := labeler.AttributeSet()
+		attrs := attrSet.ToSlice()
+		code := statusWriter.status
+		if code != 0 {
+			codeAttr := semconv.HTTPResponseStatusCode(code)
+			attrs = append(attrs, codeAttr)
+			span.SetAttributes(codeAttr)
+		}
+		attrOpt := metric.WithAttributes(attrs...)
+
+		// Increment request counter.
+		s.requests.Add(ctx, 1, attrOpt)
+
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		s.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), attrOpt)
+	}()
+
+	var (
+		recordError = func(stage string, err error) {
+			span.RecordError(err)
+
+			// https://opentelemetry.io/docs/specs/semconv/http/http-spans/#status
+			// Span Status MUST be left unset if HTTP status code was in the 1xx, 2xx or 3xx ranges,
+			// unless there was another error (e.g., network error receiving the response body; or 3xx codes with
+			// max redirects exceeded), in which case status MUST be set to Error.
+			code := statusWriter.status
+			if code < 100 || code >= 500 {
+				span.SetStatus(codes.Error, stage)
+			}
+
+			attrSet := labeler.AttributeSet()
+			attrs := attrSet.ToSlice()
+			if code != 0 {
+				attrs = append(attrs, semconv.HTTPResponseStatusCode(code))
+			}
+
+			s.errors.Add(ctx, 1, metric.WithAttributes(attrs...))
+		}
+		err          error
+		opErrContext = ogenerrors.OperationContext{
+			Name: GetFleetEmailDeliverabilityOperation,
+			ID:   "getFleetEmailDeliverability",
+		}
+	)
+	params, err := decodeGetFleetEmailDeliverabilityParams(args, argsEscaped, r)
+	if err != nil {
+		err = &ogenerrors.DecodeParamsError{
+			OperationContext: opErrContext,
+			Err:              err,
+		}
+		defer recordError("DecodeParams", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	var rawBody []byte
+
+	var response GetFleetEmailDeliverabilityRes
+	if m := s.cfg.Middleware; m != nil {
+		mreq := middleware.Request{
+			Context:          ctx,
+			OperationName:    GetFleetEmailDeliverabilityOperation,
+			OperationSummary: "Fleet per-site deliverability report (bounce + complaint rates)",
+			OperationID:      "getFleetEmailDeliverability",
+			Body:             nil,
+			RawBody:          rawBody,
+			Params: middleware.Parameters{
+				{
+					Name: "window",
+					In:   "query",
+				}: params.Window,
+			},
+			Raw: r,
+		}
+
+		type (
+			Request  = struct{}
+			Params   = GetFleetEmailDeliverabilityParams
+			Response = GetFleetEmailDeliverabilityRes
+		)
+		response, err = middleware.HookMiddleware[
+			Request,
+			Params,
+			Response,
+		](
+			m,
+			mreq,
+			unpackGetFleetEmailDeliverabilityParams,
+			func(ctx context.Context, request Request, params Params) (response Response, err error) {
+				response, err = s.h.GetFleetEmailDeliverability(ctx, params)
+				return response, err
+			},
+		)
+	} else {
+		response, err = s.h.GetFleetEmailDeliverability(ctx, params)
+	}
+	if err != nil {
+		defer recordError("Internal", err)
+		s.cfg.ErrorHandler(ctx, w, r, err)
+		return
+	}
+
+	if err := encodeGetFleetEmailDeliverabilityResponse(response, w, span); err != nil {
+		defer recordError("EncodeResponse", err)
+		if !errors.Is(err, ht.ErrInternalServerErrorResponse) {
+			s.cfg.ErrorHandler(ctx, w, r, err)
+		}
+		return
+	}
+}
+
 // handleGetFleetEmailStatsRequest handles getFleetEmailStats operation.
 //
 // Returns tenant-wide summary counts and a per-day time-series for the

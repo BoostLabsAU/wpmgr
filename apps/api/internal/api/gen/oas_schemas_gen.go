@@ -6763,6 +6763,38 @@ type DeleteSiteShareUnauthorized Error
 
 func (*DeleteSiteShareUnauthorized) deleteSiteShareRes() {}
 
+// Response for GET /email/deliverability. Contains per-site deliverability aggregates sorted by
+// bounce_rate DESC then total DESC (riskiest first).
+// Ref: #/components/schemas/DeliverabilityReport
+type DeliverabilityReport struct {
+	// The window used for the query (clamped 1–365).
+	WindowDays int `json:"window_days"`
+	// Per-site rows. Always [] never null.
+	Items []SiteDeliveryItem `json:"items"`
+}
+
+// GetWindowDays returns the value of WindowDays.
+func (s *DeliverabilityReport) GetWindowDays() int {
+	return s.WindowDays
+}
+
+// GetItems returns the value of Items.
+func (s *DeliverabilityReport) GetItems() []SiteDeliveryItem {
+	return s.Items
+}
+
+// SetWindowDays sets the value of WindowDays.
+func (s *DeliverabilityReport) SetWindowDays(val int) {
+	s.WindowDays = val
+}
+
+// SetItems sets the value of Items.
+func (s *DeliverabilityReport) SetItems(val []SiteDeliveryItem) {
+	s.Items = val
+}
+
+func (*DeliverabilityReport) getFleetEmailDeliverabilityRes() {}
+
 type DownloadPortalReportForbidden Error
 
 func (*DownloadPortalReportForbidden) downloadPortalReportRes() {}
@@ -7389,6 +7421,10 @@ type EmailStats struct {
 	Total       int64 `json:"total"`
 	SentCount   int64 `json:"sent_count"`
 	FailedCount int64 `json:"failed_count"`
+	// Total bounced emails in the range.
+	BouncedCount int64 `json:"bounced_count"`
+	// Total spam complaints in the range.
+	ComplainedCount int64 `json:"complained_count"`
 	// Number of distinct providers used in the range.
 	ProviderCount int64 `json:"provider_count"`
 	// Number of distinct sites in the range (fleet stats only).
@@ -7410,6 +7446,16 @@ func (s *EmailStats) GetSentCount() int64 {
 // GetFailedCount returns the value of FailedCount.
 func (s *EmailStats) GetFailedCount() int64 {
 	return s.FailedCount
+}
+
+// GetBouncedCount returns the value of BouncedCount.
+func (s *EmailStats) GetBouncedCount() int64 {
+	return s.BouncedCount
+}
+
+// GetComplainedCount returns the value of ComplainedCount.
+func (s *EmailStats) GetComplainedCount() int64 {
+	return s.ComplainedCount
 }
 
 // GetProviderCount returns the value of ProviderCount.
@@ -7447,6 +7493,16 @@ func (s *EmailStats) SetFailedCount(val int64) {
 	s.FailedCount = val
 }
 
+// SetBouncedCount sets the value of BouncedCount.
+func (s *EmailStats) SetBouncedCount(val int64) {
+	s.BouncedCount = val
+}
+
+// SetComplainedCount sets the value of ComplainedCount.
+func (s *EmailStats) SetComplainedCount(val int64) {
+	s.ComplainedCount = val
+}
+
 // SetProviderCount sets the value of ProviderCount.
 func (s *EmailStats) SetProviderCount(val int64) {
 	s.ProviderCount = val
@@ -7478,6 +7534,10 @@ type EmailStatsByDay struct {
 	Total       int64  `json:"total"`
 	SentCount   int64  `json:"sent_count"`
 	FailedCount int64  `json:"failed_count"`
+	// Number of emails with status=bounced on this day.
+	BouncedCount int64 `json:"bounced_count"`
+	// Number of emails with status=complained (spam complaint) on this day.
+	ComplainedCount int64 `json:"complained_count"`
 }
 
 // GetDay returns the value of Day.
@@ -7500,6 +7560,16 @@ func (s *EmailStatsByDay) GetFailedCount() int64 {
 	return s.FailedCount
 }
 
+// GetBouncedCount returns the value of BouncedCount.
+func (s *EmailStatsByDay) GetBouncedCount() int64 {
+	return s.BouncedCount
+}
+
+// GetComplainedCount returns the value of ComplainedCount.
+func (s *EmailStatsByDay) GetComplainedCount() int64 {
+	return s.ComplainedCount
+}
+
 // SetDay sets the value of Day.
 func (s *EmailStatsByDay) SetDay(val string) {
 	s.Day = val
@@ -7518,6 +7588,16 @@ func (s *EmailStatsByDay) SetSentCount(val int64) {
 // SetFailedCount sets the value of FailedCount.
 func (s *EmailStatsByDay) SetFailedCount(val int64) {
 	s.FailedCount = val
+}
+
+// SetBouncedCount sets the value of BouncedCount.
+func (s *EmailStatsByDay) SetBouncedCount(val int64) {
+	s.BouncedCount = val
+}
+
+// SetComplainedCount sets the value of ComplainedCount.
+func (s *EmailStatsByDay) SetComplainedCount(val int64) {
+	s.ComplainedCount = val
 }
 
 // One provider's aggregate email stats.
@@ -9727,6 +9807,14 @@ func (*GetEmailNotifySettingsUnauthorized) getEmailNotifySettingsRes() {}
 
 // Fleet DB health aggregate (shape matches FleetDbHealth Go model).
 type GetFleetDbHealthOK struct{}
+
+type GetFleetEmailDeliverabilityForbidden Error
+
+func (*GetFleetEmailDeliverabilityForbidden) getFleetEmailDeliverabilityRes() {}
+
+type GetFleetEmailDeliverabilityUnauthorized Error
+
+func (*GetFleetEmailDeliverabilityUnauthorized) getFleetEmailDeliverabilityRes() {}
 
 type GetFleetEmailStatsForbidden Error
 
@@ -27475,6 +27563,163 @@ func (s *SiteCreateStatus) UnmarshalText(data []byte) error {
 	default:
 		return errors.Errorf("invalid value: %q", data)
 	}
+}
+
+// Per-site deliverability aggregate for the GET /email/deliverability
+// dashboard. `bounce_rate` and `complaint_rate` are expressed as a
+// percentage (0–100). Frontend reputation thresholds:
+// bounce_rate: warn ≥2%, danger ≥5%
+// complaint_rate: warn ≥0.05%, danger ≥0.1%.
+// Ref: #/components/schemas/SiteDeliveryItem
+type SiteDeliveryItem struct {
+	SiteID   uuid.UUID `json:"site_id"`
+	SiteName string    `json:"site_name"`
+	SiteURL  string    `json:"site_url"`
+	// Active email provider for this site (empty when unconfigured).
+	Provider        string `json:"provider"`
+	Total           int64  `json:"total"`
+	SentCount       int64  `json:"sent_count"`
+	FailedCount     int64  `json:"failed_count"`
+	BouncedCount    int64  `json:"bounced_count"`
+	ComplainedCount int64  `json:"complained_count"`
+	// Bounced/total*100 (0 when total=0).
+	BounceRate float32 `json:"bounce_rate"`
+	// Complained/total*100 (0 when total=0).
+	ComplaintRate float32 `json:"complaint_rate"`
+	// When the most recent successfully-sent email was dispatched. Null when no sent email in the window.
+	LastSentAt OptNilDateTime `json:"last_sent_at"`
+	// Daily sent counts across the window, oldest→newest. Always [] never null.
+	Sparkline []int64 `json:"sparkline"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *SiteDeliveryItem) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSiteName returns the value of SiteName.
+func (s *SiteDeliveryItem) GetSiteName() string {
+	return s.SiteName
+}
+
+// GetSiteURL returns the value of SiteURL.
+func (s *SiteDeliveryItem) GetSiteURL() string {
+	return s.SiteURL
+}
+
+// GetProvider returns the value of Provider.
+func (s *SiteDeliveryItem) GetProvider() string {
+	return s.Provider
+}
+
+// GetTotal returns the value of Total.
+func (s *SiteDeliveryItem) GetTotal() int64 {
+	return s.Total
+}
+
+// GetSentCount returns the value of SentCount.
+func (s *SiteDeliveryItem) GetSentCount() int64 {
+	return s.SentCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *SiteDeliveryItem) GetFailedCount() int64 {
+	return s.FailedCount
+}
+
+// GetBouncedCount returns the value of BouncedCount.
+func (s *SiteDeliveryItem) GetBouncedCount() int64 {
+	return s.BouncedCount
+}
+
+// GetComplainedCount returns the value of ComplainedCount.
+func (s *SiteDeliveryItem) GetComplainedCount() int64 {
+	return s.ComplainedCount
+}
+
+// GetBounceRate returns the value of BounceRate.
+func (s *SiteDeliveryItem) GetBounceRate() float32 {
+	return s.BounceRate
+}
+
+// GetComplaintRate returns the value of ComplaintRate.
+func (s *SiteDeliveryItem) GetComplaintRate() float32 {
+	return s.ComplaintRate
+}
+
+// GetLastSentAt returns the value of LastSentAt.
+func (s *SiteDeliveryItem) GetLastSentAt() OptNilDateTime {
+	return s.LastSentAt
+}
+
+// GetSparkline returns the value of Sparkline.
+func (s *SiteDeliveryItem) GetSparkline() []int64 {
+	return s.Sparkline
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *SiteDeliveryItem) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSiteName sets the value of SiteName.
+func (s *SiteDeliveryItem) SetSiteName(val string) {
+	s.SiteName = val
+}
+
+// SetSiteURL sets the value of SiteURL.
+func (s *SiteDeliveryItem) SetSiteURL(val string) {
+	s.SiteURL = val
+}
+
+// SetProvider sets the value of Provider.
+func (s *SiteDeliveryItem) SetProvider(val string) {
+	s.Provider = val
+}
+
+// SetTotal sets the value of Total.
+func (s *SiteDeliveryItem) SetTotal(val int64) {
+	s.Total = val
+}
+
+// SetSentCount sets the value of SentCount.
+func (s *SiteDeliveryItem) SetSentCount(val int64) {
+	s.SentCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *SiteDeliveryItem) SetFailedCount(val int64) {
+	s.FailedCount = val
+}
+
+// SetBouncedCount sets the value of BouncedCount.
+func (s *SiteDeliveryItem) SetBouncedCount(val int64) {
+	s.BouncedCount = val
+}
+
+// SetComplainedCount sets the value of ComplainedCount.
+func (s *SiteDeliveryItem) SetComplainedCount(val int64) {
+	s.ComplainedCount = val
+}
+
+// SetBounceRate sets the value of BounceRate.
+func (s *SiteDeliveryItem) SetBounceRate(val float32) {
+	s.BounceRate = val
+}
+
+// SetComplaintRate sets the value of ComplaintRate.
+func (s *SiteDeliveryItem) SetComplaintRate(val float32) {
+	s.ComplaintRate = val
+}
+
+// SetLastSentAt sets the value of LastSentAt.
+func (s *SiteDeliveryItem) SetLastSentAt(val OptNilDateTime) {
+	s.LastSentAt = val
+}
+
+// SetSparkline sets the value of Sparkline.
+func (s *SiteDeliveryItem) SetSparkline(val []int64) {
+	s.Sparkline = val
 }
 
 // Ref: #/components/schemas/SiteDestination

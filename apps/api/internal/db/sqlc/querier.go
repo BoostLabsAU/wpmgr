@@ -399,7 +399,7 @@ type Querier interface {
 	GetEmailLogNext(ctx context.Context, arg GetEmailLogNextParams) (uuid.UUID, error)
 	// Returns the id of the next-older row for the Prev button in detail navigation.
 	GetEmailLogPrev(ctx context.Context, arg GetEmailLogPrevParams) (uuid.UUID, error)
-	// Per-site summary: total sent/failed counts over [range_from, range_to].
+	// Per-site summary: total sent/failed/bounced/complained counts over [range_from, range_to].
 	// Repo always provides explicit bounds; use epoch-start + far-future as the
 	// open-ended defaults so no NULL handling is needed in SQL.
 	GetEmailStats(ctx context.Context, arg GetEmailStatsParams) (GetEmailStatsRow, error)
@@ -419,6 +419,16 @@ type Querier interface {
 	// applied by the caller; this returns ALL scanned sites so the service can
 	// compute tenant-level aggregates and then slice the top-N list.
 	GetFleetDbHealth(ctx context.Context, arg GetFleetDbHealthParams) ([]GetFleetDbHealthRow, error)
+	// Sparkline data for GET /email/deliverability: daily sent counts per site
+	// across the window, ordered oldest-first. The caller buckets these into
+	// per-site slices ordered by day ASC to build the sparkline array.
+	// Runs under InTenantTx.
+	GetFleetDeliveryDailyBySite(ctx context.Context, arg GetFleetDeliveryDailyBySiteParams) ([]GetFleetDeliveryDailyBySiteRow, error)
+	// Deliverability endpoint: per-site aggregate for GET /email/deliverability.
+	// Joins site_email_log with sites (name, url) and site_email_config (provider
+	// from the effective per-site row, or NULL when no config exists).
+	// sorted by bounce_rate DESC then total DESC (riskiest first). Runs under InTenantTx.
+	GetFleetDeliveryPerSite(ctx context.Context, arg GetFleetDeliveryPerSiteParams) ([]GetFleetDeliveryPerSiteRow, error)
 	// Tenant-wide summary (fleet dashboard).
 	GetFleetEmailStats(ctx context.Context, arg GetFleetEmailStatsParams) (GetFleetEmailStatsRow, error)
 	// Fleet daily time-series (tenant-wide).

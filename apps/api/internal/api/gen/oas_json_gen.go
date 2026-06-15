@@ -18760,6 +18760,129 @@ func (s *DeleteSiteShareUnauthorized) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode implements json.Marshaler.
+func (s *DeliverabilityReport) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *DeliverabilityReport) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("window_days")
+		e.Int(s.WindowDays)
+	}
+	{
+		e.FieldStart("items")
+		e.ArrStart()
+		for _, elem := range s.Items {
+			elem.Encode(e)
+		}
+		e.ArrEnd()
+	}
+}
+
+var jsonFieldsNameOfDeliverabilityReport = [2]string{
+	0: "window_days",
+	1: "items",
+}
+
+// Decode decodes DeliverabilityReport from json.
+func (s *DeliverabilityReport) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode DeliverabilityReport to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "window_days":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := d.Int()
+				s.WindowDays = int(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"window_days\"")
+			}
+		case "items":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				s.Items = make([]SiteDeliveryItem, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem SiteDeliveryItem
+					if err := elem.Decode(d); err != nil {
+						return err
+					}
+					s.Items = append(s.Items, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"items\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode DeliverabilityReport")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfDeliverabilityReport) {
+					name = jsonFieldsNameOfDeliverabilityReport[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *DeliverabilityReport) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *DeliverabilityReport) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes DownloadPortalReportForbidden as json.
 func (s *DownloadPortalReportForbidden) Encode(e *jx.Encoder) {
 	unwrapped := (*Error)(s)
@@ -20354,6 +20477,14 @@ func (s *EmailStats) encodeFields(e *jx.Encoder) {
 		e.Int64(s.FailedCount)
 	}
 	{
+		e.FieldStart("bounced_count")
+		e.Int64(s.BouncedCount)
+	}
+	{
+		e.FieldStart("complained_count")
+		e.Int64(s.ComplainedCount)
+	}
+	{
 		e.FieldStart("provider_count")
 		e.Int64(s.ProviderCount)
 	}
@@ -20381,14 +20512,16 @@ func (s *EmailStats) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfEmailStats = [7]string{
+var jsonFieldsNameOfEmailStats = [9]string{
 	0: "total",
 	1: "sent_count",
 	2: "failed_count",
-	3: "provider_count",
-	4: "site_count",
-	5: "by_day",
-	6: "by_provider",
+	3: "bounced_count",
+	4: "complained_count",
+	5: "provider_count",
+	6: "site_count",
+	7: "by_day",
+	8: "by_provider",
 }
 
 // Decode decodes EmailStats from json.
@@ -20396,7 +20529,7 @@ func (s *EmailStats) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode EmailStats to nil")
 	}
-	var requiredBitSet [1]uint8
+	var requiredBitSet [2]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -20436,8 +20569,32 @@ func (s *EmailStats) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"failed_count\"")
 			}
-		case "provider_count":
+		case "bounced_count":
 			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Int64()
+				s.BouncedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bounced_count\"")
+			}
+		case "complained_count":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int64()
+				s.ComplainedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"complained_count\"")
+			}
+		case "provider_count":
+			requiredBitSet[0] |= 1 << 5
 			if err := func() error {
 				v, err := d.Int64()
 				s.ProviderCount = int64(v)
@@ -20459,7 +20616,7 @@ func (s *EmailStats) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"site_count\"")
 			}
 		case "by_day":
-			requiredBitSet[0] |= 1 << 5
+			requiredBitSet[0] |= 1 << 7
 			if err := func() error {
 				s.ByDay = make([]EmailStatsByDay, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -20477,7 +20634,7 @@ func (s *EmailStats) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"by_day\"")
 			}
 		case "by_provider":
-			requiredBitSet[0] |= 1 << 6
+			requiredBitSet[1] |= 1 << 0
 			if err := func() error {
 				s.ByProvider = make([]EmailStatsByProvider, 0)
 				if err := d.Arr(func(d *jx.Decoder) error {
@@ -20503,8 +20660,9 @@ func (s *EmailStats) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [1]uint8{
-		0b01101111,
+	for i, mask := range [2]uint8{
+		0b10111111,
+		0b00000001,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -20575,13 +20733,23 @@ func (s *EmailStatsByDay) encodeFields(e *jx.Encoder) {
 		e.FieldStart("failed_count")
 		e.Int64(s.FailedCount)
 	}
+	{
+		e.FieldStart("bounced_count")
+		e.Int64(s.BouncedCount)
+	}
+	{
+		e.FieldStart("complained_count")
+		e.Int64(s.ComplainedCount)
+	}
 }
 
-var jsonFieldsNameOfEmailStatsByDay = [4]string{
+var jsonFieldsNameOfEmailStatsByDay = [6]string{
 	0: "day",
 	1: "total",
 	2: "sent_count",
 	3: "failed_count",
+	4: "bounced_count",
+	5: "complained_count",
 }
 
 // Decode decodes EmailStatsByDay from json.
@@ -20641,6 +20809,30 @@ func (s *EmailStatsByDay) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"failed_count\"")
 			}
+		case "bounced_count":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int64()
+				s.BouncedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bounced_count\"")
+			}
+		case "complained_count":
+			requiredBitSet[0] |= 1 << 5
+			if err := func() error {
+				v, err := d.Int64()
+				s.ComplainedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"complained_count\"")
+			}
 		default:
 			return d.Skip()
 		}
@@ -20651,7 +20843,7 @@ func (s *EmailStatsByDay) Decode(d *jx.Decoder) error {
 	// Validate required fields.
 	var failures []validate.FieldError
 	for i, mask := range [1]uint8{
-		0b00001111,
+		0b00111111,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -26207,6 +26399,82 @@ func (s *GetFleetDbHealthOK) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *GetFleetDbHealthOK) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes GetFleetEmailDeliverabilityForbidden as json.
+func (s *GetFleetEmailDeliverabilityForbidden) Encode(e *jx.Encoder) {
+	unwrapped := (*Error)(s)
+
+	unwrapped.Encode(e)
+}
+
+// Decode decodes GetFleetEmailDeliverabilityForbidden from json.
+func (s *GetFleetEmailDeliverabilityForbidden) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode GetFleetEmailDeliverabilityForbidden to nil")
+	}
+	var unwrapped Error
+	if err := func() error {
+		if err := unwrapped.Decode(d); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = GetFleetEmailDeliverabilityForbidden(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *GetFleetEmailDeliverabilityForbidden) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *GetFleetEmailDeliverabilityForbidden) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes GetFleetEmailDeliverabilityUnauthorized as json.
+func (s *GetFleetEmailDeliverabilityUnauthorized) Encode(e *jx.Encoder) {
+	unwrapped := (*Error)(s)
+
+	unwrapped.Encode(e)
+}
+
+// Decode decodes GetFleetEmailDeliverabilityUnauthorized from json.
+func (s *GetFleetEmailDeliverabilityUnauthorized) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode GetFleetEmailDeliverabilityUnauthorized to nil")
+	}
+	var unwrapped Error
+	if err := func() error {
+		if err := unwrapped.Decode(d); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = GetFleetEmailDeliverabilityUnauthorized(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *GetFleetEmailDeliverabilityUnauthorized) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *GetFleetEmailDeliverabilityUnauthorized) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }
@@ -58436,6 +58704,319 @@ func (s SiteCreateStatus) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *SiteCreateStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode implements json.Marshaler.
+func (s *SiteDeliveryItem) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *SiteDeliveryItem) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("site_id")
+		json.EncodeUUID(e, s.SiteID)
+	}
+	{
+		e.FieldStart("site_name")
+		e.Str(s.SiteName)
+	}
+	{
+		e.FieldStart("site_url")
+		e.Str(s.SiteURL)
+	}
+	{
+		e.FieldStart("provider")
+		e.Str(s.Provider)
+	}
+	{
+		e.FieldStart("total")
+		e.Int64(s.Total)
+	}
+	{
+		e.FieldStart("sent_count")
+		e.Int64(s.SentCount)
+	}
+	{
+		e.FieldStart("failed_count")
+		e.Int64(s.FailedCount)
+	}
+	{
+		e.FieldStart("bounced_count")
+		e.Int64(s.BouncedCount)
+	}
+	{
+		e.FieldStart("complained_count")
+		e.Int64(s.ComplainedCount)
+	}
+	{
+		e.FieldStart("bounce_rate")
+		e.Float32(s.BounceRate)
+	}
+	{
+		e.FieldStart("complaint_rate")
+		e.Float32(s.ComplaintRate)
+	}
+	{
+		if s.LastSentAt.Set {
+			e.FieldStart("last_sent_at")
+			s.LastSentAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		e.FieldStart("sparkline")
+		e.ArrStart()
+		for _, elem := range s.Sparkline {
+			e.Int64(elem)
+		}
+		e.ArrEnd()
+	}
+}
+
+var jsonFieldsNameOfSiteDeliveryItem = [13]string{
+	0:  "site_id",
+	1:  "site_name",
+	2:  "site_url",
+	3:  "provider",
+	4:  "total",
+	5:  "sent_count",
+	6:  "failed_count",
+	7:  "bounced_count",
+	8:  "complained_count",
+	9:  "bounce_rate",
+	10: "complaint_rate",
+	11: "last_sent_at",
+	12: "sparkline",
+}
+
+// Decode decodes SiteDeliveryItem from json.
+func (s *SiteDeliveryItem) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode SiteDeliveryItem to nil")
+	}
+	var requiredBitSet [2]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "site_id":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				v, err := json.DecodeUUID(d)
+				s.SiteID = v
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_id\"")
+			}
+		case "site_name":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := d.Str()
+				s.SiteName = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_name\"")
+			}
+		case "site_url":
+			requiredBitSet[0] |= 1 << 2
+			if err := func() error {
+				v, err := d.Str()
+				s.SiteURL = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_url\"")
+			}
+		case "provider":
+			requiredBitSet[0] |= 1 << 3
+			if err := func() error {
+				v, err := d.Str()
+				s.Provider = string(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"provider\"")
+			}
+		case "total":
+			requiredBitSet[0] |= 1 << 4
+			if err := func() error {
+				v, err := d.Int64()
+				s.Total = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"total\"")
+			}
+		case "sent_count":
+			requiredBitSet[0] |= 1 << 5
+			if err := func() error {
+				v, err := d.Int64()
+				s.SentCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sent_count\"")
+			}
+		case "failed_count":
+			requiredBitSet[0] |= 1 << 6
+			if err := func() error {
+				v, err := d.Int64()
+				s.FailedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"failed_count\"")
+			}
+		case "bounced_count":
+			requiredBitSet[0] |= 1 << 7
+			if err := func() error {
+				v, err := d.Int64()
+				s.BouncedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bounced_count\"")
+			}
+		case "complained_count":
+			requiredBitSet[1] |= 1 << 0
+			if err := func() error {
+				v, err := d.Int64()
+				s.ComplainedCount = int64(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"complained_count\"")
+			}
+		case "bounce_rate":
+			requiredBitSet[1] |= 1 << 1
+			if err := func() error {
+				v, err := d.Float32()
+				s.BounceRate = float32(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"bounce_rate\"")
+			}
+		case "complaint_rate":
+			requiredBitSet[1] |= 1 << 2
+			if err := func() error {
+				v, err := d.Float32()
+				s.ComplaintRate = float32(v)
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"complaint_rate\"")
+			}
+		case "last_sent_at":
+			if err := func() error {
+				s.LastSentAt.Reset()
+				if err := s.LastSentAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"last_sent_at\"")
+			}
+		case "sparkline":
+			requiredBitSet[1] |= 1 << 4
+			if err := func() error {
+				s.Sparkline = make([]int64, 0)
+				if err := d.Arr(func(d *jx.Decoder) error {
+					var elem int64
+					v, err := d.Int64()
+					elem = int64(v)
+					if err != nil {
+						return err
+					}
+					s.Sparkline = append(s.Sparkline, elem)
+					return nil
+				}); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"sparkline\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode SiteDeliveryItem")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [2]uint8{
+		0b11111111,
+		0b00010111,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfSiteDeliveryItem) {
+					name = jsonFieldsNameOfSiteDeliveryItem[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *SiteDeliveryItem) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *SiteDeliveryItem) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

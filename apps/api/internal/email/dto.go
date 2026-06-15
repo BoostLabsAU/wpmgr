@@ -268,10 +268,12 @@ type logDetailDTO struct {
 
 // emailStatsDayDTO is one day of stats.
 type emailStatsDayDTO struct {
-	Day         string `json:"day"`
-	Total       int64  `json:"total"`
-	SentCount   int64  `json:"sent_count"`
-	FailedCount int64  `json:"failed_count"`
+	Day             string `json:"day"`
+	Total           int64  `json:"total"`
+	SentCount       int64  `json:"sent_count"`
+	FailedCount     int64  `json:"failed_count"`
+	BouncedCount    int64  `json:"bounced_count"`
+	ComplainedCount int64  `json:"complained_count"`
 }
 
 // emailStatsProviderDTO is one provider's stats.
@@ -284,13 +286,42 @@ type emailStatsProviderDTO struct {
 
 // emailStatsDTO is the full stats response.
 type emailStatsDTO struct {
-	Total         int64                   `json:"total"`
-	SentCount     int64                   `json:"sent_count"`
-	FailedCount   int64                   `json:"failed_count"`
-	ProviderCount int64                   `json:"provider_count"`
-	SiteCount     int64                   `json:"site_count,omitempty"`
-	ByDay         []emailStatsDayDTO      `json:"by_day"`
-	ByProvider    []emailStatsProviderDTO `json:"by_provider"`
+	Total           int64                   `json:"total"`
+	SentCount       int64                   `json:"sent_count"`
+	FailedCount     int64                   `json:"failed_count"`
+	BouncedCount    int64                   `json:"bounced_count"`
+	ComplainedCount int64                   `json:"complained_count"`
+	ProviderCount   int64                   `json:"provider_count"`
+	SiteCount       int64                   `json:"site_count,omitempty"`
+	ByDay           []emailStatsDayDTO      `json:"by_day"`
+	ByProvider      []emailStatsProviderDTO `json:"by_provider"`
+}
+
+// ---------------------------------------------------------------------------
+// Deliverability DTOs
+// ---------------------------------------------------------------------------
+
+// siteDeliveryItemDTO is the wire shape of one site in GET /email/deliverability.
+type siteDeliveryItemDTO struct {
+	SiteID          string  `json:"site_id"`
+	SiteName        string  `json:"site_name"`
+	SiteURL         string  `json:"site_url"`
+	Provider        string  `json:"provider"`
+	Total           int64   `json:"total"`
+	SentCount       int64   `json:"sent_count"`
+	FailedCount     int64   `json:"failed_count"`
+	BouncedCount    int64   `json:"bounced_count"`
+	ComplainedCount int64   `json:"complained_count"`
+	BounceRate      float64 `json:"bounce_rate"`
+	ComplaintRate   float64 `json:"complaint_rate"`
+	LastSentAt      *string `json:"last_sent_at"`        // RFC3339 or null
+	Sparkline       []int64 `json:"sparkline"`            // [] never null
+}
+
+// deliverabilityReportDTO is the full response for GET /email/deliverability.
+type deliverabilityReportDTO struct {
+	WindowDays int                   `json:"window_days"`
+	Items      []siteDeliveryItemDTO `json:"items"` // [] never null
 }
 
 // toLogEntryDTO maps a LogEntry to its wire DTO. Pass includeBody=true only for
@@ -356,20 +387,24 @@ func toLogDetailDTO(d LogDetail) logDetailDTO {
 // toEmailStatsDTO maps EmailStats to the wire DTO.
 func toEmailStatsDTO(s EmailStats) emailStatsDTO {
 	dto := emailStatsDTO{
-		Total:         s.Total,
-		SentCount:     s.SentCount,
-		FailedCount:   s.FailedCount,
-		ProviderCount: s.ProviderCount,
-		SiteCount:     s.SiteCount,
-		ByDay:         make([]emailStatsDayDTO, 0, len(s.ByDay)),
-		ByProvider:    make([]emailStatsProviderDTO, 0, len(s.ByProvider)),
+		Total:           s.Total,
+		SentCount:       s.SentCount,
+		FailedCount:     s.FailedCount,
+		BouncedCount:    s.BouncedCount,
+		ComplainedCount: s.ComplainedCount,
+		ProviderCount:   s.ProviderCount,
+		SiteCount:       s.SiteCount,
+		ByDay:           make([]emailStatsDayDTO, 0, len(s.ByDay)),
+		ByProvider:      make([]emailStatsProviderDTO, 0, len(s.ByProvider)),
 	}
 	for _, d := range s.ByDay {
 		dto.ByDay = append(dto.ByDay, emailStatsDayDTO{
-			Day:         d.Day.UTC().Format("2006-01-02"),
-			Total:       d.Total,
-			SentCount:   d.SentCount,
-			FailedCount: d.FailedCount,
+			Day:             d.Day.UTC().Format("2006-01-02"),
+			Total:           d.Total,
+			SentCount:       d.SentCount,
+			FailedCount:     d.FailedCount,
+			BouncedCount:    d.BouncedCount,
+			ComplainedCount: d.ComplainedCount,
 		})
 	}
 	for _, p := range s.ByProvider {
@@ -381,6 +416,40 @@ func toEmailStatsDTO(s EmailStats) emailStatsDTO {
 		})
 	}
 	return dto
+}
+
+// toDeliverabilityReportDTO maps a DeliverabilityReport to its wire DTO.
+// All slices are always non-nil ([]).
+func toDeliverabilityReportDTO(r DeliverabilityReport) deliverabilityReportDTO {
+	items := make([]siteDeliveryItemDTO, 0, len(r.Items))
+	for _, item := range r.Items {
+		dto := siteDeliveryItemDTO{
+			SiteID:          item.SiteID.String(),
+			SiteName:        item.SiteName,
+			SiteURL:         item.SiteURL,
+			Provider:        item.Provider,
+			Total:           item.Total,
+			SentCount:       item.SentCount,
+			FailedCount:     item.FailedCount,
+			BouncedCount:    item.BouncedCount,
+			ComplainedCount: item.ComplainedCount,
+			BounceRate:      item.BounceRate,
+			ComplaintRate:   item.ComplaintRate,
+			Sparkline:       item.Sparkline,
+		}
+		if item.LastSentAt != nil {
+			s := item.LastSentAt.UTC().Format(time.RFC3339)
+			dto.LastSentAt = &s
+		}
+		if dto.Sparkline == nil {
+			dto.Sparkline = []int64{}
+		}
+		items = append(items, dto)
+	}
+	return deliverabilityReportDTO{
+		WindowDays: r.WindowDays,
+		Items:      items,
+	}
 }
 
 // parseLogListFilter extracts the log list query parameters from a Gin context.

@@ -3701,6 +3701,14 @@ export type EmailStatsByDay = {
   total: number;
   sent_count: number;
   failed_count: number;
+  /**
+   * Number of emails with status=bounced on this day.
+   */
+  bounced_count: number;
+  /**
+   * Number of emails with status=complained (spam complaint) on this day.
+   */
+  complained_count: number;
 };
 
 /**
@@ -3722,6 +3730,14 @@ export type EmailStats = {
   sent_count: number;
   failed_count: number;
   /**
+   * Total bounced emails in the range.
+   */
+  bounced_count: number;
+  /**
+   * Total spam complaints in the range.
+   */
+  complained_count: number;
+  /**
    * Number of distinct providers used in the range.
    */
   provider_count: number;
@@ -3731,6 +3747,60 @@ export type EmailStats = {
   site_count?: number;
   by_day: Array<EmailStatsByDay>;
   by_provider: Array<EmailStatsByProvider>;
+};
+
+/**
+ * Per-site deliverability aggregate for the GET /email/deliverability
+ * dashboard. `bounce_rate` and `complaint_rate` are expressed as a
+ * percentage (0–100). Frontend reputation thresholds:
+ * bounce_rate: warn ≥2%, danger ≥5%
+ * complaint_rate: warn ≥0.05%, danger ≥0.1%
+ *
+ */
+export type SiteDeliveryItem = {
+  site_id: string;
+  site_name: string;
+  site_url: string;
+  /**
+   * Active email provider for this site (empty when unconfigured).
+   */
+  provider: string;
+  total: number;
+  sent_count: number;
+  failed_count: number;
+  bounced_count: number;
+  complained_count: number;
+  /**
+   * bounced/total*100 (0 when total=0).
+   */
+  bounce_rate: number;
+  /**
+   * complained/total*100 (0 when total=0).
+   */
+  complaint_rate: number;
+  /**
+   * When the most recent successfully-sent email was dispatched. Null when no sent email in the window.
+   */
+  last_sent_at?: string;
+  /**
+   * Daily sent counts across the window, oldest→newest. Always [] never null.
+   */
+  sparkline: Array<number>;
+};
+
+/**
+ * Response for GET /email/deliverability. Contains per-site deliverability aggregates sorted by bounce_rate DESC then total DESC (riskiest first).
+ *
+ */
+export type DeliverabilityReport = {
+  /**
+   * The window used for the query (clamped 1–365).
+   */
+  window_days: number;
+  /**
+   * Per-site rows. Always [] never null.
+   */
+  items: Array<SiteDeliveryItem>;
 };
 
 /**
@@ -9525,6 +9595,42 @@ export type GetFleetEmailStatsResponses = {
 
 export type GetFleetEmailStatsResponse =
   GetFleetEmailStatsResponses[keyof GetFleetEmailStatsResponses];
+
+export type GetFleetEmailDeliverabilityData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Look-back window in days (default 30, range 1–365).
+     */
+    window?: number;
+  };
+  url: "/api/v1/email/deliverability";
+};
+
+export type GetFleetEmailDeliverabilityErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission or org-scope required
+   */
+  403: Error;
+};
+
+export type GetFleetEmailDeliverabilityError =
+  GetFleetEmailDeliverabilityErrors[keyof GetFleetEmailDeliverabilityErrors];
+
+export type GetFleetEmailDeliverabilityResponses = {
+  /**
+   * Fleet deliverability report
+   */
+  200: DeliverabilityReport;
+};
+
+export type GetFleetEmailDeliverabilityResponse =
+  GetFleetEmailDeliverabilityResponses[keyof GetFleetEmailDeliverabilityResponses];
 
 export type ListSiteEmailSuppressionData = {
   body?: never;

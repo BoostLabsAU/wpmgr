@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-06-15
+
+### Added
+
+- **Fleet email and deliverability dashboard.** The Email view is rebuilt on the same operator-grade language as the other fleet dashboards. Sent, failed, bounced, and complained totals are filter tiles, with fleet bounce rate and complaint rate shown against the limits providers enforce (bounce at 5 percent, complaints at 0.1 percent) so a site harming sender reputation stands out. A per-site deliverability table lists every site with its provider, volume, bounce and complaint rates (color coded by threshold), last send, and a send-volume sparkline, sorted riskiest first, each row drilling into that site. A deliverability trend draws the danger thresholds on. The cross-site email log, suppression list, sandboxed message preview, and notification settings are kept, and a site selector switches the whole page between the fleet view and a single site, all live over SSE.
+
+### Changed
+
+- **Fleet email stats now include bounced and complained counts** in the summary and the daily series, and a new per-site deliverability endpoint backs the table. Tenant-scoped and org-level.
+
+Control plane plus dashboard at 0.48.0; no migration, no agent change.
+
 ## [0.47.2] - 2026-06-15
 
 ### Fixed

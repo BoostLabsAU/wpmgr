@@ -1021,6 +1021,23 @@ func (UnimplementedHandler) GetFleetDbHealth(ctx context.Context, params GetFlee
 	return ht.ErrNotImplemented
 }
 
+// GetFleetEmailDeliverability implements getFleetEmailDeliverability operation.
+//
+// Returns per-site deliverability aggregates for a rolling window.
+// Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+// The `window` query parameter controls the look-back period in days
+// (default 30, clamped to [1, 365]).
+// Org-scope only (site-collaborators are blocked).
+// Requires `site.email.manage` permission.
+// **Reputation thresholds (for frontend colouring):**
+// - `bounce_rate` warn ≥2%, danger ≥5%
+// - `complaint_rate` warn ≥0.05%, danger ≥0.1%.
+//
+// GET /api/v1/email/deliverability
+func (UnimplementedHandler) GetFleetEmailDeliverability(ctx context.Context, params GetFleetEmailDeliverabilityParams) (r GetFleetEmailDeliverabilityRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetFleetEmailStats implements getFleetEmailStats operation.
 //
 // Returns tenant-wide summary counts and a per-day time-series for the

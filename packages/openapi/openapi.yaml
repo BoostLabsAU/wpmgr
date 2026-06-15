@@ -5158,6 +5158,53 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
+  /api/v1/email/deliverability:
+    get:
+      operationId: getFleetEmailDeliverability
+      summary: Fleet per-site deliverability report (bounce + complaint rates)
+      description: |
+        Returns per-site deliverability aggregates for a rolling window.
+        Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+
+        The `window` query parameter controls the look-back period in days
+        (default 30, clamped to [1, 365]).
+
+        Org-scope only (site-collaborators are blocked).
+        Requires `site.email.manage` permission.
+
+        **Reputation thresholds (for frontend colouring):**
+        - `bounce_rate` warn ≥2%, danger ≥5%
+        - `complaint_rate` warn ≥0.05%, danger ≥0.1%
+      tags: [email]
+      parameters:
+        - name: window
+          in: query
+          description: Look-back window in days (default 30, range 1–365).
+          schema:
+            type: integer
+            default: 30
+            minimum: 1
+            maximum: 365
+      responses:
+        "200":
+          description: Fleet deliverability report
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeliverabilityReport"
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "403":
+          description: Insufficient permission or org-scope required
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   # ---------------------------------------------------------------------------
   # Phase 4a — Suppression list + email log actions
   # ---------------------------------------------------------------------------
@@ -11526,7 +11573,7 @@ components:
     EmailStatsByDay:
       type: object
       description: One day's aggregate email stats.
-      required: [day, total, sent_count, failed_count]
+      required: [day, total, sent_count, failed_count, bounced_count, complained_count]
       properties:
         day:
           type: string
@@ -11540,6 +11587,14 @@ components:
         failed_count:
           type: integer
           format: int64
+        bounced_count:
+          type: integer
+          format: int64
+          description: Number of emails with status=bounced on this day.
+        complained_count:
+          type: integer
+          format: int64
+          description: Number of emails with status=complained (spam complaint) on this day.
 
     EmailStatsByProvider:
       type: object
@@ -11563,7 +11618,7 @@ components:
       description: >
         Email statistics summary for a site or the whole fleet.
         `site_count` is only populated for fleet stats.
-      required: [total, sent_count, failed_count, provider_count, by_day, by_provider]
+      required: [total, sent_count, failed_count, bounced_count, complained_count, provider_count, by_day, by_provider]
       properties:
         total:
           type: integer
@@ -11574,6 +11629,14 @@ components:
         failed_count:
           type: integer
           format: int64
+        bounced_count:
+          type: integer
+          format: int64
+          description: Total bounced emails in the range.
+        complained_count:
+          type: integer
+          format: int64
+          description: Total spam complaints in the range.
         provider_count:
           type: integer
           format: int64
@@ -11591,6 +11654,93 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/EmailStatsByProvider"
+
+    # -------------------------------------------------------------------------
+    # Deliverability report (GET /email/deliverability)
+    # -------------------------------------------------------------------------
+
+    SiteDeliveryItem:
+      type: object
+      description: |
+        Per-site deliverability aggregate for the GET /email/deliverability
+        dashboard. `bounce_rate` and `complaint_rate` are expressed as a
+        percentage (0–100). Frontend reputation thresholds:
+          bounce_rate: warn ≥2%, danger ≥5%
+          complaint_rate: warn ≥0.05%, danger ≥0.1%
+      required:
+        - site_id
+        - site_name
+        - site_url
+        - provider
+        - total
+        - sent_count
+        - failed_count
+        - bounced_count
+        - complained_count
+        - bounce_rate
+        - complaint_rate
+        - sparkline
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        site_name:
+          type: string
+        site_url:
+          type: string
+        provider:
+          type: string
+          description: Active email provider for this site (empty when unconfigured).
+        total:
+          type: integer
+          format: int64
+        sent_count:
+          type: integer
+          format: int64
+        failed_count:
+          type: integer
+          format: int64
+        bounced_count:
+          type: integer
+          format: int64
+        complained_count:
+          type: integer
+          format: int64
+        bounce_rate:
+          type: number
+          format: float
+          description: bounced/total*100 (0 when total=0).
+        complaint_rate:
+          type: number
+          format: float
+          description: complained/total*100 (0 when total=0).
+        last_sent_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: When the most recent successfully-sent email was dispatched. Null when no sent email in the window.
+        sparkline:
+          type: array
+          items:
+            type: integer
+            format: int64
+          description: Daily sent counts across the window, oldest→newest. Always [] never null.
+
+    DeliverabilityReport:
+      type: object
+      description: >
+        Response for GET /email/deliverability. Contains per-site deliverability
+        aggregates sorted by bounce_rate DESC then total DESC (riskiest first).
+      required: [window_days, items]
+      properties:
+        window_days:
+          type: integer
+          description: The window used for the query (clamped 1–365).
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/SiteDeliveryItem"
+          description: Per-site rows. Always [] never null.
 
     # -------------------------------------------------------------------------
     # Phase 4a — Suppression + log actions schemas

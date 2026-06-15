@@ -183,6 +183,10 @@ func (r *fakeRepo) GetFleetStats(_ context.Context, _ uuid.UUID, _, _ time.Time)
 	return EmailStats{}, nil
 }
 
+func (r *fakeRepo) GetFleetDelivery(_ context.Context, _ uuid.UUID, windowDays int) (DeliverabilityReport, error) {
+	return DeliverabilityReport{WindowDays: windowDays, Items: []SiteDeliveryItem{}}, nil
+}
+
 func (r *fakeRepo) DeleteLogsOlderThan(_ context.Context, _ time.Time, _ int64) (int64, error) {
 	return 0, nil
 }
