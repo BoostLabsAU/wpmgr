@@ -356,6 +356,7 @@ export type {
   SiteActivityEvent,
   SiteActivityList,
   ActivityVerifyResult,
+  ChainBreak,
   ListSiteActivityData,
   ListSiteActivityResponse,
   VerifySiteActivityData,

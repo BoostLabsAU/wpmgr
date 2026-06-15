@@ -111,11 +111,69 @@ type ListFilter struct {
 	Cursor int64
 }
 
+// ChainBreakKind classifies the first broken link found by VerifyChain.
+type ChainBreakKind string
+
+const (
+	// BreakChainStartMissing means the very first stored event does not chain
+	// from genesis — the oldest events are gone or the chain was reset.
+	BreakChainStartMissing ChainBreakKind = "chain_start_missing"
+	// BreakMissingEvents means one or more seq numbers are absent between the
+	// last good row and the failing row (gap ≥ 1) — usually log cleanup /
+	// retention or direct deletion. Not by itself proof of tampering.
+	BreakMissingEvents ChainBreakKind = "missing_events"
+	// BreakLinkMismatch means the rows are contiguous but this row's
+	// prev_hash does not equal the prior row's this_hash — an event was
+	// inserted, removed, or reordered, or the prior event was altered.
+	BreakLinkMismatch ChainBreakKind = "link_mismatch"
+	// BreakContentModified means the prev link is intact but the recomputed
+	// this_hash no longer matches the stored this_hash — this event's content
+	// was edited after recording, or there is a hashing disagreement.
+	BreakContentModified ChainBreakKind = "content_modified"
+)
+
+// ChainBreakEvent is the offending event sub-struct carried in ChainBreak for
+// operator context. The web layer truncates hashes for display; the CP sends
+// the full 64-char hex.
+type ChainBreakEvent struct {
+	Summary    string `json:"summary"`
+	EventType  string `json:"event_type"`
+	ActorLogin string `json:"actor_login"`
+	OccurredAt string `json:"occurred_at"` // RFC3339
+}
+
+// ChainBreak describes the first broken link in a chain re-verification. It is
+// nil when the chain is intact.
+type ChainBreak struct {
+	// Seq is the seq of the event where verification failed.
+	Seq int64 `json:"seq"`
+	// Kind classifies the break (see BreakChainStartMissing etc.).
+	Kind ChainBreakKind `json:"kind"`
+	// PriorSeq is the seq of the last successfully-verified row, or nil when
+	// the break is at the first/genesis row (no prior was verified).
+	PriorSeq *int64 `json:"prior_seq"`
+	// SeqGap is the number of missing sequence numbers between PriorSeq and
+	// Seq. 0 when contiguous or when there is no prior row.
+	SeqGap int64 `json:"seq_gap"`
+	// ExpectedPrevHash is the verified chain head before this row (prior
+	// row's this_hash, or GenesisPrevHash if this is the first row).
+	ExpectedPrevHash string `json:"expected_prev_hash"`
+	// StoredPrevHash is the row's own prev_hash as stored.
+	StoredPrevHash string `json:"stored_prev_hash"`
+	// RecomputedThisHash is ComputeHashFromStored(ExpectedPrevHash, row).
+	RecomputedThisHash string `json:"recomputed_this_hash"`
+	// StoredThisHash is the row's own this_hash as stored.
+	StoredThisHash string `json:"stored_this_hash"`
+	// Event carries the offending event fields for operator context.
+	Event ChainBreakEvent `json:"event"`
+}
+
 // VerifyResult is the outcome of a full server-side chain re-verification.
 type VerifyResult struct {
-	Valid      bool   `json:"valid"`
-	BreakAtSeq *int64 `json:"break_at_seq"`
-	Total      int    `json:"total"`
+	Valid      bool        `json:"valid"`
+	BreakAtSeq *int64      `json:"break_at_seq"`
+	Total      int         `json:"total"`
+	Break      *ChainBreak `json:"break"`
 }
 
 // occurredAtCanonical formats the occurred_at exactly as the agent does in the
@@ -202,21 +260,72 @@ func ComputeHashFromStored(prevHash string, e Event) string {
 
 // VerifyChain folds a seq-ASC ordered slice of stored events from genesis,
 // recomputing each this_hash against the prior link, and reports the first
-// broken link. A row is a break when its prev_hash != the prior hash OR its
-// recomputed hash != its stored this_hash. This is the pure core of
-// Service.Verify (DB-free, so it is directly unit-testable).
+// broken link with a classified ChainBreak. A row is a break when its
+// prev_hash != the prior hash OR its recomputed hash != its stored this_hash.
+// This is the pure core of Service.Verify (DB-free, so it is directly
+// unit-testable).
 func VerifyChain(rows []Event) VerifyResult {
 	res := VerifyResult{Valid: true, Total: len(rows)}
 	prev := GenesisPrevHash
+	var priorSeq *int64 // nil until at least one row has been verified OK
 	for _, row := range rows {
 		recomputed := ComputeHashFromStored(prev, row)
-		if row.PrevHash != prev || recomputed != row.ThisHash {
+		linkOK := row.PrevHash == prev
+		hashOK := recomputed == row.ThisHash
+		if !linkOK || !hashOK {
 			seq := row.Seq
 			res.Valid = false
 			res.BreakAtSeq = &seq
+
+			// Compute seq gap: how many sequence numbers are missing between
+			// the last good row and this row.
+			var seqGap int64
+			if priorSeq != nil {
+				gap := row.Seq - *priorSeq - 1
+				if gap > 0 {
+					seqGap = gap
+				}
+			}
+
+			// Classify the break kind.
+			var kind ChainBreakKind
+			switch {
+			case priorSeq == nil && row.PrevHash != GenesisPrevHash:
+				// First row doesn't anchor to genesis — the chain root is gone.
+				kind = BreakChainStartMissing
+			case seqGap > 0:
+				// Gap in seq numbers — rows have been removed.
+				kind = BreakMissingEvents
+			case !linkOK:
+				// Contiguous seq but prev_hash is broken — insertion/removal/reorder.
+				kind = BreakLinkMismatch
+			default:
+				// prev link is intact but content hash diverges — content was edited.
+				kind = BreakContentModified
+			}
+
+			res.Break = &ChainBreak{
+				Seq:                seq,
+				Kind:               kind,
+				PriorSeq:           priorSeq,
+				SeqGap:             seqGap,
+				ExpectedPrevHash:   prev,
+				StoredPrevHash:     row.PrevHash,
+				RecomputedThisHash: recomputed,
+				StoredThisHash:     row.ThisHash,
+				Event: ChainBreakEvent{
+					Summary:    row.Summary,
+					EventType:  row.EventType,
+					ActorLogin: row.ActorLogin,
+					OccurredAt: row.OccurredAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+				},
+			}
 			return res
 		}
+		// Row verified OK — advance the chain head and record the last good seq.
 		prev = row.ThisHash
+		s := row.Seq
+		priorSeq = &s
 	}
 	return res
 }

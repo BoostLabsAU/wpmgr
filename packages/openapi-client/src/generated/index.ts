@@ -414,6 +414,7 @@ export {
   type CancelMediaResponse,
   type CancelMediaResponses,
   type CdnCredentials,
+  type ChainBreak,
   type CleanDatabaseData,
   type CleanDatabaseResponse,
   type CleanDatabaseResponses,

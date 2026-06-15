@@ -62,10 +62,30 @@ type activityListDTO struct {
 	NextCursor string             `json:"next_cursor,omitempty"`
 }
 
+type activityVerifyBreakEventDTO struct {
+	Summary    string `json:"summary"`
+	EventType  string `json:"event_type"`
+	ActorLogin string `json:"actor_login"`
+	OccurredAt string `json:"occurred_at"`
+}
+
+type activityVerifyBreakDTO struct {
+	Seq                int64                        `json:"seq"`
+	Kind               string                       `json:"kind"`
+	PriorSeq           *int64                       `json:"prior_seq"`
+	SeqGap             int64                        `json:"seq_gap"`
+	ExpectedPrevHash   string                       `json:"expected_prev_hash"`
+	StoredPrevHash     string                       `json:"stored_prev_hash"`
+	RecomputedThisHash string                       `json:"recomputed_this_hash"`
+	StoredThisHash     string                       `json:"stored_this_hash"`
+	Event              activityVerifyBreakEventDTO  `json:"event"`
+}
+
 type activityVerifyDTO struct {
-	Valid      bool   `json:"valid"`
-	BreakAtSeq *int64 `json:"break_at_seq"`
-	Total      int    `json:"total"`
+	Valid      bool                    `json:"valid"`
+	Total      int                     `json:"total"`
+	BreakAtSeq *int64                  `json:"break_at_seq"`
+	Break      *activityVerifyBreakDTO `json:"break"`
 }
 
 func toEventDTO(e Event) activityEventDTO {
@@ -159,9 +179,29 @@ func (h *Handler) verify(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
-	c.JSON(http.StatusOK, activityVerifyDTO{
+	dto := activityVerifyDTO{
 		Valid:      res.Valid,
-		BreakAtSeq: res.BreakAtSeq,
 		Total:      res.Total,
-	})
+		BreakAtSeq: res.BreakAtSeq,
+	}
+	if res.Break != nil {
+		b := res.Break
+		dto.Break = &activityVerifyBreakDTO{
+			Seq:                b.Seq,
+			Kind:               string(b.Kind),
+			PriorSeq:           b.PriorSeq,
+			SeqGap:             b.SeqGap,
+			ExpectedPrevHash:   b.ExpectedPrevHash,
+			StoredPrevHash:     b.StoredPrevHash,
+			RecomputedThisHash: b.RecomputedThisHash,
+			StoredThisHash:     b.StoredThisHash,
+			Event: activityVerifyBreakEventDTO{
+				Summary:    b.Event.Summary,
+				EventType:  b.Event.EventType,
+				ActorLogin: b.Event.ActorLogin,
+				OccurredAt: b.Event.OccurredAt,
+			},
+		}
+	}
+	c.JSON(http.StatusOK, dto)
 }

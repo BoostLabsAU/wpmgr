@@ -8,10 +8,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 import { cn } from "@/lib/utils";
 import { fadeUp } from "@/lib/motion-presets";
-import type { SiteActivityEvent } from "@wpmgr/api";
+import type { SiteActivityEvent, ChainBreak } from "@wpmgr/api";
 
 import { ActivityRow } from "./activity-row";
 import { ActivityDetailDrawer } from "./activity-detail-drawer";
+import { ActivityIntegrityReport } from "./activity-integrity-report";
 import {
   useActivity,
   useActivityVerify,
@@ -44,6 +45,7 @@ export function ActivityTable({ siteId }: { siteId: string }) {
   const [objectType, setObjectType] = useState("");
   const [actorLogin, setActorLogin] = useState("");
   const [active, setActive] = useState<SiteActivityEvent | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const filters: ActivityFilters = { severity, objectType, actorLogin };
   const {
@@ -99,6 +101,8 @@ export function ActivityTable({ siteId }: { siteId: string }) {
             valid={verify.data?.valid ?? true}
             breakAtSeq={verify.data?.break_at_seq ?? null}
             pending={verify.isPending}
+            chainBreak={verify.data?.break ?? null}
+            onOpenReport={() => setReportOpen(true)}
           />
           <Button
             type="button"
@@ -218,6 +222,16 @@ export function ActivityTable({ siteId }: { siteId: string }) {
       )}
 
       <ActivityDetailDrawer event={active} onClose={() => setActive(null)} />
+
+      {reportOpen && verify.data?.break ? (
+        <ActivityIntegrityReport
+          open={reportOpen}
+          onClose={() => setReportOpen(false)}
+          siteId={siteId}
+          breakData={verify.data.break}
+          total={verify.data.total}
+        />
+      ) : null}
     </section>
   );
 }
@@ -376,10 +390,14 @@ function IntegrityBadge({
   valid,
   breakAtSeq,
   pending,
+  chainBreak,
+  onOpenReport,
 }: {
   valid: boolean;
   breakAtSeq: number | null;
   pending: boolean;
+  chainBreak: ChainBreak | null;
+  onOpenReport: () => void;
 }) {
   if (pending) {
     return (
@@ -396,6 +414,26 @@ function IntegrityBadge({
       </span>
     );
   }
+  if (chainBreak) {
+    return (
+      <button
+        type="button"
+        aria-haspopup="dialog"
+        onClick={onOpenReport}
+        className={cn(
+          "inline-flex cursor-pointer items-center gap-1.5 rounded bg-destructive-subtle px-2 py-0.5 text-xs font-medium text-destructive-subtle-fg",
+          "underline-offset-2 hover:underline",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+          "transition-opacity hover:opacity-90",
+        )}
+      >
+        <ShieldAlert aria-hidden="true" className="size-3.5" />
+        Chain break at seq{" "}
+        <span className="tabular-nums">{breakAtSeq ?? "?"}</span>
+      </button>
+    );
+  }
+  // break_at_seq is known but no break detail yet (should not occur in practice).
   return (
     <span className="inline-flex items-center gap-1.5 rounded bg-destructive-subtle px-2 py-0.5 text-xs font-medium text-destructive-subtle-fg">
       <ShieldAlert aria-hidden="true" className="size-3.5" />

@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.48.3] - 2026-06-15
+
+### Added
+
+- **Activity log integrity report.** The "Chain break at seq N" badge is now a button that opens a report explaining why the tamper-evident audit chain failed to verify. The control plane classifies the break into one of four causes (missing events, a broken link between two entries, modified content, or a missing chain start) and the report states it in plain language, names the events involved, and shows the technical hash detail on demand. A chain break most often means older entries were pruned or cleared rather than tampering, and the report says so honestly instead of only flagging a number. A "Re-check" action re-runs verification.
+
+### Changed
+
+- **The `GET /activity/verify` response now includes a `break` object** when a chain break is found: the failing sequence, the cause classification, the prior verified sequence, the size of any sequence gap, the expected-versus-stored hashes, and the offending event. The existing `break_at_seq` field is unchanged.
+
+Control plane plus dashboard at 0.48.3; no migration, no agent change.
+
 ## [0.48.2] - 2026-06-15
 
 ### Fixed
