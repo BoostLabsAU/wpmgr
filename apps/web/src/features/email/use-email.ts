@@ -21,6 +21,7 @@ import {
   getSiteEmailStats,
   listFleetEmailLog,
   getFleetEmailStats,
+  getFleetEmailDeliverability,
   listSiteEmailSuppression,
   addSiteEmailSuppression,
   deleteSiteEmailSuppression,
@@ -46,6 +47,7 @@ import {
   type EmailLogList,
   type EmailLogDetail,
   type EmailStats,
+  type DeliverabilityReport,
   type EmailSuppressionEntry,
   type EmailSuppressionPage,
   type AddSuppressionRequest,
@@ -83,6 +85,8 @@ export const emailKeys = {
     [...emailKeys.all, "fleet-log", filters] as const,
   fleetStats: (range: EmailStatsRange) =>
     [...emailKeys.all, "fleet-stats", range] as const,
+  fleetDeliverability: (windowDays: number) =>
+    [...emailKeys.all, "fleet-deliverability", windowDays] as const,
   // Suppression lists (Phase 4a)
   suppression: (siteId: string, reason?: string) =>
     [...emailKeys.all, "suppression", siteId, reason ?? ""] as const,
@@ -500,6 +504,27 @@ export function useFleetEmailStats(
       });
       if (error) throw toError(error);
       return data;
+    },
+    staleTime: 60_000,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Fleet email deliverability (per-site reputation table)
+// ---------------------------------------------------------------------------
+
+/** GET /api/v1/email/deliverability?window=<days> (org-scope) */
+export function useFleetEmailDeliverability(
+  windowDays = 30,
+): UseQueryResult<DeliverabilityReport, Error> {
+  return useQuery({
+    queryKey: emailKeys.fleetDeliverability(windowDays),
+    queryFn: async () => {
+      const { data, error } = await getFleetEmailDeliverability({
+        query: { window: windowDays },
+      });
+      if (error) throw toError(error);
+      return data ?? { window_days: windowDays, items: [] };
     },
     staleTime: 60_000,
   });

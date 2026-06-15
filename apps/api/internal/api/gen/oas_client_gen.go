@@ -790,6 +790,20 @@ type Invoker interface {
 	//
 	// GET /api/v1/perf/db/fleet-health
 	GetFleetDbHealth(ctx context.Context, params GetFleetDbHealthParams) error
+	// GetFleetEmailDeliverability invokes getFleetEmailDeliverability operation.
+	//
+	// Returns per-site deliverability aggregates for a rolling window.
+	// Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+	// The `window` query parameter controls the look-back period in days
+	// (default 30, clamped to [1, 365]).
+	// Org-scope only (site-collaborators are blocked).
+	// Requires `site.email.manage` permission.
+	// **Reputation thresholds (for frontend colouring):**
+	// - `bounce_rate` warn ≥2%, danger ≥5%
+	// - `complaint_rate` warn ≥0.05%, danger ≥0.1%.
+	//
+	// GET /api/v1/email/deliverability
+	GetFleetEmailDeliverability(ctx context.Context, params GetFleetEmailDeliverabilityParams) (GetFleetEmailDeliverabilityRes, error)
 	// GetFleetEmailStats invokes getFleetEmailStats operation.
 	//
 	// Returns tenant-wide summary counts and a per-day time-series for the
@@ -10093,6 +10107,109 @@ func (c *Client) sendGetFleetDbHealth(ctx context.Context, params GetFleetDbHeal
 
 	stage = "DecodeResponse"
 	result, err := decodeGetFleetDbHealthResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetFleetEmailDeliverability invokes getFleetEmailDeliverability operation.
+//
+// Returns per-site deliverability aggregates for a rolling window.
+// Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+// The `window` query parameter controls the look-back period in days
+// (default 30, clamped to [1, 365]).
+// Org-scope only (site-collaborators are blocked).
+// Requires `site.email.manage` permission.
+// **Reputation thresholds (for frontend colouring):**
+// - `bounce_rate` warn ≥2%, danger ≥5%
+// - `complaint_rate` warn ≥0.05%, danger ≥0.1%.
+//
+// GET /api/v1/email/deliverability
+func (c *Client) GetFleetEmailDeliverability(ctx context.Context, params GetFleetEmailDeliverabilityParams) (GetFleetEmailDeliverabilityRes, error) {
+	res, err := c.sendGetFleetEmailDeliverability(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetFleetEmailDeliverability(ctx context.Context, params GetFleetEmailDeliverabilityParams) (res GetFleetEmailDeliverabilityRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetEmailDeliverability"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/email/deliverability"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetEmailDeliverabilityOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/email/deliverability"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "window" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "window",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Window.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetEmailDeliverabilityResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

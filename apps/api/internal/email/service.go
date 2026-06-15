@@ -59,6 +59,7 @@ type repository interface {
 	ListFleetLog(ctx context.Context, tenantID uuid.UUID, f LogListFilter) (LogListPage, error)
 	GetSiteStats(ctx context.Context, tenantID, siteID uuid.UUID, from, to time.Time) (EmailStats, error)
 	GetFleetStats(ctx context.Context, tenantID uuid.UUID, from, to time.Time) (EmailStats, error)
+	GetFleetDelivery(ctx context.Context, tenantID uuid.UUID, windowDays int) (DeliverabilityReport, error)
 	DeleteLogsOlderThan(ctx context.Context, cutoffTs time.Time, batchSize int64) (int64, error)
 	// Phase 4a — suppression + webhook dedup + log actions
 	UpsertSuppression(ctx context.Context, in UpsertSuppressionInput) (Suppression, error)
@@ -590,6 +591,16 @@ func (s *Service) GetFleetStats(ctx context.Context, tenantID uuid.UUID, from, t
 		return EmailStats{}, domain.Internal("email_get_fleet_stats", "failed to get fleet email stats").WithCause(err)
 	}
 	return stats, nil
+}
+
+// GetFleetDelivery returns per-site deliverability aggregates for GET /email/deliverability.
+// windowDays is clamped to [1, 365]; defaults to 30 when zero.
+func (s *Service) GetFleetDelivery(ctx context.Context, tenantID uuid.UUID, windowDays int) (DeliverabilityReport, error) {
+	report, err := s.repo.GetFleetDelivery(ctx, tenantID, windowDays)
+	if err != nil {
+		return DeliverabilityReport{}, domain.Internal("email_get_fleet_delivery", "failed to get fleet deliverability report").WithCause(err)
+	}
+	return report, nil
 }
 
 // PruneOldLogs deletes one batch of expired email log rows across all tenants.

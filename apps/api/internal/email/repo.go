@@ -1027,6 +1027,8 @@ func (r *Repo) GetSiteStats(ctx context.Context, tenantID, siteID uuid.UUID, fro
 		stats.Total = sumRow.Total
 		stats.SentCount = sumRow.SentCount
 		stats.FailedCount = sumRow.FailedCount
+		stats.BouncedCount = sumRow.BouncedCount
+		stats.ComplainedCount = sumRow.ComplainedCount
 		stats.ProviderCount = sumRow.ProviderCount
 
 		dayRows, derr := q.GetEmailStatsByDay(ctx, sqlc.GetEmailStatsByDayParams{
@@ -1040,10 +1042,12 @@ func (r *Repo) GetSiteStats(ctx context.Context, tenantID, siteID uuid.UUID, fro
 		}
 		for _, d := range dayRows {
 			stats.ByDay = append(stats.ByDay, StatsByDay{
-				Day:         d.Day,
-				Total:       d.Total,
-				SentCount:   d.SentCount,
-				FailedCount: d.FailedCount,
+				Day:             d.Day,
+				Total:           d.Total,
+				SentCount:       d.SentCount,
+				FailedCount:     d.FailedCount,
+				BouncedCount:    d.BouncedCount,
+				ComplainedCount: d.ComplainedCount,
 			})
 		}
 
@@ -1086,6 +1090,8 @@ func (r *Repo) GetFleetStats(ctx context.Context, tenantID uuid.UUID, from, to t
 		stats.Total = sumRow.Total
 		stats.SentCount = sumRow.SentCount
 		stats.FailedCount = sumRow.FailedCount
+		stats.BouncedCount = sumRow.BouncedCount
+		stats.ComplainedCount = sumRow.ComplainedCount
 		stats.ProviderCount = sumRow.ProviderCount
 		stats.SiteCount = sumRow.SiteCount
 
@@ -1099,15 +1105,118 @@ func (r *Repo) GetFleetStats(ctx context.Context, tenantID uuid.UUID, from, to t
 		}
 		for _, d := range dayRows {
 			stats.ByDay = append(stats.ByDay, StatsByDay{
-				Day:         d.Day,
-				Total:       d.Total,
-				SentCount:   d.SentCount,
-				FailedCount: d.FailedCount,
+				Day:             d.Day,
+				Total:           d.Total,
+				SentCount:       d.SentCount,
+				FailedCount:     d.FailedCount,
+				BouncedCount:    d.BouncedCount,
+				ComplainedCount: d.ComplainedCount,
 			})
 		}
 		return nil
 	})
 	return stats, err
+}
+
+// ---------------------------------------------------------------------------
+// GetFleetDelivery — deliverability dashboard (GET /email/deliverability)
+// ---------------------------------------------------------------------------
+
+// GetFleetDelivery returns per-site deliverability aggregates + sparklines for
+// the given window (days). Runs under InTenantTx.
+func (r *Repo) GetFleetDelivery(ctx context.Context, tenantID uuid.UUID, windowDays int) (DeliverabilityReport, error) {
+	if windowDays < 1 {
+		windowDays = 30
+	}
+	if windowDays > 365 {
+		windowDays = 365
+	}
+	now := time.Now().UTC()
+	rangeFrom := now.AddDate(0, 0, -windowDays)
+	rangeTo := now
+
+	var report DeliverabilityReport
+	report.WindowDays = windowDays
+
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+
+		// Fetch per-site aggregates (includes joined name/url/provider).
+		siteRows, serr := q.GetFleetDeliveryPerSite(ctx, sqlc.GetFleetDeliveryPerSiteParams{
+			TenantID:  tenantID,
+			RangeFrom: rangeFrom,
+			RangeTo:   rangeTo,
+		})
+		if serr != nil {
+			return domain.Internal("email_get_fleet_delivery", "failed to get fleet delivery stats").WithCause(serr)
+		}
+
+		// Fetch sparkline rows (daily sent per site, oldest→newest).
+		dailyRows, derr := q.GetFleetDeliveryDailyBySite(ctx, sqlc.GetFleetDeliveryDailyBySiteParams{
+			TenantID:  tenantID,
+			RangeFrom: rangeFrom,
+			RangeTo:   rangeTo,
+		})
+		if derr != nil {
+			return domain.Internal("email_get_fleet_delivery_sparkline", "failed to get fleet delivery sparkline").WithCause(derr)
+		}
+
+		// Build sparkline map: siteID → []int64 (sent counts oldest→newest).
+		type dayCount struct {
+			day   time.Time
+			count int64
+		}
+		sparkMap := make(map[uuid.UUID][]dayCount)
+		for _, d := range dailyRows {
+			sparkMap[d.SiteID] = append(sparkMap[d.SiteID], dayCount{day: d.Day, count: d.SentCount})
+		}
+
+		report.Items = make([]SiteDeliveryItem, 0, len(siteRows))
+		for _, row := range siteRows {
+			var bounceRate, complaintRate float64
+			if row.Total > 0 {
+				bounceRate = float64(row.BouncedCount) / float64(row.Total) * 100
+				complaintRate = float64(row.ComplainedCount) / float64(row.Total) * 100
+			}
+
+			// Extract last_sent_at from the interface{} value sqlc produced.
+			var lastSentAt *time.Time
+			if row.LastSentAt != nil {
+				switch v := row.LastSentAt.(type) {
+				case time.Time:
+					if !v.IsZero() {
+						t := v.UTC()
+						lastSentAt = &t
+					}
+				}
+			}
+
+			// Build sparkline: convert the per-site day slices to []int64.
+			sparks := sparkMap[row.SiteID]
+			sparkline := make([]int64, 0, len(sparks))
+			for _, s := range sparks {
+				sparkline = append(sparkline, s.count)
+			}
+
+			report.Items = append(report.Items, SiteDeliveryItem{
+				SiteID:          row.SiteID,
+				SiteName:        row.SiteName,
+				SiteURL:         row.SiteUrl,
+				Provider:        row.Provider,
+				Total:           row.Total,
+				SentCount:       row.SentCount,
+				FailedCount:     row.FailedCount,
+				BouncedCount:    row.BouncedCount,
+				ComplainedCount: row.ComplainedCount,
+				BounceRate:      bounceRate,
+				ComplaintRate:   complaintRate,
+				LastSentAt:      lastSentAt,
+				Sparkline:       sparkline,
+			})
+		}
+		return nil
+	})
+	return report, err
 }
 
 // ---------------------------------------------------------------------------

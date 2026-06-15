@@ -384,22 +384,53 @@ type IngestResult struct {
 
 // EmailStats holds the summary counts + per-day + per-provider breakdowns.
 type EmailStats struct {
-	Total         int64
-	SentCount     int64
-	FailedCount   int64
-	ProviderCount int64
+	Total           int64
+	SentCount       int64
+	FailedCount     int64
+	BouncedCount    int64
+	ComplainedCount int64
+	ProviderCount   int64
 	// SiteCount is only populated for fleet stats.
 	SiteCount  int64
 	ByDay      []StatsByDay
 	ByProvider []StatsByProvider
 }
 
+// ---------------------------------------------------------------------------
+// Deliverability report types (GET /email/deliverability)
+// ---------------------------------------------------------------------------
+
+// SiteDeliveryItem is one site's row in the deliverability report.
+type SiteDeliveryItem struct {
+	SiteID          uuid.UUID
+	SiteName        string
+	SiteURL         string
+	Provider        string
+	Total           int64
+	SentCount       int64
+	FailedCount     int64
+	BouncedCount    int64
+	ComplainedCount int64
+	BounceRate      float64    // bounced/total*100, 0 when total=0
+	ComplaintRate   float64    // complained/total*100, 0 when total=0
+	LastSentAt      *time.Time // nil when no sent email in window
+	Sparkline       []int64    // daily sent counts across the window, oldest→newest
+}
+
+// DeliverabilityReport is the full response for GET /email/deliverability.
+type DeliverabilityReport struct {
+	WindowDays int
+	Items      []SiteDeliveryItem
+}
+
 // StatsByDay is one day's aggregate.
 type StatsByDay struct {
-	Day         time.Time
-	Total       int64
-	SentCount   int64
-	FailedCount int64
+	Day             time.Time
+	Total           int64
+	SentCount       int64
+	FailedCount     int64
+	BouncedCount    int64
+	ComplainedCount int64
 }
 
 // StatsByProvider is one provider's aggregate.

@@ -474,6 +474,8 @@ SELECT
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
     COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count,
     COUNT(DISTINCT provider)                          AS provider_count
 FROM site_email_log
 WHERE tenant_id   = $1
@@ -490,13 +492,15 @@ type GetEmailStatsParams struct {
 }
 
 type GetEmailStatsRow struct {
-	Total         int64 `json:"total"`
-	SentCount     int64 `json:"sent_count"`
-	FailedCount   int64 `json:"failed_count"`
-	ProviderCount int64 `json:"provider_count"`
+	Total           int64 `json:"total"`
+	SentCount       int64 `json:"sent_count"`
+	FailedCount     int64 `json:"failed_count"`
+	BouncedCount    int64 `json:"bounced_count"`
+	ComplainedCount int64 `json:"complained_count"`
+	ProviderCount   int64 `json:"provider_count"`
 }
 
-// Per-site summary: total sent/failed counts over [range_from, range_to].
+// Per-site summary: total sent/failed/bounced/complained counts over [range_from, range_to].
 // Repo always provides explicit bounds; use epoch-start + far-future as the
 // open-ended defaults so no NULL handling is needed in SQL.
 func (q *Queries) GetEmailStats(ctx context.Context, arg GetEmailStatsParams) (GetEmailStatsRow, error) {
@@ -511,6 +515,8 @@ func (q *Queries) GetEmailStats(ctx context.Context, arg GetEmailStatsParams) (G
 		&i.Total,
 		&i.SentCount,
 		&i.FailedCount,
+		&i.BouncedCount,
+		&i.ComplainedCount,
 		&i.ProviderCount,
 	)
 	return i, err
@@ -521,7 +527,9 @@ SELECT
     date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
-    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count
+    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count
 FROM site_email_log
 WHERE tenant_id   = $1
   AND site_id     = $2
@@ -539,10 +547,12 @@ type GetEmailStatsByDayParams struct {
 }
 
 type GetEmailStatsByDayRow struct {
-	Day         time.Time `json:"day"`
-	Total       int64     `json:"total"`
-	SentCount   int64     `json:"sent_count"`
-	FailedCount int64     `json:"failed_count"`
+	Day             time.Time `json:"day"`
+	Total           int64     `json:"total"`
+	SentCount       int64     `json:"sent_count"`
+	FailedCount     int64     `json:"failed_count"`
+	BouncedCount    int64     `json:"bounced_count"`
+	ComplainedCount int64     `json:"complained_count"`
 }
 
 // Per-site daily time-series for the stats dashboard.
@@ -565,6 +575,8 @@ func (q *Queries) GetEmailStatsByDay(ctx context.Context, arg GetEmailStatsByDay
 			&i.Total,
 			&i.SentCount,
 			&i.FailedCount,
+			&i.BouncedCount,
+			&i.ComplainedCount,
 		); err != nil {
 			return nil, err
 		}
@@ -667,11 +679,145 @@ func (q *Queries) GetEmailSuppression(ctx context.Context, arg GetEmailSuppressi
 	return i, err
 }
 
+const getFleetDeliveryDailyBySite = `-- name: GetFleetDeliveryDailyBySite :many
+SELECT
+    site_id,
+    date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
+    COUNT(*) FILTER (WHERE status = 'sent')                        AS sent_count
+FROM site_email_log
+WHERE tenant_id   = $1
+  AND created_at >= $2
+  AND created_at <= $3
+GROUP BY site_id, 2
+ORDER BY site_id ASC, 2 ASC
+`
+
+type GetFleetDeliveryDailyBySiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RangeFrom time.Time `json:"range_from"`
+	RangeTo   time.Time `json:"range_to"`
+}
+
+type GetFleetDeliveryDailyBySiteRow struct {
+	SiteID    uuid.UUID `json:"site_id"`
+	Day       time.Time `json:"day"`
+	SentCount int64     `json:"sent_count"`
+}
+
+// Sparkline data for GET /email/deliverability: daily sent counts per site
+// across the window, ordered oldest-first. The caller buckets these into
+// per-site slices ordered by day ASC to build the sparkline array.
+// Runs under InTenantTx.
+func (q *Queries) GetFleetDeliveryDailyBySite(ctx context.Context, arg GetFleetDeliveryDailyBySiteParams) ([]GetFleetDeliveryDailyBySiteRow, error) {
+	rows, err := q.db.Query(ctx, getFleetDeliveryDailyBySite, arg.TenantID, arg.RangeFrom, arg.RangeTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetFleetDeliveryDailyBySiteRow
+	for rows.Next() {
+		var i GetFleetDeliveryDailyBySiteRow
+		if err := rows.Scan(&i.SiteID, &i.Day, &i.SentCount); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const getFleetDeliveryPerSite = `-- name: GetFleetDeliveryPerSite :many
+SELECT
+    l.site_id,
+    s.name                                            AS site_name,
+    s.url                                             AS site_url,
+    COALESCE(sec.provider, '')                        AS provider,
+    COUNT(*)                                          AS total,
+    COUNT(*) FILTER (WHERE l.status = 'sent')         AS sent_count,
+    COUNT(*) FILTER (WHERE l.status = 'failed')       AS failed_count,
+    COUNT(*) FILTER (WHERE l.status = 'bounced')      AS bounced_count,
+    COUNT(*) FILTER (WHERE l.status = 'complained')   AS complained_count,
+    MAX(l.created_at) FILTER (WHERE l.status = 'sent') AS last_sent_at
+FROM site_email_log l
+JOIN sites s
+  ON s.id        = l.site_id
+ AND s.tenant_id = l.tenant_id
+LEFT JOIN site_email_config sec
+  ON sec.tenant_id = l.tenant_id
+ AND sec.site_id   = l.site_id
+WHERE l.tenant_id   = $1
+  AND l.created_at >= $2
+  AND l.created_at <= $3
+GROUP BY l.site_id, s.name, s.url, sec.provider
+ORDER BY
+    (COUNT(*) FILTER (WHERE l.status = 'bounced'))::float
+        / NULLIF(COUNT(*), 0) DESC NULLS LAST,
+    COUNT(*) DESC
+`
+
+type GetFleetDeliveryPerSiteParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RangeFrom time.Time `json:"range_from"`
+	RangeTo   time.Time `json:"range_to"`
+}
+
+type GetFleetDeliveryPerSiteRow struct {
+	SiteID          uuid.UUID   `json:"site_id"`
+	SiteName        string      `json:"site_name"`
+	SiteUrl         string      `json:"site_url"`
+	Provider        string      `json:"provider"`
+	Total           int64       `json:"total"`
+	SentCount       int64       `json:"sent_count"`
+	FailedCount     int64       `json:"failed_count"`
+	BouncedCount    int64       `json:"bounced_count"`
+	ComplainedCount int64       `json:"complained_count"`
+	LastSentAt      interface{} `json:"last_sent_at"`
+}
+
+// Deliverability endpoint: per-site aggregate for GET /email/deliverability.
+// Joins site_email_log with sites (name, url) and site_email_config (provider
+// from the effective per-site row, or NULL when no config exists).
+// sorted by bounce_rate DESC then total DESC (riskiest first). Runs under InTenantTx.
+func (q *Queries) GetFleetDeliveryPerSite(ctx context.Context, arg GetFleetDeliveryPerSiteParams) ([]GetFleetDeliveryPerSiteRow, error) {
+	rows, err := q.db.Query(ctx, getFleetDeliveryPerSite, arg.TenantID, arg.RangeFrom, arg.RangeTo)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetFleetDeliveryPerSiteRow
+	for rows.Next() {
+		var i GetFleetDeliveryPerSiteRow
+		if err := rows.Scan(
+			&i.SiteID,
+			&i.SiteName,
+			&i.SiteUrl,
+			&i.Provider,
+			&i.Total,
+			&i.SentCount,
+			&i.FailedCount,
+			&i.BouncedCount,
+			&i.ComplainedCount,
+			&i.LastSentAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getFleetEmailStats = `-- name: GetFleetEmailStats :one
 SELECT
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
     COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count,
     COUNT(DISTINCT provider)                          AS provider_count,
     COUNT(DISTINCT site_id)                           AS site_count
 FROM site_email_log
@@ -687,11 +833,13 @@ type GetFleetEmailStatsParams struct {
 }
 
 type GetFleetEmailStatsRow struct {
-	Total         int64 `json:"total"`
-	SentCount     int64 `json:"sent_count"`
-	FailedCount   int64 `json:"failed_count"`
-	ProviderCount int64 `json:"provider_count"`
-	SiteCount     int64 `json:"site_count"`
+	Total           int64 `json:"total"`
+	SentCount       int64 `json:"sent_count"`
+	FailedCount     int64 `json:"failed_count"`
+	BouncedCount    int64 `json:"bounced_count"`
+	ComplainedCount int64 `json:"complained_count"`
+	ProviderCount   int64 `json:"provider_count"`
+	SiteCount       int64 `json:"site_count"`
 }
 
 // Tenant-wide summary (fleet dashboard).
@@ -702,6 +850,8 @@ func (q *Queries) GetFleetEmailStats(ctx context.Context, arg GetFleetEmailStats
 		&i.Total,
 		&i.SentCount,
 		&i.FailedCount,
+		&i.BouncedCount,
+		&i.ComplainedCount,
 		&i.ProviderCount,
 		&i.SiteCount,
 	)
@@ -713,7 +863,9 @@ SELECT
     date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
-    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count
+    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count
 FROM site_email_log
 WHERE tenant_id   = $1
   AND created_at >= $2
@@ -729,10 +881,12 @@ type GetFleetEmailStatsByDayParams struct {
 }
 
 type GetFleetEmailStatsByDayRow struct {
-	Day         time.Time `json:"day"`
-	Total       int64     `json:"total"`
-	SentCount   int64     `json:"sent_count"`
-	FailedCount int64     `json:"failed_count"`
+	Day             time.Time `json:"day"`
+	Total           int64     `json:"total"`
+	SentCount       int64     `json:"sent_count"`
+	FailedCount     int64     `json:"failed_count"`
+	BouncedCount    int64     `json:"bounced_count"`
+	ComplainedCount int64     `json:"complained_count"`
 }
 
 // Fleet daily time-series (tenant-wide).
@@ -750,6 +904,8 @@ func (q *Queries) GetFleetEmailStatsByDay(ctx context.Context, arg GetFleetEmail
 			&i.Total,
 			&i.SentCount,
 			&i.FailedCount,
+			&i.BouncedCount,
+			&i.ComplainedCount,
 		); err != nil {
 			return nil, err
 		}

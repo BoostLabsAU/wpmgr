@@ -253,6 +253,10 @@ type GetEmailNotifySettingsRes interface {
 	getEmailNotifySettingsRes()
 }
 
+type GetFleetEmailDeliverabilityRes interface {
+	getFleetEmailDeliverabilityRes()
+}
+
 type GetFleetEmailStatsRes interface {
 	getFleetEmailStatsRes()
 }

@@ -230,6 +230,9 @@ import type {
   GetFleetBackupHealthResponses,
   GetFleetDbHealthData,
   GetFleetDbHealthResponses,
+  GetFleetEmailDeliverabilityData,
+  GetFleetEmailDeliverabilityErrors,
+  GetFleetEmailDeliverabilityResponses,
   GetFleetEmailStatsData,
   GetFleetEmailStatsErrors,
   GetFleetEmailStatsResponses,
@@ -3865,6 +3868,34 @@ export const getFleetEmailStats = <ThrowOnError extends boolean = false>(
     GetFleetEmailStatsErrors,
     ThrowOnError
   >({ url: "/api/v1/email/stats", ...options });
+
+/**
+ * Fleet per-site deliverability report (bounce + complaint rates)
+ *
+ * Returns per-site deliverability aggregates for a rolling window.
+ * Items are sorted by bounce_rate DESC then total DESC (riskiest first).
+ *
+ * The `window` query parameter controls the look-back period in days
+ * (default 30, clamped to [1, 365]).
+ *
+ * Org-scope only (site-collaborators are blocked).
+ * Requires `site.email.manage` permission.
+ *
+ * **Reputation thresholds (for frontend colouring):**
+ * - `bounce_rate` warn ≥2%, danger ≥5%
+ * - `complaint_rate` warn ≥0.05%, danger ≥0.1%
+ *
+ */
+export const getFleetEmailDeliverability = <
+  ThrowOnError extends boolean = false,
+>(
+  options?: Options<GetFleetEmailDeliverabilityData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetEmailDeliverabilityResponses,
+    GetFleetEmailDeliverabilityErrors,
+    ThrowOnError
+  >({ url: "/api/v1/email/deliverability", ...options });
 
 /**
  * List suppression entries for a site

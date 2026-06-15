@@ -88,6 +88,7 @@ const (
 	GetEmailNotifySettingsOperation         OperationName = "GetEmailNotifySettings"
 	GetFleetBackupHealthOperation           OperationName = "GetFleetBackupHealth"
 	GetFleetDbHealthOperation               OperationName = "GetFleetDbHealth"
+	GetFleetEmailDeliverabilityOperation    OperationName = "GetFleetEmailDeliverability"
 	GetFleetEmailStatsOperation             OperationName = "GetFleetEmailStats"
 	GetFleetIncidentsOperation              OperationName = "GetFleetIncidents"
 	GetFleetRumAggregateOperation           OperationName = "GetFleetRumAggregate"

@@ -4193,6 +4193,101 @@ func decodeGetFleetDbHealthParams(args [0]string, argsEscaped bool, r *http.Requ
 	return params, nil
 }
 
+// GetFleetEmailDeliverabilityParams is parameters of getFleetEmailDeliverability operation.
+type GetFleetEmailDeliverabilityParams struct {
+	// Look-back window in days (default 30, range 1–365).
+	Window OptInt `json:",omitempty,omitzero"`
+}
+
+func unpackGetFleetEmailDeliverabilityParams(packed middleware.Parameters) (params GetFleetEmailDeliverabilityParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "window",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Window = v.(OptInt)
+		}
+	}
+	return params
+}
+
+func decodeGetFleetEmailDeliverabilityParams(args [0]string, argsEscaped bool, r *http.Request) (params GetFleetEmailDeliverabilityParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Set default value for query: window.
+	{
+		val := int(30)
+		params.Window.SetTo(val)
+	}
+	// Decode query: window.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "window",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotWindowVal int
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToInt(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotWindowVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Window.SetTo(paramsDotWindowVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+			if err := func() error {
+				if value, ok := params.Window.Get(); ok {
+					if err := func() error {
+						if err := (validate.Int{
+							MinSet:        true,
+							Min:           1,
+							MaxSet:        true,
+							Max:           365,
+							MinExclusive:  false,
+							MaxExclusive:  false,
+							MultipleOfSet: false,
+							MultipleOf:    0,
+							Pattern:       nil,
+						}).Validate(int64(value)); err != nil {
+							return errors.Wrap(err, "int")
+						}
+						return nil
+					}(); err != nil {
+						return err
+					}
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "window",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // GetFleetEmailStatsParams is parameters of getFleetEmailStats operation.
 type GetFleetEmailStatsParams struct {
 	From OptString `json:",omitempty,omitzero"`

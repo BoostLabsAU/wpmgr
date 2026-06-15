@@ -129,6 +129,8 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// m62 Area 4: notify settings.
 	org.GET("/notify-settings", authz.RequirePermission(authz.PermEmailManage), h.getNotifySettings)
 	org.PUT("/notify-settings", authz.RequirePermission(authz.PermEmailManage), h.putNotifySettings)
+	// Deliverability dashboard.
+	org.GET("/deliverability", authz.RequirePermission(authz.PermEmailManage), h.getFleetDeliverability)
 }
 
 // ---------------------------------------------------------------------------
@@ -520,6 +522,32 @@ func (h *Handler) getFleetStats(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, toEmailStatsDTO(stats))
+}
+
+// getFleetDeliverability handles GET /email/deliverability?window=<days> (org-scope).
+// Returns per-site deliverability aggregates (bounce/complaint rates + sparklines).
+// window defaults to 30, clamped to [1, 365].
+func (h *Handler) getFleetDeliverability(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	windowDays := 30
+	if s := c.Query("window"); s != "" {
+		if n, err := strconv.Atoi(s); err == nil {
+			windowDays = n
+		}
+	}
+	// Clamp: [1, 365].
+	if windowDays < 1 {
+		windowDays = 1
+	}
+	if windowDays > 365 {
+		windowDays = 365
+	}
+	report, err := h.svc.GetFleetDelivery(c.Request.Context(), p.TenantID, windowDays)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toDeliverabilityReportDTO(report))
 }
 
 // ---------------------------------------------------------------------------

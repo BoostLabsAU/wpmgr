@@ -197,6 +197,8 @@ export {
   disableObjectCache,
   flushObjectCache,
   getObjectCacheStatsHistory,
+  // email deliverability (fleet per-site reputation dashboard)
+  getFleetEmailDeliverability,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -686,4 +688,9 @@ export type {
   FlushObjectCacheResponse,
   GetObjectCacheStatsHistoryData,
   GetObjectCacheStatsHistoryResponse,
+  // email deliverability (fleet per-site reputation dashboard)
+  SiteDeliveryItem,
+  DeliverabilityReport,
+  GetFleetEmailDeliverabilityData,
+  GetFleetEmailDeliverabilityResponse,
 } from "./generated/types.gen";

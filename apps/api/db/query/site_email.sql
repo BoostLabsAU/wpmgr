@@ -303,13 +303,15 @@ ORDER BY created_at DESC, id DESC
 LIMIT @row_limit;
 
 -- name: GetEmailStats :one
--- Per-site summary: total sent/failed counts over [range_from, range_to].
+-- Per-site summary: total sent/failed/bounced/complained counts over [range_from, range_to].
 -- Repo always provides explicit bounds; use epoch-start + far-future as the
 -- open-ended defaults so no NULL handling is needed in SQL.
 SELECT
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
     COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count,
     COUNT(DISTINCT provider)                          AS provider_count
 FROM site_email_log
 WHERE tenant_id   = @tenant_id
@@ -323,7 +325,9 @@ SELECT
     date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
-    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count
+    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count
 FROM site_email_log
 WHERE tenant_id   = @tenant_id
   AND site_id     = @site_id
@@ -353,6 +357,8 @@ SELECT
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
     COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count,
     COUNT(DISTINCT provider)                          AS provider_count,
     COUNT(DISTINCT site_id)                           AS site_count
 FROM site_email_log
@@ -366,7 +372,9 @@ SELECT
     date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
     COUNT(*)                                          AS total,
     COUNT(*) FILTER (WHERE status = 'sent')           AS sent_count,
-    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count
+    COUNT(*) FILTER (WHERE status = 'failed')         AS failed_count,
+    COUNT(*) FILTER (WHERE status = 'bounced')        AS bounced_count,
+    COUNT(*) FILTER (WHERE status = 'complained')     AS complained_count
 FROM site_email_log
 WHERE tenant_id   = @tenant_id
   AND created_at >= @range_from
@@ -805,6 +813,54 @@ WHERE tenant_id   = @tenant_id
 GROUP BY site_id
 ORDER BY failed_count DESC, total DESC
 LIMIT @row_limit;
+
+-- name: GetFleetDeliveryPerSite :many
+-- Deliverability endpoint: per-site aggregate for GET /email/deliverability.
+-- Joins site_email_log with sites (name, url) and site_email_config (provider
+-- from the effective per-site row, or NULL when no config exists).
+-- sorted by bounce_rate DESC then total DESC (riskiest first). Runs under InTenantTx.
+SELECT
+    l.site_id,
+    s.name                                            AS site_name,
+    s.url                                             AS site_url,
+    COALESCE(sec.provider, '')                        AS provider,
+    COUNT(*)                                          AS total,
+    COUNT(*) FILTER (WHERE l.status = 'sent')         AS sent_count,
+    COUNT(*) FILTER (WHERE l.status = 'failed')       AS failed_count,
+    COUNT(*) FILTER (WHERE l.status = 'bounced')      AS bounced_count,
+    COUNT(*) FILTER (WHERE l.status = 'complained')   AS complained_count,
+    MAX(l.created_at) FILTER (WHERE l.status = 'sent') AS last_sent_at
+FROM site_email_log l
+JOIN sites s
+  ON s.id        = l.site_id
+ AND s.tenant_id = l.tenant_id
+LEFT JOIN site_email_config sec
+  ON sec.tenant_id = l.tenant_id
+ AND sec.site_id   = l.site_id
+WHERE l.tenant_id   = @tenant_id
+  AND l.created_at >= @range_from
+  AND l.created_at <= @range_to
+GROUP BY l.site_id, s.name, s.url, sec.provider
+ORDER BY
+    (COUNT(*) FILTER (WHERE l.status = 'bounced'))::float
+        / NULLIF(COUNT(*), 0) DESC NULLS LAST,
+    COUNT(*) DESC;
+
+-- name: GetFleetDeliveryDailyBySite :many
+-- Sparkline data for GET /email/deliverability: daily sent counts per site
+-- across the window, ordered oldest-first. The caller buckets these into
+-- per-site slices ordered by day ASC to build the sparkline array.
+-- Runs under InTenantTx.
+SELECT
+    site_id,
+    date_trunc('day', created_at AT TIME ZONE 'UTC')::timestamptz AS day,
+    COUNT(*) FILTER (WHERE status = 'sent')                        AS sent_count
+FROM site_email_log
+WHERE tenant_id   = @tenant_id
+  AND created_at >= @range_from
+  AND created_at <= @range_to
+GROUP BY site_id, 2
+ORDER BY site_id ASC, 2 ASC;
 
 -- name: TopFailureSamples :many
 -- Top failure samples for the digest (subject + truncated error, no bodies).
