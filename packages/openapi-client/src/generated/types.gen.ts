@@ -2004,6 +2004,7 @@ export type ActivityVerifyResult = {
   valid: boolean;
   /**
    * The seq of the first broken link, or null when the chain is intact.
+   * Kept for backward compatibility; equals break.seq when broken.
    *
    */
   break_at_seq?: number;
@@ -2011,6 +2012,71 @@ export type ActivityVerifyResult = {
    * Total number of events folded during verification.
    */
   total: number;
+  /**
+   * Null when the chain is intact. Describes the first broken link with
+   * enough detail for an operator to understand and act on the failure.
+   *
+   */
+  break?: ChainBreak;
+};
+
+export type ChainBreak = {
+  /**
+   * The seq of the event where verification failed.
+   */
+  seq: number;
+  /**
+   * Classifies the break:
+   * - missing_events: one or more seq numbers are absent (log cleanup / retention / deletion).
+   * - link_mismatch: contiguous seq but prev_hash broken (insertion/removal/reorder/prior alteration).
+   * - content_modified: prev link intact but recomputed hash diverges (content edited after recording).
+   * - chain_start_missing: first stored event does not chain from genesis (oldest events gone / chain reset).
+   *
+   */
+  kind:
+    | "missing_events"
+    | "link_mismatch"
+    | "content_modified"
+    | "chain_start_missing";
+  /**
+   * The seq of the last successfully-verified row. Null when the break is
+   * at the first/genesis row and no prior row was verified.
+   *
+   */
+  prior_seq?: number;
+  /**
+   * Number of missing sequence numbers between prior_seq and seq.
+   * 0 when contiguous or when there is no prior row.
+   *
+   */
+  seq_gap: number;
+  /**
+   * The verified chain head before this row: the prior row's this_hash,
+   * or GenesisPrevHash (64 zero hex chars) if this is the first row.
+   *
+   */
+  expected_prev_hash: string;
+  /**
+   * The row's own prev_hash as stored.
+   */
+  stored_prev_hash: string;
+  /**
+   * ComputeHashFromStored(expected_prev_hash, row).
+   */
+  recomputed_this_hash: string;
+  /**
+   * The row's own this_hash as stored.
+   */
+  stored_this_hash: string;
+  /**
+   * The offending event fields for operator context.
+   */
+  event: {
+    summary: string;
+    event_type: string;
+    actor_login: string;
+    occurred_at: string;
+  };
 };
 
 export type SecurityThresholds = {

@@ -9770,9 +9770,87 @@ components:
           nullable: true
           description: |
             The seq of the first broken link, or null when the chain is intact.
+            Kept for backward compatibility; equals break.seq when broken.
         total:
           type: integer
           description: Total number of events folded during verification.
+        break:
+          nullable: true
+          description: |
+            Null when the chain is intact. Describes the first broken link with
+            enough detail for an operator to understand and act on the failure.
+          allOf:
+            - $ref: "#/components/schemas/ChainBreak"
+    ChainBreak:
+      type: object
+      required:
+        - seq
+        - kind
+        - seq_gap
+        - expected_prev_hash
+        - stored_prev_hash
+        - recomputed_this_hash
+        - stored_this_hash
+        - event
+      properties:
+        seq:
+          type: integer
+          format: int64
+          description: The seq of the event where verification failed.
+        kind:
+          type: string
+          enum:
+            - missing_events
+            - link_mismatch
+            - content_modified
+            - chain_start_missing
+          description: |
+            Classifies the break:
+            - missing_events: one or more seq numbers are absent (log cleanup / retention / deletion).
+            - link_mismatch: contiguous seq but prev_hash broken (insertion/removal/reorder/prior alteration).
+            - content_modified: prev link intact but recomputed hash diverges (content edited after recording).
+            - chain_start_missing: first stored event does not chain from genesis (oldest events gone / chain reset).
+        prior_seq:
+          type: integer
+          format: int64
+          nullable: true
+          description: |
+            The seq of the last successfully-verified row. Null when the break is
+            at the first/genesis row and no prior row was verified.
+        seq_gap:
+          type: integer
+          format: int64
+          description: |
+            Number of missing sequence numbers between prior_seq and seq.
+            0 when contiguous or when there is no prior row.
+        expected_prev_hash:
+          type: string
+          description: |
+            The verified chain head before this row: the prior row's this_hash,
+            or GenesisPrevHash (64 zero hex chars) if this is the first row.
+        stored_prev_hash:
+          type: string
+          description: The row's own prev_hash as stored.
+        recomputed_this_hash:
+          type: string
+          description: ComputeHashFromStored(expected_prev_hash, row).
+        stored_this_hash:
+          type: string
+          description: The row's own this_hash as stored.
+        event:
+          type: object
+          required: [summary, event_type, actor_login, occurred_at]
+          description: The offending event fields for operator context.
+          properties:
+            summary:
+              type: string
+            event_type:
+              type: string
+            actor_login:
+              type: string
+            occurred_at:
+              type: string
+              format: date-time
     # ── S2 — Login Protection + IP store ───────────────────────────────────
     SecurityThresholds:
       type: object

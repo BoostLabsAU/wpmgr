@@ -198,9 +198,13 @@ type ActivityVerifyResult struct {
 	// True when the entire chain re-verifies intact.
 	Valid bool `json:"valid"`
 	// The seq of the first broken link, or null when the chain is intact.
+	// Kept for backward compatibility; equals break.seq when broken.
 	BreakAtSeq OptNilInt64 `json:"break_at_seq"`
 	// Total number of events folded during verification.
 	Total int `json:"total"`
+	// Null when the chain is intact. Describes the first broken link with
+	// enough detail for an operator to understand and act on the failure.
+	Break OptNilChainBreak `json:"break"`
 }
 
 // GetValid returns the value of Valid.
@@ -218,6 +222,11 @@ func (s *ActivityVerifyResult) GetTotal() int {
 	return s.Total
 }
 
+// GetBreak returns the value of Break.
+func (s *ActivityVerifyResult) GetBreak() OptNilChainBreak {
+	return s.Break
+}
+
 // SetValid sets the value of Valid.
 func (s *ActivityVerifyResult) SetValid(val bool) {
 	s.Valid = val
@@ -231,6 +240,11 @@ func (s *ActivityVerifyResult) SetBreakAtSeq(val OptNilInt64) {
 // SetTotal sets the value of Total.
 func (s *ActivityVerifyResult) SetTotal(val int) {
 	s.Total = val
+}
+
+// SetBreak sets the value of Break.
+func (s *ActivityVerifyResult) SetBreak(val OptNilChainBreak) {
+	s.Break = val
 }
 
 type AddClientMemberConflict Error
@@ -4193,6 +4207,235 @@ func (s *CdnCredentials) SetZoneID(val OptString) {
 // SetZone sets the value of Zone.
 func (s *CdnCredentials) SetZone(val OptString) {
 	s.Zone = val
+}
+
+// Ref: #/components/schemas/ChainBreak
+type ChainBreak struct {
+	// The seq of the event where verification failed.
+	Seq int64 `json:"seq"`
+	// Classifies the break:
+	// - missing_events: one or more seq numbers are absent (log cleanup / retention / deletion).
+	// - link_mismatch: contiguous seq but prev_hash broken (insertion/removal/reorder/prior alteration).
+	// - content_modified: prev link intact but recomputed hash diverges (content edited after recording).
+	// - chain_start_missing: first stored event does not chain from genesis (oldest events gone / chain
+	// reset).
+	Kind ChainBreakKind `json:"kind"`
+	// The seq of the last successfully-verified row. Null when the break is
+	// at the first/genesis row and no prior row was verified.
+	PriorSeq OptNilInt64 `json:"prior_seq"`
+	// Number of missing sequence numbers between prior_seq and seq.
+	// 0 when contiguous or when there is no prior row.
+	SeqGap int64 `json:"seq_gap"`
+	// The verified chain head before this row: the prior row's this_hash,
+	// or GenesisPrevHash (64 zero hex chars) if this is the first row.
+	ExpectedPrevHash string `json:"expected_prev_hash"`
+	// The row's own prev_hash as stored.
+	StoredPrevHash string `json:"stored_prev_hash"`
+	// ComputeHashFromStored(expected_prev_hash, row).
+	RecomputedThisHash string `json:"recomputed_this_hash"`
+	// The row's own this_hash as stored.
+	StoredThisHash string `json:"stored_this_hash"`
+	// The offending event fields for operator context.
+	Event ChainBreakEvent `json:"event"`
+}
+
+// GetSeq returns the value of Seq.
+func (s *ChainBreak) GetSeq() int64 {
+	return s.Seq
+}
+
+// GetKind returns the value of Kind.
+func (s *ChainBreak) GetKind() ChainBreakKind {
+	return s.Kind
+}
+
+// GetPriorSeq returns the value of PriorSeq.
+func (s *ChainBreak) GetPriorSeq() OptNilInt64 {
+	return s.PriorSeq
+}
+
+// GetSeqGap returns the value of SeqGap.
+func (s *ChainBreak) GetSeqGap() int64 {
+	return s.SeqGap
+}
+
+// GetExpectedPrevHash returns the value of ExpectedPrevHash.
+func (s *ChainBreak) GetExpectedPrevHash() string {
+	return s.ExpectedPrevHash
+}
+
+// GetStoredPrevHash returns the value of StoredPrevHash.
+func (s *ChainBreak) GetStoredPrevHash() string {
+	return s.StoredPrevHash
+}
+
+// GetRecomputedThisHash returns the value of RecomputedThisHash.
+func (s *ChainBreak) GetRecomputedThisHash() string {
+	return s.RecomputedThisHash
+}
+
+// GetStoredThisHash returns the value of StoredThisHash.
+func (s *ChainBreak) GetStoredThisHash() string {
+	return s.StoredThisHash
+}
+
+// GetEvent returns the value of Event.
+func (s *ChainBreak) GetEvent() ChainBreakEvent {
+	return s.Event
+}
+
+// SetSeq sets the value of Seq.
+func (s *ChainBreak) SetSeq(val int64) {
+	s.Seq = val
+}
+
+// SetKind sets the value of Kind.
+func (s *ChainBreak) SetKind(val ChainBreakKind) {
+	s.Kind = val
+}
+
+// SetPriorSeq sets the value of PriorSeq.
+func (s *ChainBreak) SetPriorSeq(val OptNilInt64) {
+	s.PriorSeq = val
+}
+
+// SetSeqGap sets the value of SeqGap.
+func (s *ChainBreak) SetSeqGap(val int64) {
+	s.SeqGap = val
+}
+
+// SetExpectedPrevHash sets the value of ExpectedPrevHash.
+func (s *ChainBreak) SetExpectedPrevHash(val string) {
+	s.ExpectedPrevHash = val
+}
+
+// SetStoredPrevHash sets the value of StoredPrevHash.
+func (s *ChainBreak) SetStoredPrevHash(val string) {
+	s.StoredPrevHash = val
+}
+
+// SetRecomputedThisHash sets the value of RecomputedThisHash.
+func (s *ChainBreak) SetRecomputedThisHash(val string) {
+	s.RecomputedThisHash = val
+}
+
+// SetStoredThisHash sets the value of StoredThisHash.
+func (s *ChainBreak) SetStoredThisHash(val string) {
+	s.StoredThisHash = val
+}
+
+// SetEvent sets the value of Event.
+func (s *ChainBreak) SetEvent(val ChainBreakEvent) {
+	s.Event = val
+}
+
+// The offending event fields for operator context.
+type ChainBreakEvent struct {
+	Summary    string    `json:"summary"`
+	EventType  string    `json:"event_type"`
+	ActorLogin string    `json:"actor_login"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+// GetSummary returns the value of Summary.
+func (s *ChainBreakEvent) GetSummary() string {
+	return s.Summary
+}
+
+// GetEventType returns the value of EventType.
+func (s *ChainBreakEvent) GetEventType() string {
+	return s.EventType
+}
+
+// GetActorLogin returns the value of ActorLogin.
+func (s *ChainBreakEvent) GetActorLogin() string {
+	return s.ActorLogin
+}
+
+// GetOccurredAt returns the value of OccurredAt.
+func (s *ChainBreakEvent) GetOccurredAt() time.Time {
+	return s.OccurredAt
+}
+
+// SetSummary sets the value of Summary.
+func (s *ChainBreakEvent) SetSummary(val string) {
+	s.Summary = val
+}
+
+// SetEventType sets the value of EventType.
+func (s *ChainBreakEvent) SetEventType(val string) {
+	s.EventType = val
+}
+
+// SetActorLogin sets the value of ActorLogin.
+func (s *ChainBreakEvent) SetActorLogin(val string) {
+	s.ActorLogin = val
+}
+
+// SetOccurredAt sets the value of OccurredAt.
+func (s *ChainBreakEvent) SetOccurredAt(val time.Time) {
+	s.OccurredAt = val
+}
+
+// Classifies the break:
+// - missing_events: one or more seq numbers are absent (log cleanup / retention / deletion).
+// - link_mismatch: contiguous seq but prev_hash broken (insertion/removal/reorder/prior alteration).
+// - content_modified: prev link intact but recomputed hash diverges (content edited after recording).
+// - chain_start_missing: first stored event does not chain from genesis (oldest events gone / chain
+// reset).
+type ChainBreakKind string
+
+const (
+	ChainBreakKindMissingEvents     ChainBreakKind = "missing_events"
+	ChainBreakKindLinkMismatch      ChainBreakKind = "link_mismatch"
+	ChainBreakKindContentModified   ChainBreakKind = "content_modified"
+	ChainBreakKindChainStartMissing ChainBreakKind = "chain_start_missing"
+)
+
+// AllValues returns all ChainBreakKind values.
+func (ChainBreakKind) AllValues() []ChainBreakKind {
+	return []ChainBreakKind{
+		ChainBreakKindMissingEvents,
+		ChainBreakKindLinkMismatch,
+		ChainBreakKindContentModified,
+		ChainBreakKindChainStartMissing,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ChainBreakKind) MarshalText() ([]byte, error) {
+	switch s {
+	case ChainBreakKindMissingEvents:
+		return []byte(s), nil
+	case ChainBreakKindLinkMismatch:
+		return []byte(s), nil
+	case ChainBreakKindContentModified:
+		return []byte(s), nil
+	case ChainBreakKindChainStartMissing:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ChainBreakKind) UnmarshalText(data []byte) error {
+	switch ChainBreakKind(data) {
+	case ChainBreakKindMissingEvents:
+		*s = ChainBreakKindMissingEvents
+		return nil
+	case ChainBreakKindLinkMismatch:
+		*s = ChainBreakKindLinkMismatch
+		return nil
+	case ChainBreakKindContentModified:
+		*s = ChainBreakKindContentModified
+		return nil
+	case ChainBreakKindChainStartMissing:
+		*s = ChainBreakKindChainStartMissing
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
 }
 
 // Ref: #/components/schemas/ClientInvitation
@@ -17389,6 +17632,69 @@ func (o OptNilBool) Get() (v bool, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptNilBool) Or(d bool) bool {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptNilChainBreak returns new OptNilChainBreak with value set to v.
+func NewOptNilChainBreak(v ChainBreak) OptNilChainBreak {
+	return OptNilChainBreak{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptNilChainBreak is optional nullable ChainBreak.
+type OptNilChainBreak struct {
+	Value ChainBreak
+	Set   bool
+	Null  bool
+}
+
+// IsSet returns true if OptNilChainBreak was set.
+func (o OptNilChainBreak) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptNilChainBreak) Reset() {
+	var v ChainBreak
+	o.Value = v
+	o.Set = false
+	o.Null = false
+}
+
+// SetTo sets value to v.
+func (o *OptNilChainBreak) SetTo(v ChainBreak) {
+	o.Set = true
+	o.Null = false
+	o.Value = v
+}
+
+// IsNull returns true if value is Null.
+func (o OptNilChainBreak) IsNull() bool { return o.Null }
+
+// SetToNull sets value to null.
+func (o *OptNilChainBreak) SetToNull() {
+	o.Set = true
+	o.Null = true
+	var v ChainBreak
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptNilChainBreak) Get() (v ChainBreak, ok bool) {
+	if o.Null {
+		return v, false
+	}
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptNilChainBreak) Or(d ChainBreak) ChainBreak {
 	if v, ok := o.Get(); ok {
 		return v
 	}

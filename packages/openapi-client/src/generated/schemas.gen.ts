@@ -3862,11 +3862,103 @@ export const ActivityVerifyResultSchema = {
       format: "int64",
       nullable: true,
       description:
-        "The seq of the first broken link, or null when the chain is intact.\n",
+        "The seq of the first broken link, or null when the chain is intact.\nKept for backward compatibility; equals break.seq when broken.\n",
     },
     total: {
       type: "integer",
       description: "Total number of events folded during verification.",
+    },
+    break: {
+      nullable: true,
+      description:
+        "Null when the chain is intact. Describes the first broken link with\nenough detail for an operator to understand and act on the failure.\n",
+      allOf: [
+        {
+          $ref: "#/components/schemas/ChainBreak",
+        },
+      ],
+    },
+  },
+} as const;
+
+export const ChainBreakSchema = {
+  type: "object",
+  required: [
+    "seq",
+    "kind",
+    "seq_gap",
+    "expected_prev_hash",
+    "stored_prev_hash",
+    "recomputed_this_hash",
+    "stored_this_hash",
+    "event",
+  ],
+  properties: {
+    seq: {
+      type: "integer",
+      format: "int64",
+      description: "The seq of the event where verification failed.",
+    },
+    kind: {
+      type: "string",
+      enum: [
+        "missing_events",
+        "link_mismatch",
+        "content_modified",
+        "chain_start_missing",
+      ],
+      description:
+        "Classifies the break:\n- missing_events: one or more seq numbers are absent (log cleanup / retention / deletion).\n- link_mismatch: contiguous seq but prev_hash broken (insertion/removal/reorder/prior alteration).\n- content_modified: prev link intact but recomputed hash diverges (content edited after recording).\n- chain_start_missing: first stored event does not chain from genesis (oldest events gone / chain reset).\n",
+    },
+    prior_seq: {
+      type: "integer",
+      format: "int64",
+      nullable: true,
+      description:
+        "The seq of the last successfully-verified row. Null when the break is\nat the first/genesis row and no prior row was verified.\n",
+    },
+    seq_gap: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of missing sequence numbers between prior_seq and seq.\n0 when contiguous or when there is no prior row.\n",
+    },
+    expected_prev_hash: {
+      type: "string",
+      description:
+        "The verified chain head before this row: the prior row's this_hash,\nor GenesisPrevHash (64 zero hex chars) if this is the first row.\n",
+    },
+    stored_prev_hash: {
+      type: "string",
+      description: "The row's own prev_hash as stored.",
+    },
+    recomputed_this_hash: {
+      type: "string",
+      description: "ComputeHashFromStored(expected_prev_hash, row).",
+    },
+    stored_this_hash: {
+      type: "string",
+      description: "The row's own this_hash as stored.",
+    },
+    event: {
+      type: "object",
+      required: ["summary", "event_type", "actor_login", "occurred_at"],
+      description: "The offending event fields for operator context.",
+      properties: {
+        summary: {
+          type: "string",
+        },
+        event_type: {
+          type: "string",
+        },
+        actor_login: {
+          type: "string",
+        },
+        occurred_at: {
+          type: "string",
+          format: "date-time",
+        },
+      },
     },
   },
 } as const;
