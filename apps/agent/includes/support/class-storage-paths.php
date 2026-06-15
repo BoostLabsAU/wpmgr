@@ -59,6 +59,83 @@ final class StoragePaths {
 	}
 
 	/**
+	 * Ensure the user-data directory for $purpose exists and is hardened against
+	 * direct web access (deny-all .htaccess + empty index.php guard).
+	 *
+	 * Resolves the path via dataBase(), creates the directory with wp_mkdir_p()
+	 * if it does not yet exist, then drops the guard files on first call. Safe
+	 * to call on every request — file_exists() short-circuits the writes.
+	 *
+	 * This is required when the resolved path is under uploads/, which is
+	 * web-accessible. Callers that create the directory themselves may call this
+	 * method after creation to apply the same hardening.
+	 *
+	 * @param string $purpose Lowercase slug (same as passed to dataBase()).
+	 * @return string The resolved absolute path, or '' when no base is available.
+	 */
+	public static function ensureHardened( string $purpose ): string {
+		$path = self::dataBase( $purpose );
+		if ( $path === '' ) {
+			return '';
+		}
+		return self::ensureHardenedPath( $path );
+	}
+
+	/**
+	 * Harden a SPECIFIC absolute directory against direct web access (deny-all
+	 * .htaccess + empty index.php guard), creating it if needed.
+	 *
+	 * Use this when the caller has already resolved the directory itself (for
+	 * example a destination that may fall back to the legacy wp-content path):
+	 * harden the path that is actually written to, not a recomputed one, so the
+	 * guard files always land in the real data directory.
+	 *
+	 * @param string $path Absolute directory path (no trailing slash required).
+	 * @return string The path, or '' when $path is empty.
+	 */
+	public static function ensureHardenedPath( string $path ): string {
+		$path = rtrim( $path, '/\\' );
+		if ( $path === '' ) {
+			return '';
+		}
+
+		if ( ! is_dir( $path ) ) {
+			if ( function_exists( 'wp_mkdir_p' ) ) {
+				wp_mkdir_p( $path );
+			} else {
+				// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- wp_mkdir_p not yet available in this context; headless agent, WP_Filesystem never initialized
+				@mkdir( $path, 0755, true );
+			}
+		}
+
+		// Deny-all .htaccess — blocks Apache/LiteSpeed.
+		$htaccess = $path . '/.htaccess';
+		if ( ! file_exists( $htaccess ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- headless agent; WP_Filesystem never initialized; direct write of a static guard file
+			@file_put_contents(
+				$htaccess,
+				"# Block direct web access to WPMgr user-data directories.\n"
+				. "<IfModule mod_authz_core.c>\n"
+				. "    Require all denied\n"
+				. "</IfModule>\n"
+				. "<IfModule !mod_authz_core.c>\n"
+				. "    Deny from all\n"
+				. "</IfModule>\n",
+				LOCK_EX
+			);
+		}
+
+		// Empty index.php — silences directory listing on PHP-proxied servers.
+		$index = $path . '/index.php';
+		if ( ! file_exists( $index ) ) {
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- headless agent; WP_Filesystem never initialized; direct write of a static guard file
+			@file_put_contents( $index, "<?php\n// Silence is golden.\n", LOCK_EX );
+		}
+
+		return $path;
+	}
+
+	/**
 	 * Legacy path for a purpose (wp-content/wpmgr-<purpose>).
 	 *
 	 * Used by callers that need to read from the old pre-uploads location so

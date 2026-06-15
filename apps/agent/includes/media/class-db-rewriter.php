@@ -413,12 +413,15 @@ final class DbRewriter
             $urlArgs[]    = $regexpUrl . '([^0-9A-Za-z]|$)';
         }
 
-        // Build the denylist exclusion using single-quote doubling (no escaping function).
-        $skipList = [];
-        foreach (self::SKIP_META_KEYS as $key) {
-            $skipList[] = "'" . str_replace("'", "''", $key) . "'";
+        // Build the denylist exclusion using prepared %s placeholders (string meta keys).
+        // Guard the zero-length case so prepare() is never called with an empty IN().
+        $skipArgs = [];
+        $skipIn   = '';
+        if (count(self::SKIP_META_KEYS) > 0) {
+            $skipPlaceholders = implode(', ', array_fill(0, count(self::SKIP_META_KEYS), '%s'));
+            $skipIn           = "AND pm.meta_key NOT IN ({$skipPlaceholders})";
+            $skipArgs         = self::SKIP_META_KEYS;
         }
-        $skipIn = implode(', ', $skipList);
 
         // Build the IN placeholder list for post types.
         $typePlaceholders = implode(', ', array_fill(0, count($postTypes), '%s'));
@@ -427,13 +430,13 @@ final class DbRewriter
                 FROM {$wpdb->postmeta} pm
                 INNER JOIN {$wpdb->posts} p ON pm.post_id = p.ID
                 WHERE (" . implode(' OR ', $urlClauses) . ")
-                  AND pm.meta_key NOT IN ({$skipIn})
+                  {$skipIn}
                   AND p.post_status = 'publish'
                   AND p.post_type IN ({$typePlaceholders})
                 ORDER BY pm.meta_id DESC
                 LIMIT " . self::META_LIMIT;
 
-        $args = array_merge($urlArgs, $postTypes);
+        $args = array_merge($urlArgs, $skipArgs, $postTypes);
         $rows = $wpdb->get_results($wpdb->prepare($sql, $args), ARRAY_A); // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,PluginCheck.Security.DirectDB.UnescapedDBParameter -- direct query on postmeta; no caching appropriate for a bounded migration pass; sql is built with $wpdb->prepare(); value is the output of $wpdb->prepare()
 
         if (!is_array($rows)) {

@@ -2,24 +2,28 @@
 /**
  * Local destination — ADR-036 P1.
  *
- * Chunks land in `WP_CONTENT_DIR/wpmgr-backups/<snapshot_id>/chunks/<hash>.bin`
- * on the same webserver as the WordPress site. This mirrors the "local folder"
- * destination offered by leading backup plugins (the most-used option because
- * customers without S3 credentials still want a backup off the live tree). The manifest is written next to the chunks AND a metadata-only POST
- * still goes to the CP so the snapshot shows up in the operator UI; only the
- * bytes stay local.
+ * Chunks land in `uploads/wpmgr-backups/<snapshot_id>/chunks/<hash>.bin`
+ * on the same webserver as the WordPress site, routing through
+ * StoragePaths::dataBase('backups') (uploads-first, wp-content fallback).
+ * This mirrors the "local folder" destination offered by leading backup plugins
+ * (the most-used option because customers without S3 credentials still want a
+ * backup off the live tree). The manifest is written next to the chunks AND a
+ * metadata-only POST still goes to the CP so the snapshot shows up in the
+ * operator UI; only the bytes stay local.
  *
  * Deny-by-default is critical: a backup zip is a complete copy of the site,
- * including wp-config.php credentials and the SQL dump. We drop four files
- * into the base dir on first prepare:
+ * including wp-config.php credentials and the SQL dump. We drop the following
+ * guard files into the base dir on first prepare (via StoragePaths::ensureHardened):
  *
- *   - .htaccess          (Apache mod_rewrite deny — covers shared hosts)
- *   - web.config         (IIS — covers Microsoft-host customers)
+ *   - .htaccess          (Apache/LiteSpeed deny — auto-applied)
+ *   - index.php          (PHP directory-listing silence guard — auto-applied)
+ *   - web.config         (IIS deny — covers Microsoft-host customers)
  *   - nginx.conf.snippet (sample directive — customer must include it)
  *   - README.txt         (explains the directory + nginx instructions)
  *
- * Three of those are picked up automatically by the web server; nginx needs an
- * operator action so we ship a clear README pointing at the snippet.
+ * Apache, LiteSpeed, and PHP-proxied servers are protected automatically;
+ * nginx needs an operator action so we ship a clear README pointing at the
+ * snippet.
  *
  * @package WPMgr\Agent\Backup\Destinations
  */
@@ -29,6 +33,7 @@ declare(strict_types=1);
 namespace WPMgr\Agent\Backup\Destinations;
 
 use WPMgr\Agent\Support\BackupTransport;
+use WPMgr\Agent\Support\StoragePaths;
 
 /**
  * Writes ciphertext chunks to a local directory under wp-content. The CP only
@@ -70,12 +75,24 @@ final class LocalDestination implements BackupDestination
     }
 
     /**
-     * Resolve the base dir (WP_CONTENT_DIR preferred; uploads fallback), create
-     * the per-snapshot chunk dir, and drop the deny-by-default config files.
+     * Resolve the base dir (uploads-first via StoragePaths; wp-content fallback),
+     * create the per-snapshot chunk dir, and drop the deny-by-default config files.
+     *
+     * resolveBaseDir() delegates to StoragePaths for uploads-first resolution and
+     * handles the best-effort legacy migration. StoragePaths::ensureHardened() then
+     * drops .htaccess + index.php web-access guards (required because uploads/ is
+     * web-accessible). ensureBaseGuardFiles() adds IIS web.config, nginx snippet,
+     * and README for additional server coverage.
      */
     public function prepare(string $snapshotId): void
     {
         $base = $this->resolveBaseDir();
+        // Apply web-access hardening (.htaccess + index.php) on the path that is
+        // ACTUALLY written to. resolveBaseDir() can return the legacy wp-content
+        // location on read-only-uploads hosts, so harden $base directly rather
+        // than the uploads path StoragePaths::dataBase() would recompute. Guards
+        // are idempotent (file_exists short-circuits).
+        StoragePaths::ensureHardenedPath($base);
         $this->ensureBaseGuardFiles($base);
 
         $snapshotDir = $base . DIRECTORY_SEPARATOR . $snapshotId;
@@ -196,24 +213,41 @@ final class LocalDestination implements BackupDestination
     }
 
     /**
-     * Pick the dir under which we'll create wpmgr-backups/. Uploads is the
-     * preferred target (wp.org Guideline compliance; matches UpdraftPlus default)
-     * with WP_CONTENT_DIR as a fallback for hosts where uploads is read-only.
+     * Pick the base dir for wpmgr-backups/.
+     *
+     * Delegates to StoragePaths::dataBase('backups') for uploads-first resolution
+     * (wp.org Guideline compliance). Web-access guard files (.htaccess + index.php)
+     * are written by StoragePaths::ensureHardened() because uploads/ is web-accessible.
+     *
+     * Best-effort migration: if the legacy wp-content/wpmgr-backups directory exists
+     * and the new uploads-based location does not yet exist, we atomically rename it
+     * so existing local backups are preserved without operator intervention.
+     *
+     * Read-fallback: if the primary path is not writable but the legacy location is,
+     * we use the legacy location so existing self-hosted flows are not broken.
      */
     private function resolveBaseDir(): string
     {
-        $candidates = [];
-        // Uploads-first: honors relocatable upload_path + multisite per-site subdirs.
-        if (function_exists('wp_upload_dir')) {
-            $upload = wp_upload_dir();
-            if (is_array($upload) && isset($upload['basedir']) && is_string($upload['basedir']) && $upload['basedir'] !== '') {
-                $candidates[] = rtrim($upload['basedir'], '/\\') . DIRECTORY_SEPARATOR . self::BASE_DIR_NAME;
+        // Primary candidate: uploads-first via StoragePaths.
+        $primary = StoragePaths::dataBase('backups');
+        $legacy  = StoragePaths::legacyBase('backups');
+
+        // Best-effort migration: atomically move legacy dir to new location.
+        if ($primary !== ''
+            && $primary !== $legacy
+            && $legacy !== ''
+            && is_dir($legacy)
+            && !is_dir($primary)
+        ) {
+            $newParent = dirname($primary);
+            if (!is_dir($newParent) && function_exists('wp_mkdir_p')) {
+                wp_mkdir_p($newParent);
             }
+            // phpcs:ignore WordPress.WP.AlternativeFunctions.rename_rename -- atomic directory rename; WP_Filesystem::move() is non-atomic and would leave partial state on failure
+            @rename($legacy, $primary);
         }
-        // Fallback: wp-content (for managed-WP hosts where uploads may be read-only).
-        if (defined('WP_CONTENT_DIR') && is_string(WP_CONTENT_DIR) && WP_CONTENT_DIR !== '') {
-            $candidates[] = rtrim((string) WP_CONTENT_DIR, '/\\') . DIRECTORY_SEPARATOR . self::BASE_DIR_NAME;
-        }
+
+        $candidates = array_filter(array_unique([$primary, $legacy]));
         foreach ($candidates as $candidate) {
             if (is_dir($candidate)) {
                 if (is_writable($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
@@ -221,7 +255,7 @@ final class LocalDestination implements BackupDestination
                 }
                 continue;
             }
-            // Try to create + chmod the dir; if we succeed it's writable for us.
+            // Try to create the dir; if we succeed it's writable for us.
             if (@mkdir($candidate, self::DIR_MODE, true) || is_dir($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms on secret backup dir; wp_mkdir_p would apply the wider FS_CHMOD_DIR
                 @chmod($candidate, self::DIR_MODE); // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- explicit security perms (0700); WP_Filesystem would coerce to wider FS_CHMOD_DIR
                 if (is_writable($candidate)) { // phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe is the only option
@@ -229,21 +263,25 @@ final class LocalDestination implements BackupDestination
                 }
             }
         }
-        throw new \RuntimeException('WPMgr Local Destination: no writable base dir under wp-content or uploads');
+        throw new \RuntimeException('WPMgr Local Destination: no writable base dir under uploads or wp-content');
     }
 
     /**
-     * Drop deny-by-default web-server config + a README on first prepare. Each
-     * file is only written if missing (idempotent across snapshots — the same
-     * base dir is shared).
+     * Drop supplemental deny-by-default guard files + a README on first prepare.
+     * Each file is only written if missing (idempotent across snapshots — the
+     * same base dir is shared). .htaccess and index.php are already written by
+     * StoragePaths::ensureHardened(); this method adds IIS and nginx coverage.
      */
     private function ensureBaseGuardFiles(string $base): void
     {
-        $files = [
-            '.htaccess' => "<IfModule mod_rewrite.c>\nRewriteEngine On\nRewriteRule .* - [F,L]\n</IfModule>\n",
-            'web.config' => '<configuration><system.webServer><security><authorization><remove users="*" roles="" verbs="" /></authorization></security></system.webServer></configuration>',
-            'nginx.conf.snippet' => "location ~ ^/wp-content/wpmgr-backups/ { deny all; return 403; }\n",
-            'README.txt' => $this->readmeBody(),
+        // The actual on-disk path (may be under uploads/ or wp-content/ depending
+        // on the host) is passed to the nginx snippet so operators can copy it.
+        $nginxLocation = rtrim(str_replace('\\', '/', $base), '/') . '/';
+        $files         = [
+            'web.config'         => '<configuration><system.webServer><security><authorization><remove users="*" roles="" verbs="" /></authorization></security></system.webServer></configuration>',
+            'nginx.conf.snippet' => "# Add inside the `server { ... }` block of your WordPress vhost.\n"
+                                    . "location ~ ^" . preg_quote($nginxLocation, '~') . " { deny all; return 403; }\n",
+            'README.txt'         => $this->readmeBody($base),
         ];
         foreach ($files as $name => $contents) {
             $path = $base . DIRECTORY_SEPARATOR . $name;
@@ -255,8 +293,9 @@ final class LocalDestination implements BackupDestination
         }
     }
 
-    private function readmeBody(): string
+    private function readmeBody(string $base = ''): string
     {
+        $dirNote = $base !== '' ? rtrim(str_replace('\\', '/', $base), '/') . '/' : 'this directory';
         return "WPMgr local backups\n"
             . "===================\n\n"
             . "This directory holds backup chunks for sites that selected the\n"
@@ -268,7 +307,7 @@ final class LocalDestination implements BackupDestination
             . "nginx users: include the snippet in nginx.conf.snippet inside the\n"
             . "matching `server { ... }` block (or the relevant `include` you\n"
             . "already pull into the WordPress vhost). Reload nginx and verify\n"
-            . "that GET https://your-site/wp-content/wpmgr-backups/ returns a\n"
+            . "that a request to " . $dirNote . " returns a\n"
             . "403 before relying on this destination.\n";
     }
 
