@@ -247,6 +247,19 @@ final class AutologinCommandTest extends TestCase
     }
 
     /**
+     * Build an AutologinCommandSecuPressStub (securityPluginHardBail() returns 'secupress').
+     */
+    private function commandWithBail(?ReplayCache $replay = null): AutologinCommandSecuPressStub
+    {
+        return new AutologinCommandSecuPressStub(
+            $this->connector,
+            $replay ?? new ReplayCache(),
+            $this->signer,
+            $this->settings,
+        );
+    }
+
+    /**
      * @param array<int,string> $roles Roles array.
      */
     private function stubUserByLogin(string $login, array $roles, int $id = 7): void
@@ -321,7 +334,7 @@ final class AutologinCommandTest extends TestCase
 
         $hooks = array_column($this->hookCalls, 0);
         $this->assertContains('wpmgr_autologin_success', $hooks);
-        $this->assertContains('wp_login', $hooks);
+        $this->assertNotContains('wp_login', $hooks, 'autologin must never fire wp_login (it arms the Solid Security / Two Factor interstitial)');
 
         // CP consume call shape.
         $this->assertCount(1, $this->outboundPosts);
@@ -759,7 +772,7 @@ final class AutologinCommandTest extends TestCase
         $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued when no valid session is detected.');
 
         $hooks = array_column($this->hookCalls, 0);
-        $this->assertContains('wp_login', $hooks, 'wp_login must fire for a genuine first login.');
+        $this->assertNotContains('wp_login', $hooks, 'autologin must never fire wp_login (it arms the Solid Security / Two Factor interstitial)');
     }
 
     // -----------------------------------------------------------------------
@@ -923,6 +936,138 @@ final class AutologinCommandTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // wp_login suppression — explicit assertions
+    // -----------------------------------------------------------------------
+
+    /**
+     * Full happy path: wp_login must NEVER appear in the hook log even on a
+     * genuine first login (no prior session cookie).
+     */
+    public function test_wp_login_never_fires_on_genuine_first_login(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        $token = $this->jwt($this->uniqueJti('no-wp-login'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        $hooks = array_column($this->hookCalls, 0);
+        $this->assertNotContains('wp_login', $hooks, 'autologin must never fire wp_login (it arms the Solid Security / Two Factor interstitial)');
+        $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued on a genuine first login.');
+        $this->assertContains('wpmgr_autologin_success', $hooks);
+    }
+
+    /**
+     * When the user has a Two Factor provider configured, the session markers
+     * must be injected AND wp_login must still be absent.
+     */
+    public function test_wp_login_not_fired_even_when_two_factor_provider_set(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        Functions\when('get_user_meta')->alias(static function ($userId, $key, $single = false): mixed {
+            if ($key === '_two_factor_provider' && $single) {
+                return 'Two_Factor_Totp';
+            }
+            return $single ? '' : [];
+        });
+
+        /** @var array<int,array{hook:string,callable:callable,priority:int}> $addFilterCalls */
+        $addFilterCalls = [];
+        Functions\when('add_filter')->alias(
+            function (string $hook, callable $cb, int $priority = 10, int $accepted = 1) use (&$addFilterCalls): bool {
+                $addFilterCalls[] = ['hook' => $hook, 'callable' => $cb, 'priority' => $priority];
+                return true;
+            }
+        );
+
+        $token = $this->jwt($this->uniqueJti('2fa-no-wp-login'), time(), ['tgt' => 'alice']);
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+
+        // Cookie issued.
+        $this->assertCount(1, $this->authCookieCalls);
+
+        // attach_session_information filter was added (markers injected).
+        $sessionFilterAdds = array_filter(
+            $addFilterCalls,
+            static fn ($c) => $c['hook'] === 'attach_session_information'
+        );
+        $this->assertCount(1, $sessionFilterAdds, 'Session-marker filter must be added when provider is set.');
+
+        // wp_login must still be absent.
+        $hooks = array_column($this->hookCalls, 0);
+        $this->assertNotContains('wp_login', $hooks, 'autologin must never fire wp_login even when Two Factor is active');
+    }
+
+    // -----------------------------------------------------------------------
+    // SecuPress hard-bail (CHANGE 2)
+    // -----------------------------------------------------------------------
+
+    /**
+     * When SecuPress is detected, handle() must return a 409 WP_Error
+     * with code wpmgr_autologin_unsupported_security_plugin and issue no cookie.
+     */
+    public function test_secupress_present_skips_autologin_with_409(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        $token = $this->jwt($this->uniqueJti('secupress-bail'), time(), ['tgt' => 'alice']);
+        $res   = $this->commandWithBail()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_Error::class, $res);
+        $this->assertSame('wpmgr_autologin_unsupported_security_plugin', $res->get_error_code());
+        $this->assertSame(409, $res->get_error_data()['status']);
+        $this->assertSame([], $this->authCookieCalls, 'No cookie must be issued when SecuPress is detected.');
+    }
+
+    /**
+     * When SecuPress bail fires, the single-use token must NOT be consumed
+     * (mark() must not be called), so the operator can retry after disabling
+     * the plugin.
+     */
+    public function test_secupress_bail_does_not_consume_replay_token(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        $spy   = new ReplayCacheSpy();
+        $token = $this->jwt($this->uniqueJti('secupress-no-burn'), time(), ['tgt' => 'alice']);
+        $res   = $this->commandWithBail($spy)->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_Error::class, $res);
+        $this->assertSame(0, $spy->markCalls, 'mark() must NOT be called when SecuPress bail fires before consume.');
+        $this->assertSame([], $this->authCookieCalls);
+    }
+
+    /**
+     * When no incompatible plugin is present (helper returns null), autologin
+     * must proceed normally and issue a cookie — guards against false-positives
+     * in the bail detection logic.
+     */
+    public function test_secupress_absent_proceeds_normally(): void
+    {
+        $this->setConsumeOk('alice', ['administrator']);
+        $this->stubUserByLogin('alice', ['administrator'], 7);
+
+        $token = $this->jwt($this->uniqueJti('secupress-absent'), time(), ['tgt' => 'alice']);
+        // Uses the default command() which has the real securityPluginHardBail()
+        // returning null (no SecuPress plugin files on the CI filesystem).
+        $res   = $this->command()->handle(new \WP_REST_Request(['token' => $token]));
+
+        $this->assertInstanceOf(\WP_REST_Response::class, $res);
+        $this->assertSame(302, $res->get_status());
+        $this->assertCount(1, $this->authCookieCalls, 'Cookie must be issued when no incompatible plugin detected.');
+    }
+
+    // -----------------------------------------------------------------------
     // Name + dispatch-guard
     // -----------------------------------------------------------------------
 
@@ -932,6 +1077,18 @@ final class AutologinCommandTest extends TestCase
         $this->assertSame('autologin', $cmd->name());
         $out = $cmd->execute([], []);
         $this->assertSame(['ok' => false, 'error' => 'not_dispatchable'], $out);
+    }
+}
+
+/**
+ * Test seam: overrides securityPluginHardBail() to always report SecuPress
+ * as present, without performing real filesystem checks.
+ */
+final class AutologinCommandSecuPressStub extends AutologinCommand
+{
+    protected function securityPluginHardBail(): ?string
+    {
+        return 'secupress';
     }
 }
 
