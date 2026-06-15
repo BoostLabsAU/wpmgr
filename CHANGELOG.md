@@ -6,6 +6,23 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-06-15
+
+### Changed
+
+- **Local backups are stored under the uploads directory.** The local backup destination now writes to uploads/wpmgr-backups (falling back to wp-content only when uploads is not writable), with a deny-all .htaccess and an index.php guard so archives are never directly downloadable, plus a best-effort migration of any existing local backups. Snapshots and the media quarantine already used the uploads-based location.
+- **Database queries hardened with prepared placeholders.** The object-cache drop-in installer's transient cleanup and the media URL rewriter's postmeta lookup now bind their values through $wpdb->prepare().
+
+### Added
+
+- **External services fully documented.** The readme now lists every outbound service the agent's own code can contact, including the Amazon SES, SendGrid, Mailgun, and Postmark email providers, each with what is sent, when, and links to its terms and privacy policy.
+
+### Fixed
+
+- **WordPress.org distribution packaging.** The directory build no longer ships vendor CLI entrypoints, vendor license files, or hidden dotfiles; a .distignore is included for source-level archive tooling.
+
+This is an agent-focused compliance release; the control plane and dashboard images are rebuilt at the same version with no functional change.
+
 ## [0.45.0] - 2026-06-13
 
 ### Added
