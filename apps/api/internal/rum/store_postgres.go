@@ -303,6 +303,48 @@ func (s *StorePostgres) GetDailyRollups(ctx context.Context, siteID, tenantID uu
 	return out, err
 }
 
+// GetHourlyRollupsForSites returns hourly rollup rows for a set of sites within
+// a tenant since the given timestamp. Used by the fleet RUM aggregate endpoint
+// to compute cross-site p75 without N+1 DB round-trips. Runs under InTenantTx.
+func (s *StorePostgres) GetHourlyRollupsForSites(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, since time.Time) ([]HourlyRollup, error) {
+	var out []HourlyRollup
+	err := s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, qerr := sqlc.New(tx).GetRumRollupHourlyForSites(ctx, sqlc.GetRumRollupHourlyForSitesParams{
+			TenantID: tenantID,
+			SiteIds:  siteIDs,
+			Since:    since,
+		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return nil
+			}
+			return qerr
+		}
+		out = make([]HourlyRollup, len(rows))
+		for i, r := range rows {
+			out[i] = HourlyRollup{
+				RollupKey: RollupKey{
+					SiteID:     r.SiteID,
+					TenantID:   r.TenantID,
+					URLPattern: r.UrlPattern,
+					Metric:     r.Metric,
+					Device:     r.Device,
+					Country:    r.Country,
+				},
+				BucketHour:   r.BucketHour,
+				SampleCount:  r.SampleCount,
+				SampleRate:   r.SampleRate,
+				BucketCounts: r.BucketCounts,
+				SumValue:     r.SumValue,
+				MinValue:     r.MinValue,
+				MaxValue:     r.MaxValue,
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
 // ComputeP75 interpolates the 75th percentile from a slice of hourly rollup rows.
 // The algorithm:
 //  1. Group rows by (metric, device, country).

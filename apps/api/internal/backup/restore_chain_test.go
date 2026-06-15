@@ -199,6 +199,9 @@ func (f *fakeSiteLookup) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID) (S
 		AgeRecipient: "age1testrecipient",
 	}, nil
 }
+func (f *fakeSiteLookup) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // buildChainSvc — builds a Service wired with the chain fakes.

@@ -41,6 +41,9 @@ var canonicalBackupRoutes = []string{
 	// m50: per-site backup settings (Track-B notifications).
 	"GET    /api/v1/sites/:siteId/backup-settings/notifications",
 	"PUT    /api/v1/sites/:siteId/backup-settings/notifications",
+	// Fleet endpoints (no :siteId, tenant-level backup health / list).
+	"GET    /api/v1/backups/fleet",
+	"GET    /api/v1/backups/health",
 	// By-snapshotId routes (no :siteId; site gate via canReadSite).
 	"GET    /api/v1/backups/:snapshotId",
 	"DELETE /api/v1/backups/:snapshotId",

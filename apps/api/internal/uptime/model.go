@@ -56,6 +56,74 @@ type AlertState struct {
 	LastAlertAt     *time.Time
 }
 
+// ---------------------------------------------------------------------------
+// Fleet uptime models (GET /api/v1/fleet/status, GET /api/v1/fleet/incidents)
+// ---------------------------------------------------------------------------
+
+// slowThresholdMs is the latency threshold above which a probe is classified
+// as "degraded" even when the site responds with a 2xx. Matches the UX spec.
+const slowThresholdMs = 2000.0
+
+// FleetSiteStatus is the derived availability status for one site in the fleet
+// status endpoint.
+type FleetSiteStatus string
+
+const (
+	FleetStatusUp       FleetSiteStatus = "up"
+	FleetStatusDegraded FleetSiteStatus = "degraded"
+	FleetStatusDown     FleetSiteStatus = "down"
+	FleetStatusUnknown  FleetSiteStatus = "unknown"
+)
+
+// FleetStatusCounts is the summary count header in the fleet status response.
+type FleetStatusCounts struct {
+	Up       int `json:"up"`
+	Degraded int `json:"degraded"`
+	Down     int `json:"down"`
+	Unknown  int `json:"unknown"`
+}
+
+// FleetStatusItem is the per-site row in the fleet status response.
+type FleetStatusItem struct {
+	SiteID          uuid.UUID       `json:"site_id"`
+	SiteName        string          `json:"site_name"`
+	SiteURL         string          `json:"site_url"`
+	Status          FleetSiteStatus `json:"status"`
+	UptimePct7d     float64         `json:"uptime_pct_7d"`
+	AvgLatencyMs7d  float64         `json:"avg_latency_ms_7d"`
+	LatestTotalMs   *float64        `json:"latest_total_ms,omitempty"`
+	LastProbeAt     *time.Time      `json:"last_probe_at,omitempty"`
+	TLSExpiry       *time.Time      `json:"tls_expiry,omitempty"`
+	InIncident      bool            `json:"in_incident"`
+	ConnectionState string          `json:"connection_state"`
+	HealthStatus    string          `json:"health_status"`
+}
+
+// FleetStatusResponse is the response body for GET /api/v1/fleet/status.
+type FleetStatusResponse struct {
+	Summary FleetStatusCounts `json:"summary"`
+	Items   []FleetStatusItem `json:"items"`
+}
+
+// FleetIncidentItem is one open or recently-closed incident for the incidents endpoint.
+// NOTE: Full historical incident reconstruction is NOT possible from site_alert_state:
+// site_alert_state stores only the CURRENT transition memory (last_status,
+// consecutive_down, in_incident, last_alert_at). Past closed incidents are not
+// persisted. This endpoint returns open incidents (in_incident=true) and
+// recently-alerted sites (last_alert_at >= since). Calling code must treat
+// ended_at / duration_seconds as estimates (derived from updated_at on the
+// alert-state row, not from a true incident-close timestamp).
+type FleetIncidentItem struct {
+	SiteID          uuid.UUID  `json:"site_id"`
+	SiteName        string     `json:"site_name"`
+	SiteURL         string     `json:"site_url"`
+	StartedAt       *time.Time `json:"started_at,omitempty"`
+	EndedAt         *time.Time `json:"ended_at,omitempty"`
+	DurationSeconds *int64     `json:"duration_seconds,omitempty"`
+	Ongoing         bool       `json:"ongoing"`
+	LatestTotalMs   *float64   `json:"latest_total_ms,omitempty"`
+}
+
 // AlertKind distinguishes a downtime alert from a recovery alert.
 type AlertKind string
 

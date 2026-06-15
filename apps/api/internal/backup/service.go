@@ -35,6 +35,9 @@ type SiteInfo struct {
 // in main, so this package needs no site import).
 type SiteLookup interface {
 	GetBackupSiteInfo(ctx context.Context, tenantID, siteID uuid.UUID) (SiteInfo, error)
+	// ListSiteIDs returns all site IDs for the tenant. Used by the fleet
+	// endpoints to build the full candidate set for org-scoped principals.
+	ListSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // BackupMailer enqueues a durable transactional email for a backup event.
@@ -293,6 +296,71 @@ func (s *Service) ListSnapshots(ctx context.Context, tenantID, siteID uuid.UUID,
 	}
 	limit, offset = normalizePage(limit, offset)
 	return s.repo.ListSnapshotsForSite(ctx, tenantID, siteID, limit, offset)
+}
+
+// FleetSiteIDs returns the set of site IDs that this principal may access for
+// fleet queries. For org-scoped principals it returns all site IDs in the
+// tenant; for site-scoped principals it returns p.AllowedSiteIDs.
+func (s *Service) FleetSiteIDs(ctx context.Context, tenantID uuid.UUID, p domain.Principal) ([]uuid.UUID, error) {
+	if p.Scope == domain.ScopeSite {
+		return p.AllowedSiteIDs, nil
+	}
+	return s.sites.ListSiteIDs(ctx, tenantID)
+}
+
+// FleetListSnapshots returns a paginated, filtered list of snapshots across the
+// principal's accessible sites. For org-scoped principals allSiteIDs must be the
+// full tenant site list (passed from the caller); for site-scoped principals it
+// must be p.AllowedSiteIDs. The explicit site IDs passed as the query ?sites= CSV
+// are intersected with the principal's access list before being forwarded to the
+// repo.
+//
+// Fail-closed: if p is site-scoped and the resolved f.SiteIDs slice is empty
+// (the principal has no granted sites), no query is issued and an empty page
+// is returned immediately. This prevents an empty site-filter from becoming
+// an unscoped scan of the tenant's snapshots.
+func (s *Service) FleetListSnapshots(ctx context.Context, p domain.Principal, tenantID uuid.UUID, f FleetListFilter) (FleetSnapshotPage, error) {
+	if tenantID == uuid.Nil {
+		return FleetSnapshotPage{}, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	// Fail-closed: site-scoped principal with zero accessible sites → empty page.
+	if p.Scope == domain.ScopeSite && len(f.SiteIDs) == 0 {
+		return FleetSnapshotPage{Items: []Snapshot{}}, nil
+	}
+	const (
+		maxLimit     = 200
+		defaultLimit = 50
+	)
+	if f.Limit <= 0 {
+		f.Limit = defaultLimit
+	}
+	if f.Limit > maxLimit {
+		f.Limit = maxLimit
+	}
+	if f.Offset < 0 {
+		f.Offset = 0
+	}
+	return s.repo.FleetListSnapshots(ctx, p, tenantID, f)
+}
+
+// FleetBackupHealth returns one FleetBackupHealthItem per requested site with a
+// server-derived health classification. siteIDs must already be limited to the
+// principal's accessible sites.
+//
+// Fail-closed: if p is site-scoped and siteIDs is empty (the principal has no
+// granted sites), no query is issued and an empty list is returned immediately.
+func (s *Service) FleetBackupHealth(ctx context.Context, p domain.Principal, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetBackupHealthItem, error) {
+	if tenantID == uuid.Nil {
+		return nil, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	// Fail-closed: site-scoped principal with zero accessible sites → empty list.
+	if p.Scope == domain.ScopeSite && len(siteIDs) == 0 {
+		return []FleetBackupHealthItem{}, nil
+	}
+	if len(siteIDs) == 0 {
+		return []FleetBackupHealthItem{}, nil
+	}
+	return s.repo.FleetBackupHealth(ctx, p, tenantID, siteIDs)
 }
 
 // RestoreSelection is the (possibly partial) restore request: full, by path, or

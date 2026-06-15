@@ -55,6 +55,9 @@ type BackupChecker interface {
 // this package stays free of a site import cycle).
 type SiteLookup interface {
 	GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, error)
+	// ListSiteIDs returns all site IDs for the tenant. Used by the fleet RUM
+	// aggregate endpoint to compute sites_total.
+	ListSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // EventPublisher publishes perf SSE envelopes on the shared tenant bus.
@@ -1308,6 +1311,12 @@ const fleetTopN = 10
 // that have at least one completed scan. `days` is the lookback window for the
 // growth calculation (clamped [7,365] by the caller). The result is READ-ONLY
 // and NEVER crosses tenant boundaries — the repo call runs inside InTenantTx.
+// ListAllSiteIDs returns all site IDs for the tenant. Used by the fleet RUM
+// handler to build the full candidate set and compute sites_total.
+func (s *Service) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	return s.sites.ListSiteIDs(ctx, tenantID)
+}
+
 func (s *Service) GetFleetDbHealth(ctx context.Context, tenantID uuid.UUID, days int) (FleetDbHealth, error) {
 	since := time.Now().UTC().AddDate(0, 0, -days)
 	rows, err := s.repo.GetFleetDbHealth(ctx, tenantID, since)

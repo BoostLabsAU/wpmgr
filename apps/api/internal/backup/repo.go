@@ -86,6 +86,20 @@ type Repo interface {
 	// operator must explicitly unlock it first. Tenant-scoped.
 	SetSnapshotLocked(ctx context.Context, tenantID, snapshotID uuid.UUID, locked bool) (Snapshot, error)
 
+	// Fleet endpoints (operator-scoped, no :siteId).
+
+	// FleetListSnapshots returns a paginated list of backup snapshots across the
+	// supplied set of site IDs. Routes the transaction through RunTenantTx so a
+	// site-scoped principal activates InScopedTenantTx and the RESTRICTIVE
+	// backup_snapshots_site_scope RLS policy acts as the DB-level backstop.
+	FleetListSnapshots(ctx context.Context, p db.ScopedPrincipal, tenantID uuid.UUID, f FleetListFilter) (FleetSnapshotPage, error)
+
+	// FleetBackupHealth returns one FleetBackupHealthItem per requested site.
+	// The health status is derived in Go from the raw correlated-subquery row
+	// (last_completed_at, last_failed_at, in_flight_count, schedule_cadence).
+	// Routes through RunTenantTx — same scoping as FleetListSnapshots.
+	FleetBackupHealth(ctx context.Context, p db.ScopedPrincipal, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetBackupHealthItem, error)
+
 	// GetBackupSettings returns the settings row for the site. Returns
 	// domain.NotFound when no row exists (caller applies safe defaults).
 	// Tenant scoping is enforced via InTenantTx + the FK from sites which
@@ -1883,6 +1897,272 @@ func (r *pgRepo) UpdateSnapshotCycleStats(ctx context.Context, tenantID, snapsho
 		}
 		return nil
 	})
+}
+
+// ----------------------------------------------------------------------------
+// Fleet backup repo methods (operator-scoped, no :siteId)
+// ----------------------------------------------------------------------------
+
+// FleetListSnapshots returns a paginated, filtered list of backup snapshots
+// across the supplied set of site IDs. Routes through RunTenantTx so a
+// site-scoped principal activates InScopedTenantTx and the RESTRICTIVE
+// backup_snapshots_site_scope RLS policy acts as the DB-level backstop.
+func (r *pgRepo) FleetListSnapshots(ctx context.Context, p db.ScopedPrincipal, tenantID uuid.UUID, f FleetListFilter) (FleetSnapshotPage, error) {
+	params := sqlc.FleetListSnapshotsParams{
+		TenantID:     tenantID,
+		SiteIdsFilter: len(f.SiteIDs) > 0,
+		SiteIds:      f.SiteIDs,
+		StatusFilter: f.Status != "",
+		StatusVal:    f.Status,
+		AfterFilter:  f.CreatedAfter != nil,
+		BeforeFilter: f.CreatedBefore != nil,
+		RowOffset:    f.Offset,
+		RowLimit:     f.Limit,
+	}
+	if f.CreatedAfter != nil {
+		params.CreatedAfter = *f.CreatedAfter
+	}
+	if f.CreatedBefore != nil {
+		params.CreatedBefore = *f.CreatedBefore
+	}
+
+	countParams := sqlc.FleetListSnapshotsCountParams{
+		TenantID:      params.TenantID,
+		SiteIdsFilter: params.SiteIdsFilter,
+		SiteIds:       params.SiteIds,
+		StatusFilter:  params.StatusFilter,
+		StatusVal:     params.StatusVal,
+		AfterFilter:   params.AfterFilter,
+		CreatedAfter:  params.CreatedAfter,
+		BeforeFilter:  params.BeforeFilter,
+		CreatedBefore: params.CreatedBefore,
+	}
+
+	var page FleetSnapshotPage
+	err := r.pool.RunTenantTx(ctx, p, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		rows, err := q.FleetListSnapshots(ctx, params)
+		if err != nil {
+			return domain.Internal("fleet_backup_list_failed", "failed to list fleet snapshots").WithCause(err)
+		}
+		page.Items = make([]Snapshot, 0, len(rows))
+		for _, row := range rows {
+			page.Items = append(page.Items, fleetSnapshotRowToSnapshot(row))
+		}
+
+		total, err := q.FleetListSnapshotsCount(ctx, countParams)
+		if err != nil {
+			return domain.Internal("fleet_backup_count_failed", "failed to count fleet snapshots").WithCause(err)
+		}
+		nextOff := int64(f.Offset) + int64(len(rows))
+		if nextOff < total {
+			page.NextOffset = &nextOff
+		}
+		return nil
+	})
+	if err != nil {
+		return FleetSnapshotPage{}, err
+	}
+	return page, nil
+}
+
+// FleetBackupHealth returns one FleetBackupHealthItem per requested site with a
+// server-derived health classification. Routes through RunTenantTx — site-scoped
+// principals activate InScopedTenantTx and the RESTRICTIVE RLS policy.
+func (r *pgRepo) FleetBackupHealth(ctx context.Context, p db.ScopedPrincipal, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetBackupHealthItem, error) {
+	var out []FleetBackupHealthItem
+	err := r.pool.RunTenantTx(ctx, p, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).FleetBackupHealth(ctx, sqlc.FleetBackupHealthParams{
+			TenantID: tenantID,
+			SiteIds:  siteIDs,
+		})
+		if err != nil {
+			return domain.Internal("fleet_backup_health_failed", "failed to query fleet backup health").WithCause(err)
+		}
+		out = make([]FleetBackupHealthItem, 0, len(rows))
+		for _, row := range rows {
+			item := FleetBackupHealthItem{
+				SiteID:          row.SiteID,
+				SiteName:        row.SiteName,
+				SiteURL:         row.SiteUrl,
+				InFlightCount:   row.InFlightCount,
+				LatestSizeBytes: toInt64Interface(row.LatestSizeBytes),
+				ScheduleCadence: row.ScheduleCadence,
+			}
+			// Coerce the interface{} timestamps from correlated subqueries.
+			item.LastCompletedAt = toTimeInterface(row.LastCompletedAt)
+			item.LastFailedAt = toTimeInterface(row.LastFailedAt)
+			// Schedule next_run_at.
+			if row.NextRunAt.Valid {
+				t := row.NextRunAt.Time
+				item.NextRunAt = &t
+			}
+			item.Status = classifyBackupHealth(item)
+			out = append(out, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// classifyBackupHealth derives the FleetBackupHealthStatus from a
+// FleetBackupHealthItem. The completed/failed timestamps and schedule cadence
+// have already been resolved from the DB row. Classification priority:
+//
+//  1. unprotected — no completed backup ever
+//  2. failed      — most recent event was a failure (last_failed_at > last_completed_at)
+//  3. in_flight   — in-flight backup exists, no recent completion to anchor protection
+//  4. stale       — completed exists but older than 2× cadence (or >48h with no schedule)
+//  5. protected   — recent completed backup, no newer failure
+func classifyBackupHealth(item FleetBackupHealthItem) FleetBackupHealthStatus {
+	completedAt := item.LastCompletedAt
+	failedAt := item.LastFailedAt
+
+	if completedAt == nil && failedAt == nil {
+		// No history at all.
+		if item.InFlightCount > 0 {
+			return HealthStatusInFlight
+		}
+		return HealthStatusUnprotected
+	}
+	if completedAt == nil {
+		// Only failures ever occurred.
+		if item.InFlightCount > 0 {
+			return HealthStatusInFlight
+		}
+		return HealthStatusFailed
+	}
+	// A completed backup exists.
+	if failedAt != nil && failedAt.After(*completedAt) {
+		return HealthStatusFailed
+	}
+	// Check staleness: completed exists but older than threshold.
+	staleness := staleDuration(item.ScheduleCadence)
+	if time.Since(*completedAt) > staleness {
+		return HealthStatusStale
+	}
+	return HealthStatusProtected
+}
+
+// staleDuration returns the staleness threshold (2× cadence) for a given
+// schedule cadence string. Falls back to 48h when the cadence is unset.
+func staleDuration(cadence *string) time.Duration {
+	if cadence == nil || *cadence == "" {
+		return 48 * time.Hour
+	}
+	switch *cadence {
+	case CadenceHourly:
+		return 2 * time.Hour
+	case CadenceEveryNHours:
+		// Without the actual N we use a conservative 48h.
+		return 48 * time.Hour
+	case CadenceDaily:
+		return 48 * time.Hour
+	case CadenceWeekly:
+		return 14 * 24 * time.Hour
+	case CadenceMonthly:
+		return 62 * 24 * time.Hour
+	}
+	return 48 * time.Hour
+}
+
+// toTimeInterface coerces an interface{} value from a correlated subquery
+// returning timestamptz (or NULL). pgx scans nullable timestamps as
+// pgtype.Timestamptz; we extract the Go time.Time when valid.
+func toTimeInterface(v interface{}) *time.Time {
+	if v == nil {
+		return nil
+	}
+	switch t := v.(type) {
+	case pgtype.Timestamptz:
+		if !t.Valid {
+			return nil
+		}
+		tt := t.Time
+		return &tt
+	case time.Time:
+		if t.IsZero() {
+			return nil
+		}
+		return &t
+	}
+	return nil
+}
+
+// toInt64Interface coerces an interface{} column value (typically from a
+// correlated subquery returning bigint or NULL) to int64. Returns 0 on NULL
+// or unrecognised type (mirrors the equivalent helper in perf/repo.go).
+func toInt64Interface(v interface{}) int64 {
+	if v == nil {
+		return 0
+	}
+	switch t := v.(type) {
+	case int64:
+		return t
+	case int32:
+		return int64(t)
+	case float64:
+		return int64(t)
+	default:
+		return 0
+	}
+}
+
+// fleetSnapshotRowToSnapshot converts a sqlc.FleetListSnapshotsRow (the
+// columns returned by the fleet list query) to the canonical Snapshot domain
+// type. This mirrors toSnapshot but operates on the fleet-specific row type
+// which shares the same column set as backup_snapshots.
+func fleetSnapshotRowToSnapshot(row sqlc.FleetListSnapshotsRow) Snapshot {
+	out := Snapshot{
+		ID:            row.ID,
+		TenantID:      row.TenantID,
+		SiteID:        row.SiteID,
+		Kind:          row.Kind,
+		Status:        row.Status,
+		AgeRecipient:  row.AgeRecipient,
+		TotalSize:     row.TotalSize,
+		ChunkCount:    row.ChunkCount,
+		Error:         row.Error,
+		Archived:      row.Archived,
+		IsIncremental: row.IsIncremental,
+		Generation:    int(row.Generation),
+		Locked:        row.Locked,
+		Progress:      row.Progress,
+		CreatedAt:     row.CreatedAt,
+		UpdatedAt:     row.UpdatedAt,
+	}
+	if row.CreatedBy.Valid {
+		id := uuid.UUID(row.CreatedBy.Bytes)
+		out.CreatedBy = &id
+	}
+	if row.StartedAt.Valid {
+		t := row.StartedAt.Time
+		out.StartedAt = &t
+	}
+	if row.FinishedAt.Valid {
+		t := row.FinishedAt.Time
+		out.FinishedAt = &t
+	}
+	if row.ProgressUpdatedAt.Valid {
+		t := row.ProgressUpdatedAt.Time
+		out.ProgressUpdatedAt = &t
+	}
+	if row.ChainID.Valid {
+		id := uuid.UUID(row.ChainID.Bytes)
+		out.ChainID = &id
+	}
+	if row.ParentSnapshotID.Valid {
+		id := uuid.UUID(row.ParentSnapshotID.Bytes)
+		out.ParentSnapshotID = &id
+	}
+	if row.BaseSnapshotID.Valid {
+		id := uuid.UUID(row.BaseSnapshotID.Bytes)
+		out.BaseSnapshotID = &id
+	}
+	return out
 }
 
 // ----------------------------------------------------------------------------

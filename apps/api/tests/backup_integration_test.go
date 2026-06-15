@@ -34,6 +34,9 @@ type stubSiteLookup struct {
 func (s stubSiteLookup) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID) (backup.SiteInfo, error) {
 	return s.info, s.err
 }
+func (s stubSiteLookup) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // stubEnqueuer captures enqueued jobs without a River round-trip.
 type stubEnqueuer struct {

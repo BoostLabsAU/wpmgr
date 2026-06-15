@@ -354,6 +354,259 @@ func (q *Queries) FailBackupSnapshot(ctx context.Context, arg FailBackupSnapshot
 	return i, err
 }
 
+const fleetBackupHealth = `-- name: FleetBackupHealth :many
+SELECT
+    s.id            AS site_id,
+    s.name          AS site_name,
+    s.url           AS site_url,
+    -- last completed
+    (SELECT MAX(finished_at) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'completed')
+                    AS last_completed_at,
+    -- last failed (not cancelled-by-operator)
+    (SELECT MAX(finished_at) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'failed')
+                    AS last_failed_at,
+    -- latest completed size
+    (SELECT total_size FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'completed'
+     ORDER BY finished_at DESC, x.id DESC LIMIT 1)
+                    AS latest_size_bytes,
+    -- in-flight count (pending or running)
+    (SELECT COUNT(*) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id
+       AND x.status IN ('pending','running'))
+                    AS in_flight_count,
+    -- schedule info (NULL when no schedule exists)
+    bs.cadence      AS schedule_cadence,
+    bs.next_run_at  AS next_run_at
+FROM sites s
+LEFT JOIN backup_schedules bs
+       ON bs.site_id = s.id AND bs.tenant_id = s.tenant_id AND bs.enabled = true
+WHERE s.tenant_id = $1
+  AND s.id = ANY($2::uuid[])
+ORDER BY s.name ASC
+`
+
+type FleetBackupHealthParams struct {
+	TenantID uuid.UUID   `json:"tenant_id"`
+	SiteIds  []uuid.UUID `json:"site_ids"`
+}
+
+type FleetBackupHealthRow struct {
+	SiteID          uuid.UUID          `json:"site_id"`
+	SiteName        string             `json:"site_name"`
+	SiteUrl         string             `json:"site_url"`
+	LastCompletedAt interface{}        `json:"last_completed_at"`
+	LastFailedAt    interface{}        `json:"last_failed_at"`
+	LatestSizeBytes int64              `json:"latest_size_bytes"`
+	InFlightCount   int64              `json:"in_flight_count"`
+	ScheduleCadence *string            `json:"schedule_cadence"`
+	NextRunAt       pgtype.Timestamptz `json:"next_run_at"`
+}
+
+// Returns one row per site with the data needed for the backup health card:
+// latest completed snapshot time, latest failed snapshot time, in-flight
+// count, and the schedule cadence / next_run_at when a schedule exists.
+// Site-scoped principals pass @site_ids with their AllowedSiteIDs;
+// org-scoped principals pass all tenant site IDs so the @site_ids_filter
+// gate applies equally without a separate query path.
+func (q *Queries) FleetBackupHealth(ctx context.Context, arg FleetBackupHealthParams) ([]FleetBackupHealthRow, error) {
+	rows, err := q.db.Query(ctx, fleetBackupHealth, arg.TenantID, arg.SiteIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FleetBackupHealthRow
+	for rows.Next() {
+		var i FleetBackupHealthRow
+		if err := rows.Scan(
+			&i.SiteID,
+			&i.SiteName,
+			&i.SiteUrl,
+			&i.LastCompletedAt,
+			&i.LastFailedAt,
+			&i.LatestSizeBytes,
+			&i.InFlightCount,
+			&i.ScheduleCadence,
+			&i.NextRunAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const fleetListSnapshots = `-- name: FleetListSnapshots :many
+
+SELECT bs.id, bs.tenant_id, bs.site_id, bs.kind, bs.status,
+       bs.total_size, bs.chunk_count, bs.created_by,
+       bs.age_recipient, bs.archived, bs.error,
+       bs.started_at, bs.finished_at,
+       bs.progress, bs.progress_updated_at,
+       bs.is_incremental, bs.generation,
+       bs.chain_id, bs.parent_snapshot_id, bs.base_snapshot_id,
+       bs.locked, bs.created_at, bs.updated_at
+FROM backup_snapshots bs
+WHERE bs.tenant_id = $1
+  AND ($2::bool = false OR bs.site_id = ANY($3::uuid[]))
+  AND ($4::bool = false OR bs.status = $5)
+  AND ($6::bool  = false OR bs.created_at >= $7)
+  AND ($8::bool = false OR bs.created_at <= $9)
+ORDER BY bs.created_at DESC, bs.id DESC
+LIMIT $11 OFFSET $10
+`
+
+type FleetListSnapshotsParams struct {
+	TenantID      uuid.UUID   `json:"tenant_id"`
+	SiteIdsFilter bool        `json:"site_ids_filter"`
+	SiteIds       []uuid.UUID `json:"site_ids"`
+	StatusFilter  bool        `json:"status_filter"`
+	StatusVal     string      `json:"status_val"`
+	AfterFilter   bool        `json:"after_filter"`
+	CreatedAfter  time.Time   `json:"created_after"`
+	BeforeFilter  bool        `json:"before_filter"`
+	CreatedBefore time.Time   `json:"created_before"`
+	RowOffset     int32       `json:"row_offset"`
+	RowLimit      int32       `json:"row_limit"`
+}
+
+type FleetListSnapshotsRow struct {
+	ID                uuid.UUID          `json:"id"`
+	TenantID          uuid.UUID          `json:"tenant_id"`
+	SiteID            uuid.UUID          `json:"site_id"`
+	Kind              string             `json:"kind"`
+	Status            string             `json:"status"`
+	TotalSize         int64              `json:"total_size"`
+	ChunkCount        int64              `json:"chunk_count"`
+	CreatedBy         pgtype.UUID        `json:"created_by"`
+	AgeRecipient      string             `json:"age_recipient"`
+	Archived          bool               `json:"archived"`
+	Error             string             `json:"error"`
+	StartedAt         pgtype.Timestamptz `json:"started_at"`
+	FinishedAt        pgtype.Timestamptz `json:"finished_at"`
+	Progress          []byte             `json:"progress"`
+	ProgressUpdatedAt pgtype.Timestamptz `json:"progress_updated_at"`
+	IsIncremental     bool               `json:"is_incremental"`
+	Generation        int32              `json:"generation"`
+	ChainID           pgtype.UUID        `json:"chain_id"`
+	ParentSnapshotID  pgtype.UUID        `json:"parent_snapshot_id"`
+	BaseSnapshotID    pgtype.UUID        `json:"base_snapshot_id"`
+	Locked            bool               `json:"locked"`
+	CreatedAt         time.Time          `json:"created_at"`
+	UpdatedAt         time.Time          `json:"updated_at"`
+}
+
+// ---------------------------------------------------------------------------
+// Fleet backup endpoints
+// ---------------------------------------------------------------------------
+// Returns a filtered, paginated list of backup snapshots across a set of
+// sites for the fleet dashboard. site_ids is always filtered to the
+// principal's AllowedSiteIDs (for site-scoped principals) or all tenant
+// sites (for org-scoped principals) so RLS plus the explicit site_ids
+// filter is the double-gate. Offset pagination with ORDER BY created_at
+// DESC, id DESC (project convention).
+func (q *Queries) FleetListSnapshots(ctx context.Context, arg FleetListSnapshotsParams) ([]FleetListSnapshotsRow, error) {
+	rows, err := q.db.Query(ctx, fleetListSnapshots,
+		arg.TenantID,
+		arg.SiteIdsFilter,
+		arg.SiteIds,
+		arg.StatusFilter,
+		arg.StatusVal,
+		arg.AfterFilter,
+		arg.CreatedAfter,
+		arg.BeforeFilter,
+		arg.CreatedBefore,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FleetListSnapshotsRow
+	for rows.Next() {
+		var i FleetListSnapshotsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.SiteID,
+			&i.Kind,
+			&i.Status,
+			&i.TotalSize,
+			&i.ChunkCount,
+			&i.CreatedBy,
+			&i.AgeRecipient,
+			&i.Archived,
+			&i.Error,
+			&i.StartedAt,
+			&i.FinishedAt,
+			&i.Progress,
+			&i.ProgressUpdatedAt,
+			&i.IsIncremental,
+			&i.Generation,
+			&i.ChainID,
+			&i.ParentSnapshotID,
+			&i.BaseSnapshotID,
+			&i.Locked,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const fleetListSnapshotsCount = `-- name: FleetListSnapshotsCount :one
+SELECT COUNT(*) AS total
+FROM backup_snapshots bs
+WHERE bs.tenant_id = $1
+  AND ($2::bool = false OR bs.site_id = ANY($3::uuid[]))
+  AND ($4::bool = false OR bs.status = $5)
+  AND ($6::bool  = false OR bs.created_at >= $7)
+  AND ($8::bool = false OR bs.created_at <= $9)
+`
+
+type FleetListSnapshotsCountParams struct {
+	TenantID      uuid.UUID   `json:"tenant_id"`
+	SiteIdsFilter bool        `json:"site_ids_filter"`
+	SiteIds       []uuid.UUID `json:"site_ids"`
+	StatusFilter  bool        `json:"status_filter"`
+	StatusVal     string      `json:"status_val"`
+	AfterFilter   bool        `json:"after_filter"`
+	CreatedAfter  time.Time   `json:"created_after"`
+	BeforeFilter  bool        `json:"before_filter"`
+	CreatedBefore time.Time   `json:"created_before"`
+}
+
+// Returns the total row count for the fleet snapshot list (for next_offset
+// calculation). Uses the same predicates as FleetListSnapshots.
+func (q *Queries) FleetListSnapshotsCount(ctx context.Context, arg FleetListSnapshotsCountParams) (int64, error) {
+	row := q.db.QueryRow(ctx, fleetListSnapshotsCount,
+		arg.TenantID,
+		arg.SiteIdsFilter,
+		arg.SiteIds,
+		arg.StatusFilter,
+		arg.StatusVal,
+		arg.AfterFilter,
+		arg.CreatedAfter,
+		arg.BeforeFilter,
+		arg.CreatedBefore,
+	)
+	var total int64
+	err := row.Scan(&total)
+	return total, err
+}
+
 const getBackupChunk = `-- name: GetBackupChunk :one
 
 SELECT id, tenant_id, blake3, s3_key, size, refcount, created_at, updated_at FROM backup_chunks

@@ -154,6 +154,61 @@ type Snapshot struct {
 	Locked bool
 }
 
+// ---------------------------------------------------------------------------
+// Fleet backup models
+// ---------------------------------------------------------------------------
+
+// FleetBackupHealthStatus is the server-derived protection status for one site.
+type FleetBackupHealthStatus string
+
+const (
+	// HealthStatusUnprotected means no completed backup has ever been recorded for the site.
+	HealthStatusUnprotected FleetBackupHealthStatus = "unprotected"
+	// HealthStatusFailed means the most recent completed event was a failure
+	// (last_failed_at > last_completed_at, or only failures).
+	HealthStatusFailed FleetBackupHealthStatus = "failed"
+	// HealthStatusStale means a completed backup exists but it is older than
+	// 2× the schedule cadence (or >48h if no schedule is set).
+	HealthStatusStale FleetBackupHealthStatus = "stale"
+	// HealthStatusInFlight means at least one pending/running backup exists and
+	// there is no recent completed backup to anchor protection status.
+	HealthStatusInFlight FleetBackupHealthStatus = "in_flight"
+	// HealthStatusProtected means a recent completed backup exists and no failure
+	// has occurred since.
+	HealthStatusProtected FleetBackupHealthStatus = "protected"
+)
+
+// FleetBackupHealthItem is the health summary for one site in the fleet health response.
+type FleetBackupHealthItem struct {
+	SiteID          uuid.UUID               `json:"site_id"`
+	SiteName        string                  `json:"site_name"`
+	SiteURL         string                  `json:"site_url"`
+	Status          FleetBackupHealthStatus `json:"status"`
+	LastCompletedAt *time.Time              `json:"last_completed_at,omitempty"`
+	LastFailedAt    *time.Time              `json:"last_failed_at,omitempty"`
+	LatestSizeBytes int64                   `json:"latest_size_bytes"`
+	InFlightCount   int64                   `json:"in_flight_count"`
+	ScheduleCadence *string                 `json:"schedule_cadence,omitempty"`
+	NextRunAt       *time.Time              `json:"next_run_at,omitempty"`
+}
+
+// FleetListFilter holds the parsed fleet snapshot list filters (passed from handler
+// to service to avoid re-parsing at the service layer).
+type FleetListFilter struct {
+	SiteIDs       []uuid.UUID // nil = all sites the principal can access
+	Status        string      // "" = no filter
+	CreatedAfter  *time.Time
+	CreatedBefore *time.Time
+	Limit         int32
+	Offset        int32
+}
+
+// FleetSnapshotPage is the paginated result of a fleet snapshot list query.
+type FleetSnapshotPage struct {
+	Items      []Snapshot
+	NextOffset *int64 // nil when there are no more pages
+}
+
 // FileIndexEntry is one row of the backup_file_index table: a single file's
 // content fingerprint for a completed snapshot. Used by the NDJSON streaming
 // endpoint and by SubmitIncrementalManifest inserts.

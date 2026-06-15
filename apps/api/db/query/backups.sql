@@ -308,3 +308,81 @@ SELECT id, tenant_id, url, enrolled_at, age_recipient,
        wp_timezone, wp_gmt_offset
 FROM sites
 WHERE id = $1 AND tenant_id = $2;
+
+-- ---------------------------------------------------------------------------
+-- Fleet backup endpoints
+-- ---------------------------------------------------------------------------
+
+-- name: FleetListSnapshots :many
+-- Returns a filtered, paginated list of backup snapshots across a set of
+-- sites for the fleet dashboard. site_ids is always filtered to the
+-- principal's AllowedSiteIDs (for site-scoped principals) or all tenant
+-- sites (for org-scoped principals) so RLS plus the explicit site_ids
+-- filter is the double-gate. Offset pagination with ORDER BY created_at
+-- DESC, id DESC (project convention).
+SELECT bs.id, bs.tenant_id, bs.site_id, bs.kind, bs.status,
+       bs.total_size, bs.chunk_count, bs.created_by,
+       bs.age_recipient, bs.archived, bs.error,
+       bs.started_at, bs.finished_at,
+       bs.progress, bs.progress_updated_at,
+       bs.is_incremental, bs.generation,
+       bs.chain_id, bs.parent_snapshot_id, bs.base_snapshot_id,
+       bs.locked, bs.created_at, bs.updated_at
+FROM backup_snapshots bs
+WHERE bs.tenant_id = @tenant_id
+  AND (@site_ids_filter::bool = false OR bs.site_id = ANY(@site_ids::uuid[]))
+  AND (@status_filter::bool = false OR bs.status = @status_val)
+  AND (@after_filter::bool  = false OR bs.created_at >= @created_after)
+  AND (@before_filter::bool = false OR bs.created_at <= @created_before)
+ORDER BY bs.created_at DESC, bs.id DESC
+LIMIT @row_limit OFFSET @row_offset;
+
+-- name: FleetListSnapshotsCount :one
+-- Returns the total row count for the fleet snapshot list (for next_offset
+-- calculation). Uses the same predicates as FleetListSnapshots.
+SELECT COUNT(*) AS total
+FROM backup_snapshots bs
+WHERE bs.tenant_id = @tenant_id
+  AND (@site_ids_filter::bool = false OR bs.site_id = ANY(@site_ids::uuid[]))
+  AND (@status_filter::bool = false OR bs.status = @status_val)
+  AND (@after_filter::bool  = false OR bs.created_at >= @created_after)
+  AND (@before_filter::bool = false OR bs.created_at <= @created_before);
+
+-- name: FleetBackupHealth :many
+-- Returns one row per site with the data needed for the backup health card:
+-- latest completed snapshot time, latest failed snapshot time, in-flight
+-- count, and the schedule cadence / next_run_at when a schedule exists.
+-- Site-scoped principals pass @site_ids with their AllowedSiteIDs;
+-- org-scoped principals pass all tenant site IDs so the @site_ids_filter
+-- gate applies equally without a separate query path.
+SELECT
+    s.id            AS site_id,
+    s.name          AS site_name,
+    s.url           AS site_url,
+    -- last completed
+    (SELECT MAX(finished_at) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'completed')
+                    AS last_completed_at,
+    -- last failed (not cancelled-by-operator)
+    (SELECT MAX(finished_at) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'failed')
+                    AS last_failed_at,
+    -- latest completed size
+    (SELECT total_size FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id AND x.status = 'completed'
+     ORDER BY finished_at DESC, x.id DESC LIMIT 1)
+                    AS latest_size_bytes,
+    -- in-flight count (pending or running)
+    (SELECT COUNT(*) FROM backup_snapshots x
+     WHERE x.tenant_id = s.tenant_id AND x.site_id = s.id
+       AND x.status IN ('pending','running'))
+                    AS in_flight_count,
+    -- schedule info (NULL when no schedule exists)
+    bs.cadence      AS schedule_cadence,
+    bs.next_run_at  AS next_run_at
+FROM sites s
+LEFT JOIN backup_schedules bs
+       ON bs.site_id = s.id AND bs.tenant_id = s.tenant_id AND bs.enabled = true
+WHERE s.tenant_id = @tenant_id
+  AND s.id = ANY(@site_ids::uuid[])
+ORDER BY s.name ASC;

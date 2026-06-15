@@ -133,7 +133,7 @@ export const FEATURES: {
           bullets: [
             "Live flip from Awaiting to Connected, no refresh",
             "One-click wp-admin login, no shared passwords",
-            "Sweeper dials quiet sites to verify liveness, not just heartbeats",
+            "Sweeper verifies quiet sites directly, not just heartbeats",
             "Accurate badge: unreachable vs idle, never a false disconnect",
           ],
         },
@@ -145,6 +145,7 @@ export const FEATURES: {
             "Increments pack only files that changed",
             "Base plus increments in one expandable chain",
             "Restore to any snapshot, site stays online",
+            "Fleet backup browser: protected, stale, or unprotected per site",
           ],
         },
         {
@@ -162,7 +163,8 @@ export const FEATURES: {
           title: "Monitoring and health",
           summary: "Uptime, response time, and fleet-wide status at a glance.",
           bullets: [
-            "7, 30, and 90 day charts",
+            "Fleet status matrix: up, degraded, or down across all sites",
+            "7, 30, and 90 day response-time trends per site",
             "Down and recovery alerts by email or webhook",
             "TLS expiry warnings and PHP fatal tracking",
           ],
@@ -461,6 +463,7 @@ export const PERFORMANCE = {
   bodyLines: [
     "Page caching serves pre-gzipped HTML straight from disk, with logged-in, per-role, mobile, and per-query variants, bypass rules for cart and checkout, scheduled refresh, automatic purge on content changes, and a preload warmer. The server fast-path installs itself on Apache and ships a paste-in snippet for nginx.",
     "Remove Unused CSS is computed by WPMgr's own engine with no headless browser and no third-party service. Interactive states stay intact, a per-site safelist covers anything added by scripts, and on a cache miss the full CSS is served so rendering is never blocked.",
+    "The fleet performance dashboard gives Core Web Vitals across every site in one view: worst-offender ranking by LCP, INP, and CLS, a fleet-wide trend line, and per-site drill-down, so you can see at a glance which sites need attention without opening each one.",
   ],
   chips: [
     { icon: "Gauge", value: "From disk", label: "Anonymous pages served as pre-gzipped HTML, no PHP on a hit" },
@@ -504,7 +507,7 @@ export const PERFORMANCE_STEPS = {
       icon: "Gauge",
       title: "Manage it like a fleet",
       desc:
-        "Save the config for one site, purge the cache across many at once, or apply a safe, balanced, or aggressive preset to a whole group in one run. Live status and stats stream to the dashboard with no refresh.",
+        "Save the config for one site, purge the cache across many at once, or apply a safe, balanced, or aggressive preset to a whole group in one run. Live status and stats stream to the dashboard with no refresh. The fleet performance dashboard surfaces Core Web Vitals and worst-offenders across every site, and the fleet uptime overview shows the status matrix and incident history so you never have to open each site individually.",
     },
   ],
 };
@@ -517,6 +520,7 @@ export const RUM = {
   bodyLines: [
     "WPMgr collects LCP, INP, CLS, FCP, and TTFB from real visitor sessions and surfaces them at the p75 percentile: the same threshold Google PageSpeed Insights and Search Console use for field data. No lab simulation, no synthetic crawler.",
     "Every metric shows a PageSpeed Insights-style distribution bar and a 28-day p75 trend with the passing threshold marked, so you can see at a glance whether a recent change moved the needle in the field. Per-URL and per-device breakdowns let you pinpoint exactly where a score comes from.",
+    "The fleet performance dashboard aggregates Core Web Vitals across every connected site. A worst-offenders table ranks sites by LCP, INP, and CLS so you can spot which sites are dragging the fleet average down and open the per-site detail without hunting through individual dashboards.",
   ],
   capabilities: [
     { icon: "BarChart2", label: "All five Core Web Vitals", detail: "LCP, INP, CLS, FCP, and TTFB at p75, the percentile Google uses for field data" },
@@ -690,7 +694,7 @@ export const STATS = {
     { icon: "ImageDown", value: "AVIF + WebP", label: "Media Optimizer delivers modern formats to browsers that support them, originals as fallback" },
     { icon: "Undo2", value: "100%", label: "Reversible by design: media revert, backup restore, and db clean all roll back cleanly" },
     { icon: "DatabaseZap", value: "DB Cleaner", label: "Scan, classify orphans, trend 90 days of health, and act on the whole fleet at once" },
-    { icon: "Activity", value: "7 / 30 / 90 days", label: "Response-time and uptime history with fleet-wide status" },
+    { icon: "Activity", value: "7 / 30 / 90 days", label: "Fleet status matrix, response-time trends, and incident history across all sites" },
     { icon: "Users", value: "4 roles", label: "From owner to viewer, plus single-site sharing" },
     { icon: "GitFork", value: "AGPL + MIT", label: "Fork, self-host, and contribute, no paid tier required" },
   ],

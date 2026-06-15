@@ -189,6 +189,68 @@ func (q *Queries) GetRumRollupHourly(ctx context.Context, arg GetRumRollupHourly
 	return items, nil
 }
 
+const getRumRollupHourlyForSites = `-- name: GetRumRollupHourlyForSites :many
+
+SELECT tenant_id, site_id, url_pattern, metric, device, country,
+       bucket_hour, sample_count, sample_rate,
+       bucket_counts, sum_value, min_value, max_value
+FROM rum_rollup_hourly
+WHERE tenant_id  = $1
+  AND site_id    = ANY($2::uuid[])
+  AND bucket_hour >= $3
+ORDER BY bucket_hour ASC, site_id ASC, metric ASC, device ASC
+`
+
+type GetRumRollupHourlyForSitesParams struct {
+	TenantID uuid.UUID   `json:"tenant_id"`
+	SiteIds  []uuid.UUID `json:"site_ids"`
+	Since    time.Time   `json:"since"`
+}
+
+// ---------------------------------------------------------------------------
+// Fleet RUM aggregate (InTenantTx — tenant-scoped)
+// ---------------------------------------------------------------------------
+// Returns hourly rollup rows across a set of sites in one tenant, within a
+// time window. Used by the fleet RUM aggregate endpoint to compute cross-site
+// p75 without N+1 DB round-trips. site_ids is always filtered to the
+// principal's AllowedSiteIDs (site-scoped) or all tenant sites (org-scoped).
+// The `, id` tiebreaker is not applicable here (no ORDER BY on primary key
+// for aggregation reads), but ORDER BY bucket_hour ASC ensures deterministic
+// streaming for the in-Go accumulator.
+func (q *Queries) GetRumRollupHourlyForSites(ctx context.Context, arg GetRumRollupHourlyForSitesParams) ([]RumRollupHourly, error) {
+	rows, err := q.db.Query(ctx, getRumRollupHourlyForSites, arg.TenantID, arg.SiteIds, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RumRollupHourly
+	for rows.Next() {
+		var i RumRollupHourly
+		if err := rows.Scan(
+			&i.TenantID,
+			&i.SiteID,
+			&i.UrlPattern,
+			&i.Metric,
+			&i.Device,
+			&i.Country,
+			&i.BucketHour,
+			&i.SampleCount,
+			&i.SampleRate,
+			&i.BucketCounts,
+			&i.SumValue,
+			&i.MinValue,
+			&i.MaxValue,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertRumEvent = `-- name: InsertRumEvent :exec
 
 INSERT INTO rum_events_raw (

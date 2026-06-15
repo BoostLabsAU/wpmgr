@@ -3162,6 +3162,184 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/backups/fleet:
+    get:
+      operationId: listFleetBackups
+      summary: Paginated filtered list of backup snapshots across fleet sites
+      description: |
+        Returns a filtered, paginated list of backup snapshots across the caller's
+        accessible sites. Org-scoped principals see all tenant sites; site-scoped
+        collaborators see only their granted sites. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - name: sites
+          in: query
+          schema:
+            type: string
+          description: Comma-separated site UUIDs. Defaults to all accessible sites.
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, completed, failed]
+          description: Filter by snapshot status.
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            maximum: 200
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Paginated snapshot list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupFleetList"
+  /api/v1/backups/health:
+    get:
+      operationId: getFleetBackupHealth
+      summary: Per-site backup health classification across the fleet
+      description: |
+        Returns one health item per requested site with a server-derived status:
+        unprotected, failed, stale, in_flight, or protected. Requires viewer+.
+      tags: [backups]
+      parameters:
+        - name: sites
+          in: query
+          schema:
+            type: string
+          description: Comma-separated site UUIDs. Defaults to all accessible sites.
+      responses:
+        "200":
+          description: Per-site backup health
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BackupHealthList"
+  /api/v1/fleet/status:
+    get:
+      operationId: getFleetUptimeStatus
+      summary: Fleet-wide uptime status with summary counts and per-site items
+      description: |
+        Returns summary counts {up, degraded, down, unknown} and a per-site list
+        with the latest probe result, 7-day uptime %, and in-incident flag.
+        Status derivation: down=latest probe up=false; degraded=up but latency
+        >2000ms or connection_state=degraded; up=probe up+fast; unknown=no probe.
+        Requires viewer+.
+      tags: [uptime]
+      responses:
+        "200":
+          description: Fleet uptime status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FleetUptimeStatus"
+  /api/v1/fleet/incidents:
+    get:
+      operationId: getFleetIncidents
+      summary: Open incidents and recently-alerted sites
+      description: |
+        Returns open incidents (in_incident=true) and recently-alerted sites
+        (last_alert_at >= since). Full historical incident reconstruction is NOT
+        possible from site_alert_state, which stores only current transition
+        memory. ended_at/duration_seconds are estimated from updated_at for
+        closed incidents, not from a true incident-close record. Requires viewer+.
+      tags: [uptime]
+      parameters:
+        - name: since
+          in: query
+          schema:
+            type: string
+            format: date-time
+          description: Lower bound on last_alert_at. Defaults to 7 days ago.
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+      responses:
+        "200":
+          description: Open incidents and recent alerts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FleetIncidentList"
+  /api/v1/perf/rum/fleet:
+    get:
+      operationId: getFleetRumAggregate
+      summary: Cross-site RUM Core Web Vitals aggregate
+      description: |
+        Returns a fleet-level CWV aggregate across all tenant sites reporting RUM
+        data in the window. Includes summary counts, per-metric p75/rating/
+        distribution, fleet pass %, and worst offenders. Org-scope only;
+        site-scoped collaborators should use the per-site /perf/rum/summary.
+        Requires viewer+.
+      tags: [perf]
+      parameters:
+        - name: window_days
+          in: query
+          schema:
+            type: integer
+            default: 28
+            minimum: 1
+            maximum: 365
+        - name: device
+          in: query
+          schema:
+            type: string
+            enum: [desktop, mobile, tablet, all]
+          description: Device filter. Default all (no device filter).
+      responses:
+        "200":
+          description: Fleet RUM aggregate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FleetRumAggregate"
+  /api/v1/perf/db/fleet-health:
+    get:
+      operationId: getFleetDbHealth
+      summary: Fleet-level database health aggregate across all scanned sites
+      description: |
+        Returns an aggregate of database health metrics across all tenant sites
+        that have at least one completed DB scan within the lookback window.
+        Includes total DB size, orphaned option/cron counts, and the top-N sites
+        by DB size. Org-scope only. Requires viewer+.
+      tags: [perf]
+      parameters:
+        - name: days
+          in: query
+          schema:
+            type: integer
+            default: 90
+            minimum: 7
+            maximum: 365
+          description: Lookback window for growth calculation.
+      responses:
+        "200":
+          description: Fleet DB health aggregate
+          content:
+            application/json:
+              schema:
+                type: object
+                description: Fleet DB health aggregate (shape matches FleetDbHealth Go model).
   /api/v1/uptime/summary:
     get:
       operationId: getUptimeSummary
@@ -8158,6 +8336,59 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/BackupSnapshot"
+    BackupFleetList:
+      type: object
+      required: [items]
+      description: Paginated fleet snapshot list.
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupSnapshot"
+        next_offset:
+          type: integer
+          format: int64
+          nullable: true
+          description: Offset to pass for the next page; null when no further pages.
+    BackupHealthItem:
+      type: object
+      required: [site_id, site_name, site_url, status, in_flight_count, latest_size_bytes]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        site_name:
+          type: string
+        site_url:
+          type: string
+        status:
+          type: string
+          enum: [unprotected, failed, stale, in_flight, protected]
+        last_completed_at:
+          type: string
+          format: date-time
+        last_failed_at:
+          type: string
+          format: date-time
+        latest_size_bytes:
+          type: integer
+          format: int64
+        in_flight_count:
+          type: integer
+          format: int64
+        schedule_cadence:
+          type: string
+        next_run_at:
+          type: string
+          format: date-time
+    BackupHealthList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/BackupHealthItem"
     BackupManifestEntry:
       type: object
       required: [path, entry_kind, size, chunk_count]
@@ -8918,6 +9149,159 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/UptimeSummaryItem"
+    FleetUptimeCounts:
+      type: object
+      required: [up, degraded, down, unknown]
+      properties:
+        up:
+          type: integer
+        degraded:
+          type: integer
+        down:
+          type: integer
+        unknown:
+          type: integer
+    FleetUptimeStatusItem:
+      type: object
+      required: [site_id, site_name, site_url, status, uptime_pct_7d, avg_latency_ms_7d, in_incident, connection_state, health_status]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        site_name:
+          type: string
+        site_url:
+          type: string
+        status:
+          type: string
+          enum: [up, degraded, down, unknown]
+        uptime_pct_7d:
+          type: number
+          format: double
+        avg_latency_ms_7d:
+          type: number
+          format: double
+        latest_total_ms:
+          type: number
+          format: double
+        last_probe_at:
+          type: string
+          format: date-time
+        tls_expiry:
+          type: string
+          format: date-time
+        in_incident:
+          type: boolean
+        connection_state:
+          type: string
+        health_status:
+          type: string
+    FleetUptimeStatus:
+      type: object
+      required: [summary, items]
+      properties:
+        summary:
+          $ref: "#/components/schemas/FleetUptimeCounts"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetUptimeStatusItem"
+    FleetIncidentItem:
+      type: object
+      required: [site_id, site_name, site_url, ongoing]
+      description: |
+        An open or recently-closed incident. NOTE: site_alert_state stores only
+        current transition memory; full historical incident logs are not persisted.
+        ended_at / duration_seconds are estimated from updated_at for closed
+        incidents, not from a true incident-close record.
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        site_name:
+          type: string
+        site_url:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        ended_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+          format: int64
+        ongoing:
+          type: boolean
+        latest_total_ms:
+          type: number
+          format: double
+    FleetIncidentList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetIncidentItem"
+    FleetRumMetric:
+      type: object
+      required: [metric, p75_ms, sample_count, suppressed, good_pct, ni_pct, poor_pct]
+      properties:
+        metric:
+          type: string
+        p75_ms:
+          type: number
+          format: double
+        sample_count:
+          type: integer
+          format: int64
+        rating:
+          type: string
+          enum: [good, needs_improvement, poor]
+        suppressed:
+          type: boolean
+        good_pct:
+          type: integer
+        ni_pct:
+          type: integer
+        poor_pct:
+          type: integer
+    FleetRumWorstOffender:
+      type: object
+      required: [site_id, p75_ms, rating]
+      properties:
+        site_id:
+          type: string
+          format: uuid
+        p75_ms:
+          type: number
+          format: double
+        rating:
+          type: string
+    FleetRumAggregate:
+      type: object
+      required: [window_days, sites_reporting, sites_total, fleet_pass_pct, metrics, worst_offenders]
+      properties:
+        window_days:
+          type: integer
+        sites_reporting:
+          type: integer
+        sites_total:
+          type: integer
+        fleet_pass_pct:
+          type: number
+          format: double
+          description: Percentage of sites with "good" LCP p75.
+        metrics:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/FleetRumMetric"
+          description: Keyed by metric name (lcp, inp, cls, fcp, ttfb).
+        worst_offenders:
+          type: array
+          items:
+            $ref: "#/components/schemas/FleetRumWorstOffender"
     UptimeSummaryItem:
       type: object
       required: [site_id, up]

@@ -2272,6 +2272,225 @@ func (s *BackupCreateKind) UnmarshalText(data []byte) error {
 	}
 }
 
+// Paginated fleet snapshot list.
+// Ref: #/components/schemas/BackupFleetList
+type BackupFleetList struct {
+	Items []BackupSnapshot `json:"items"`
+	// Offset to pass for the next page; null when no further pages.
+	NextOffset OptNilInt64 `json:"next_offset"`
+}
+
+// GetItems returns the value of Items.
+func (s *BackupFleetList) GetItems() []BackupSnapshot {
+	return s.Items
+}
+
+// GetNextOffset returns the value of NextOffset.
+func (s *BackupFleetList) GetNextOffset() OptNilInt64 {
+	return s.NextOffset
+}
+
+// SetItems sets the value of Items.
+func (s *BackupFleetList) SetItems(val []BackupSnapshot) {
+	s.Items = val
+}
+
+// SetNextOffset sets the value of NextOffset.
+func (s *BackupFleetList) SetNextOffset(val OptNilInt64) {
+	s.NextOffset = val
+}
+
+// Ref: #/components/schemas/BackupHealthItem
+type BackupHealthItem struct {
+	SiteID          uuid.UUID              `json:"site_id"`
+	SiteName        string                 `json:"site_name"`
+	SiteURL         string                 `json:"site_url"`
+	Status          BackupHealthItemStatus `json:"status"`
+	LastCompletedAt OptDateTime            `json:"last_completed_at"`
+	LastFailedAt    OptDateTime            `json:"last_failed_at"`
+	LatestSizeBytes int64                  `json:"latest_size_bytes"`
+	InFlightCount   int64                  `json:"in_flight_count"`
+	ScheduleCadence OptString              `json:"schedule_cadence"`
+	NextRunAt       OptDateTime            `json:"next_run_at"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *BackupHealthItem) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSiteName returns the value of SiteName.
+func (s *BackupHealthItem) GetSiteName() string {
+	return s.SiteName
+}
+
+// GetSiteURL returns the value of SiteURL.
+func (s *BackupHealthItem) GetSiteURL() string {
+	return s.SiteURL
+}
+
+// GetStatus returns the value of Status.
+func (s *BackupHealthItem) GetStatus() BackupHealthItemStatus {
+	return s.Status
+}
+
+// GetLastCompletedAt returns the value of LastCompletedAt.
+func (s *BackupHealthItem) GetLastCompletedAt() OptDateTime {
+	return s.LastCompletedAt
+}
+
+// GetLastFailedAt returns the value of LastFailedAt.
+func (s *BackupHealthItem) GetLastFailedAt() OptDateTime {
+	return s.LastFailedAt
+}
+
+// GetLatestSizeBytes returns the value of LatestSizeBytes.
+func (s *BackupHealthItem) GetLatestSizeBytes() int64 {
+	return s.LatestSizeBytes
+}
+
+// GetInFlightCount returns the value of InFlightCount.
+func (s *BackupHealthItem) GetInFlightCount() int64 {
+	return s.InFlightCount
+}
+
+// GetScheduleCadence returns the value of ScheduleCadence.
+func (s *BackupHealthItem) GetScheduleCadence() OptString {
+	return s.ScheduleCadence
+}
+
+// GetNextRunAt returns the value of NextRunAt.
+func (s *BackupHealthItem) GetNextRunAt() OptDateTime {
+	return s.NextRunAt
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *BackupHealthItem) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSiteName sets the value of SiteName.
+func (s *BackupHealthItem) SetSiteName(val string) {
+	s.SiteName = val
+}
+
+// SetSiteURL sets the value of SiteURL.
+func (s *BackupHealthItem) SetSiteURL(val string) {
+	s.SiteURL = val
+}
+
+// SetStatus sets the value of Status.
+func (s *BackupHealthItem) SetStatus(val BackupHealthItemStatus) {
+	s.Status = val
+}
+
+// SetLastCompletedAt sets the value of LastCompletedAt.
+func (s *BackupHealthItem) SetLastCompletedAt(val OptDateTime) {
+	s.LastCompletedAt = val
+}
+
+// SetLastFailedAt sets the value of LastFailedAt.
+func (s *BackupHealthItem) SetLastFailedAt(val OptDateTime) {
+	s.LastFailedAt = val
+}
+
+// SetLatestSizeBytes sets the value of LatestSizeBytes.
+func (s *BackupHealthItem) SetLatestSizeBytes(val int64) {
+	s.LatestSizeBytes = val
+}
+
+// SetInFlightCount sets the value of InFlightCount.
+func (s *BackupHealthItem) SetInFlightCount(val int64) {
+	s.InFlightCount = val
+}
+
+// SetScheduleCadence sets the value of ScheduleCadence.
+func (s *BackupHealthItem) SetScheduleCadence(val OptString) {
+	s.ScheduleCadence = val
+}
+
+// SetNextRunAt sets the value of NextRunAt.
+func (s *BackupHealthItem) SetNextRunAt(val OptDateTime) {
+	s.NextRunAt = val
+}
+
+type BackupHealthItemStatus string
+
+const (
+	BackupHealthItemStatusUnprotected BackupHealthItemStatus = "unprotected"
+	BackupHealthItemStatusFailed      BackupHealthItemStatus = "failed"
+	BackupHealthItemStatusStale       BackupHealthItemStatus = "stale"
+	BackupHealthItemStatusInFlight    BackupHealthItemStatus = "in_flight"
+	BackupHealthItemStatusProtected   BackupHealthItemStatus = "protected"
+)
+
+// AllValues returns all BackupHealthItemStatus values.
+func (BackupHealthItemStatus) AllValues() []BackupHealthItemStatus {
+	return []BackupHealthItemStatus{
+		BackupHealthItemStatusUnprotected,
+		BackupHealthItemStatusFailed,
+		BackupHealthItemStatusStale,
+		BackupHealthItemStatusInFlight,
+		BackupHealthItemStatusProtected,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s BackupHealthItemStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case BackupHealthItemStatusUnprotected:
+		return []byte(s), nil
+	case BackupHealthItemStatusFailed:
+		return []byte(s), nil
+	case BackupHealthItemStatusStale:
+		return []byte(s), nil
+	case BackupHealthItemStatusInFlight:
+		return []byte(s), nil
+	case BackupHealthItemStatusProtected:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *BackupHealthItemStatus) UnmarshalText(data []byte) error {
+	switch BackupHealthItemStatus(data) {
+	case BackupHealthItemStatusUnprotected:
+		*s = BackupHealthItemStatusUnprotected
+		return nil
+	case BackupHealthItemStatusFailed:
+		*s = BackupHealthItemStatusFailed
+		return nil
+	case BackupHealthItemStatusStale:
+		*s = BackupHealthItemStatusStale
+		return nil
+	case BackupHealthItemStatusInFlight:
+		*s = BackupHealthItemStatusInFlight
+		return nil
+	case BackupHealthItemStatusProtected:
+		*s = BackupHealthItemStatusProtected
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/BackupHealthList
+type BackupHealthList struct {
+	Items []BackupHealthItem `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *BackupHealthList) GetItems() []BackupHealthItem {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *BackupHealthList) SetItems(val []BackupHealthItem) {
+	s.Items = val
+}
+
 // One file (or db dump) in a snapshot, summarized.
 // Ref: #/components/schemas/BackupManifestEntry
 type BackupManifestEntry struct {
@@ -7967,6 +8186,643 @@ type ExportSiteEmailLogUnauthorized Error
 
 func (*ExportSiteEmailLogUnauthorized) exportSiteEmailLogRes() {}
 
+// An open or recently-closed incident. NOTE: site_alert_state stores only
+// current transition memory; full historical incident logs are not persisted.
+// ended_at / duration_seconds are estimated from updated_at for closed
+// incidents, not from a true incident-close record.
+// Ref: #/components/schemas/FleetIncidentItem
+type FleetIncidentItem struct {
+	SiteID          uuid.UUID   `json:"site_id"`
+	SiteName        string      `json:"site_name"`
+	SiteURL         string      `json:"site_url"`
+	StartedAt       OptDateTime `json:"started_at"`
+	EndedAt         OptDateTime `json:"ended_at"`
+	DurationSeconds OptInt64    `json:"duration_seconds"`
+	Ongoing         bool        `json:"ongoing"`
+	LatestTotalMs   OptFloat64  `json:"latest_total_ms"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *FleetIncidentItem) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSiteName returns the value of SiteName.
+func (s *FleetIncidentItem) GetSiteName() string {
+	return s.SiteName
+}
+
+// GetSiteURL returns the value of SiteURL.
+func (s *FleetIncidentItem) GetSiteURL() string {
+	return s.SiteURL
+}
+
+// GetStartedAt returns the value of StartedAt.
+func (s *FleetIncidentItem) GetStartedAt() OptDateTime {
+	return s.StartedAt
+}
+
+// GetEndedAt returns the value of EndedAt.
+func (s *FleetIncidentItem) GetEndedAt() OptDateTime {
+	return s.EndedAt
+}
+
+// GetDurationSeconds returns the value of DurationSeconds.
+func (s *FleetIncidentItem) GetDurationSeconds() OptInt64 {
+	return s.DurationSeconds
+}
+
+// GetOngoing returns the value of Ongoing.
+func (s *FleetIncidentItem) GetOngoing() bool {
+	return s.Ongoing
+}
+
+// GetLatestTotalMs returns the value of LatestTotalMs.
+func (s *FleetIncidentItem) GetLatestTotalMs() OptFloat64 {
+	return s.LatestTotalMs
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *FleetIncidentItem) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSiteName sets the value of SiteName.
+func (s *FleetIncidentItem) SetSiteName(val string) {
+	s.SiteName = val
+}
+
+// SetSiteURL sets the value of SiteURL.
+func (s *FleetIncidentItem) SetSiteURL(val string) {
+	s.SiteURL = val
+}
+
+// SetStartedAt sets the value of StartedAt.
+func (s *FleetIncidentItem) SetStartedAt(val OptDateTime) {
+	s.StartedAt = val
+}
+
+// SetEndedAt sets the value of EndedAt.
+func (s *FleetIncidentItem) SetEndedAt(val OptDateTime) {
+	s.EndedAt = val
+}
+
+// SetDurationSeconds sets the value of DurationSeconds.
+func (s *FleetIncidentItem) SetDurationSeconds(val OptInt64) {
+	s.DurationSeconds = val
+}
+
+// SetOngoing sets the value of Ongoing.
+func (s *FleetIncidentItem) SetOngoing(val bool) {
+	s.Ongoing = val
+}
+
+// SetLatestTotalMs sets the value of LatestTotalMs.
+func (s *FleetIncidentItem) SetLatestTotalMs(val OptFloat64) {
+	s.LatestTotalMs = val
+}
+
+// Ref: #/components/schemas/FleetIncidentList
+type FleetIncidentList struct {
+	Items []FleetIncidentItem `json:"items"`
+}
+
+// GetItems returns the value of Items.
+func (s *FleetIncidentList) GetItems() []FleetIncidentItem {
+	return s.Items
+}
+
+// SetItems sets the value of Items.
+func (s *FleetIncidentList) SetItems(val []FleetIncidentItem) {
+	s.Items = val
+}
+
+// Ref: #/components/schemas/FleetRumAggregate
+type FleetRumAggregate struct {
+	WindowDays     int `json:"window_days"`
+	SitesReporting int `json:"sites_reporting"`
+	SitesTotal     int `json:"sites_total"`
+	// Percentage of sites with "good" LCP p75.
+	FleetPassPct float64 `json:"fleet_pass_pct"`
+	// Keyed by metric name (lcp, inp, cls, fcp, ttfb).
+	Metrics        FleetRumAggregateMetrics `json:"metrics"`
+	WorstOffenders []FleetRumWorstOffender  `json:"worst_offenders"`
+}
+
+// GetWindowDays returns the value of WindowDays.
+func (s *FleetRumAggregate) GetWindowDays() int {
+	return s.WindowDays
+}
+
+// GetSitesReporting returns the value of SitesReporting.
+func (s *FleetRumAggregate) GetSitesReporting() int {
+	return s.SitesReporting
+}
+
+// GetSitesTotal returns the value of SitesTotal.
+func (s *FleetRumAggregate) GetSitesTotal() int {
+	return s.SitesTotal
+}
+
+// GetFleetPassPct returns the value of FleetPassPct.
+func (s *FleetRumAggregate) GetFleetPassPct() float64 {
+	return s.FleetPassPct
+}
+
+// GetMetrics returns the value of Metrics.
+func (s *FleetRumAggregate) GetMetrics() FleetRumAggregateMetrics {
+	return s.Metrics
+}
+
+// GetWorstOffenders returns the value of WorstOffenders.
+func (s *FleetRumAggregate) GetWorstOffenders() []FleetRumWorstOffender {
+	return s.WorstOffenders
+}
+
+// SetWindowDays sets the value of WindowDays.
+func (s *FleetRumAggregate) SetWindowDays(val int) {
+	s.WindowDays = val
+}
+
+// SetSitesReporting sets the value of SitesReporting.
+func (s *FleetRumAggregate) SetSitesReporting(val int) {
+	s.SitesReporting = val
+}
+
+// SetSitesTotal sets the value of SitesTotal.
+func (s *FleetRumAggregate) SetSitesTotal(val int) {
+	s.SitesTotal = val
+}
+
+// SetFleetPassPct sets the value of FleetPassPct.
+func (s *FleetRumAggregate) SetFleetPassPct(val float64) {
+	s.FleetPassPct = val
+}
+
+// SetMetrics sets the value of Metrics.
+func (s *FleetRumAggregate) SetMetrics(val FleetRumAggregateMetrics) {
+	s.Metrics = val
+}
+
+// SetWorstOffenders sets the value of WorstOffenders.
+func (s *FleetRumAggregate) SetWorstOffenders(val []FleetRumWorstOffender) {
+	s.WorstOffenders = val
+}
+
+// Keyed by metric name (lcp, inp, cls, fcp, ttfb).
+type FleetRumAggregateMetrics map[string]FleetRumMetric
+
+func (s *FleetRumAggregateMetrics) init() FleetRumAggregateMetrics {
+	m := *s
+	if m == nil {
+		m = map[string]FleetRumMetric{}
+		*s = m
+	}
+	return m
+}
+
+// Ref: #/components/schemas/FleetRumMetric
+type FleetRumMetric struct {
+	Metric      string                  `json:"metric"`
+	P75Ms       float64                 `json:"p75_ms"`
+	SampleCount int64                   `json:"sample_count"`
+	Rating      OptFleetRumMetricRating `json:"rating"`
+	Suppressed  bool                    `json:"suppressed"`
+	GoodPct     int                     `json:"good_pct"`
+	NiPct       int                     `json:"ni_pct"`
+	PoorPct     int                     `json:"poor_pct"`
+}
+
+// GetMetric returns the value of Metric.
+func (s *FleetRumMetric) GetMetric() string {
+	return s.Metric
+}
+
+// GetP75Ms returns the value of P75Ms.
+func (s *FleetRumMetric) GetP75Ms() float64 {
+	return s.P75Ms
+}
+
+// GetSampleCount returns the value of SampleCount.
+func (s *FleetRumMetric) GetSampleCount() int64 {
+	return s.SampleCount
+}
+
+// GetRating returns the value of Rating.
+func (s *FleetRumMetric) GetRating() OptFleetRumMetricRating {
+	return s.Rating
+}
+
+// GetSuppressed returns the value of Suppressed.
+func (s *FleetRumMetric) GetSuppressed() bool {
+	return s.Suppressed
+}
+
+// GetGoodPct returns the value of GoodPct.
+func (s *FleetRumMetric) GetGoodPct() int {
+	return s.GoodPct
+}
+
+// GetNiPct returns the value of NiPct.
+func (s *FleetRumMetric) GetNiPct() int {
+	return s.NiPct
+}
+
+// GetPoorPct returns the value of PoorPct.
+func (s *FleetRumMetric) GetPoorPct() int {
+	return s.PoorPct
+}
+
+// SetMetric sets the value of Metric.
+func (s *FleetRumMetric) SetMetric(val string) {
+	s.Metric = val
+}
+
+// SetP75Ms sets the value of P75Ms.
+func (s *FleetRumMetric) SetP75Ms(val float64) {
+	s.P75Ms = val
+}
+
+// SetSampleCount sets the value of SampleCount.
+func (s *FleetRumMetric) SetSampleCount(val int64) {
+	s.SampleCount = val
+}
+
+// SetRating sets the value of Rating.
+func (s *FleetRumMetric) SetRating(val OptFleetRumMetricRating) {
+	s.Rating = val
+}
+
+// SetSuppressed sets the value of Suppressed.
+func (s *FleetRumMetric) SetSuppressed(val bool) {
+	s.Suppressed = val
+}
+
+// SetGoodPct sets the value of GoodPct.
+func (s *FleetRumMetric) SetGoodPct(val int) {
+	s.GoodPct = val
+}
+
+// SetNiPct sets the value of NiPct.
+func (s *FleetRumMetric) SetNiPct(val int) {
+	s.NiPct = val
+}
+
+// SetPoorPct sets the value of PoorPct.
+func (s *FleetRumMetric) SetPoorPct(val int) {
+	s.PoorPct = val
+}
+
+type FleetRumMetricRating string
+
+const (
+	FleetRumMetricRatingGood             FleetRumMetricRating = "good"
+	FleetRumMetricRatingNeedsImprovement FleetRumMetricRating = "needs_improvement"
+	FleetRumMetricRatingPoor             FleetRumMetricRating = "poor"
+)
+
+// AllValues returns all FleetRumMetricRating values.
+func (FleetRumMetricRating) AllValues() []FleetRumMetricRating {
+	return []FleetRumMetricRating{
+		FleetRumMetricRatingGood,
+		FleetRumMetricRatingNeedsImprovement,
+		FleetRumMetricRatingPoor,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FleetRumMetricRating) MarshalText() ([]byte, error) {
+	switch s {
+	case FleetRumMetricRatingGood:
+		return []byte(s), nil
+	case FleetRumMetricRatingNeedsImprovement:
+		return []byte(s), nil
+	case FleetRumMetricRatingPoor:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FleetRumMetricRating) UnmarshalText(data []byte) error {
+	switch FleetRumMetricRating(data) {
+	case FleetRumMetricRatingGood:
+		*s = FleetRumMetricRatingGood
+		return nil
+	case FleetRumMetricRatingNeedsImprovement:
+		*s = FleetRumMetricRatingNeedsImprovement
+		return nil
+	case FleetRumMetricRatingPoor:
+		*s = FleetRumMetricRatingPoor
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Ref: #/components/schemas/FleetRumWorstOffender
+type FleetRumWorstOffender struct {
+	SiteID uuid.UUID `json:"site_id"`
+	P75Ms  float64   `json:"p75_ms"`
+	Rating string    `json:"rating"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *FleetRumWorstOffender) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetP75Ms returns the value of P75Ms.
+func (s *FleetRumWorstOffender) GetP75Ms() float64 {
+	return s.P75Ms
+}
+
+// GetRating returns the value of Rating.
+func (s *FleetRumWorstOffender) GetRating() string {
+	return s.Rating
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *FleetRumWorstOffender) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetP75Ms sets the value of P75Ms.
+func (s *FleetRumWorstOffender) SetP75Ms(val float64) {
+	s.P75Ms = val
+}
+
+// SetRating sets the value of Rating.
+func (s *FleetRumWorstOffender) SetRating(val string) {
+	s.Rating = val
+}
+
+// Ref: #/components/schemas/FleetUptimeCounts
+type FleetUptimeCounts struct {
+	Up       int `json:"up"`
+	Degraded int `json:"degraded"`
+	Down     int `json:"down"`
+	Unknown  int `json:"unknown"`
+}
+
+// GetUp returns the value of Up.
+func (s *FleetUptimeCounts) GetUp() int {
+	return s.Up
+}
+
+// GetDegraded returns the value of Degraded.
+func (s *FleetUptimeCounts) GetDegraded() int {
+	return s.Degraded
+}
+
+// GetDown returns the value of Down.
+func (s *FleetUptimeCounts) GetDown() int {
+	return s.Down
+}
+
+// GetUnknown returns the value of Unknown.
+func (s *FleetUptimeCounts) GetUnknown() int {
+	return s.Unknown
+}
+
+// SetUp sets the value of Up.
+func (s *FleetUptimeCounts) SetUp(val int) {
+	s.Up = val
+}
+
+// SetDegraded sets the value of Degraded.
+func (s *FleetUptimeCounts) SetDegraded(val int) {
+	s.Degraded = val
+}
+
+// SetDown sets the value of Down.
+func (s *FleetUptimeCounts) SetDown(val int) {
+	s.Down = val
+}
+
+// SetUnknown sets the value of Unknown.
+func (s *FleetUptimeCounts) SetUnknown(val int) {
+	s.Unknown = val
+}
+
+// Ref: #/components/schemas/FleetUptimeStatus
+type FleetUptimeStatus struct {
+	Summary FleetUptimeCounts       `json:"summary"`
+	Items   []FleetUptimeStatusItem `json:"items"`
+}
+
+// GetSummary returns the value of Summary.
+func (s *FleetUptimeStatus) GetSummary() FleetUptimeCounts {
+	return s.Summary
+}
+
+// GetItems returns the value of Items.
+func (s *FleetUptimeStatus) GetItems() []FleetUptimeStatusItem {
+	return s.Items
+}
+
+// SetSummary sets the value of Summary.
+func (s *FleetUptimeStatus) SetSummary(val FleetUptimeCounts) {
+	s.Summary = val
+}
+
+// SetItems sets the value of Items.
+func (s *FleetUptimeStatus) SetItems(val []FleetUptimeStatusItem) {
+	s.Items = val
+}
+
+// Ref: #/components/schemas/FleetUptimeStatusItem
+type FleetUptimeStatusItem struct {
+	SiteID          uuid.UUID                   `json:"site_id"`
+	SiteName        string                      `json:"site_name"`
+	SiteURL         string                      `json:"site_url"`
+	Status          FleetUptimeStatusItemStatus `json:"status"`
+	UptimePct7d     float64                     `json:"uptime_pct_7d"`
+	AvgLatencyMs7d  float64                     `json:"avg_latency_ms_7d"`
+	LatestTotalMs   OptFloat64                  `json:"latest_total_ms"`
+	LastProbeAt     OptDateTime                 `json:"last_probe_at"`
+	TLSExpiry       OptDateTime                 `json:"tls_expiry"`
+	InIncident      bool                        `json:"in_incident"`
+	ConnectionState string                      `json:"connection_state"`
+	HealthStatus    string                      `json:"health_status"`
+}
+
+// GetSiteID returns the value of SiteID.
+func (s *FleetUptimeStatusItem) GetSiteID() uuid.UUID {
+	return s.SiteID
+}
+
+// GetSiteName returns the value of SiteName.
+func (s *FleetUptimeStatusItem) GetSiteName() string {
+	return s.SiteName
+}
+
+// GetSiteURL returns the value of SiteURL.
+func (s *FleetUptimeStatusItem) GetSiteURL() string {
+	return s.SiteURL
+}
+
+// GetStatus returns the value of Status.
+func (s *FleetUptimeStatusItem) GetStatus() FleetUptimeStatusItemStatus {
+	return s.Status
+}
+
+// GetUptimePct7d returns the value of UptimePct7d.
+func (s *FleetUptimeStatusItem) GetUptimePct7d() float64 {
+	return s.UptimePct7d
+}
+
+// GetAvgLatencyMs7d returns the value of AvgLatencyMs7d.
+func (s *FleetUptimeStatusItem) GetAvgLatencyMs7d() float64 {
+	return s.AvgLatencyMs7d
+}
+
+// GetLatestTotalMs returns the value of LatestTotalMs.
+func (s *FleetUptimeStatusItem) GetLatestTotalMs() OptFloat64 {
+	return s.LatestTotalMs
+}
+
+// GetLastProbeAt returns the value of LastProbeAt.
+func (s *FleetUptimeStatusItem) GetLastProbeAt() OptDateTime {
+	return s.LastProbeAt
+}
+
+// GetTLSExpiry returns the value of TLSExpiry.
+func (s *FleetUptimeStatusItem) GetTLSExpiry() OptDateTime {
+	return s.TLSExpiry
+}
+
+// GetInIncident returns the value of InIncident.
+func (s *FleetUptimeStatusItem) GetInIncident() bool {
+	return s.InIncident
+}
+
+// GetConnectionState returns the value of ConnectionState.
+func (s *FleetUptimeStatusItem) GetConnectionState() string {
+	return s.ConnectionState
+}
+
+// GetHealthStatus returns the value of HealthStatus.
+func (s *FleetUptimeStatusItem) GetHealthStatus() string {
+	return s.HealthStatus
+}
+
+// SetSiteID sets the value of SiteID.
+func (s *FleetUptimeStatusItem) SetSiteID(val uuid.UUID) {
+	s.SiteID = val
+}
+
+// SetSiteName sets the value of SiteName.
+func (s *FleetUptimeStatusItem) SetSiteName(val string) {
+	s.SiteName = val
+}
+
+// SetSiteURL sets the value of SiteURL.
+func (s *FleetUptimeStatusItem) SetSiteURL(val string) {
+	s.SiteURL = val
+}
+
+// SetStatus sets the value of Status.
+func (s *FleetUptimeStatusItem) SetStatus(val FleetUptimeStatusItemStatus) {
+	s.Status = val
+}
+
+// SetUptimePct7d sets the value of UptimePct7d.
+func (s *FleetUptimeStatusItem) SetUptimePct7d(val float64) {
+	s.UptimePct7d = val
+}
+
+// SetAvgLatencyMs7d sets the value of AvgLatencyMs7d.
+func (s *FleetUptimeStatusItem) SetAvgLatencyMs7d(val float64) {
+	s.AvgLatencyMs7d = val
+}
+
+// SetLatestTotalMs sets the value of LatestTotalMs.
+func (s *FleetUptimeStatusItem) SetLatestTotalMs(val OptFloat64) {
+	s.LatestTotalMs = val
+}
+
+// SetLastProbeAt sets the value of LastProbeAt.
+func (s *FleetUptimeStatusItem) SetLastProbeAt(val OptDateTime) {
+	s.LastProbeAt = val
+}
+
+// SetTLSExpiry sets the value of TLSExpiry.
+func (s *FleetUptimeStatusItem) SetTLSExpiry(val OptDateTime) {
+	s.TLSExpiry = val
+}
+
+// SetInIncident sets the value of InIncident.
+func (s *FleetUptimeStatusItem) SetInIncident(val bool) {
+	s.InIncident = val
+}
+
+// SetConnectionState sets the value of ConnectionState.
+func (s *FleetUptimeStatusItem) SetConnectionState(val string) {
+	s.ConnectionState = val
+}
+
+// SetHealthStatus sets the value of HealthStatus.
+func (s *FleetUptimeStatusItem) SetHealthStatus(val string) {
+	s.HealthStatus = val
+}
+
+type FleetUptimeStatusItemStatus string
+
+const (
+	FleetUptimeStatusItemStatusUp       FleetUptimeStatusItemStatus = "up"
+	FleetUptimeStatusItemStatusDegraded FleetUptimeStatusItemStatus = "degraded"
+	FleetUptimeStatusItemStatusDown     FleetUptimeStatusItemStatus = "down"
+	FleetUptimeStatusItemStatusUnknown  FleetUptimeStatusItemStatus = "unknown"
+)
+
+// AllValues returns all FleetUptimeStatusItemStatus values.
+func (FleetUptimeStatusItemStatus) AllValues() []FleetUptimeStatusItemStatus {
+	return []FleetUptimeStatusItemStatus{
+		FleetUptimeStatusItemStatusUp,
+		FleetUptimeStatusItemStatusDegraded,
+		FleetUptimeStatusItemStatusDown,
+		FleetUptimeStatusItemStatusUnknown,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FleetUptimeStatusItemStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case FleetUptimeStatusItemStatusUp:
+		return []byte(s), nil
+	case FleetUptimeStatusItemStatusDegraded:
+		return []byte(s), nil
+	case FleetUptimeStatusItemStatusDown:
+		return []byte(s), nil
+	case FleetUptimeStatusItemStatusUnknown:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FleetUptimeStatusItemStatus) UnmarshalText(data []byte) error {
+	switch FleetUptimeStatusItemStatus(data) {
+	case FleetUptimeStatusItemStatusUp:
+		*s = FleetUptimeStatusItemStatusUp
+		return nil
+	case FleetUptimeStatusItemStatusDegraded:
+		*s = FleetUptimeStatusItemStatusDegraded
+		return nil
+	case FleetUptimeStatusItemStatusDown:
+		*s = FleetUptimeStatusItemStatusDown
+		return nil
+	case FleetUptimeStatusItemStatusUnknown:
+		*s = FleetUptimeStatusItemStatusUnknown
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
 type FlushObjectCacheReq struct {
 	Scope OptFlushObjectCacheReqScope `json:"scope"`
 	// Required when scope is "group".
@@ -8869,6 +9725,9 @@ type GetEmailNotifySettingsUnauthorized Error
 
 func (*GetEmailNotifySettingsUnauthorized) getEmailNotifySettingsRes() {}
 
+// Fleet DB health aggregate (shape matches FleetDbHealth Go model).
+type GetFleetDbHealthOK struct{}
+
 type GetFleetEmailStatsForbidden Error
 
 func (*GetFleetEmailStatsForbidden) getFleetEmailStatsRes() {}
@@ -8876,6 +9735,61 @@ func (*GetFleetEmailStatsForbidden) getFleetEmailStatsRes() {}
 type GetFleetEmailStatsUnauthorized Error
 
 func (*GetFleetEmailStatsUnauthorized) getFleetEmailStatsRes() {}
+
+type GetFleetRumAggregateDevice string
+
+const (
+	GetFleetRumAggregateDeviceDesktop GetFleetRumAggregateDevice = "desktop"
+	GetFleetRumAggregateDeviceMobile  GetFleetRumAggregateDevice = "mobile"
+	GetFleetRumAggregateDeviceTablet  GetFleetRumAggregateDevice = "tablet"
+	GetFleetRumAggregateDeviceAll     GetFleetRumAggregateDevice = "all"
+)
+
+// AllValues returns all GetFleetRumAggregateDevice values.
+func (GetFleetRumAggregateDevice) AllValues() []GetFleetRumAggregateDevice {
+	return []GetFleetRumAggregateDevice{
+		GetFleetRumAggregateDeviceDesktop,
+		GetFleetRumAggregateDeviceMobile,
+		GetFleetRumAggregateDeviceTablet,
+		GetFleetRumAggregateDeviceAll,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s GetFleetRumAggregateDevice) MarshalText() ([]byte, error) {
+	switch s {
+	case GetFleetRumAggregateDeviceDesktop:
+		return []byte(s), nil
+	case GetFleetRumAggregateDeviceMobile:
+		return []byte(s), nil
+	case GetFleetRumAggregateDeviceTablet:
+		return []byte(s), nil
+	case GetFleetRumAggregateDeviceAll:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *GetFleetRumAggregateDevice) UnmarshalText(data []byte) error {
+	switch GetFleetRumAggregateDevice(data) {
+	case GetFleetRumAggregateDeviceDesktop:
+		*s = GetFleetRumAggregateDeviceDesktop
+		return nil
+	case GetFleetRumAggregateDeviceMobile:
+		*s = GetFleetRumAggregateDeviceMobile
+		return nil
+	case GetFleetRumAggregateDeviceTablet:
+		*s = GetFleetRumAggregateDeviceTablet
+		return nil
+	case GetFleetRumAggregateDeviceAll:
+		*s = GetFleetRumAggregateDeviceAll
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 type GetOrgEmailConfigForbidden Error
 
@@ -9397,6 +10311,61 @@ func (*ListEmailProvidersForbidden) listEmailProvidersRes() {}
 type ListEmailProvidersUnauthorized Error
 
 func (*ListEmailProvidersUnauthorized) listEmailProvidersRes() {}
+
+type ListFleetBackupsStatus string
+
+const (
+	ListFleetBackupsStatusPending   ListFleetBackupsStatus = "pending"
+	ListFleetBackupsStatusRunning   ListFleetBackupsStatus = "running"
+	ListFleetBackupsStatusCompleted ListFleetBackupsStatus = "completed"
+	ListFleetBackupsStatusFailed    ListFleetBackupsStatus = "failed"
+)
+
+// AllValues returns all ListFleetBackupsStatus values.
+func (ListFleetBackupsStatus) AllValues() []ListFleetBackupsStatus {
+	return []ListFleetBackupsStatus{
+		ListFleetBackupsStatusPending,
+		ListFleetBackupsStatusRunning,
+		ListFleetBackupsStatusCompleted,
+		ListFleetBackupsStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s ListFleetBackupsStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case ListFleetBackupsStatusPending:
+		return []byte(s), nil
+	case ListFleetBackupsStatusRunning:
+		return []byte(s), nil
+	case ListFleetBackupsStatusCompleted:
+		return []byte(s), nil
+	case ListFleetBackupsStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *ListFleetBackupsStatus) UnmarshalText(data []byte) error {
+	switch ListFleetBackupsStatus(data) {
+	case ListFleetBackupsStatusPending:
+		*s = ListFleetBackupsStatusPending
+		return nil
+	case ListFleetBackupsStatusRunning:
+		*s = ListFleetBackupsStatusRunning
+		return nil
+	case ListFleetBackupsStatusCompleted:
+		*s = ListFleetBackupsStatusCompleted
+		return nil
+	case ListFleetBackupsStatusFailed:
+		*s = ListFleetBackupsStatusFailed
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
 
 type ListFleetEmailLogForbidden Error
 
@@ -14573,6 +15542,52 @@ func (o OptExportSiteEmailLogFormat) Or(d ExportSiteEmailLogFormat) ExportSiteEm
 	return d
 }
 
+// NewOptFleetRumMetricRating returns new OptFleetRumMetricRating with value set to v.
+func NewOptFleetRumMetricRating(v FleetRumMetricRating) OptFleetRumMetricRating {
+	return OptFleetRumMetricRating{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptFleetRumMetricRating is optional FleetRumMetricRating.
+type OptFleetRumMetricRating struct {
+	Value FleetRumMetricRating
+	Set   bool
+}
+
+// IsSet returns true if OptFleetRumMetricRating was set.
+func (o OptFleetRumMetricRating) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptFleetRumMetricRating) Reset() {
+	var v FleetRumMetricRating
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptFleetRumMetricRating) SetTo(v FleetRumMetricRating) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptFleetRumMetricRating) Get() (v FleetRumMetricRating, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptFleetRumMetricRating) Or(d FleetRumMetricRating) FleetRumMetricRating {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptFloat32 returns new OptFloat32 with value set to v.
 func NewOptFloat32(v float32) OptFloat32 {
 	return OptFloat32{
@@ -14895,6 +15910,52 @@ func (o OptGenerateClientReportRequest) Or(d GenerateClientReportRequest) Genera
 	return d
 }
 
+// NewOptGetFleetRumAggregateDevice returns new OptGetFleetRumAggregateDevice with value set to v.
+func NewOptGetFleetRumAggregateDevice(v GetFleetRumAggregateDevice) OptGetFleetRumAggregateDevice {
+	return OptGetFleetRumAggregateDevice{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptGetFleetRumAggregateDevice is optional GetFleetRumAggregateDevice.
+type OptGetFleetRumAggregateDevice struct {
+	Value GetFleetRumAggregateDevice
+	Set   bool
+}
+
+// IsSet returns true if OptGetFleetRumAggregateDevice was set.
+func (o OptGetFleetRumAggregateDevice) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptGetFleetRumAggregateDevice) Reset() {
+	var v GetFleetRumAggregateDevice
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptGetFleetRumAggregateDevice) SetTo(v GetFleetRumAggregateDevice) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptGetFleetRumAggregateDevice) Get() (v GetFleetRumAggregateDevice, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptGetFleetRumAggregateDevice) Or(d GetFleetRumAggregateDevice) GetFleetRumAggregateDevice {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptGetPortalSiteUptimeRange returns new OptGetPortalSiteUptimeRange with value set to v.
 func NewOptGetPortalSiteUptimeRange(v GetPortalSiteUptimeRange) OptGetPortalSiteUptimeRange {
 	return OptGetPortalSiteUptimeRange{
@@ -15211,6 +16272,52 @@ func (o OptInt64) Get() (v int64, ok bool) {
 
 // Or returns value if set, or given parameter if does not.
 func (o OptInt64) Or(d int64) int64 {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
+// NewOptListFleetBackupsStatus returns new OptListFleetBackupsStatus with value set to v.
+func NewOptListFleetBackupsStatus(v ListFleetBackupsStatus) OptListFleetBackupsStatus {
+	return OptListFleetBackupsStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptListFleetBackupsStatus is optional ListFleetBackupsStatus.
+type OptListFleetBackupsStatus struct {
+	Value ListFleetBackupsStatus
+	Set   bool
+}
+
+// IsSet returns true if OptListFleetBackupsStatus was set.
+func (o OptListFleetBackupsStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptListFleetBackupsStatus) Reset() {
+	var v ListFleetBackupsStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptListFleetBackupsStatus) SetTo(v ListFleetBackupsStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptListFleetBackupsStatus) Get() (v ListFleetBackupsStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptListFleetBackupsStatus) Or(d ListFleetBackupsStatus) ListFleetBackupsStatus {
 	if v, ok := o.Get(); ok {
 		return v
 	}

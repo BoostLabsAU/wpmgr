@@ -100,6 +100,11 @@ type Repo interface {
 	// PairingCodeSiteID peeks a code's bound site_id (enroll GUC) so /enroll can
 	// route between the site-first consume and the legacy create-at-enroll flow.
 	PairingCodeSiteID(ctx context.Context, codeHash string) (uuid.UUID, bool, error)
+
+	// ListAllSiteIDs returns every non-archived site ID for the tenant in a single
+	// lightweight query (SELECT id only). Use this instead of List+cap for fleet
+	// adapters that enumerate all sites without a row limit.
+	ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 }
 
 // SiteRef is the slim (site, tenant, url) projection the timeout sweeper
@@ -616,6 +621,19 @@ func (r *pgRepo) MarkUnreachable(ctx context.Context, siteID uuid.UUID) (bool, e
 		return nil
 	})
 	return changed, err
+}
+
+func (r *pgRepo) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	var ids []uuid.UUID
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).ListAllSiteIDs(ctx, tenantID)
+		if err != nil {
+			return domain.Internal("site_list_all_ids_failed", "failed to list all site IDs").WithCause(err)
+		}
+		ids = rows
+		return nil
+	})
+	return ids, err
 }
 
 func mapCreateErr(err error) error {

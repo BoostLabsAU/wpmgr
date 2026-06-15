@@ -226,9 +226,19 @@ import type {
   GetEmailNotifySettingsData,
   GetEmailNotifySettingsErrors,
   GetEmailNotifySettingsResponses,
+  GetFleetBackupHealthData,
+  GetFleetBackupHealthResponses,
+  GetFleetDbHealthData,
+  GetFleetDbHealthResponses,
   GetFleetEmailStatsData,
   GetFleetEmailStatsErrors,
   GetFleetEmailStatsResponses,
+  GetFleetIncidentsData,
+  GetFleetIncidentsResponses,
+  GetFleetRumAggregateData,
+  GetFleetRumAggregateResponses,
+  GetFleetUptimeStatusData,
+  GetFleetUptimeStatusResponses,
   GetHealthzData,
   GetHealthzResponses,
   GetMeData,
@@ -340,6 +350,8 @@ import type {
   ListEmailProvidersData,
   ListEmailProvidersErrors,
   ListEmailProvidersResponses,
+  ListFleetBackupsData,
+  ListFleetBackupsResponses,
   ListFleetEmailLogData,
   ListFleetEmailLogErrors,
   ListFleetEmailLogResponses,
@@ -2570,6 +2582,114 @@ export const getSiteUptime = <ThrowOnError extends boolean = false>(
     GetSiteUptimeErrors,
     ThrowOnError
   >({ url: "/api/v1/sites/{siteId}/uptime", ...options });
+
+/**
+ * Paginated filtered list of backup snapshots across fleet sites
+ *
+ * Returns a filtered, paginated list of backup snapshots across the caller's
+ * accessible sites. Org-scoped principals see all tenant sites; site-scoped
+ * collaborators see only their granted sites. Requires viewer+.
+ *
+ */
+export const listFleetBackups = <ThrowOnError extends boolean = false>(
+  options?: Options<ListFleetBackupsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    ListFleetBackupsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/backups/fleet", ...options });
+
+/**
+ * Per-site backup health classification across the fleet
+ *
+ * Returns one health item per requested site with a server-derived status:
+ * unprotected, failed, stale, in_flight, or protected. Requires viewer+.
+ *
+ */
+export const getFleetBackupHealth = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetBackupHealthData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetBackupHealthResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/backups/health", ...options });
+
+/**
+ * Fleet-wide uptime status with summary counts and per-site items
+ *
+ * Returns summary counts {up, degraded, down, unknown} and a per-site list
+ * with the latest probe result, 7-day uptime %, and in-incident flag.
+ * Status derivation: down=latest probe up=false; degraded=up but latency
+ * >2000ms or connection_state=degraded; up=probe up+fast; unknown=no probe.
+ * Requires viewer+.
+ *
+ */
+export const getFleetUptimeStatus = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetUptimeStatusData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetUptimeStatusResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/fleet/status", ...options });
+
+/**
+ * Open incidents and recently-alerted sites
+ *
+ * Returns open incidents (in_incident=true) and recently-alerted sites
+ * (last_alert_at >= since). Full historical incident reconstruction is NOT
+ * possible from site_alert_state, which stores only current transition
+ * memory. ended_at/duration_seconds are estimated from updated_at for
+ * closed incidents, not from a true incident-close record. Requires viewer+.
+ *
+ */
+export const getFleetIncidents = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetIncidentsData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetIncidentsResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/fleet/incidents", ...options });
+
+/**
+ * Cross-site RUM Core Web Vitals aggregate
+ *
+ * Returns a fleet-level CWV aggregate across all tenant sites reporting RUM
+ * data in the window. Includes summary counts, per-metric p75/rating/
+ * distribution, fleet pass %, and worst offenders. Org-scope only;
+ * site-scoped collaborators should use the per-site /perf/rum/summary.
+ * Requires viewer+.
+ *
+ */
+export const getFleetRumAggregate = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetRumAggregateData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetRumAggregateResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/perf/rum/fleet", ...options });
+
+/**
+ * Fleet-level database health aggregate across all scanned sites
+ *
+ * Returns an aggregate of database health metrics across all tenant sites
+ * that have at least one completed DB scan within the lookback window.
+ * Includes total DB size, orphaned option/cron counts, and the top-N sites
+ * by DB size. Org-scope only. Requires viewer+.
+ *
+ */
+export const getFleetDbHealth = <ThrowOnError extends boolean = false>(
+  options?: Options<GetFleetDbHealthData, ThrowOnError>,
+) =>
+  (options?.client ?? client).get<
+    GetFleetDbHealthResponses,
+    unknown,
+    ThrowOnError
+  >({ url: "/api/v1/perf/db/fleet-health", ...options });
 
 /**
  * Current up/down status per site for the dashboard

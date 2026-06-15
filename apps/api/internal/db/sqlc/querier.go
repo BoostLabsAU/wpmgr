@@ -238,6 +238,26 @@ type Querier interface {
 	// Archived clients are excluded so a stale earliest membership cannot
 	// shadow a live one in another tenant.
 	FirstClientMemberTenant(ctx context.Context, userID uuid.UUID) (uuid.UUID, error)
+	// Returns one row per site with the data needed for the backup health card:
+	// latest completed snapshot time, latest failed snapshot time, in-flight
+	// count, and the schedule cadence / next_run_at when a schedule exists.
+	// Site-scoped principals pass @site_ids with their AllowedSiteIDs;
+	// org-scoped principals pass all tenant site IDs so the @site_ids_filter
+	// gate applies equally without a separate query path.
+	FleetBackupHealth(ctx context.Context, arg FleetBackupHealthParams) ([]FleetBackupHealthRow, error)
+	// ---------------------------------------------------------------------------
+	// Fleet backup endpoints
+	// ---------------------------------------------------------------------------
+	// Returns a filtered, paginated list of backup snapshots across a set of
+	// sites for the fleet dashboard. site_ids is always filtered to the
+	// principal's AllowedSiteIDs (for site-scoped principals) or all tenant
+	// sites (for org-scoped principals) so RLS plus the explicit site_ids
+	// filter is the double-gate. Offset pagination with ORDER BY created_at
+	// DESC, id DESC (project convention).
+	FleetListSnapshots(ctx context.Context, arg FleetListSnapshotsParams) ([]FleetListSnapshotsRow, error)
+	// Returns the total row count for the fleet snapshot list (for next_offset
+	// calculation). Uses the same predicates as FleetListSnapshots.
+	FleetListSnapshotsCount(ctx context.Context, arg FleetListSnapshotsCountParams) (int64, error)
 	GetAPIKey(ctx context.Context, arg GetAPIKeyParams) (ApiKey, error)
 	// GetAPIKeyByPrefix resolves a presented key by its unique prefix. This runs
 	// WITHOUT a tenant GUC (the auth layer does not yet know the tenant), so it must
@@ -480,6 +500,17 @@ type Querier interface {
 	// bucket_hour ascending. Used by the read-time p75 interpolation. The caller
 	// sums bucket_counts across the result set.
 	GetRumRollupHourly(ctx context.Context, arg GetRumRollupHourlyParams) ([]RumRollupHourly, error)
+	// ---------------------------------------------------------------------------
+	// Fleet RUM aggregate (InTenantTx — tenant-scoped)
+	// ---------------------------------------------------------------------------
+	// Returns hourly rollup rows across a set of sites in one tenant, within a
+	// time window. Used by the fleet RUM aggregate endpoint to compute cross-site
+	// p75 without N+1 DB round-trips. site_ids is always filtered to the
+	// principal's AllowedSiteIDs (site-scoped) or all tenant sites (org-scoped).
+	// The `, id` tiebreaker is not applicable here (no ORDER BY on primary key
+	// for aggregation reads), but ORDER BY bucket_hour ASC ensures deterministic
+	// streaming for the in-Go accumulator.
+	GetRumRollupHourlyForSites(ctx context.Context, arg GetRumRollupHourlyForSitesParams) ([]RumRollupHourly, error)
 	// Fetch the single instance SMTP row. Run under Pool.InAgentTx (app.agent='on').
 	GetSMTPSettings(ctx context.Context) (SmtpSetting, error)
 	GetScheduleRun(ctx context.Context, arg GetScheduleRunParams) (BackupScheduleRun, error)
@@ -680,6 +711,11 @@ type Querier interface {
 	// Cross-tenant enumeration for the evaluator (app.agent GUC). Only enabled
 	// configs are returned.
 	ListAlertConfigsAllTenants(ctx context.Context) ([]AlertConfig, error)
+	// Returns all non-archived site IDs for a tenant. Lightweight alternative to
+	// ListSites used by fleet adapters that need the full ID set without a 500-row
+	// cap. Excludes archived sites (connection_state = 'archived') to match the
+	// default ListSites behaviour.
+	ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
 	// Returns successfully applied update tasks for one site, ordered newest first.
 	// Used by the client portal /portal/sites/:siteId/updates endpoint. Site-scope
 	// RLS AND the explicit (site_id, tenant_id) filter together prevent cross-site

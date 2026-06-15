@@ -754,6 +754,22 @@ type Handler interface {
 	//
 	// GET /api/v1/email/notify-settings
 	GetEmailNotifySettings(ctx context.Context) (GetEmailNotifySettingsRes, error)
+	// GetFleetBackupHealth implements getFleetBackupHealth operation.
+	//
+	// Returns one health item per requested site with a server-derived status:
+	// unprotected, failed, stale, in_flight, or protected. Requires viewer+.
+	//
+	// GET /api/v1/backups/health
+	GetFleetBackupHealth(ctx context.Context, params GetFleetBackupHealthParams) (*BackupHealthList, error)
+	// GetFleetDbHealth implements getFleetDbHealth operation.
+	//
+	// Returns an aggregate of database health metrics across all tenant sites
+	// that have at least one completed DB scan within the lookback window.
+	// Includes total DB size, orphaned option/cron counts, and the top-N sites
+	// by DB size. Org-scope only. Requires viewer+.
+	//
+	// GET /api/v1/perf/db/fleet-health
+	GetFleetDbHealth(ctx context.Context, params GetFleetDbHealthParams) error
 	// GetFleetEmailStats implements getFleetEmailStats operation.
 	//
 	// Returns tenant-wide summary counts and a per-day time-series for the
@@ -762,6 +778,36 @@ type Handler interface {
 	//
 	// GET /api/v1/email/stats
 	GetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (GetFleetEmailStatsRes, error)
+	// GetFleetIncidents implements getFleetIncidents operation.
+	//
+	// Returns open incidents (in_incident=true) and recently-alerted sites
+	// (last_alert_at >= since). Full historical incident reconstruction is NOT
+	// possible from site_alert_state, which stores only current transition
+	// memory. ended_at/duration_seconds are estimated from updated_at for
+	// closed incidents, not from a true incident-close record. Requires viewer+.
+	//
+	// GET /api/v1/fleet/incidents
+	GetFleetIncidents(ctx context.Context, params GetFleetIncidentsParams) (*FleetIncidentList, error)
+	// GetFleetRumAggregate implements getFleetRumAggregate operation.
+	//
+	// Returns a fleet-level CWV aggregate across all tenant sites reporting RUM
+	// data in the window. Includes summary counts, per-metric p75/rating/
+	// distribution, fleet pass %, and worst offenders. Org-scope only;
+	// site-scoped collaborators should use the per-site /perf/rum/summary.
+	// Requires viewer+.
+	//
+	// GET /api/v1/perf/rum/fleet
+	GetFleetRumAggregate(ctx context.Context, params GetFleetRumAggregateParams) (*FleetRumAggregate, error)
+	// GetFleetUptimeStatus implements getFleetUptimeStatus operation.
+	//
+	// Returns summary counts {up, degraded, down, unknown} and a per-site list
+	// with the latest probe result, 7-day uptime %, and in-incident flag.
+	// Status derivation: down=latest probe up=false; degraded=up but latency
+	// >2000ms or connection_state=degraded; up=probe up+fast; unknown=no probe.
+	// Requires viewer+.
+	//
+	// GET /api/v1/fleet/status
+	GetFleetUptimeStatus(ctx context.Context) (*FleetUptimeStatus, error)
 	// GetHealthz implements getHealthz operation.
 	//
 	// Liveness probe.
@@ -1085,6 +1131,14 @@ type Handler interface {
 	//
 	// GET /api/v1/email/providers
 	ListEmailProviders(ctx context.Context) (ListEmailProvidersRes, error)
+	// ListFleetBackups implements listFleetBackups operation.
+	//
+	// Returns a filtered, paginated list of backup snapshots across the caller's
+	// accessible sites. Org-scoped principals see all tenant sites; site-scoped
+	// collaborators see only their granted sites. Requires viewer+.
+	//
+	// GET /api/v1/backups/fleet
+	ListFleetBackups(ctx context.Context, params ListFleetBackupsParams) (*BackupFleetList, error)
 	// ListFleetEmailLog implements listFleetEmailLog operation.
 	//
 	// Returns a keyset-paginated cross-site email log for the tenant.

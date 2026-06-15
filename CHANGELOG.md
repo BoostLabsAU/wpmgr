@@ -6,6 +6,21 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-06-15
+
+### Added
+
+- **Fleet uptime and status overview.** A new cross-site view: up / degraded / down summary tiles that filter the page, a dense status matrix (one cell per site, grouped) for spotting the one red site in a sea of green, a virtualized per-site table with a 90-day uptime strip and a response-time sparkline per row, unified agent connection state plus probe state, and a cross-site incident feed.
+- **Fleet backup browser.** A new cross-site view centered on backup health: Protected / Stale / Failed / Unprotected tiles, a virtualized one-row-per-site table led by the age of the last good backup (color-coded), with next scheduled run, latest size, a size-trend sparkline, run-backup, browse-snapshots drill-in, and per-snapshot restore. Full-archive download is planned as a follow-up.
+
+### Changed
+
+- **Performance dashboard redesigned as a true fleet view.** The single-site picker is gone. The page now leads with fleet headline figures, a sortable worst-offenders table with an inline Core Web Vitals distribution bar and p75 sparkline per site, a 28-day fleet CWV trend with threshold lines, and the database-health rollup folded in as one section. Device and window are shareable URL parameters.
+
+### Notes
+
+- New tenant-scoped read endpoints: fleet backup list and backup health, fleet uptime status and incidents, and a fleet RUM aggregate. All are site-scope aware (a collaborator sees only their granted sites) and fail closed. Control plane plus dashboard at 0.47.0; no migration, no agent change.
+
 ## [0.46.0] - 2026-06-15
 
 ### Changed

@@ -1325,9 +1325,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// M56 — Wire the RUM results reader for GET /perf/rum, /perf/rum/summary,
 	// and /perf/rum/trend (dashboard redesign: distribution + 28-day trend).
 	perfRumResultsReader := &perf.RumResultsReader{
-		GetHourlyRollups: rumStore.GetHourlyRollups,
-		ComputeP75:       rumStore.ComputeP75,
-		GetDailyRollups:  rumStore.GetDailyRollups,
+		GetHourlyRollups:         rumStore.GetHourlyRollups,
+		ComputeP75:               rumStore.ComputeP75,
+		GetDailyRollups:          rumStore.GetDailyRollups,
+		GetHourlyRollupsForSites: rumStore.GetHourlyRollupsForSites,
 	}
 	perfH.SetRumResultsReader(perfRumResultsReader)
 	// M56 — Wire the RUM beacon key repo so UpdateConfig generates keys on first enable.
