@@ -28,6 +28,11 @@ type RumResultsReader struct {
 	// handler aggregates in-Go via rum.InterpolateP75FromCounts so no separate
 	// ComputeP75Daily callback is needed on this struct.
 	GetDailyRollups func(ctx context.Context, siteID, tenantID uuid.UUID, since time.Time) ([]rum.DailyRollup, error)
+	// GetHourlyRollupsForSites returns hourly rollup rows for a set of sites within
+	// one tenant since the given time. Used by the fleet RUM aggregate endpoint to
+	// compute cross-site p75 without N+1 DB round-trips.
+	// Optional: when nil the fleet endpoint returns an empty response.
+	GetHourlyRollupsForSites func(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, since time.Time) ([]rum.HourlyRollup, error)
 }
 
 // SetRumResultsReader wires the RUM results list reader. When nil the
@@ -455,6 +460,251 @@ func emptyTrendResponse(windowDays, minSampleCount int) RumTrendResponse {
 		MinSampleCount: minSampleCount,
 		Metrics:        m,
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Fleet RUM aggregate  GET /api/v1/perf/rum/fleet
+// ---------------------------------------------------------------------------
+
+// FleetRumMetricSummary is the p75 + distribution for one Core Web Vital in
+// the fleet aggregate (device-collapsed, cross-site).
+type FleetRumMetricSummary struct {
+	Metric      string           `json:"metric"`
+	P75Ms       float64          `json:"p75_ms"`
+	SampleCount int64            `json:"sample_count"`
+	Rating      string           `json:"rating"`
+	Suppressed  bool             `json:"suppressed"`
+	GoodPct     int              `json:"good_pct"`
+	NiPct       int              `json:"ni_pct"`
+	PoorPct     int              `json:"poor_pct"`
+	Distribution *RumDistribution `json:"distribution,omitempty"`
+}
+
+// FleetRumTrendPoint is one day's fleet aggregate p75.
+type FleetRumTrendPoint struct {
+	Day         string  `json:"day"`
+	P75Ms       float64 `json:"p75_ms"`
+	SampleCount int64   `json:"sample_count"`
+	Suppressed  bool    `json:"suppressed"`
+}
+
+// FleetRumWorstOffender is a site with a poor fleet CWV rating.
+type FleetRumWorstOffender struct {
+	SiteID uuid.UUID `json:"site_id"`
+	P75Ms  float64   `json:"p75_ms"`
+	Rating string    `json:"rating"`
+}
+
+// FleetRumResponse is the response body for GET /api/v1/perf/rum/fleet.
+type FleetRumResponse struct {
+	WindowDays     int                              `json:"window_days"`
+	SitesReporting int                              `json:"sites_reporting"`
+	SitesTotal     int                              `json:"sites_total"`
+	FleetPassPct   float64                          `json:"fleet_pass_pct"` // pct of sites with good LCP p75
+	Metrics        map[string]FleetRumMetricSummary `json:"metrics"`        // keyed by metric name
+	WorstOffenders []FleetRumWorstOffender          `json:"worst_offenders"`
+}
+
+// rumFleet handles GET /api/v1/perf/rum/fleet.
+// Returns a fleet-level CWV aggregate across all tenant sites that reported
+// RUM data in the window. Query params:
+//
+//	window_days — 1-365, default 28.
+//	device      — desktop | mobile | tablet | all (default all).
+func (h *Handler) rumFleet(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+
+	windowDays := 28
+	if s := c.Query("window_days"); s != "" {
+		var n int
+		if _, err := parseIntParam(s, &n, 1, 365); err == nil {
+			windowDays = n
+		}
+	}
+	deviceFilter := c.Query("device") // empty or "all" = no device filter
+
+	if h.rum == nil || h.rum.GetHourlyRollupsForSites == nil {
+		// Degrade gracefully when the RUM store is not wired.
+		c.JSON(http.StatusOK, FleetRumResponse{
+			WindowDays:     windowDays,
+			SitesReporting: 0,
+			SitesTotal:     0,
+			FleetPassPct:   0,
+			Metrics:        map[string]FleetRumMetricSummary{},
+			WorstOffenders: []FleetRumWorstOffender{},
+		})
+		return
+	}
+
+	// Enumerate all tenant site IDs (this endpoint is RequireOrgScope so
+	// site-scoped principals are already blocked by middleware).
+	siteIDs, err := h.svc.ListAllSiteIDs(c.Request.Context(), p.TenantID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -windowDays)
+	rollups, err := h.rum.GetHourlyRollupsForSites(c.Request.Context(), p.TenantID, siteIDs, since)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Track which sites reported data.
+	reportingSites := make(map[uuid.UUID]struct{})
+	for _, r := range rollups {
+		reportingSites[r.SiteID] = struct{}{}
+	}
+
+	// Accumulate per-metric device-collapsed buckets across all sites.
+	// For the fleet aggregate we collapse both site and device (as the user
+	// can filter by device via the ?device= param but cross-site comparison
+	// needs a single p75 per metric).
+	type metricAcc struct {
+		counts      []int64
+		sampleCount int64
+		maxVal      int32
+		// bySite accumulates sums per site for worst-offenders (LCP only for now).
+		bySite map[uuid.UUID]*struct {
+			counts      []int64
+			sampleCount int64
+			maxVal      int32
+		}
+	}
+	acc := make(map[string]*metricAcc)
+
+	for _, r := range rollups {
+		// Apply device filter.
+		if deviceFilter != "" && deviceFilter != "all" && r.Device != deviceFilter {
+			continue
+		}
+		ma, ok := acc[r.Metric]
+		if !ok {
+			ma = &metricAcc{
+				counts: make([]int64, rum.NumBuckets),
+				bySite: make(map[uuid.UUID]*struct {
+					counts      []int64
+					sampleCount int64
+					maxVal      int32
+				}),
+			}
+			acc[r.Metric] = ma
+		}
+		ma.sampleCount += r.SampleCount
+		if r.MaxValue > ma.maxVal {
+			ma.maxVal = r.MaxValue
+		}
+		for i, c := range r.BucketCounts {
+			if i < rum.NumBuckets {
+				ma.counts[i] += int64(c)
+			}
+		}
+		// Per-site accumulation for worst-offenders.
+		sa, ok := ma.bySite[r.SiteID]
+		if !ok {
+			sa = &struct {
+				counts      []int64
+				sampleCount int64
+				maxVal      int32
+			}{counts: make([]int64, rum.NumBuckets)}
+			ma.bySite[r.SiteID] = sa
+		}
+		sa.sampleCount += r.SampleCount
+		if r.MaxValue > sa.maxVal {
+			sa.maxVal = r.MaxValue
+		}
+		for i, cnt := range r.BucketCounts {
+			if i < rum.NumBuckets {
+				sa.counts[i] += int64(cnt)
+			}
+		}
+	}
+
+	const minSampleCount = 30
+	metrics := make(map[string]FleetRumMetricSummary, len(acc))
+	var lcpGoodSites, lcpTotalSites int
+
+	for metric, ma := range acc {
+		suppressed := ma.sampleCount < int64(minSampleCount)
+		p75 := float64(0)
+		if !suppressed {
+			p75 = rum.InterpolateP75FromCounts(ma.counts, ma.sampleCount, ma.maxVal)
+		}
+		ms := FleetRumMetricSummary{
+			Metric:      metric,
+			P75Ms:       p75,
+			SampleCount: ma.sampleCount,
+			Suppressed:  suppressed,
+		}
+		if !suppressed {
+			ms.Rating = cwvRating(metric, p75)
+			ms.Distribution = foldBucketsIntoDistribution(metric, ma.counts)
+			if ms.Distribution != nil {
+				ms.GoodPct = ms.Distribution.GoodPct
+				ms.NiPct = ms.Distribution.NeedsImprovementPct
+				ms.PoorPct = ms.Distribution.PoorPct
+			}
+		}
+		metrics[metric] = ms
+
+		// Fleet-pass-pct: fraction of reporting sites with "good" LCP p75.
+		if metric == "lcp" {
+			for siteID, sa := range ma.bySite {
+				if sa.sampleCount < int64(minSampleCount) {
+					continue
+				}
+				_ = siteID
+				lcpTotalSites++
+				siteP75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
+				if cwvRating("lcp", siteP75) == "good" {
+					lcpGoodSites++
+				}
+			}
+		}
+	}
+
+	// Worst offenders: sites with poor LCP p75, sorted descending by p75.
+	var worstOffenders []FleetRumWorstOffender
+	if lcpAcc, ok := acc["lcp"]; ok {
+		for siteID, sa := range lcpAcc.bySite {
+			if sa.sampleCount < int64(minSampleCount) {
+				continue
+			}
+			siteP75 := rum.InterpolateP75FromCounts(sa.counts, sa.sampleCount, sa.maxVal)
+			rating := cwvRating("lcp", siteP75)
+			if rating == "poor" || rating == "needs_improvement" {
+				worstOffenders = append(worstOffenders, FleetRumWorstOffender{
+					SiteID: siteID,
+					P75Ms:  siteP75,
+					Rating: rating,
+				})
+			}
+		}
+		sort.Slice(worstOffenders, func(i, j int) bool {
+			return worstOffenders[i].P75Ms > worstOffenders[j].P75Ms
+		})
+		if len(worstOffenders) > 10 {
+			worstOffenders = worstOffenders[:10]
+		}
+	}
+	if worstOffenders == nil {
+		worstOffenders = []FleetRumWorstOffender{}
+	}
+
+	fleetPassPct := float64(0)
+	if lcpTotalSites > 0 {
+		fleetPassPct = float64(lcpGoodSites) / float64(lcpTotalSites) * 100
+	}
+
+	c.JSON(http.StatusOK, FleetRumResponse{
+		WindowDays:     windowDays,
+		SitesReporting: len(reportingSites),
+		SitesTotal:     len(siteIDs),
+		FleetPassPct:   fleetPassPct,
+		Metrics:        metrics,
+		WorstOffenders: worstOffenders,
+	})
 }
 
 // parseIntParam parses an integer from a string, clamping to [min, max].

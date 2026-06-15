@@ -181,6 +181,12 @@ func (r *wiringRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteB
 func (r *wiringRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
 	panic("unused")
 }
+func (r *wiringRepo) FleetListSnapshots(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ FleetListFilter) (FleetSnapshotPage, error) {
+	panic("wiringRepo.FleetListSnapshots not implemented")
+}
+func (r *wiringRepo) FleetBackupHealth(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ []uuid.UUID) ([]FleetBackupHealthItem, error) {
+	panic("wiringRepo.FleetBackupHealth not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // recordingEnqueuer — records which enqueue method was called.
@@ -211,6 +217,9 @@ type fakeSites struct{ info SiteInfo }
 
 func (s fakeSites) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID) (SiteInfo, error) {
 	return s.info, nil
+}
+func (s fakeSites) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
 }
 
 func buildWiringSvc(repo *wiringRepo, enq *recordingEnqueuer, now time.Time) *Service {

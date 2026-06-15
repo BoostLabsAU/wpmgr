@@ -1,6 +1,7 @@
 package uptime
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
@@ -42,6 +43,11 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// so RequirePermission will already block site-scoped principals.
 	r.GET("/alert-config", authz.RequirePermission(authz.PermAuditRead), h.getAlertConfig)
 	r.PUT("/alert-config", authz.RequirePermission(authz.PermAuditRead), h.putAlertConfig)
+	// Fleet uptime endpoints (no :siteId). Site-scoped principals see only
+	// their AllowedSiteIDs (filtered inside the handler). No RequireOrgScope()
+	// because site-scoped collaborators get a filtered view, not an error.
+	r.GET("/fleet/status", authz.RequirePermission(authz.PermSiteRead), h.fleetStatus)
+	r.GET("/fleet/incidents", authz.RequirePermission(authz.PermSiteRead), h.fleetIncidents)
 }
 
 func windowDuration(w string) (time.Duration, gen.UptimeStatusWindow) {
@@ -224,6 +230,101 @@ func (h *Handler) record(c *gin.Context, tenantID uuid.UUID, meta map[string]any
 		TargetID:   tenantID.String(),
 		Metadata:   meta,
 	})
+}
+
+// ---------------------------------------------------------------------------
+// Fleet uptime endpoints
+// ---------------------------------------------------------------------------
+
+// fleetStatus handles GET /api/v1/fleet/status.
+// Returns summary counts {up, degraded, down, unknown} and per-site status
+// items derived from the latest probe result and 7-day aggregates.
+// Site-scoped principals see only their AllowedSiteIDs.
+func (h *Handler) fleetStatus(c *gin.Context) {
+	tenantID, ok := domain.TenantIDFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Forbidden("tenant_required", "a tenant context is required"))
+		return
+	}
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteIDs, err := h.svc.FleetSiteIDs(c.Request.Context(), tenantID, p)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if len(siteIDs) == 0 {
+		c.JSON(http.StatusOK, FleetStatusResponse{
+			Summary: FleetStatusCounts{},
+			Items:   []FleetStatusItem{},
+		})
+		return
+	}
+	resp, err := h.svc.GetFleetStatus(c.Request.Context(), tenantID, siteIDs)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// fleetIncidents handles GET /api/v1/fleet/incidents.
+// Returns open incidents and recently-alerted sites.
+//
+// Query params:
+//
+//	since — RFC 3339 timestamp; defaults to 7 days ago. Controls the
+//	         "recently-alerted" window for closed incidents.
+//	limit — max 100, default 100.
+//
+// NOTE: Full historical incident reconstruction is NOT possible from
+// site_alert_state, which stores only current transition memory. This endpoint
+// returns open incidents (in_incident=true) and derivable recoveries
+// (last_alert_at >= since). ended_at/duration_seconds are estimated from
+// updated_at, not from a true incident-close record.
+func (h *Handler) fleetIncidents(c *gin.Context) {
+	tenantID, ok := domain.TenantIDFromContext(c.Request.Context())
+	if !ok {
+		httpx.Error(c, domain.Forbidden("tenant_required", "a tenant context is required"))
+		return
+	}
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteIDs, err := h.svc.FleetSiteIDs(c.Request.Context(), tenantID, p)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	since := time.Now().UTC().AddDate(0, 0, -7)
+	if s := c.Query("since"); s != "" {
+		if t, terr := time.Parse(time.RFC3339, s); terr == nil {
+			since = t
+		}
+	}
+	limit := 100
+	if s := c.Query("limit"); s != "" {
+		if n, nerr := parseInt(s); nerr == nil && n > 0 && n <= 100 {
+			limit = n
+		}
+	}
+
+	if len(siteIDs) == 0 {
+		c.JSON(http.StatusOK, gin.H{"items": []FleetIncidentItem{}})
+		return
+	}
+	items, err := h.svc.GetFleetIncidents(c.Request.Context(), tenantID, siteIDs, since, limit)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// parseInt is a minimal helper for query-param int parsing in handler methods
+// that don't have access to the backup package's parseInt32.
+func parseInt(s string) (int, error) {
+	var n int
+	_, err := fmt.Sscan(s, &n)
+	return n, err
 }
 
 // alertConfigToAPI maps an AlertConfig to its OpenAPI representation. The webhook

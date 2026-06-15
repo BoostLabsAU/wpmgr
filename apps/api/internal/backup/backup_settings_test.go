@@ -438,6 +438,9 @@ type fakeSettingsSiteLookup struct{}
 func (f fakeSettingsSiteLookup) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID) (SiteInfo, error) {
 	return SiteInfo{URL: "https://example.com", Enrolled: true}, nil
 }
+func (f fakeSettingsSiteLookup) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 func TestSendBackupEmail_NoRow_NoEmail(t *testing.T) {
 	repo := newSettingsFakeRepo()

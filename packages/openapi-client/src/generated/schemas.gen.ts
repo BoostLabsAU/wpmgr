@@ -2016,6 +2016,91 @@ export const BackupSnapshotListSchema = {
   },
 } as const;
 
+export const BackupFleetListSchema = {
+  type: "object",
+  required: ["items"],
+  description: "Paginated fleet snapshot list.",
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/BackupSnapshot",
+      },
+    },
+    next_offset: {
+      type: "integer",
+      format: "int64",
+      nullable: true,
+      description:
+        "Offset to pass for the next page; null when no further pages.",
+    },
+  },
+} as const;
+
+export const BackupHealthItemSchema = {
+  type: "object",
+  required: [
+    "site_id",
+    "site_name",
+    "site_url",
+    "status",
+    "in_flight_count",
+    "latest_size_bytes",
+  ],
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_name: {
+      type: "string",
+    },
+    site_url: {
+      type: "string",
+    },
+    status: {
+      type: "string",
+      enum: ["unprotected", "failed", "stale", "in_flight", "protected"],
+    },
+    last_completed_at: {
+      type: "string",
+      format: "date-time",
+    },
+    last_failed_at: {
+      type: "string",
+      format: "date-time",
+    },
+    latest_size_bytes: {
+      type: "integer",
+      format: "int64",
+    },
+    in_flight_count: {
+      type: "integer",
+      format: "int64",
+    },
+    schedule_cadence: {
+      type: "string",
+    },
+    next_run_at: {
+      type: "string",
+      format: "date-time",
+    },
+  },
+} as const;
+
+export const BackupHealthListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/BackupHealthItem",
+      },
+    },
+  },
+} as const;
+
 export const BackupManifestEntrySchema = {
   type: "object",
   required: ["path", "entry_kind", "size", "chunk_count"],
@@ -3012,6 +3097,253 @@ export const UptimeSummarySchema = {
       type: "array",
       items: {
         $ref: "#/components/schemas/UptimeSummaryItem",
+      },
+    },
+  },
+} as const;
+
+export const FleetUptimeCountsSchema = {
+  type: "object",
+  required: ["up", "degraded", "down", "unknown"],
+  properties: {
+    up: {
+      type: "integer",
+    },
+    degraded: {
+      type: "integer",
+    },
+    down: {
+      type: "integer",
+    },
+    unknown: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const FleetUptimeStatusItemSchema = {
+  type: "object",
+  required: [
+    "site_id",
+    "site_name",
+    "site_url",
+    "status",
+    "uptime_pct_7d",
+    "avg_latency_ms_7d",
+    "in_incident",
+    "connection_state",
+    "health_status",
+  ],
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_name: {
+      type: "string",
+    },
+    site_url: {
+      type: "string",
+    },
+    status: {
+      type: "string",
+      enum: ["up", "degraded", "down", "unknown"],
+    },
+    uptime_pct_7d: {
+      type: "number",
+      format: "double",
+    },
+    avg_latency_ms_7d: {
+      type: "number",
+      format: "double",
+    },
+    latest_total_ms: {
+      type: "number",
+      format: "double",
+    },
+    last_probe_at: {
+      type: "string",
+      format: "date-time",
+    },
+    tls_expiry: {
+      type: "string",
+      format: "date-time",
+    },
+    in_incident: {
+      type: "boolean",
+    },
+    connection_state: {
+      type: "string",
+    },
+    health_status: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const FleetUptimeStatusSchema = {
+  type: "object",
+  required: ["summary", "items"],
+  properties: {
+    summary: {
+      $ref: "#/components/schemas/FleetUptimeCounts",
+    },
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FleetUptimeStatusItem",
+      },
+    },
+  },
+} as const;
+
+export const FleetIncidentItemSchema = {
+  type: "object",
+  required: ["site_id", "site_name", "site_url", "ongoing"],
+  description:
+    "An open or recently-closed incident. NOTE: site_alert_state stores only\ncurrent transition memory; full historical incident logs are not persisted.\nended_at / duration_seconds are estimated from updated_at for closed\nincidents, not from a true incident-close record.\n",
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    site_name: {
+      type: "string",
+    },
+    site_url: {
+      type: "string",
+    },
+    started_at: {
+      type: "string",
+      format: "date-time",
+    },
+    ended_at: {
+      type: "string",
+      format: "date-time",
+    },
+    duration_seconds: {
+      type: "integer",
+      format: "int64",
+    },
+    ongoing: {
+      type: "boolean",
+    },
+    latest_total_ms: {
+      type: "number",
+      format: "double",
+    },
+  },
+} as const;
+
+export const FleetIncidentListSchema = {
+  type: "object",
+  required: ["items"],
+  properties: {
+    items: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FleetIncidentItem",
+      },
+    },
+  },
+} as const;
+
+export const FleetRumMetricSchema = {
+  type: "object",
+  required: [
+    "metric",
+    "p75_ms",
+    "sample_count",
+    "suppressed",
+    "good_pct",
+    "ni_pct",
+    "poor_pct",
+  ],
+  properties: {
+    metric: {
+      type: "string",
+    },
+    p75_ms: {
+      type: "number",
+      format: "double",
+    },
+    sample_count: {
+      type: "integer",
+      format: "int64",
+    },
+    rating: {
+      type: "string",
+      enum: ["good", "needs_improvement", "poor"],
+    },
+    suppressed: {
+      type: "boolean",
+    },
+    good_pct: {
+      type: "integer",
+    },
+    ni_pct: {
+      type: "integer",
+    },
+    poor_pct: {
+      type: "integer",
+    },
+  },
+} as const;
+
+export const FleetRumWorstOffenderSchema = {
+  type: "object",
+  required: ["site_id", "p75_ms", "rating"],
+  properties: {
+    site_id: {
+      type: "string",
+      format: "uuid",
+    },
+    p75_ms: {
+      type: "number",
+      format: "double",
+    },
+    rating: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const FleetRumAggregateSchema = {
+  type: "object",
+  required: [
+    "window_days",
+    "sites_reporting",
+    "sites_total",
+    "fleet_pass_pct",
+    "metrics",
+    "worst_offenders",
+  ],
+  properties: {
+    window_days: {
+      type: "integer",
+    },
+    sites_reporting: {
+      type: "integer",
+    },
+    sites_total: {
+      type: "integer",
+    },
+    fleet_pass_pct: {
+      type: "number",
+      format: "double",
+      description: 'Percentage of sites with "good" LCP p75.',
+    },
+    metrics: {
+      type: "object",
+      additionalProperties: {
+        $ref: "#/components/schemas/FleetRumMetric",
+      },
+      description: "Keyed by metric name (lcp, inp, cls, fcp, ttfb).",
+    },
+    worst_offenders: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FleetRumWorstOffender",
       },
     },
   },

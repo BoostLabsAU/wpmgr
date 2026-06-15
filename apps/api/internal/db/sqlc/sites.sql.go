@@ -388,6 +388,37 @@ func (q *Queries) GetSiteByURLForEnroll(ctx context.Context, arg GetSiteByURLFor
 	return i, err
 }
 
+const listAllSiteIDs = `-- name: ListAllSiteIDs :many
+SELECT id FROM sites
+WHERE tenant_id = $1
+  AND connection_state <> 'archived'
+ORDER BY created_at DESC
+`
+
+// Returns all non-archived site IDs for a tenant. Lightweight alternative to
+// ListSites used by fleet adapters that need the full ID set without a 500-row
+// cap. Excludes archived sites (connection_state = 'archived') to match the
+// default ListSites behaviour.
+func (q *Queries) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, listAllSiteIDs, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listClientNamesForSites = `-- name: ListClientNamesForSites :many
 SELECT s.id AS site_id, c.id AS client_id, c.name AS client_name
 FROM sites s

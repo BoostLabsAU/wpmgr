@@ -42,3 +42,31 @@ SET tenant_id        = EXCLUDED.tenant_id,
     last_alert_at    = EXCLUDED.last_alert_at,
     updated_at       = now()
 RETURNING *;
+
+-- ---------------------------------------------------------------------------
+-- Fleet uptime queries (implemented as raw SQL in uptime/repo.go because the
+-- LEFT JOIN LATERAL probe columns are nullable and sqlc cannot model that
+-- correctly for the bool/time.Time scalar columns; follows the GetFleetDbHealth
+-- precedent in perf/repo.go).
+--
+-- FleetUptimeStatus (InTenantTx, tenant-scoped):
+--   SELECT s.id, s.name, s.url, s.connection_state, s.health_status,
+--          p.up, p.probed_at, p.total_ms, p.tls_expiry,
+--          (7d uptime_pct correlated subquery),
+--          (7d avg_latency_ms correlated subquery),
+--          COALESCE(ast.in_incident, false)
+--   FROM sites s
+--   LEFT JOIN LATERAL (latest probe row) p ON true
+--   LEFT JOIN site_alert_state ast ON ast.site_id = s.id
+--   WHERE s.tenant_id = $1 AND s.id = ANY($2::uuid[])
+--   ORDER BY s.name ASC;
+--
+-- FleetUptimeIncidents (InTenantTx, tenant-scoped):
+--   SELECT s.id, s.name, s.url, ast.last_status, ast.last_alert_at, ast.updated_at, p.total_ms
+--   FROM site_alert_state ast
+--   JOIN sites s ON s.id = ast.site_id AND s.tenant_id = ast.tenant_id
+--   LEFT JOIN LATERAL (latest probe) p ON true
+--   WHERE ast.tenant_id = $1 AND s.id = ANY($2::uuid[])
+--     AND (ast.in_incident = true OR ast.last_alert_at >= $3)
+--   ORDER BY ast.last_alert_at DESC NULLS LAST LIMIT $4;
+-- ---------------------------------------------------------------------------

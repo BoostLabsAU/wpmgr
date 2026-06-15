@@ -154,3 +154,13 @@ WHERE enrolled_at IS NOT NULL;
 UPDATE sites
 SET health_status = $2, updated_at = now()
 WHERE id = $1 AND health_status <> $2;
+
+-- name: ListAllSiteIDs :many
+-- Returns all non-archived site IDs for a tenant. Lightweight alternative to
+-- ListSites used by fleet adapters that need the full ID set without a 500-row
+-- cap. Excludes archived sites (connection_state = 'archived') to match the
+-- default ListSites behaviour.
+SELECT id FROM sites
+WHERE tenant_id = @tenant_id
+  AND connection_state <> 'archived'
+ORDER BY created_at DESC;

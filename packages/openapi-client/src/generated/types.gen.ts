@@ -975,6 +975,34 @@ export type BackupSnapshotList = {
 };
 
 /**
+ * Paginated fleet snapshot list.
+ */
+export type BackupFleetList = {
+  items: Array<BackupSnapshot>;
+  /**
+   * Offset to pass for the next page; null when no further pages.
+   */
+  next_offset?: number;
+};
+
+export type BackupHealthItem = {
+  site_id: string;
+  site_name: string;
+  site_url: string;
+  status: "unprotected" | "failed" | "stale" | "in_flight" | "protected";
+  last_completed_at?: string;
+  last_failed_at?: string;
+  latest_size_bytes: number;
+  in_flight_count: number;
+  schedule_cadence?: string;
+  next_run_at?: string;
+};
+
+export type BackupHealthList = {
+  items: Array<BackupHealthItem>;
+};
+
+/**
  * One file (or db dump) in a snapshot, summarized.
  */
 export type BackupManifestEntry = {
@@ -1567,6 +1595,89 @@ export type UptimePoint = {
 
 export type UptimeSummary = {
   items: Array<UptimeSummaryItem>;
+};
+
+export type FleetUptimeCounts = {
+  up: number;
+  degraded: number;
+  down: number;
+  unknown: number;
+};
+
+export type FleetUptimeStatusItem = {
+  site_id: string;
+  site_name: string;
+  site_url: string;
+  status: "up" | "degraded" | "down" | "unknown";
+  uptime_pct_7d: number;
+  avg_latency_ms_7d: number;
+  latest_total_ms?: number;
+  last_probe_at?: string;
+  tls_expiry?: string;
+  in_incident: boolean;
+  connection_state: string;
+  health_status: string;
+};
+
+export type FleetUptimeStatus = {
+  summary: FleetUptimeCounts;
+  items: Array<FleetUptimeStatusItem>;
+};
+
+/**
+ * An open or recently-closed incident. NOTE: site_alert_state stores only
+ * current transition memory; full historical incident logs are not persisted.
+ * ended_at / duration_seconds are estimated from updated_at for closed
+ * incidents, not from a true incident-close record.
+ *
+ */
+export type FleetIncidentItem = {
+  site_id: string;
+  site_name: string;
+  site_url: string;
+  started_at?: string;
+  ended_at?: string;
+  duration_seconds?: number;
+  ongoing: boolean;
+  latest_total_ms?: number;
+};
+
+export type FleetIncidentList = {
+  items: Array<FleetIncidentItem>;
+};
+
+export type FleetRumMetric = {
+  metric: string;
+  p75_ms: number;
+  sample_count: number;
+  rating?: "good" | "needs_improvement" | "poor";
+  suppressed: boolean;
+  good_pct: number;
+  ni_pct: number;
+  poor_pct: number;
+};
+
+export type FleetRumWorstOffender = {
+  site_id: string;
+  p75_ms: number;
+  rating: string;
+};
+
+export type FleetRumAggregate = {
+  window_days: number;
+  sites_reporting: number;
+  sites_total: number;
+  /**
+   * Percentage of sites with "good" LCP p75.
+   */
+  fleet_pass_pct: number;
+  /**
+   * Keyed by metric name (lcp, inp, cls, fcp, ttfb).
+   */
+  metrics: {
+    [key: string]: FleetRumMetric;
+  };
+  worst_offenders: Array<FleetRumWorstOffender>;
 };
 
 export type UptimeSummaryItem = {
@@ -7770,6 +7881,145 @@ export type GetSiteUptimeResponses = {
 
 export type GetSiteUptimeResponse =
   GetSiteUptimeResponses[keyof GetSiteUptimeResponses];
+
+export type ListFleetBackupsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Comma-separated site UUIDs. Defaults to all accessible sites.
+     */
+    sites?: string;
+    /**
+     * Filter by snapshot status.
+     */
+    status?: "pending" | "running" | "completed" | "failed";
+    created_after?: string;
+    created_before?: string;
+    limit?: number;
+    offset?: number;
+  };
+  url: "/api/v1/backups/fleet";
+};
+
+export type ListFleetBackupsResponses = {
+  /**
+   * Paginated snapshot list
+   */
+  200: BackupFleetList;
+};
+
+export type ListFleetBackupsResponse =
+  ListFleetBackupsResponses[keyof ListFleetBackupsResponses];
+
+export type GetFleetBackupHealthData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Comma-separated site UUIDs. Defaults to all accessible sites.
+     */
+    sites?: string;
+  };
+  url: "/api/v1/backups/health";
+};
+
+export type GetFleetBackupHealthResponses = {
+  /**
+   * Per-site backup health
+   */
+  200: BackupHealthList;
+};
+
+export type GetFleetBackupHealthResponse =
+  GetFleetBackupHealthResponses[keyof GetFleetBackupHealthResponses];
+
+export type GetFleetUptimeStatusData = {
+  body?: never;
+  path?: never;
+  query?: never;
+  url: "/api/v1/fleet/status";
+};
+
+export type GetFleetUptimeStatusResponses = {
+  /**
+   * Fleet uptime status
+   */
+  200: FleetUptimeStatus;
+};
+
+export type GetFleetUptimeStatusResponse =
+  GetFleetUptimeStatusResponses[keyof GetFleetUptimeStatusResponses];
+
+export type GetFleetIncidentsData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Lower bound on last_alert_at. Defaults to 7 days ago.
+     */
+    since?: string;
+    limit?: number;
+  };
+  url: "/api/v1/fleet/incidents";
+};
+
+export type GetFleetIncidentsResponses = {
+  /**
+   * Open incidents and recent alerts
+   */
+  200: FleetIncidentList;
+};
+
+export type GetFleetIncidentsResponse =
+  GetFleetIncidentsResponses[keyof GetFleetIncidentsResponses];
+
+export type GetFleetRumAggregateData = {
+  body?: never;
+  path?: never;
+  query?: {
+    window_days?: number;
+    /**
+     * Device filter. Default all (no device filter).
+     */
+    device?: "desktop" | "mobile" | "tablet" | "all";
+  };
+  url: "/api/v1/perf/rum/fleet";
+};
+
+export type GetFleetRumAggregateResponses = {
+  /**
+   * Fleet RUM aggregate
+   */
+  200: FleetRumAggregate;
+};
+
+export type GetFleetRumAggregateResponse =
+  GetFleetRumAggregateResponses[keyof GetFleetRumAggregateResponses];
+
+export type GetFleetDbHealthData = {
+  body?: never;
+  path?: never;
+  query?: {
+    /**
+     * Lookback window for growth calculation.
+     */
+    days?: number;
+  };
+  url: "/api/v1/perf/db/fleet-health";
+};
+
+export type GetFleetDbHealthResponses = {
+  /**
+   * Fleet DB health aggregate (shape matches FleetDbHealth Go model).
+   */
+  200: {
+    [key: string]: unknown;
+  };
+};
+
+export type GetFleetDbHealthResponse =
+  GetFleetDbHealthResponses[keyof GetFleetDbHealthResponses];
 
 export type GetUptimeSummaryData = {
   body?: never;

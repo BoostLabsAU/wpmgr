@@ -134,6 +134,10 @@ func (f *fakeRepo) DeleteCancellable(_ context.Context, _, _ uuid.UUID) (int64, 
 	return 1, nil
 }
 
+func (f *fakeRepo) ListAllSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
 func orDefault(s string) string {
 	if s == "" {
 		return "pending"

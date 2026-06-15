@@ -134,6 +134,27 @@ WHERE site_id    = @site_id
 ORDER BY bucket_day ASC, url_pattern ASC, metric ASC, device ASC, country ASC;
 
 -- ---------------------------------------------------------------------------
+-- Fleet RUM aggregate (InTenantTx — tenant-scoped)
+-- ---------------------------------------------------------------------------
+
+-- name: GetRumRollupHourlyForSites :many
+-- Returns hourly rollup rows across a set of sites in one tenant, within a
+-- time window. Used by the fleet RUM aggregate endpoint to compute cross-site
+-- p75 without N+1 DB round-trips. site_ids is always filtered to the
+-- principal's AllowedSiteIDs (site-scoped) or all tenant sites (org-scoped).
+-- The `, id` tiebreaker is not applicable here (no ORDER BY on primary key
+-- for aggregation reads), but ORDER BY bucket_hour ASC ensures deterministic
+-- streaming for the in-Go accumulator.
+SELECT tenant_id, site_id, url_pattern, metric, device, country,
+       bucket_hour, sample_count, sample_rate,
+       bucket_counts, sum_value, min_value, max_value
+FROM rum_rollup_hourly
+WHERE tenant_id  = @tenant_id
+  AND site_id    = ANY(@site_ids::uuid[])
+  AND bucket_hour >= @since
+ORDER BY bucket_hour ASC, site_id ASC, metric ASC, device ASC;
+
+-- ---------------------------------------------------------------------------
 -- Retention GC (InAgentTx — cross-tenant)
 -- ---------------------------------------------------------------------------
 

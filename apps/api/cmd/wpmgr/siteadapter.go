@@ -46,17 +46,10 @@ func (a *uptimeSiteAdapter) VerifySite(ctx context.Context, tenantID, siteID uui
 	return s.Name, true, nil
 }
 
-// ListSiteIDs returns all site IDs in the tenant (for the uptime summary).
+// ListSiteIDs returns all non-archived site IDs in the tenant (for the uptime
+// summary). Uses ListAllSiteIDs to avoid the 500-row cap in site.List.
 func (a *uptimeSiteAdapter) ListSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
-	sites, err := a.svc.List(ctx, site.ListInput{TenantID: tenantID, Limit: 500, Offset: 0})
-	if err != nil {
-		return nil, err
-	}
-	ids := make([]uuid.UUID, 0, len(sites))
-	for _, s := range sites {
-		ids = append(ids, s.ID)
-	}
-	return ids, nil
+	return a.svc.ListAllSiteIDs(ctx, tenantID)
 }
 
 // SiteName resolves a site's display name for alert rendering; an unresolvable
@@ -152,6 +145,15 @@ func (l *backupSiteLookup) GetBackupSiteInfo(ctx context.Context, tenantID, site
 		WpGmtOffset:  s.WpGmtOffset,
 	}, nil
 }
+
+// ListSiteIDs returns all non-archived site IDs for the tenant (used by fleet
+// endpoints to build the full candidate set for org-scoped principals). Uses
+// ListAllSiteIDs to avoid the 500-row cap in site.List.
+func (l *backupSiteLookup) ListSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	return l.svc.ListAllSiteIDs(ctx, tenantID)
+}
+
+var _ backup.SiteLookup = (*backupSiteLookup)(nil)
 
 // autologinSiteAdapter adapts the site service to the autologin package's
 // SiteLookup interface (returns the site URL the operator's browser will
@@ -325,6 +327,12 @@ func (a *perfSiteAdapter) GetSiteURL(ctx context.Context, tenantID, siteID uuid.
 		return "", err
 	}
 	return s.URL, nil
+}
+
+// ListSiteIDs returns all non-archived site IDs for the tenant (used by fleet
+// RUM aggregate). Uses ListAllSiteIDs to avoid the 500-row cap in site.List.
+func (a *perfSiteAdapter) ListSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	return a.svc.ListAllSiteIDs(ctx, tenantID)
 }
 
 var _ perf.SiteLookup = (*perfSiteAdapter)(nil)

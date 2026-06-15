@@ -149,6 +149,56 @@ func (s *Service) GetAlertConfig(ctx context.Context, tenantID uuid.UUID) (Alert
 	return cfg, nil
 }
 
+// FleetSiteIDs returns the set of site IDs accessible to the principal for fleet
+// queries. For org-scoped principals it returns all tenant site IDs; for
+// site-scoped principals it returns p.AllowedSiteIDs.
+func (s *Service) FleetSiteIDs(ctx context.Context, tenantID uuid.UUID, p domain.Principal) ([]uuid.UUID, error) {
+	if p.Scope == domain.ScopeSite {
+		return p.AllowedSiteIDs, nil
+	}
+	return s.verifier.ListSiteIDs(ctx, tenantID)
+}
+
+// GetFleetStatus returns the fleet-wide uptime status for the principal's
+// accessible sites, with summary counts and per-site items.
+func (s *Service) GetFleetStatus(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) (FleetStatusResponse, error) {
+	items, err := s.repo.GetFleetStatus(ctx, tenantID, siteIDs)
+	if err != nil {
+		return FleetStatusResponse{}, err
+	}
+	var resp FleetStatusResponse
+	resp.Items = items
+	resp.Summary = FleetStatusCounts{}
+	for _, it := range items {
+		switch it.Status {
+		case FleetStatusUp:
+			resp.Summary.Up++
+		case FleetStatusDegraded:
+			resp.Summary.Degraded++
+		case FleetStatusDown:
+			resp.Summary.Down++
+		default:
+			resp.Summary.Unknown++
+		}
+	}
+	return resp, nil
+}
+
+// GetFleetIncidents returns open incidents and recently-alerted sites for the
+// principal's accessible sites.
+//
+// LIMITATION: site_alert_state stores only the CURRENT transition memory.
+// Full historical incident logs are not persisted; this endpoint returns open
+// incidents (in_incident=true) and recently-alerted sites (last_alert_at >=
+// since). ended_at/duration_seconds are estimated from state updated_at for
+// closed incidents, not from a true incident-close record.
+func (s *Service) GetFleetIncidents(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, since time.Time, limit int) ([]FleetIncidentItem, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 100
+	}
+	return s.repo.GetFleetIncidents(ctx, tenantID, siteIDs, since, limit)
+}
+
 // SaveAlertConfig validates and upserts the tenant's alert config.
 func (s *Service) SaveAlertConfig(ctx context.Context, cfg AlertConfig) (AlertConfig, error) {
 	if len(cfg.EmailRecipients) > 50 {

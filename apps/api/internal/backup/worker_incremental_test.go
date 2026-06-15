@@ -105,6 +105,9 @@ func (fakeWorkerSiteLookup) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID)
 		AgeRecipient: "age1ql3z7hjy54pw3hyww5ayyfg7zqgvc7w3j2elw8zmrj2kg5sfn9aqmcac8p",
 	}, nil
 }
+func (fakeWorkerSiteLookup) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // TestBackupWorker_DispatchesFullRequest — when IsIncremental=false (or zero),

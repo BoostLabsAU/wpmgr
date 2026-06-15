@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -73,6 +74,10 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	r.PUT("/sites/:siteId/backup-settings/contents", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.putBackupContents)
 	r.GET("/sites/:siteId/backup-settings/notifications", authz.RequirePermission(authz.PermSiteRead), authz.RequireSiteAccess("siteId"), h.getBackupNotifications)
 	r.PUT("/sites/:siteId/backup-settings/notifications", authz.RequirePermission(authz.PermSiteWrite), authz.RequireSiteAccess("siteId"), h.putBackupNotifications)
+	// Fleet endpoints (tenant-level, no :siteId). Site-scoped principals are
+	// filtered to their AllowedSiteIDs inside the handler.
+	r.GET("/backups/fleet", authz.RequirePermission(authz.PermSiteRead), h.fleetList)
+	r.GET("/backups/health", authz.RequirePermission(authz.PermSiteRead), h.fleetHealth)
 	// Routes by snapshotId (no :siteId param): site isolation is enforced by
 	// running the repo queries through pool.RunTenantTx (which activates scoped
 	// RLS for site-scoped principals). The RESTRICTIVE RLS policy on
@@ -1139,6 +1144,175 @@ func (h *Handler) setLock(c *gin.Context, locked bool) {
 	}
 	out := toAPISnapshot(updated)
 	c.JSON(http.StatusOK, &out)
+}
+
+// ---------------------------------------------------------------------------
+// Fleet backup endpoints (GET /backups/fleet, GET /backups/health)
+// ---------------------------------------------------------------------------
+
+// fleetList handles GET /api/v1/backups/fleet.
+// Returns a filtered, paginated list of backup snapshots across the caller's
+// accessible sites. Query params:
+//
+//	sites         — comma-separated UUIDs; defaults to all tenant sites
+//	status        — pending | running | completed | failed; default all
+//	created_after — RFC 3339; default none
+//	created_before — RFC 3339; default none
+//	sort          — created_at | size | site; only created_at supported via SQL (others ignored)
+//	dir           — asc | desc; ORDER BY is always DESC (project convention for offset lists)
+//	limit         — max 200, default 50
+//	offset        — default 0
+func (h *Handler) fleetList(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+
+	// Resolve the accessible site IDs for this principal.
+	siteIDs, err := h.svc.FleetSiteIDs(c.Request.Context(), tenantID, p)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Intersect with the explicit ?sites= CSV when provided.
+	if raw := c.Query("sites"); raw != "" {
+		requested, parseErr := parseUUIDCSV(raw)
+		if parseErr != nil {
+			httpx.Error(c, domain.Validation("invalid_site_id", "sites contains an invalid UUID"))
+			return
+		}
+		siteIDs = intersectSiteIDs(siteIDs, requested)
+	}
+
+	f := FleetListFilter{
+		SiteIDs: siteIDs,
+		Status:  c.Query("status"),
+		Limit:   parseInt32(c.Query("limit"), 50),
+		Offset:  parseInt32(c.Query("offset"), 0),
+	}
+	if s := c.Query("created_after"); s != "" {
+		t, terr := time.Parse(time.RFC3339, s)
+		if terr != nil {
+			httpx.Error(c, domain.Validation("invalid_created_after", "created_after must be RFC 3339"))
+			return
+		}
+		f.CreatedAfter = &t
+	}
+	if s := c.Query("created_before"); s != "" {
+		t, terr := time.Parse(time.RFC3339, s)
+		if terr != nil {
+			httpx.Error(c, domain.Validation("invalid_created_before", "created_before must be RFC 3339"))
+			return
+		}
+		f.CreatedBefore = &t
+	}
+
+	page, err := h.svc.FleetListSnapshots(c.Request.Context(), p, tenantID, f)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	items := make([]gen.BackupSnapshot, 0, len(page.Items))
+	for _, s := range page.Items {
+		items = append(items, toAPISnapshot(s))
+	}
+	resp := gin.H{"items": items}
+	if page.NextOffset != nil {
+		resp["next_offset"] = *page.NextOffset
+	} else {
+		resp["next_offset"] = nil
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// fleetHealth handles GET /api/v1/backups/health.
+// Returns per-site backup health with a server-derived status classification.
+// Query params:
+//
+//	sites — comma-separated UUIDs; defaults to all tenant sites
+func (h *Handler) fleetHealth(c *gin.Context) {
+	tenantID, ok := tenantOf(c)
+	if !ok {
+		return
+	}
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+
+	siteIDs, err := h.svc.FleetSiteIDs(c.Request.Context(), tenantID, p)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	if raw := c.Query("sites"); raw != "" {
+		requested, parseErr := parseUUIDCSV(raw)
+		if parseErr != nil {
+			httpx.Error(c, domain.Validation("invalid_site_id", "sites contains an invalid UUID"))
+			return
+		}
+		siteIDs = intersectSiteIDs(siteIDs, requested)
+	}
+
+	items, err := h.svc.FleetBackupHealth(c.Request.Context(), p, tenantID, siteIDs)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if items == nil {
+		items = []FleetBackupHealthItem{}
+	}
+	c.JSON(http.StatusOK, gin.H{"items": items})
+}
+
+// parseUUIDCSV parses a comma-separated string of UUIDs.
+func parseUUIDCSV(raw string) ([]uuid.UUID, error) {
+	parts := splitCSV(raw)
+	out := make([]uuid.UUID, 0, len(parts))
+	for _, p := range parts {
+		id, err := uuid.Parse(p)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+// splitCSV splits a comma-separated string, trimming whitespace from each part.
+func splitCSV(s string) []string {
+	parts := make([]string, 0)
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			parts = append(parts, p)
+		}
+	}
+	return parts
+}
+
+// intersectSiteIDs returns only the IDs in `candidate` that also appear in
+// `allowed`. When `allowed` is empty the result is always empty (fail-closed):
+// an empty allowlist means no sites are permitted, not that all are. Callers
+// on the org-scoped path always supply a non-empty allowed list (the full
+// tenant site set from ListSiteIDs); the only empty-allowed case is a
+// site-scoped principal with zero granted sites.
+func intersectSiteIDs(allowed, candidate []uuid.UUID) []uuid.UUID {
+	if len(allowed) == 0 {
+		return []uuid.UUID{}
+	}
+	set := make(map[uuid.UUID]struct{}, len(allowed))
+	for _, id := range allowed {
+		set[id] = struct{}{}
+	}
+	out := make([]uuid.UUID, 0, len(candidate))
+	for _, id := range candidate {
+		if _, ok := set[id]; ok {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 func parseInt32(s string, def int32) int32 {

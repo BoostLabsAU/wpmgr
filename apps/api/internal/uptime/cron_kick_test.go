@@ -42,6 +42,12 @@ func (r *fakeCronRepo) GetAlertConfig(_ context.Context, _ uuid.UUID) (AlertConf
 func (r *fakeCronRepo) UpsertAlertConfig(_ context.Context, _ AlertConfig) (AlertConfig, error) {
 	panic("CronKicker must not call UpsertAlertConfig")
 }
+func (r *fakeCronRepo) GetFleetStatus(_ context.Context, _ uuid.UUID, _ []uuid.UUID) ([]FleetStatusItem, error) {
+	panic("CronKicker must not call GetFleetStatus")
+}
+func (r *fakeCronRepo) GetFleetIncidents(_ context.Context, _ uuid.UUID, _ []uuid.UUID, _ time.Time, _ int) ([]FleetIncidentItem, error) {
+	panic("CronKicker must not call GetFleetIncidents")
+}
 
 // TestCronKickFiresWPCronEndpoint verifies that the kicker fires a GET to
 // /wp-cron.php for every enrolled site.

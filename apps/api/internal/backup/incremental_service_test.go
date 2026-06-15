@@ -264,6 +264,12 @@ func (r *fakeRepo) SetSnapshotLocked(_ context.Context, _, id uuid.UUID, locked 
 	r.snapshots[id] = s
 	return s, nil
 }
+func (r *fakeRepo) FleetListSnapshots(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ FleetListFilter) (FleetSnapshotPage, error) {
+	panic("fakeRepo.FleetListSnapshots not implemented")
+}
+func (r *fakeRepo) FleetBackupHealth(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ []uuid.UUID) ([]FleetBackupHealthItem, error) {
+	panic("fakeRepo.FleetBackupHealth not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // fakeClock — deterministic clock for tests.

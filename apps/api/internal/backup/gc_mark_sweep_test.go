@@ -347,6 +347,12 @@ func (r *gcFakeRepo) GetBackupSettings(_ context.Context, _, _ uuid.UUID) (SiteB
 func (r *gcFakeRepo) UpsertBackupSettings(_ context.Context, _ uuid.UUID, in SiteBackupSettings) (SiteBackupSettings, error) {
 	panic("unused")
 }
+func (r *gcFakeRepo) FleetListSnapshots(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ FleetListFilter) (FleetSnapshotPage, error) {
+	panic("gcFakeRepo.FleetListSnapshots not implemented")
+}
+func (r *gcFakeRepo) FleetBackupHealth(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ []uuid.UUID) ([]FleetBackupHealthItem, error) {
+	panic("gcFakeRepo.FleetBackupHealth not implemented")
+}
 
 // ---------------------------------------------------------------------------
 // Helpers

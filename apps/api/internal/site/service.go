@@ -66,6 +66,15 @@ func (s *Service) List(ctx context.Context, in ListInput) ([]Site, error) {
 	return s.repo.List(ctx, in)
 }
 
+// ListAllSiteIDs returns every non-archived site ID for the tenant in a single
+// lightweight query (no row cap). Use this for fleet enumeration.
+func (s *Service) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	if tenantID == uuid.Nil {
+		return nil, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	return s.repo.ListAllSiteIDs(ctx, tenantID)
+}
+
 // Delete removes a tenant-scoped site.
 func (s *Service) Delete(ctx context.Context, tenantID, id uuid.UUID) error {
 	if tenantID == uuid.Nil {

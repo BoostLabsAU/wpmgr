@@ -774,6 +774,22 @@ type Invoker interface {
 	//
 	// GET /api/v1/email/notify-settings
 	GetEmailNotifySettings(ctx context.Context) (GetEmailNotifySettingsRes, error)
+	// GetFleetBackupHealth invokes getFleetBackupHealth operation.
+	//
+	// Returns one health item per requested site with a server-derived status:
+	// unprotected, failed, stale, in_flight, or protected. Requires viewer+.
+	//
+	// GET /api/v1/backups/health
+	GetFleetBackupHealth(ctx context.Context, params GetFleetBackupHealthParams) (*BackupHealthList, error)
+	// GetFleetDbHealth invokes getFleetDbHealth operation.
+	//
+	// Returns an aggregate of database health metrics across all tenant sites
+	// that have at least one completed DB scan within the lookback window.
+	// Includes total DB size, orphaned option/cron counts, and the top-N sites
+	// by DB size. Org-scope only. Requires viewer+.
+	//
+	// GET /api/v1/perf/db/fleet-health
+	GetFleetDbHealth(ctx context.Context, params GetFleetDbHealthParams) error
 	// GetFleetEmailStats invokes getFleetEmailStats operation.
 	//
 	// Returns tenant-wide summary counts and a per-day time-series for the
@@ -782,6 +798,36 @@ type Invoker interface {
 	//
 	// GET /api/v1/email/stats
 	GetFleetEmailStats(ctx context.Context, params GetFleetEmailStatsParams) (GetFleetEmailStatsRes, error)
+	// GetFleetIncidents invokes getFleetIncidents operation.
+	//
+	// Returns open incidents (in_incident=true) and recently-alerted sites
+	// (last_alert_at >= since). Full historical incident reconstruction is NOT
+	// possible from site_alert_state, which stores only current transition
+	// memory. ended_at/duration_seconds are estimated from updated_at for
+	// closed incidents, not from a true incident-close record. Requires viewer+.
+	//
+	// GET /api/v1/fleet/incidents
+	GetFleetIncidents(ctx context.Context, params GetFleetIncidentsParams) (*FleetIncidentList, error)
+	// GetFleetRumAggregate invokes getFleetRumAggregate operation.
+	//
+	// Returns a fleet-level CWV aggregate across all tenant sites reporting RUM
+	// data in the window. Includes summary counts, per-metric p75/rating/
+	// distribution, fleet pass %, and worst offenders. Org-scope only;
+	// site-scoped collaborators should use the per-site /perf/rum/summary.
+	// Requires viewer+.
+	//
+	// GET /api/v1/perf/rum/fleet
+	GetFleetRumAggregate(ctx context.Context, params GetFleetRumAggregateParams) (*FleetRumAggregate, error)
+	// GetFleetUptimeStatus invokes getFleetUptimeStatus operation.
+	//
+	// Returns summary counts {up, degraded, down, unknown} and a per-site list
+	// with the latest probe result, 7-day uptime %, and in-incident flag.
+	// Status derivation: down=latest probe up=false; degraded=up but latency
+	// >2000ms or connection_state=degraded; up=probe up+fast; unknown=no probe.
+	// Requires viewer+.
+	//
+	// GET /api/v1/fleet/status
+	GetFleetUptimeStatus(ctx context.Context) (*FleetUptimeStatus, error)
 	// GetHealthz invokes getHealthz operation.
 	//
 	// Liveness probe.
@@ -1105,6 +1151,14 @@ type Invoker interface {
 	//
 	// GET /api/v1/email/providers
 	ListEmailProviders(ctx context.Context) (ListEmailProvidersRes, error)
+	// ListFleetBackups invokes listFleetBackups operation.
+	//
+	// Returns a filtered, paginated list of backup snapshots across the caller's
+	// accessible sites. Org-scoped principals see all tenant sites; site-scoped
+	// collaborators see only their granted sites. Requires viewer+.
+	//
+	// GET /api/v1/backups/fleet
+	ListFleetBackups(ctx context.Context, params ListFleetBackupsParams) (*BackupFleetList, error)
 	// ListFleetEmailLog invokes listFleetEmailLog operation.
 	//
 	// Returns a keyset-paginated cross-site email log for the tenant.
@@ -9852,6 +9906,200 @@ func (c *Client) sendGetEmailNotifySettings(ctx context.Context) (res GetEmailNo
 	return result, nil
 }
 
+// GetFleetBackupHealth invokes getFleetBackupHealth operation.
+//
+// Returns one health item per requested site with a server-derived status:
+// unprotected, failed, stale, in_flight, or protected. Requires viewer+.
+//
+// GET /api/v1/backups/health
+func (c *Client) GetFleetBackupHealth(ctx context.Context, params GetFleetBackupHealthParams) (*BackupHealthList, error) {
+	res, err := c.sendGetFleetBackupHealth(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetFleetBackupHealth(ctx context.Context, params GetFleetBackupHealthParams) (res *BackupHealthList, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetBackupHealth"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/backups/health"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetBackupHealthOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/backups/health"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "sites" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "sites",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Sites.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetBackupHealthResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetFleetDbHealth invokes getFleetDbHealth operation.
+//
+// Returns an aggregate of database health metrics across all tenant sites
+// that have at least one completed DB scan within the lookback window.
+// Includes total DB size, orphaned option/cron counts, and the top-N sites
+// by DB size. Org-scope only. Requires viewer+.
+//
+// GET /api/v1/perf/db/fleet-health
+func (c *Client) GetFleetDbHealth(ctx context.Context, params GetFleetDbHealthParams) error {
+	_, err := c.sendGetFleetDbHealth(ctx, params)
+	return err
+}
+
+func (c *Client) sendGetFleetDbHealth(ctx context.Context, params GetFleetDbHealthParams) (res *GetFleetDbHealthOK, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetDbHealth"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/perf/db/fleet-health"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetDbHealthOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/perf/db/fleet-health"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "days" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "days",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Days.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetDbHealthResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetFleetEmailStats invokes getFleetEmailStats operation.
 //
 // Returns tenant-wide summary counts and a per-day time-series for the
@@ -9959,6 +10207,316 @@ func (c *Client) sendGetFleetEmailStats(ctx context.Context, params GetFleetEmai
 
 	stage = "DecodeResponse"
 	result, err := decodeGetFleetEmailStatsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetFleetIncidents invokes getFleetIncidents operation.
+//
+// Returns open incidents (in_incident=true) and recently-alerted sites
+// (last_alert_at >= since). Full historical incident reconstruction is NOT
+// possible from site_alert_state, which stores only current transition
+// memory. ended_at/duration_seconds are estimated from updated_at for
+// closed incidents, not from a true incident-close record. Requires viewer+.
+//
+// GET /api/v1/fleet/incidents
+func (c *Client) GetFleetIncidents(ctx context.Context, params GetFleetIncidentsParams) (*FleetIncidentList, error) {
+	res, err := c.sendGetFleetIncidents(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetFleetIncidents(ctx context.Context, params GetFleetIncidentsParams) (res *FleetIncidentList, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetIncidents"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/fleet/incidents"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetIncidentsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/fleet/incidents"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "since" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "since",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Since.Get(); ok {
+				return e.EncodeValue(conv.DateTimeToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetIncidentsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetFleetRumAggregate invokes getFleetRumAggregate operation.
+//
+// Returns a fleet-level CWV aggregate across all tenant sites reporting RUM
+// data in the window. Includes summary counts, per-metric p75/rating/
+// distribution, fleet pass %, and worst offenders. Org-scope only;
+// site-scoped collaborators should use the per-site /perf/rum/summary.
+// Requires viewer+.
+//
+// GET /api/v1/perf/rum/fleet
+func (c *Client) GetFleetRumAggregate(ctx context.Context, params GetFleetRumAggregateParams) (*FleetRumAggregate, error) {
+	res, err := c.sendGetFleetRumAggregate(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetFleetRumAggregate(ctx context.Context, params GetFleetRumAggregateParams) (res *FleetRumAggregate, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetRumAggregate"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/perf/rum/fleet"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetRumAggregateOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/perf/rum/fleet"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "window_days" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "window_days",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.WindowDays.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "device" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "device",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Device.Get(); ok {
+				return e.EncodeValue(conv.StringToString(string(val)))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetRumAggregateResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// GetFleetUptimeStatus invokes getFleetUptimeStatus operation.
+//
+// Returns summary counts {up, degraded, down, unknown} and a per-site list
+// with the latest probe result, 7-day uptime %, and in-incident flag.
+// Status derivation: down=latest probe up=false; degraded=up but latency
+// >2000ms or connection_state=degraded; up=probe up+fast; unknown=no probe.
+// Requires viewer+.
+//
+// GET /api/v1/fleet/status
+func (c *Client) GetFleetUptimeStatus(ctx context.Context) (*FleetUptimeStatus, error) {
+	res, err := c.sendGetFleetUptimeStatus(ctx)
+	return res, err
+}
+
+func (c *Client) sendGetFleetUptimeStatus(ctx context.Context) (res *FleetUptimeStatus, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getFleetUptimeStatus"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/fleet/status"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetFleetUptimeStatusOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/fleet/status"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetFleetUptimeStatusResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -14013,6 +14571,188 @@ func (c *Client) sendListEmailProviders(ctx context.Context) (res ListEmailProvi
 
 	stage = "DecodeResponse"
 	result, err := decodeListEmailProvidersResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ListFleetBackups invokes listFleetBackups operation.
+//
+// Returns a filtered, paginated list of backup snapshots across the caller's
+// accessible sites. Org-scoped principals see all tenant sites; site-scoped
+// collaborators see only their granted sites. Requires viewer+.
+//
+// GET /api/v1/backups/fleet
+func (c *Client) ListFleetBackups(ctx context.Context, params ListFleetBackupsParams) (*BackupFleetList, error) {
+	res, err := c.sendListFleetBackups(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListFleetBackups(ctx context.Context, params ListFleetBackupsParams) (res *BackupFleetList, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listFleetBackups"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/backups/fleet"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListFleetBackupsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [1]string
+	pathParts[0] = "/api/v1/backups/fleet"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "sites" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "sites",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Sites.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "status" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "status",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Status.Get(); ok {
+				return e.EncodeValue(conv.StringToString(string(val)))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "created_after" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "created_after",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.CreatedAfter.Get(); ok {
+				return e.EncodeValue(conv.DateTimeToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "created_before" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "created_before",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.CreatedBefore.Get(); ok {
+				return e.EncodeValue(conv.DateTimeToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "limit" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "limit",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Limit.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "offset" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "offset",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Offset.Get(); ok {
+				return e.EncodeValue(conv.IntToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListFleetBackupsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

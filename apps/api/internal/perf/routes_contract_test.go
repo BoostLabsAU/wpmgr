@@ -72,6 +72,8 @@ var canonicalOperatorRoutes = []string{
 	"PUT    /api/v1/cache/bulk-config",
 	// P3.7 — tenant-level (no :siteId) fleet DB health aggregate.
 	"GET    /api/v1/perf/db/fleet-health",
+	// Fleet RUM aggregate (cross-site Core Web Vitals, org-scoped only).
+	"GET    /api/v1/perf/rum/fleet",
 	// #190 — unused media library cleaner (scan/quarantine/isolate/restore/delete).
 	"GET    /api/v1/sites/:siteId/media/clean/scan",
 	"GET    /api/v1/sites/:siteId/media/clean/quarantine",

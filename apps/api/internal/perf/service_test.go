@@ -317,6 +317,9 @@ type fakeSites struct{ url string }
 func (s *fakeSites) GetSiteURL(context.Context, uuid.UUID, uuid.UUID) (string, error) {
 	return s.url, nil
 }
+func (s *fakeSites) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
 
 // ---------------------------------------------------------------------------
 // config validation

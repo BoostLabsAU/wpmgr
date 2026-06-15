@@ -157,6 +157,14 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 		authz.RequirePermission(authz.PermSiteRead),
 		h.getFleetDbHealth,
 	)
+	// Fleet RUM aggregate (cross-site Core Web Vitals).
+	// RequireOrgScope blocks site-scoped collaborators (fleet aggregation is
+	// tenant-level; site-scoped principals use the per-site /perf/rum/summary).
+	r.GET("/perf/rum/fleet",
+		authz.RequireOrgScope(),
+		authz.RequirePermission(authz.PermSiteRead),
+		h.rumFleet,
+	)
 }
 
 // ---------------------------------------------------------------------------
