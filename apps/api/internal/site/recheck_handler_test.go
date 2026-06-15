@@ -65,6 +65,7 @@ func (f *fakeConnSvc) BeginReEnrollment(_ context.Context, _ ActorSiteInput) (En
 	return EnrollmentCode{}, nil
 }
 func (f *fakeConnSvc) CancelEnrollment(_ context.Context, _ ActorSiteInput) error { return nil }
+func (f *fakeConnSvc) SetOnEnrollHook(_ OnEnrollHook)                              {}
 
 // recheckRepo extends freshRepo with call counting on Get so we can observe
 // the second Get (post-heartbeat state refresh).

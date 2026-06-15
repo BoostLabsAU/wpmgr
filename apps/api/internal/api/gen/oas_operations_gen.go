@@ -188,6 +188,7 @@ const (
 	PutSiteLoginBrandOperation              OperationName = "PutSiteLoginBrand"
 	PutSiteLoginProtectionOperation         OperationName = "PutSiteLoginProtection"
 	RefreshSiteDiagnosticsOperation         OperationName = "RefreshSiteDiagnostics"
+	RefreshSiteScreenshotOperation          OperationName = "RefreshSiteScreenshot"
 	RefreshSiteUpdatesOperation             OperationName = "RefreshSiteUpdates"
 	RegenerateClientInvitationOperation     OperationName = "RegenerateClientInvitation"
 	RegisterOperation                       OperationName = "Register"

@@ -25,12 +25,6 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronsUpDown,
-  MoreHorizontal,
-  RefreshCw,
-  RotateCw,
-  Trash2,
-  Unplug,
-  Zap,
 } from "lucide-react";
 import { motion } from "motion/react";
 import type { Site } from "@wpmgr/api";
@@ -38,13 +32,6 @@ import type { Site } from "@wpmgr/api";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { fadeUp } from "@/lib/motion-presets";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import {
   BackupChip,
   ConnectionStateBadge,
@@ -54,7 +41,6 @@ import {
 import {
   asConnectedSite,
   connectionStateOf,
-  isReconnectable,
   type ConnectionState,
 } from "@/features/sites/connection-state";
 import { cn } from "@/lib/utils";
@@ -67,11 +53,7 @@ import {
   useSitesSelection,
   type SitesSelection,
 } from "@/features/sites/use-sites-selection";
-import {
-  useRecheckConnection,
-  AgentUnreachableError,
-} from "@/features/sites/use-site-connection";
-import { toast } from "@/components/toast";
+import { SiteRowActions } from "@/features/sites/site-row-actions";
 
 // Surface 4.5 — the Sites table.
 //
@@ -459,7 +441,7 @@ function buildColumns(
       enableSorting: false,
       size: COL_ACTIONS_PX,
       cell: ({ row }) => (
-        <RowActions
+        <SiteRowActions
           site={row.original.site}
           connectionState={row.original.connectionState}
           onOpenAutoLogin={onOpenAutoLogin}
@@ -473,183 +455,8 @@ function buildColumns(
   ];
 }
 
-function RowActions({
-  site,
-  connectionState,
-  onOpenAutoLogin,
-  onOpenDetail,
-  onDisconnect,
-  onReconnect,
-  onRemove,
-}: {
-  site: Site;
-  connectionState: ConnectionState;
-  onOpenAutoLogin: ((site: Site) => void) | undefined;
-  onOpenDetail: ((site: Site) => void) | undefined;
-  onDisconnect: ((site: Site) => void) | undefined;
-  onReconnect: ((site: Site) => void) | undefined;
-  onRemove: ((site: Site) => void) | undefined;
-}) {
-  // pending_enrollment ("Awaiting agent") also needs the code action — the raw
-  // code is shown once, so a stuck-pending site has no other way back to it.
-  const canReconnect =
-    isReconnectable(connectionState) ||
-    connectionState === "pending_enrollment";
-  const reconnectLabel =
-    connectionState === "pending_enrollment"
-      ? "Get enrollment code"
-      : "Reconnect";
-  const canDisconnect =
-    connectionState === "connected" || connectionState === "degraded";
-  // Remove is only surfaced for archived/disconnected sites — states where
-  // neither connecting nor active management is possible.
-  const canRemove = isReconnectable(connectionState);
-  // Re-check is available for any enrolled, signing-capable site — including
-  // disconnected, where it is the primary way to recover a site that merely
-  // fell behind on heartbeats (an unreachable agent returns a calm error, not
-  // a hard failure). pending_enrollment/revoked/archived have no signed command
-  // channel, so they stay excluded.
-  const canRecheck =
-    connectionState === "connected" ||
-    connectionState === "degraded" ||
-    connectionState === "disconnected";
-  const recheck = useRecheckConnection();
-
-  return (
-    <div className="flex items-center justify-end gap-1">
-      {canRecheck ? (
-        <button
-          type="button"
-          aria-label="Re-check connection"
-          title="Re-check connection"
-          disabled={recheck.isPending}
-          onClick={(e) => {
-            e.stopPropagation();
-            recheck.mutate(
-              { siteId: site.id },
-              {
-                onSuccess: () =>
-                  toast.success("Connection refreshed", {
-                    description: "Agent responded.",
-                  }),
-                onError: (err) => {
-                  if (err instanceof AgentUnreachableError) {
-                    toast.info(err.message);
-                  } else {
-                    toast.error("Re-check failed", { description: err.message });
-                  }
-                },
-              },
-            );
-          }}
-          className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
-        >
-          <RefreshCw
-            aria-hidden="true"
-            className={cn("size-3.5", recheck.isPending && "animate-spin")}
-          />
-        </button>
-      ) : null}
-      <button
-        type="button"
-        aria-label={`Log in to ${site.name}`}
-        title="Log in to site"
-        onClick={(e) => {
-          e.stopPropagation();
-          onOpenAutoLogin?.(site);
-        }}
-        disabled={!onOpenAutoLogin}
-        className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:opacity-50"
-      >
-        <Zap aria-hidden="true" className="size-4" />
-      </button>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            aria-label={`More actions for ${site.name}`}
-            onClick={(e) => e.stopPropagation()}
-            className="inline-flex size-7 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-          >
-            <MoreHorizontal aria-hidden="true" className="size-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              onOpenDetail?.(site);
-            }}
-          >
-            Open site
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              onOpenAutoLogin?.(site);
-            }}
-            disabled={!onOpenAutoLogin}
-          >
-            Log in to site
-          </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem
-            onSelect={(e) => {
-              e.preventDefault();
-              window.open(site.url, "_blank", "noopener,noreferrer");
-            }}
-          >
-            Open site URL
-          </DropdownMenuItem>
-          {canReconnect && onReconnect ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                onSelect={(e) => {
-                  e.preventDefault();
-                  onReconnect(site);
-                }}
-              >
-                <RotateCw aria-hidden="true" className="size-4" />
-                {reconnectLabel}
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          {canRemove && onRemove ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={(e) => {
-                  e.preventDefault();
-                  onRemove(site);
-                }}
-              >
-                <Trash2 aria-hidden="true" className="size-4" />
-                Remove
-              </DropdownMenuItem>
-            </>
-          ) : null}
-          {canDisconnect && onDisconnect ? (
-            <>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive focus:text-destructive"
-                onSelect={(e) => {
-                  e.preventDefault();
-                  onDisconnect(site);
-                }}
-              >
-                <Unplug aria-hidden="true" className="size-4" />
-                Disconnect
-              </DropdownMenuItem>
-            </>
-          ) : null}
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
-  );
-}
+// RowActions is now in site-row-actions.tsx (SiteRowActions). Imported above.
+// The table uses SiteRowActions in the "actions" column cell renderer.
 
 // ---------------------------------------------------------------------------
 // Virtuoso component slots

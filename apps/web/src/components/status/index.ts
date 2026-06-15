@@ -26,3 +26,6 @@ export type {
 
 export { ConnectionStateBadge } from "./connection-state-badge";
 export type { ConnectionStateBadgeProps } from "./connection-state-badge";
+
+export { SslChip } from "./ssl-chip";
+export type { SslChipProps } from "./ssl-chip";

@@ -80,6 +80,22 @@ type Site struct {
 	// as LastBackupStatus). Absent on detail (not needed by the detail view).
 	ClientID   *uuid.UUID
 	ClientName string
+	// M72 — site screenshot. Populated by repo.List's batched lookup (same
+	// pattern as LastBackupStatus). Nil when the site has no screenshot row yet.
+	// Never nil after the first capture is enqueued (status=pending).
+	ScreenshotURL      *string // presigned GCS GET URL for the 1x WebP; nil when not ready
+	ScreenshotURL2x    *string // presigned GCS GET URL for the 2x WebP; nil when absent
+	ScreenshotStatus   *string // "pending"|"ready"|"failed"; nil = never captured
+	ScreenshotCapturedAt *time.Time
+	ScreenshotFailedReason *string
+	// Uptime summary — populated by repo.List's batched raw-SQL lookup (same
+	// pattern as LastBackupStatus, but using raw SQL to handle nullable probe
+	// columns that sqlc cannot generate correct types for).
+	// Nil/zero when no probes exist yet for this site.
+	UptimePct30d   *float64   // 0–100, rounded to 2 decimal places; nil = no probes
+	UptimeUp       *bool      // current up/down from the most-recent probe; nil = never probed
+	AvgLatencyMs   *float64   // average total_ms over successful probes in the 30d window
+	TLSExpiresAt   *time.Time // cert expiry from the most-recent probe; nil = non-HTTPS or no probes
 }
 
 // CreateInput is the validated input for creating a site under a tenant.

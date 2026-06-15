@@ -461,6 +461,42 @@ func (q *Queries) ListClientNamesForSites(ctx context.Context, arg ListClientNam
 	return items, nil
 }
 
+const listConnectedSiteIDsForScreenshot = `-- name: ListConnectedSiteIDsForScreenshot :many
+SELECT id, tenant_id, url FROM sites
+WHERE connection_state = 'connected'
+  AND enrolled_at IS NOT NULL
+ORDER BY created_at DESC, id DESC
+`
+
+type ListConnectedSiteIDsForScreenshotRow struct {
+	ID       uuid.UUID `json:"id"`
+	TenantID uuid.UUID `json:"tenant_id"`
+	Url      string    `json:"url"`
+}
+
+// Cross-tenant enumeration of connected sites for the weekly screenshot fanout.
+// Returns only sites in the 'connected' state (not degraded/pending/archived).
+// Runs under the app.agent GUC (sites_agent policy) since it spans tenants.
+func (q *Queries) ListConnectedSiteIDsForScreenshot(ctx context.Context) ([]ListConnectedSiteIDsForScreenshotRow, error) {
+	rows, err := q.db.Query(ctx, listConnectedSiteIDsForScreenshot)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConnectedSiteIDsForScreenshotRow
+	for rows.Next() {
+		var i ListConnectedSiteIDsForScreenshotRow
+		if err := rows.Scan(&i.ID, &i.TenantID, &i.Url); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listEnrolledSitesAllTenants = `-- name: ListEnrolledSitesAllTenants :many
 
 SELECT id, tenant_id, last_seen_at, health_status FROM sites

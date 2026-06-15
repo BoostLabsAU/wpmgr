@@ -6,6 +6,23 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-06-16
+
+### Added
+
+- **Sites grid view with website screenshots.** The Sites dashboard now has a list/grid toggle. The grid shows each site as a rich card led by a real screenshot of the site, captured server-side and refreshed on connect, weekly, and on demand. Each card also shows connection state, a capability strip (page cache, object cache, HTTPS, backups, multisite), pending updates, backup health, SSL expiry, uptime and latency, WordPress, PHP, and agent versions, host, client, and tags, with comfortable and compact densities. The screenshot degrades to the site favicon or a monogram until a capture lands.
+- **Uptime percentage, latency, and SSL expiry on the Sites list.** These are now returned with each site (joined from the uptime monitor) so the grid card and other surfaces can show them without a per-site request.
+
+### Fixed
+
+- **Sites filters now work.** The Status and Tags filters were inert (they logged but did not filter). They are now real multi-select filters that compose with search, client, and the archived toggle, with an applied-count badge and a clear-all control, and all filters plus the chosen view persist in the URL so a filtered grid can be shared or reloaded.
+
+### Security
+
+- Screenshot capture runs headless Chromium behind an in-process SSRF guard that re-validates every connection (navigation, redirect, and sub-resource) at dial time, rejecting private, link-local, loopback, and cloud-metadata addresses. QUIC, HTTP/3, and non-proxied WebRTC are disabled so no connection can escape the guard over UDP. Captures run unprivileged with bounded memory and time, the screenshot table is tenant-isolated with a restrictive row policy, and only control-plane-signed image URLs are served (never the raw site URL).
+
+Control plane, media worker, and dashboard at 0.49.0; one migration (auto-applied on boot); no agent change.
+
 ## [0.48.3] - 2026-06-15
 
 ### Added

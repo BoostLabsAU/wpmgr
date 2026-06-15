@@ -199,6 +199,8 @@ export {
   getObjectCacheStatsHistory,
   // email deliverability (fleet per-site reputation dashboard)
   getFleetEmailDeliverability,
+  // screenshots (M72)
+  refreshSiteScreenshot,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -694,4 +696,7 @@ export type {
   DeliverabilityReport,
   GetFleetEmailDeliverabilityData,
   GetFleetEmailDeliverabilityResponse,
+  // screenshots (M72)
+  RefreshSiteScreenshotData,
+  RefreshSiteScreenshotResponse,
 } from "./generated/types.gen";

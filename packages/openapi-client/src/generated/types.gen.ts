@@ -125,6 +125,62 @@ export type Site = {
    * Display name of the agency client this site is grouped under (m63). Absent when the site has no client.
    */
   client_name?: string;
+  /**
+   * M72 — Presigned GCS GET URL for the site's 1x WebP screenshot thumbnail (640×400 effective).
+   * Absent/null when the screenshot has never been captured or is pending.
+   * The URL is time-bounded (1 h); clients must NOT cache it past the TTL and should
+   * refetch on reconnect. NEVER put the raw WordPress site URL here; this is always a
+   * CP-presigned storage URL.
+   *
+   */
+  screenshot_url?: string;
+  /**
+   * M72 — Presigned GCS GET URL for the site's 2x WebP screenshot thumbnail (1280×800 effective).
+   * Absent/null when not captured or pending.
+   *
+   */
+  screenshot_url_2x?: string;
+  /**
+   * M72 — Current screenshot capture status. Absent/null means "never captured" (treat as no screenshot).
+   * pending = capture job is enqueued or running.
+   * ready   = last capture completed; screenshot_url is valid.
+   * failed  = last capture failed; screenshot_failed_reason explains why.
+   *
+   */
+  screenshot_status?: "pending" | "ready" | "failed";
+  /**
+   * M72 — When the current screenshot was captured. Absent/null when pending or never captured.
+   */
+  screenshot_captured_at?: string;
+  /**
+   * M72 — Human-readable reason for the last failed capture. Absent/null when not failed.
+   */
+  screenshot_failed_reason?: string;
+  /**
+   * Current up/down from the most-recent uptime probe. Absent/null when the site has never been probed.
+   * true = last probe received a non-error 2xx response; false = last probe failed or timed out.
+   *
+   */
+  up?: boolean;
+  /**
+   * Uptime percentage over the trailing 30 days, rounded to 2 decimal places (e.g. 99.98).
+   * Absent/null when the site has no probes in the 30-day window.
+   *
+   */
+  uptime_pct?: number;
+  /**
+   * Average total response latency in milliseconds over successful (up=true) probes in the
+   * trailing 30 days, rounded to the nearest millisecond.
+   * Absent/null when there are no successful probes in the window.
+   *
+   */
+  avg_latency_ms?: number;
+  /**
+   * RFC 3339 timestamp of the TLS certificate expiry captured on the most-recent uptime probe.
+   * Absent/null when the site is non-HTTPS or has never been probed.
+   *
+   */
+  tls_expires_at?: string;
   created_at: string;
   updated_at: string;
 };
@@ -7958,6 +8014,46 @@ export type RefreshSiteUpdatesResponses = {
    */
   202: unknown;
 };
+
+export type RefreshSiteScreenshotData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/screenshot/refresh";
+};
+
+export type RefreshSiteScreenshotErrors = {
+  /**
+   * Site not found
+   */
+  404: Error;
+  /**
+   * Site not enrolled
+   */
+  409: Error;
+  /**
+   * Screenshot capture not configured on this instance
+   */
+  501: Error;
+};
+
+export type RefreshSiteScreenshotError =
+  RefreshSiteScreenshotErrors[keyof RefreshSiteScreenshotErrors];
+
+export type RefreshSiteScreenshotResponses = {
+  /**
+   * Screenshot capture enqueued
+   */
+  202: {
+    status: "pending";
+    updated_at: string;
+  };
+};
+
+export type RefreshSiteScreenshotResponse =
+  RefreshSiteScreenshotResponses[keyof RefreshSiteScreenshotResponses];
 
 export type GetSiteAvailableUpdatesData = {
   body?: never;

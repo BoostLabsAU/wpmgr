@@ -1,12 +1,15 @@
 import {
   forwardRef,
   useMemo,
+  useState,
   type ReactNode,
 } from "react";
 import {
   ChevronDown,
   Download,
   ExternalLink,
+  LayoutGrid,
+  List,
   MoreHorizontal,
   RefreshCw,
   RotateCcw,
@@ -14,6 +17,7 @@ import {
   Rows3,
   Rows4,
   Search,
+  Square,
   Tag,
   Users,
   X,
@@ -24,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
+  DropdownMenuCheckboxItem,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
@@ -34,32 +39,25 @@ import { cn } from "@/lib/utils";
 import { dur, ease } from "@/lib/motion-presets";
 import type { SitesDensity } from "@/features/sites/use-sites-density";
 import type { SitesSelection } from "@/features/sites/use-sites-selection";
+import type { SitesView, CardSize } from "@/features/sites/use-sites-view";
 
 // Surface 4.6 — the Sites toolbar.
 //
 // Two modes that transform into each other via a FLIP layout animation:
 //
-//   IDLE   [Search  ⌘K] [Client▾] [Status▾] [Tags▾]      [Density] [Add site]
+//   IDLE   [List|Grid] [Search  ⌘K] [Client▾] [Status▾] [Tags▾]  [Density|CardSize] [Add site]
 //   ACTION [N sites selected · Clear] [Update plugins (N)▾] [Run backup]
 //          [Restore...] [Open in wp-admin (N)] [More▾]
 //
-// The two modes are conditional children of a single <motion.div layout> parent;
-// `layout` measures the bounds before and after the mode swap and runs the
-// resulting transform on the GPU (translate + scale). No width / height / left
-// / top is animated — strictly transform + opacity, per DESIGN.md.
+// P1: Status and Tags are now controlled MULTI-SELECT dropdowns (Radix
+// DropdownMenuCheckboxItem) with an applied-count badge, in-menu text filter,
+// and max-h scroll for long option lists. The menu stays open across toggles
+// via e.preventDefault() on item select.
 //
-// Why one parent instead of two stacked panels: the parent's bounds change as
-// it re-flows around the children. With `layout`, motion turns that re-flow
-// into a single 240ms outQuart transform.
-//
-// Reduced motion is honoured globally via <MotionConfig reducedMotion="user">
-// which disables the layout transform but keeps the cross-fade.
+// P2: A [List | Grid] icon toggle sits leftmost in the right-hand cluster. In
+// grid view the DensityToggle swaps for a CardSizeToggle. A "Select all (N)"
+// inline control is shown only in grid view (the table keeps its header checkbox).
 
-// Phase 5: timing tokens imported from @/lib/motion-presets so the toolbar
-// rides the same easing/duration tiers as the rest of the app (dialog, drawer,
-// save bar). The cross-fade between idle/action modes stays short (80ms,
-// linear) — it intentionally undercuts the layout transform so the bounds
-// re-flow reads as the primary motion and the swap reads as instant.
 const TOOLBAR_MOTION = {
   layout: { duration: dur.base, ease: ease.out },
   fade: { duration: 0.08, ease: "linear" as const },
@@ -95,31 +93,55 @@ export interface SitesToolbarProps {
   onClientFilterChange?: (clientId: string | null) => void;
   /** Available tag values, used to populate the Tag dropdown. */
   tagOptions?: readonly string[];
+  /** Currently selected tags (controlled multi-select). */
+  selectedTags?: readonly string[];
+  /** Called when a tag is toggled. */
+  onTagToggle?: (tag: string) => void;
+  /** Called to clear all tag filters. */
+  onTagsClear?: () => void;
+  /** Available status values for the Status dropdown. */
+  statusOptions?: readonly string[];
+  /** Currently selected statuses (controlled multi-select). */
+  selectedStatuses?: readonly string[];
+  /** Called when a status is toggled. */
+  onStatusToggle?: (status: string) => void;
+  /** Called to clear all status filters. */
+  onStatusesClear?: () => void;
+  /** Total count of active filter axes (for the "Clear filters" pill). */
+  activeFilterCount?: number;
+  /** Called to clear ALL filters across all axes. */
+  onClearAllFilters?: () => void;
+
+  // ---- P2 view mode wiring --------------------------------------------------
+  /** Current view mode (list | grid). */
+  view?: SitesView;
+  /** Called when the view toggle is clicked. */
+  onViewChange?: (next: SitesView) => void;
+  /** Current card size (comfortable | compact) — only relevant in grid view. */
+  cardSize?: CardSize;
+  /** Called when the card size toggle is clicked. */
+  onCardSizeChange?: (next: CardSize) => void;
+  /**
+   * Visible site ids in the current view — used by the grid "Select all (N)"
+   * control. The table keeps its own header checkbox.
+   */
+  visibleIds?: readonly string[];
 
   // ---- Permission gates ---------------------------------------------------
   /** Operator+ may see Add Site / bulk actions. */
   canOperate: boolean;
 
   // ---- Action-mode handlers (Sprint 3 stubs; wired progressively) ---------
-  /** Update plugins/themes/core for the selection. Opens the UpdateWizard. */
   onBulkUpdate: (kind: "plugins" | "themes" | "core") => void;
-  /** Run a backup across the selection. Wires to the bulk-backup endpoint. */
   onBulkBackup: () => void;
-  /** Restore from backup — Sprint 4 follow-up (no fleet-wide flow yet). */
   onBulkRestore: () => void;
-  /** Open every selected site's wp-admin in a new tab (auto-login). */
   onBulkOpenWpAdmin: () => void;
-  /** Tag / re-tag the selection. Sprint 4 wiring. */
   onBulkTag: () => void;
-  /** Re-assign the selection to a client. Sprint 4 wiring. */
   onBulkSetClient: () => void;
-  /** Pause monitoring for the selection. Sprint 4 wiring. */
   onBulkPauseMonitoring: () => void;
-  /** Delete the selection. Sprint 4 wiring; requires confirm-by-typing. */
   onBulkDelete: () => void;
 
   // ---- Idle-mode primary action ------------------------------------------
-  /** Render-prop slot for the "Add site" affordance — keeps the dialog wiring in the route. */
   addSiteSlot?: ReactNode;
 }
 
@@ -136,8 +158,6 @@ export function SitesToolbar(props: SitesToolbarProps) {
         aria-label={inAction ? "Bulk actions" : "Filter sites"}
         className={cn(
           "flex flex-wrap items-center justify-between gap-3 border-b border-border bg-background px-1 py-2",
-          // Min-height keeps the row stable so the surrounding layout doesn't
-          // jitter when the mode flips (transform/opacity-only — see DESIGN).
           "min-h-11",
         )}
         data-mode={inAction ? "action" : "idle"}
@@ -155,7 +175,7 @@ export function SitesToolbar(props: SitesToolbarProps) {
 }
 
 // ---------------------------------------------------------------------------
-// IDLE mode — filter chips + density + add site
+// IDLE mode — filter chips + view toggle + density/card-size + add site
 // ---------------------------------------------------------------------------
 
 function IdleMode({
@@ -165,7 +185,22 @@ function IdleMode({
   appliedClientId,
   onClientFilterChange,
   tagOptions = [],
+  selectedTags = [],
+  onTagToggle,
+  onTagsClear,
+  statusOptions = [],
+  selectedStatuses = [],
+  onStatusToggle,
+  onStatusesClear,
+  activeFilterCount = 0,
+  onClearAllFilters,
   densityState,
+  view = "list",
+  onViewChange,
+  cardSize = "comfortable",
+  onCardSizeChange,
+  visibleIds = [],
+  selection,
   addSiteSlot,
 }: SitesToolbarProps) {
   const [density, onDensityChange] = densityState;
@@ -184,9 +219,11 @@ function IdleMode({
       transition={TOOLBAR_MOTION.fade}
       className="flex w-full flex-wrap items-center justify-between gap-2"
     >
+      {/* Left cluster: search + filters */}
       <div className="flex flex-wrap items-center gap-2">
         <SearchInput value={search} onChange={onSearchChange} />
-        {/* Client filter — real wiring when onClientFilterChange is provided */}
+
+        {/* Client filter */}
         {onClientFilterChange ? (
           <ClientFilterDropdown
             label={activeClientLabel}
@@ -194,37 +231,79 @@ function IdleMode({
             appliedId={appliedClientId ?? null}
             onSelect={onClientFilterChange}
           />
-        ) : (
-          <FilterDropdown
-            label="All clients"
-            options={clientOptions.map((c) => c.name)}
-            icon={Users}
-            ariaLabel="Filter by client"
-            filterKind="client"
-          />
-        )}
-        <FilterDropdown
-          label="Status: any"
-          options={["Up", "Down", "Pending", "Disabled"]}
+        ) : null}
+
+        {/* Status — controlled multi-select */}
+        <MultiSelectDropdown
+          label="Status"
+          options={statusOptions}
+          selected={selectedStatuses}
+          onToggle={onStatusToggle ?? (() => {})}
+          onClear={onStatusesClear ?? (() => {})}
           ariaLabel="Filter by status"
-          filterKind="status"
         />
-        <FilterDropdown
+
+        {/* Tags — controlled multi-select */}
+        <MultiSelectDropdown
           label="Tags"
           options={tagOptions}
-          icon={Tag}
+          selected={selectedTags}
+          onToggle={onTagToggle ?? (() => {})}
+          onClear={onTagsClear ?? (() => {})}
           ariaLabel="Filter by tag"
-          filterKind="tag"
+          icon={Tag}
         />
+
+        {/* Clear all filters pill — shown when any filter axis is active */}
+        {activeFilterCount > 0 && onClearAllFilters ? (
+          <button
+            type="button"
+            onClick={onClearAllFilters}
+            aria-label={`Clear ${activeFilterCount} active ${activeFilterCount === 1 ? "filter" : "filters"}`}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full border border-primary/50 bg-primary/5",
+              "px-2.5 py-1 text-xs font-medium text-foreground",
+              "transition-colors hover:bg-primary/10",
+              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+            )}
+          >
+            <X aria-hidden="true" className="size-3" />
+            Clear filters ({activeFilterCount})
+          </button>
+        ) : null}
       </div>
 
+      {/* Right cluster: view toggle + density/card-size + select-all-grid + add site */}
       <div className="flex items-center gap-2">
-        <DensityToggle density={density} onChange={onDensityChange} />
+        {/* Grid "Select all (N)" control — only in grid view (table has header checkbox). */}
+        {view === "grid" && visibleIds.length > 0 ? (
+          <GridSelectAll
+            visibleIds={visibleIds}
+            selection={selection}
+          />
+        ) : null}
+
+        {/* [List | Grid] view toggle */}
+        {onViewChange ? (
+          <ViewToggle view={view} onChange={onViewChange} />
+        ) : null}
+
+        {/* Density (list) or CardSize (grid) */}
+        {view === "grid" && onCardSizeChange ? (
+          <CardSizeToggle size={cardSize} onChange={onCardSizeChange} />
+        ) : (
+          <DensityToggle density={density} onChange={onDensityChange} />
+        )}
+
         {addSiteSlot}
       </div>
     </motion.div>
   );
 }
+
+// ---------------------------------------------------------------------------
+// SearchInput
+// ---------------------------------------------------------------------------
 
 const SearchInput = forwardRef<
   HTMLInputElement,
@@ -255,60 +334,140 @@ const SearchInput = forwardRef<
   );
 });
 
-type FilterKind = "client" | "status" | "tag";
+// ---------------------------------------------------------------------------
+// MultiSelectDropdown — controlled multi-select with in-menu text filter
+// ---------------------------------------------------------------------------
 
-function FilterDropdown({
+/**
+ * A controlled multi-select dropdown using DropdownMenuCheckboxItem.
+ * e.preventDefault() on item select keeps the menu open across toggles.
+ * Applied state: border-primary/50 bg-primary/5 + inline count badge.
+ * Long option lists get max-h-[60vh] overflow-y-auto + an in-menu filter.
+ */
+function MultiSelectDropdown({
   label,
   options,
+  selected,
+  onToggle,
+  onClear,
   ariaLabel,
   icon: Icon,
-  filterKind,
 }: {
   label: string;
   options: readonly string[];
+  selected: readonly string[];
+  onToggle: (value: string) => void;
+  onClear: () => void;
   ariaLabel: string;
   icon?: typeof Tag;
-  filterKind: FilterKind;
 }) {
-  const handleSelect = (value: string | null) => {
-    console.debug("[sites-toolbar] filter change", {
-      kind: filterKind,
-      value,
-    });
-  };
+  const [menuFilter, setMenuFilter] = useState("");
+  const count = selected.length;
+  const isActive = count > 0;
+
+  const filtered = useMemo(() => {
+    const q = menuFilter.trim().toLowerCase();
+    if (!q) return options;
+    return options.filter((o) => o.toLowerCase().includes(q));
+  }, [options, menuFilter]);
 
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      onOpenChange={(open) => {
+        if (!open) setMenuFilter("");
+      }}
+    >
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
           size="sm"
           aria-label={ariaLabel}
-          className="h-9 gap-1.5"
+          className={cn(
+            "h-9 gap-1.5",
+            isActive && "border-primary/50 bg-primary/5",
+          )}
         >
           {Icon ? <Icon aria-hidden="true" className="size-3.5" /> : null}
           {label}
+          {isActive ? (
+            <span className="ml-0.5 rounded-sm bg-primary/10 px-1 text-xs font-medium tabular-nums text-primary">
+              {count}
+            </span>
+          ) : null}
           <ChevronDown aria-hidden="true" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[14rem]">
-        <DropdownMenuItem onSelect={() => handleSelect(null)}>
-          Show all
-        </DropdownMenuItem>
-        {options.length > 0 ? <DropdownMenuSeparator /> : null}
-        {options.length === 0 ? (
-          <DropdownMenuItem disabled>No options yet</DropdownMenuItem>
-        ) : (
-          options.slice(0, 24).map((opt) => (
+      <DropdownMenuContent
+        align="start"
+        className="min-w-[14rem]"
+        collisionPadding={8}
+      >
+        {/* In-menu text filter for long lists */}
+        {options.length > 6 ? (
+          <div className="px-2 pb-1 pt-0.5">
+            <input
+              type="text"
+              value={menuFilter}
+              onChange={(e) => setMenuFilter(e.target.value)}
+              placeholder="Filter..."
+              aria-label={`Filter ${label} options`}
+              className={cn(
+                "h-7 w-full rounded border border-border bg-background px-2 text-xs",
+                "text-foreground placeholder:text-muted-foreground",
+                "focus:outline-none focus:ring-1 focus:ring-ring",
+              )}
+            />
+          </div>
+        ) : null}
+
+        {/* "Show all" clears the filter */}
+        {isActive ? (
+          <>
             <DropdownMenuItem
-              key={opt}
-              onSelect={() => handleSelect(opt)}
-              className="font-mono text-xs"
+              onSelect={(e) => {
+                e.preventDefault();
+                onClear();
+              }}
+              className="text-xs"
             >
-              {opt}
+              Show all
             </DropdownMenuItem>
-          ))
-        )}
+            <DropdownMenuSeparator />
+          </>
+        ) : null}
+
+        {/* Option list with scroll for long lists */}
+        <div className="max-h-[60vh] overflow-y-auto">
+          {filtered.length === 0 ? (
+            <div className="px-2 py-2 text-xs text-muted-foreground">
+              No options
+            </div>
+          ) : (
+            filtered.map((opt) => (
+              <DropdownMenuCheckboxItem
+                key={opt}
+                checked={selected.includes(opt)}
+                onCheckedChange={() => {
+                  onToggle(opt);
+                }}
+                onSelect={(e) => {
+                  // Keep the menu open so the user can toggle multiple options.
+                  e.preventDefault();
+                }}
+                className="text-xs"
+              >
+                {opt}
+              </DropdownMenuCheckboxItem>
+            ))
+          )}
+        </div>
+
+        {/* Labels for empty state */}
+        {options.length === 0 ? (
+          <DropdownMenuLabel className="text-xs text-muted-foreground">
+            No options yet
+          </DropdownMenuLabel>
+        ) : null}
       </DropdownMenuContent>
     </DropdownMenu>
   );
@@ -346,7 +505,7 @@ function ClientFilterDropdown({
           <ChevronDown aria-hidden="true" className="size-3" />
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="start" className="min-w-[14rem]">
+      <DropdownMenuContent align="start" className="min-w-[14rem]" collisionPadding={8}>
         <DropdownMenuItem
           onSelect={() => onSelect(null)}
           className={!appliedId ? "font-medium" : ""}
@@ -357,7 +516,7 @@ function ClientFilterDropdown({
         {options.length === 0 ? (
           <DropdownMenuItem disabled>No clients yet</DropdownMenuItem>
         ) : (
-          options.slice(0, 50).map((opt) => (
+          options.map((opt) => (
             <DropdownMenuItem
               key={opt.id}
               onSelect={() => onSelect(opt.id)}
@@ -371,6 +530,84 @@ function ClientFilterDropdown({
     </DropdownMenu>
   );
 }
+
+// ---------------------------------------------------------------------------
+// ViewToggle — [List | Grid] icon buttons
+// ---------------------------------------------------------------------------
+
+function ViewToggle({
+  view,
+  onChange,
+}: {
+  view: SitesView;
+  onChange: (next: SitesView) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="View mode"
+      className="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+    >
+      <DensityButton
+        active={view === "list"}
+        onClick={() => onChange("list")}
+        title="List view"
+        label="Switch to list view"
+      >
+        <List aria-hidden="true" className="size-4" />
+      </DensityButton>
+      <DensityButton
+        active={view === "grid"}
+        onClick={() => onChange("grid")}
+        title="Grid view"
+        label="Switch to grid view"
+      >
+        <LayoutGrid aria-hidden="true" className="size-4" />
+      </DensityButton>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// CardSizeToggle — [Comfortable | Compact] for grid view
+// ---------------------------------------------------------------------------
+
+function CardSizeToggle({
+  size,
+  onChange,
+}: {
+  size: CardSize;
+  onChange: (next: CardSize) => void;
+}) {
+  return (
+    <div
+      role="group"
+      aria-label="Card size"
+      className="inline-flex items-center rounded-md border border-border bg-background p-0.5"
+    >
+      <DensityButton
+        active={size === "comfortable"}
+        onClick={() => onChange("comfortable")}
+        title="Comfortable card size"
+        label="Comfortable card size"
+      >
+        <Rows3 aria-hidden="true" className="size-4" />
+      </DensityButton>
+      <DensityButton
+        active={size === "compact"}
+        onClick={() => onChange("compact")}
+        title="Compact card size"
+        label="Compact card size"
+      >
+        <Rows2 aria-hidden="true" className="size-4" />
+      </DensityButton>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// DensityToggle — row density for list view
+// ---------------------------------------------------------------------------
 
 function DensityToggle({
   density,
@@ -441,6 +678,46 @@ function DensityButton({
       )}
     >
       {children}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// GridSelectAll — "Select all (N)" control shown only in grid view
+// ---------------------------------------------------------------------------
+
+function GridSelectAll({
+  visibleIds,
+  selection,
+}: {
+  visibleIds: readonly string[];
+  selection: SitesSelection;
+}) {
+  const allSelected =
+    visibleIds.length > 0 &&
+    visibleIds.every((id) => selection.selected.has(id));
+
+  return (
+    <button
+      type="button"
+      aria-label={
+        allSelected
+          ? "Clear selection"
+          : `Select all ${visibleIds.length} visible sites`
+      }
+      onClick={() => {
+        selection.setMany(visibleIds, !allSelected);
+      }}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded border px-2.5 py-1 text-xs font-medium transition-colors",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+        allSelected
+          ? "border-primary/50 bg-primary/5 text-primary"
+          : "border-border text-muted-foreground hover:text-foreground",
+      )}
+    >
+      <Square aria-hidden="true" className="size-3.5" />
+      {allSelected ? "Deselect all" : `Select all (${visibleIds.length})`}
     </button>
   );
 }

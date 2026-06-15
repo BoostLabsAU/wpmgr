@@ -15308,6 +15308,71 @@ func decodeRefreshSiteDiagnosticsParams(args [1]string, argsEscaped bool, r *htt
 	return params, nil
 }
 
+// RefreshSiteScreenshotParams is parameters of refreshSiteScreenshot operation.
+type RefreshSiteScreenshotParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackRefreshSiteScreenshotParams(packed middleware.Parameters) (params RefreshSiteScreenshotParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeRefreshSiteScreenshotParams(args [1]string, argsEscaped bool, r *http.Request) (params RefreshSiteScreenshotParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // RefreshSiteUpdatesParams is parameters of refreshSiteUpdates operation.
 type RefreshSiteUpdatesParams struct {
 	SiteId uuid.UUID

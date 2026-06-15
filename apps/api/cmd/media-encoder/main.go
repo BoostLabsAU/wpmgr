@@ -39,6 +39,8 @@ import (
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
 	mediaworker "github.com/mosamlife/wpmgr/apps/api/internal/media/worker"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot/capture"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
 )
 
@@ -143,9 +145,36 @@ func run() error {
 	perfRepo := perf.NewRepo(pool)
 	fontTranscodeWorker := mediafont.NewTranscodeWorker(perfRepo, store, cfg.Backup.PresignTTL, logger)
 
+	// Site screenshot capture worker. Headless Chromium is available in this binary
+	// only (cmd/media-encoder ships with /usr/bin/chromium-browser); the main API
+	// binary (distroless/static, CGO_ENABLED=0) only client.Inserts screenshot.CaptureArgs.
+	//
+	// SSRF protection: every Chromium TCP connection is routed through the in-process
+	// ssrfproxy.New() which calls ssrf.Safe at dial time (RFC1918 + link-local blocked).
+	screenshotRepo := screenshot.NewRepo(pool)
+	screenshotCaptureWorker := capture.NewWorker(
+		screenshotRepo,
+		store,
+		eventsPub,
+		0, // defaultConcurrency (2 concurrent Chromium captures)
+		logger,
+	)
+	// Weekly fanout: lists all connected sites cross-tenant and enqueues captures.
+	// The fanout enqueuer is wired after River starts (post-client start) via
+	// screenshotFanoutWorker.SetEnqueuer; a nil enqueuer logs and skips enqueue.
+	screenshotSiteLister := capture.NewDBSiteIDLister(pool)
+	screenshotFanoutWorker := capture.NewWeeklyFanoutWorker(
+		screenshotSiteLister,
+		nil, // wired below after River starts
+		0,   // fanoutCap default (500)
+		logger,
+	)
+
 	riverWorkers := river.NewWorkers()
 	river.AddWorker(riverWorkers, encodeWorker)
 	river.AddWorker(riverWorkers, fontTranscodeWorker)
+	river.AddWorker(riverWorkers, screenshotCaptureWorker)
+	river.AddWorker(riverWorkers, screenshotFanoutWorker)
 
 	// encodeJobTimeout must match EncodeWorker.Timeout(). SoftStopTimeout gives
 	// in-flight jobs this long to finish after a SIGTERM before their contexts are
@@ -155,15 +184,31 @@ func run() error {
 	const encodeJobTimeout = 5 * time.Minute
 	const fontTranscodeJobTimeout = 3 * time.Minute
 
+	// screenshotFanoutInterval runs the weekly screenshot sweep. 7 days (168h) is
+	// the default; the fanout itself fans out to per-site capture jobs.
+	const screenshotFanoutInterval = 7 * 24 * time.Hour
+
 	client, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
 		Logger: logger,
 		Queues: map[string]river.QueueConfig{
-			model.MediaEncodeQueue:          {MaxWorkers: workers},
-			mediafont.FontTranscodeQueue:    {MaxWorkers: workers * 2}, // pure-Go, more concurrency is fine
+			model.MediaEncodeQueue:       {MaxWorkers: workers},
+			mediafont.FontTranscodeQueue: {MaxWorkers: workers * 2}, // pure-Go, more concurrency is fine
+			// Screenshot capture queue: Chromium captures are memory-heavy (~150–300 MiB each).
+			// MaxWorkers is bounded by the capture worker's own semaphore; we match that here.
+			screenshot.ScreenshotQueue: {MaxWorkers: 2},
 		},
 		Workers: riverWorkers,
+		PeriodicJobs: []*river.PeriodicJob{
+			// Weekly screenshot fanout: lists all connected sites and enqueues captures.
+			// RunOnStart: false — avoids a burst on every encoder restart/scale-event.
+			river.NewPeriodicJob(
+				river.PeriodicInterval(screenshotFanoutInterval),
+				func() (river.JobArgs, *river.InsertOpts) { return capture.WeeklyFanoutArgs{}, nil },
+				&river.PeriodicJobOpts{RunOnStart: false},
+			),
+		},
 		// SoftStopTimeout must be >= the longest in-flight job. encodeJobTimeout
-		// (5 min) > fontTranscodeJobTimeout (3 min) so it covers both.
+		// (5 min) > fontTranscodeJobTimeout (3 min) and captureTimeout (30s), so it covers all.
 		SoftStopTimeout: encodeJobTimeout,
 	})
 	_ = fontTranscodeJobTimeout // documented above
@@ -173,6 +218,11 @@ func run() error {
 	if err := client.Start(ctx); err != nil {
 		return err
 	}
+
+	// Wire the screenshot fanout enqueuer now that the River client is started.
+	// The fanout worker's Job table INSERT requires an active client.
+	screenshotFanoutWorker.SetEnqueuer(screenshot.NewEnqueuer(client))
+
 	logger.Info("media-encoder started",
 		slog.Int("encode_workers", workers),
 		slog.String("queue", model.MediaEncodeQueue),
@@ -184,7 +234,10 @@ func run() error {
 	// open there to keep this cold-started instance alive until the media_encode
 	// queue drains. Self-hosters running this via docker-compose (the `media`
 	// profile) run it always-on and never call /internal/drain.
-	healthSrv := startHealthServer(logger, pool, model.MediaEncodeQueue)
+	// Pass both queues to the drain handler so it counts live screenshot capture
+	// jobs alongside media_encode jobs. The encoder must stay warm while either queue
+	// has pending work.
+	healthSrv := startHealthServer(logger, pool, model.MediaEncodeQueue, screenshot.ScreenshotQueue)
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining encode queue")
@@ -238,8 +291,8 @@ type drainConfig struct {
 // startHealthServer binds a minimal HTTP server on $PORT (default 8080). It
 // serves the Cloud Run startup/liveness probe (200 on every other path) and the
 // /internal/drain wake endpoint. Runs in a goroutine so it never blocks the
-// queue. pool/queue drive the drain handler's live-job count.
-func startHealthServer(logger *slog.Logger, pool *db.Pool, queue string) *http.Server {
+// queue. pool/queues drive the drain handler's live-job count.
+func startHealthServer(logger *slog.Logger, pool *db.Pool, queues ...string) *http.Server {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -249,7 +302,7 @@ func startHealthServer(logger *slog.Logger, pool *db.Pool, queue string) *http.S
 		poll:    drainPollInterval,
 		quiet:   drainQuietPeriod,
 		maxHold: drainMaxHold,
-		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, queue) },
+		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, queues...) },
 		logger:  logger,
 		sem:     make(chan struct{}, maxConcurrentDrains),
 	}))
@@ -350,12 +403,13 @@ func holdUntilDrained(ctx context.Context, cfg drainConfig) (bool, string) {
 	}
 }
 
-// liveEncodeJobs counts media_encode jobs needing an awake encoder: available,
-// running, or retryable. Mirrors the CP waker's query so both sides agree.
-func liveEncodeJobs(ctx context.Context, pool *db.Pool, queue string) (int, error) {
-	const q = `SELECT count(*) FROM river_job WHERE queue = $1 AND state IN ('available','running','retryable')`
+// liveEncodeJobs counts jobs in any of the given queues that need an awake encoder:
+// available, running, or retryable. Mirrors the CP waker's query so both sides agree.
+// Accepts multiple queues so both media_encode and site_screenshot are counted together.
+func liveEncodeJobs(ctx context.Context, pool *db.Pool, queues ...string) (int, error) {
+	const q = `SELECT count(*) FROM river_job WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
 	var n int
-	if err := pool.QueryRow(ctx, q, queue).Scan(&n); err != nil {
+	if err := pool.QueryRow(ctx, q, queues).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil

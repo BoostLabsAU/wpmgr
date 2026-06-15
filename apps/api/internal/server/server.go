@@ -38,6 +38,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
 	"github.com/mosamlife/wpmgr/apps/api/internal/settings"
 	"github.com/mosamlife/wpmgr/apps/api/internal/sharing"
@@ -150,6 +151,9 @@ type Deps struct {
 	// FontResultsAgentH serves POST /agent/v1/fonts/results (M55 — font results
 	// catalog push from the media-encoder). nil ⇒ route not mounted.
 	FontResultsAgentH *perf.FontResultsAgentHandler
+	// ScreenshotH serves the M72 manual screenshot refresh at
+	// POST /api/v1/sites/{siteId}/screenshot/refresh. nil ⇒ route not mounted.
+	ScreenshotH *screenshot.Handler
 	// AdminH serves the superadmin instance-management area under
 	// /api/v1/admin. nil ⇒ routes not mounted.
 	AdminH *admin.Handler
@@ -396,6 +400,11 @@ func New(deps Deps) *Server {
 	// S3 — operator-facing scan run management + findings routes.
 	if deps.ScanH != nil {
 		deps.ScanH.Register(v1)
+	}
+	// M72 — site screenshot refresh endpoint. Gated on RequireSiteAccess inside
+	// the handler's Register (same as every per-site endpoint).
+	if deps.ScreenshotH != nil {
+		deps.ScreenshotH.Register(v1)
 	}
 	// m16 — restore run history + phase log.
 	if deps.RestoreRunH != nil {

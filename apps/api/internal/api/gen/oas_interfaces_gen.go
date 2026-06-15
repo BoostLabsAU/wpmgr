@@ -533,6 +533,10 @@ type RefreshSiteDiagnosticsRes interface {
 	refreshSiteDiagnosticsRes()
 }
 
+type RefreshSiteScreenshotRes interface {
+	refreshSiteScreenshotRes()
+}
+
 type RefreshSiteUpdatesRes interface {
 	refreshSiteUpdatesRes()
 }

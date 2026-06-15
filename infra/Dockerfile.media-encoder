@@ -57,18 +57,57 @@ RUN --mount=type=cache,target=/go/pkg/mod \
         -o /out/media-encoder ./cmd/media-encoder
 
 # ---- final stage ----
-# distroless/cc-debian13:nonroot — lilliput is a CGO/C++ library (a stripped
-# OpenCV core + the codec wrappers), so the runtime needs glibc + libstdc++ +
-# libgcc, which `static`/`base` lack but the `cc` variant provides.
+# debian:trixie-slim — we need a package manager in the runtime layer because
+# headless Chromium (go-rod screenshot worker) has ~168 transitive shared-lib
+# deps that make copying individual .so files into a distroless image
+# impractical.
 #
-# CRITICAL: the runtime Debian MUST match the BUILD image. golang:1.26 is
-# Debian 13 "trixie" (glibc 2.41 + GCC 14 libstdc++), so the binary requires
-# GLIBC_2.38+ and GLIBCXX_3.4.32+. A debian12 runtime (glibc 2.36, older
-# libstdc++) makes it die at startup with "GLIBCXX_3.4.32 not found" /
-# "GLIBC_2.38 not found" before it can bind $PORT. Keep build + runtime on
-# trixie/13. :nonroot = uid 65532. (base-nonroot:latest does not exist —
-# distroless dropped :latest and nonroot is a tag, not a repo suffix.)
-FROM gcr.io/distroless/cc-debian13:nonroot
+# WHY NOT distroless/cc-debian13 any more: distroless has no shell and no apt.
+# Chromium's wrapper at /usr/bin/chromium IS a shell script that execs
+# /usr/lib/chromium/chromium — so we need /bin/sh in the final image.
+# debian:trixie-slim ships glibc 2.41 + libstdc++ from GCC 14 (identical ABI
+# to distroless/cc-debian13), so the lilliput CGO requirement is still met.
+#
+# CRITICAL: stay on Debian 13 "trixie" to match golang:1.26 (also trixie).
+# The binary requires GLIBC_2.38+ and GLIBCXX_3.4.32+; a debian12 runtime
+# dies at startup before it can bind $PORT.
+#
+# BINARY PATH MISMATCH: the Go code hard-codes /usr/bin/chromium-browser
+# (capture/worker.go const chromiumBin). On Debian trixie the `chromium`
+# package installs at /usr/bin/chromium (no -browser suffix). We add a symlink
+# /usr/bin/chromium-browser -> /usr/bin/chromium so exec.LookPath finds it.
+#
+# NON-ROOT: uid/gid 65532 ("nonroot") is created manually to mirror the uid
+# the distroless image used. Chromium runs with --no-sandbox (set by the Go
+# launcher) which is required in any container environment regardless of user.
+FROM debian:trixie-slim
+
+# Install Chromium + runtime libraries it needs for headless operation.
+# One RUN layer: install → symlink → clean → adduser. Cache is purged in the
+# same layer to keep the image lean (apt lists alone are ~50 MB).
+#
+# Package notes:
+#   chromium              — browser + its auto-pulled libs (~168 packages)
+#   fonts-liberation      — metrically-compatible Arial/Times/Courier (pulled
+#                           automatically by chromium on trixie; listed
+#                           explicitly for clarity)
+#   fonts-noto-color-emoji — emoji fallback; prevents □ boxes in screenshots
+#   fonts-noto-cjk        — CJK (Chinese/Japanese/Korean) fallback; prevents
+#                           tofu on Asian-language sites
+#   ca-certificates       — TLS roots for the SSRF-proxy CONNECT tunnel
+#
+# dbus, libnss3, libnspr4, libatk*, libgbm1, libasound2t64, libpango*,
+# libcairo2, libgtk-3* are all pulled as chromium dependencies automatically.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        chromium \
+        fonts-noto-color-emoji \
+        fonts-noto-cjk \
+        ca-certificates \
+    && ln -s /usr/bin/chromium /usr/bin/chromium-browser \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 65532 nonroot \
+    && useradd --uid 65532 --gid 65532 --no-create-home --shell /usr/sbin/nologin nonroot
 
 WORKDIR /
 COPY --from=build /out/media-encoder /usr/local/bin/media-encoder

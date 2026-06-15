@@ -15,6 +15,57 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
+// listLatestUptimeForSites returns the 30-day uptime summary for a batch of
+// site IDs in a single query. It is implemented via raw SQL (not sqlc) because
+// the LEFT JOIN LATERAL columns are nullable — sqlc generates non-nullable Go
+// types for bool/float64 which cause scan failures when a site has never been
+// probed (the same reason GetFleetStatus in the uptime repo uses raw SQL).
+//
+// The query uses unnest($2) as the anchor so sites with zero probes still
+// appear in the result (with all nullable columns as nil). RLS is active
+// because this runs inside InTenantTx / RunTenantTx; the explicit
+// tenant_id = $1 predicate gives defense-in-depth and index coverage.
+const listLatestUptimeForSitesSQL = `
+SELECT
+    s.id AS site_id,
+    lat.up,
+    lat.total_ms,
+    lat.tls_expiry,
+    (SELECT ROUND(
+            100.0 * SUM(CASE WHEN up THEN 1 ELSE 0 END)::numeric
+            / NULLIF(COUNT(*), 0),
+            2)
+     FROM site_uptime_probes x
+     WHERE x.site_id = s.id
+       AND x.tenant_id = $1
+       AND x.probed_at >= NOW() - INTERVAL '30 days') AS uptime_pct_30d,
+    (SELECT AVG(total_ms)
+     FROM site_uptime_probes x
+     WHERE x.site_id = s.id
+       AND x.tenant_id = $1
+       AND x.probed_at >= NOW() - INTERVAL '30 days'
+       AND x.up = true) AS avg_latency_ms
+FROM unnest($2::uuid[]) AS s(id)
+LEFT JOIN LATERAL (
+    SELECT up, total_ms, tls_expiry
+    FROM site_uptime_probes
+    WHERE site_id = s.id
+      AND tenant_id = $1
+    ORDER BY probed_at DESC
+    LIMIT 1
+) lat ON true
+`
+
+// siteUptimeSummary is the per-site row returned by listLatestUptimeForSitesSQL.
+type siteUptimeSummary struct {
+	SiteID       uuid.UUID
+	Up           *bool
+	TotalMs      *float64
+	TLSExpiry    *time.Time
+	UptimePct30d *float64
+	AvgLatencyMs *float64
+}
+
 // Repo is the tenant-scoped site persistence interface plus the enrollment and
 // agent-auth paths, which (by necessity) run before a tenant scope is known.
 type Repo interface {
@@ -105,6 +156,12 @@ type Repo interface {
 	// lightweight query (SELECT id only). Use this instead of List+cap for fleet
 	// adapters that enumerate all sites without a row limit.
 	ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error)
+
+	// GetSiteURL returns the URL and enrolled status of a tenant-scoped site.
+	// Used by the screenshot handler to validate enrollment before enqueueing.
+	// (url, true, nil) when enrolled; (url, false, nil) when found but not enrolled;
+	// ("", false, domain.NotFound) when the site doesn't exist.
+	GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, bool, error)
 }
 
 // SiteRef is the slim (site, tenant, url) projection the timeout sweeper
@@ -175,16 +232,37 @@ type EnrolledSite struct {
 	HealthStatus string
 }
 
+// ScreenshotEnricher enriches site list rows with screenshot data and presigned
+// URLs. Implemented by screenshotadapter.Enricher (wired in cmd/wpmgr), or by
+// a nil value (no-op when screenshots are unconfigured).
+//
+// This local interface keeps the site package free of a direct screenshot import.
+type ScreenshotEnricher interface {
+	// EnrichSites enriches the provided sites slice in-place with screenshot
+	// status + presigned URLs. Must be safe to call with an empty or nil slice.
+	EnrichSites(ctx context.Context, tenantID uuid.UUID, sites []Site) error
+}
+
 // pgRepo runs every operation inside a transaction scoped by the appropriate
 // GUC (tenant, enroll, or agent) so RLS enforces isolation even if a query
 // omitted its filter.
 type pgRepo struct {
-	pool *db.Pool
+	pool          *db.Pool
+	screenshotEnr ScreenshotEnricher // optional; nil disables screenshot enrichment
 }
 
 // NewRepo builds a Repo backed by the pgx pool with RLS enforcement.
 func NewRepo(pool *db.Pool) Repo {
 	return &pgRepo{pool: pool}
+}
+
+// SetScreenshotEnricher wires the screenshot enricher on a Repo returned by
+// NewRepo. It is a no-op if repo is not a *pgRepo. Call once at boot when
+// object storage is configured; omit on self-host without screenshots.
+func SetScreenshotEnricher(repo Repo, e ScreenshotEnricher) {
+	if r, ok := repo.(*pgRepo); ok {
+		r.screenshotEnr = e
+	}
 }
 
 func (r *pgRepo) Create(ctx context.Context, in CreateInput) (Site, error) {
@@ -324,6 +402,65 @@ func (r *pgRepo) List(ctx context.Context, in ListInput) ([]Site, error) {
 				if name, ok := clientByID[out[i].ID]; ok {
 					out[i].ClientName = name
 				}
+			}
+
+			// M72 — enrich with screenshot status + presigned URLs. One batched
+			// query + presign loop, matching the backup/client enrichment pattern.
+			if r.screenshotEnr != nil {
+				if err := r.screenshotEnr.EnrichSites(ctx, in.TenantID, out); err != nil {
+					// Non-fatal: screenshots are optional; log and continue.
+					// The site list is still usable without screenshot URLs.
+					_ = err // caller cannot do anything; keep serving
+				}
+			}
+
+			// Uptime summary — one raw-SQL query returning one row per site,
+			// using unnest($2) as the anchor so unprobed sites appear with nil
+			// columns rather than being omitted. See listLatestUptimeForSitesSQL.
+			uRows, uerr := tx.Query(ctx, listLatestUptimeForSitesSQL, in.TenantID, ids)
+			if uerr != nil {
+				return domain.Internal("site_list_uptime_failed", "failed to fetch uptime summary").WithCause(uerr)
+			}
+			uptimeByID := make(map[uuid.UUID]siteUptimeSummary, len(out))
+			for uRows.Next() {
+				var (
+					siteID    uuid.UUID
+					upVal     *bool
+					totalMs   *float64
+					tlsExpiry pgtype.Timestamptz
+					pct30d    *float64
+					avgLatMs  *float64
+				)
+				if serr := uRows.Scan(&siteID, &upVal, &totalMs, &tlsExpiry, &pct30d, &avgLatMs); serr != nil {
+					uRows.Close()
+					return domain.Internal("site_list_uptime_scan_failed", "failed to scan uptime row").WithCause(serr)
+				}
+				sum := siteUptimeSummary{
+					SiteID:       siteID,
+					Up:           upVal,
+					TotalMs:      totalMs,
+					UptimePct30d: pct30d,
+					AvgLatencyMs: avgLatMs,
+				}
+				if tlsExpiry.Valid {
+					t := tlsExpiry.Time
+					sum.TLSExpiry = &t
+				}
+				uptimeByID[siteID] = sum
+			}
+			uRows.Close()
+			if err := uRows.Err(); err != nil {
+				return domain.Internal("site_list_uptime_rows_failed", "uptime query iteration error").WithCause(err)
+			}
+			for i := range out {
+				u, ok := uptimeByID[out[i].ID]
+				if !ok {
+					continue
+				}
+				out[i].UptimeUp = u.Up
+				out[i].UptimePct30d = u.UptimePct30d
+				out[i].AvgLatencyMs = u.AvgLatencyMs
+				out[i].TLSExpiresAt = u.TLSExpiry
 			}
 		}
 		return nil
@@ -621,6 +758,15 @@ func (r *pgRepo) MarkUnreachable(ctx context.Context, siteID uuid.UUID) (bool, e
 		return nil
 	})
 	return changed, err
+}
+
+func (r *pgRepo) GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, bool, error) {
+	s, err := r.Get(ctx, tenantID, siteID)
+	if err != nil {
+		return "", false, err
+	}
+	enrolled := s.EnrolledAt != nil
+	return s.URL, enrolled, nil
 }
 
 func (r *pgRepo) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {

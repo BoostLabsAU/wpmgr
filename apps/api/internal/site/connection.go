@@ -407,4 +407,10 @@ type ConnectionService interface {
 	// an agent key is present the call returns a 409 with code "not_cancellable"
 	// — archive/revoke must be used instead.
 	CancelEnrollment(ctx context.Context, in ActorSiteInput) error
+
+	// SetOnEnrollHook wires a post-enroll callback (e.g. screenshot capture trigger).
+	// Must be called before the server starts accepting requests. The hook fires
+	// best-effort in a goroutine after the enrollment state transition commits.
+	// Passing nil is a no-op.
+	SetOnEnrollHook(hook OnEnrollHook)
 }

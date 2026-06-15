@@ -164,3 +164,12 @@ SELECT id FROM sites
 WHERE tenant_id = @tenant_id
   AND connection_state <> 'archived'
 ORDER BY created_at DESC;
+
+-- name: ListConnectedSiteIDsForScreenshot :many
+-- Cross-tenant enumeration of connected sites for the weekly screenshot fanout.
+-- Returns only sites in the 'connected' state (not degraded/pending/archived).
+-- Runs under the app.agent GUC (sites_agent policy) since it spans tenants.
+SELECT id, tenant_id, url FROM sites
+WHERE connection_state = 'connected'
+  AND enrolled_at IS NOT NULL
+ORDER BY created_at DESC, id DESC;

@@ -20031,6 +20031,52 @@ func (o OptSiteLifecycleReason) Or(d SiteLifecycleReason) SiteLifecycleReason {
 	return d
 }
 
+// NewOptSiteScreenshotStatus returns new OptSiteScreenshotStatus with value set to v.
+func NewOptSiteScreenshotStatus(v SiteScreenshotStatus) OptSiteScreenshotStatus {
+	return OptSiteScreenshotStatus{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSiteScreenshotStatus is optional SiteScreenshotStatus.
+type OptSiteScreenshotStatus struct {
+	Value SiteScreenshotStatus
+	Set   bool
+}
+
+// IsSet returns true if OptSiteScreenshotStatus was set.
+func (o OptSiteScreenshotStatus) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSiteScreenshotStatus) Reset() {
+	var v SiteScreenshotStatus
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSiteScreenshotStatus) SetTo(v SiteScreenshotStatus) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSiteScreenshotStatus) Get() (v SiteScreenshotStatus, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSiteScreenshotStatus) Or(d SiteScreenshotStatus) SiteScreenshotStatus {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSiteShare returns new OptSiteShare with value set to v.
 func NewOptSiteShare(v SiteShare) OptSiteShare {
 	return OptSiteShare{
@@ -23803,6 +23849,79 @@ type RefreshSiteDiagnosticsAccepted struct{}
 
 func (*RefreshSiteDiagnosticsAccepted) refreshSiteDiagnosticsRes() {}
 
+type RefreshSiteScreenshotAccepted struct {
+	Status    RefreshSiteScreenshotAcceptedStatus `json:"status"`
+	UpdatedAt time.Time                           `json:"updated_at"`
+}
+
+// GetStatus returns the value of Status.
+func (s *RefreshSiteScreenshotAccepted) GetStatus() RefreshSiteScreenshotAcceptedStatus {
+	return s.Status
+}
+
+// GetUpdatedAt returns the value of UpdatedAt.
+func (s *RefreshSiteScreenshotAccepted) GetUpdatedAt() time.Time {
+	return s.UpdatedAt
+}
+
+// SetStatus sets the value of Status.
+func (s *RefreshSiteScreenshotAccepted) SetStatus(val RefreshSiteScreenshotAcceptedStatus) {
+	s.Status = val
+}
+
+// SetUpdatedAt sets the value of UpdatedAt.
+func (s *RefreshSiteScreenshotAccepted) SetUpdatedAt(val time.Time) {
+	s.UpdatedAt = val
+}
+
+func (*RefreshSiteScreenshotAccepted) refreshSiteScreenshotRes() {}
+
+type RefreshSiteScreenshotAcceptedStatus string
+
+const (
+	RefreshSiteScreenshotAcceptedStatusPending RefreshSiteScreenshotAcceptedStatus = "pending"
+)
+
+// AllValues returns all RefreshSiteScreenshotAcceptedStatus values.
+func (RefreshSiteScreenshotAcceptedStatus) AllValues() []RefreshSiteScreenshotAcceptedStatus {
+	return []RefreshSiteScreenshotAcceptedStatus{
+		RefreshSiteScreenshotAcceptedStatusPending,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s RefreshSiteScreenshotAcceptedStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case RefreshSiteScreenshotAcceptedStatusPending:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *RefreshSiteScreenshotAcceptedStatus) UnmarshalText(data []byte) error {
+	switch RefreshSiteScreenshotAcceptedStatus(data) {
+	case RefreshSiteScreenshotAcceptedStatusPending:
+		*s = RefreshSiteScreenshotAcceptedStatusPending
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type RefreshSiteScreenshotConflict Error
+
+func (*RefreshSiteScreenshotConflict) refreshSiteScreenshotRes() {}
+
+type RefreshSiteScreenshotNotFound Error
+
+func (*RefreshSiteScreenshotNotFound) refreshSiteScreenshotRes() {}
+
+type RefreshSiteScreenshotNotImplemented Error
+
+func (*RefreshSiteScreenshotNotImplemented) refreshSiteScreenshotRes() {}
+
 // RefreshSiteUpdatesAccepted is response for RefreshSiteUpdates operation.
 type RefreshSiteUpdatesAccepted struct{}
 
@@ -26182,8 +26301,40 @@ type Site struct {
 	// Display name of the agency client this site is grouped under (m63). Absent when the site has no
 	// client.
 	ClientName OptString `json:"client_name"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	// M72 — Presigned GCS GET URL for the site's 1x WebP screenshot thumbnail (640×400 effective).
+	// Absent/null when the screenshot has never been captured or is pending.
+	// The URL is time-bounded (1 h); clients must NOT cache it past the TTL and should
+	// refetch on reconnect. NEVER put the raw WordPress site URL here; this is always a
+	// CP-presigned storage URL.
+	ScreenshotURL OptURI `json:"screenshot_url"`
+	// M72 — Presigned GCS GET URL for the site's 2x WebP screenshot thumbnail (1280×800 effective).
+	// Absent/null when not captured or pending.
+	ScreenshotURL2x OptURI `json:"screenshot_url_2x"`
+	// M72 — Current screenshot capture status. Absent/null means "never captured" (treat as no
+	// screenshot).
+	// pending = capture job is enqueued or running.
+	// ready   = last capture completed; screenshot_url is valid.
+	// failed  = last capture failed; screenshot_failed_reason explains why.
+	ScreenshotStatus OptSiteScreenshotStatus `json:"screenshot_status"`
+	// M72 — When the current screenshot was captured. Absent/null when pending or never captured.
+	ScreenshotCapturedAt OptDateTime `json:"screenshot_captured_at"`
+	// M72 — Human-readable reason for the last failed capture. Absent/null when not failed.
+	ScreenshotFailedReason OptString `json:"screenshot_failed_reason"`
+	// Current up/down from the most-recent uptime probe. Absent/null when the site has never been probed.
+	// true = last probe received a non-error 2xx response; false = last probe failed or timed out.
+	Up OptBool `json:"up"`
+	// Uptime percentage over the trailing 30 days, rounded to 2 decimal places (e.g. 99.98).
+	// Absent/null when the site has no probes in the 30-day window.
+	UptimePct OptFloat64 `json:"uptime_pct"`
+	// Average total response latency in milliseconds over successful (up=true) probes in the
+	// trailing 30 days, rounded to the nearest millisecond.
+	// Absent/null when there are no successful probes in the window.
+	AvgLatencyMs OptInt32 `json:"avg_latency_ms"`
+	// RFC 3339 timestamp of the TLS certificate expiry captured on the most-recent uptime probe.
+	// Absent/null when the site is non-HTTPS or has never been probed.
+	TLSExpiresAt OptDateTime `json:"tls_expires_at"`
+	CreatedAt    time.Time   `json:"created_at"`
+	UpdatedAt    time.Time   `json:"updated_at"`
 }
 
 // GetID returns the value of ID.
@@ -26324,6 +26475,51 @@ func (s *Site) GetClientID() OptUUID {
 // GetClientName returns the value of ClientName.
 func (s *Site) GetClientName() OptString {
 	return s.ClientName
+}
+
+// GetScreenshotURL returns the value of ScreenshotURL.
+func (s *Site) GetScreenshotURL() OptURI {
+	return s.ScreenshotURL
+}
+
+// GetScreenshotURL2x returns the value of ScreenshotURL2x.
+func (s *Site) GetScreenshotURL2x() OptURI {
+	return s.ScreenshotURL2x
+}
+
+// GetScreenshotStatus returns the value of ScreenshotStatus.
+func (s *Site) GetScreenshotStatus() OptSiteScreenshotStatus {
+	return s.ScreenshotStatus
+}
+
+// GetScreenshotCapturedAt returns the value of ScreenshotCapturedAt.
+func (s *Site) GetScreenshotCapturedAt() OptDateTime {
+	return s.ScreenshotCapturedAt
+}
+
+// GetScreenshotFailedReason returns the value of ScreenshotFailedReason.
+func (s *Site) GetScreenshotFailedReason() OptString {
+	return s.ScreenshotFailedReason
+}
+
+// GetUp returns the value of Up.
+func (s *Site) GetUp() OptBool {
+	return s.Up
+}
+
+// GetUptimePct returns the value of UptimePct.
+func (s *Site) GetUptimePct() OptFloat64 {
+	return s.UptimePct
+}
+
+// GetAvgLatencyMs returns the value of AvgLatencyMs.
+func (s *Site) GetAvgLatencyMs() OptInt32 {
+	return s.AvgLatencyMs
+}
+
+// GetTLSExpiresAt returns the value of TLSExpiresAt.
+func (s *Site) GetTLSExpiresAt() OptDateTime {
+	return s.TLSExpiresAt
 }
 
 // GetCreatedAt returns the value of CreatedAt.
@@ -26474,6 +26670,51 @@ func (s *Site) SetClientID(val OptUUID) {
 // SetClientName sets the value of ClientName.
 func (s *Site) SetClientName(val OptString) {
 	s.ClientName = val
+}
+
+// SetScreenshotURL sets the value of ScreenshotURL.
+func (s *Site) SetScreenshotURL(val OptURI) {
+	s.ScreenshotURL = val
+}
+
+// SetScreenshotURL2x sets the value of ScreenshotURL2x.
+func (s *Site) SetScreenshotURL2x(val OptURI) {
+	s.ScreenshotURL2x = val
+}
+
+// SetScreenshotStatus sets the value of ScreenshotStatus.
+func (s *Site) SetScreenshotStatus(val OptSiteScreenshotStatus) {
+	s.ScreenshotStatus = val
+}
+
+// SetScreenshotCapturedAt sets the value of ScreenshotCapturedAt.
+func (s *Site) SetScreenshotCapturedAt(val OptDateTime) {
+	s.ScreenshotCapturedAt = val
+}
+
+// SetScreenshotFailedReason sets the value of ScreenshotFailedReason.
+func (s *Site) SetScreenshotFailedReason(val OptString) {
+	s.ScreenshotFailedReason = val
+}
+
+// SetUp sets the value of Up.
+func (s *Site) SetUp(val OptBool) {
+	s.Up = val
+}
+
+// SetUptimePct sets the value of UptimePct.
+func (s *Site) SetUptimePct(val OptFloat64) {
+	s.UptimePct = val
+}
+
+// SetAvgLatencyMs sets the value of AvgLatencyMs.
+func (s *Site) SetAvgLatencyMs(val OptInt32) {
+	s.AvgLatencyMs = val
+}
+
+// SetTLSExpiresAt sets the value of TLSExpiresAt.
+func (s *Site) SetTLSExpiresAt(val OptDateTime) {
+	s.TLSExpiresAt = val
 }
 
 // SetCreatedAt sets the value of CreatedAt.
@@ -30007,6 +30248,59 @@ func (s *SiteLoginProtectionConfigUpdateMode) UnmarshalText(data []byte) error {
 		return nil
 	case SiteLoginProtectionConfigUpdateModeProtect:
 		*s = SiteLoginProtectionConfigUpdateModeProtect
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// M72 — Current screenshot capture status. Absent/null means "never captured" (treat as no
+// screenshot).
+// pending = capture job is enqueued or running.
+// ready   = last capture completed; screenshot_url is valid.
+// failed  = last capture failed; screenshot_failed_reason explains why.
+type SiteScreenshotStatus string
+
+const (
+	SiteScreenshotStatusPending SiteScreenshotStatus = "pending"
+	SiteScreenshotStatusReady   SiteScreenshotStatus = "ready"
+	SiteScreenshotStatusFailed  SiteScreenshotStatus = "failed"
+)
+
+// AllValues returns all SiteScreenshotStatus values.
+func (SiteScreenshotStatus) AllValues() []SiteScreenshotStatus {
+	return []SiteScreenshotStatus{
+		SiteScreenshotStatusPending,
+		SiteScreenshotStatusReady,
+		SiteScreenshotStatusFailed,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SiteScreenshotStatus) MarshalText() ([]byte, error) {
+	switch s {
+	case SiteScreenshotStatusPending:
+		return []byte(s), nil
+	case SiteScreenshotStatusReady:
+		return []byte(s), nil
+	case SiteScreenshotStatusFailed:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SiteScreenshotStatus) UnmarshalText(data []byte) error {
+	switch SiteScreenshotStatus(data) {
+	case SiteScreenshotStatusPending:
+		*s = SiteScreenshotStatusPending
+		return nil
+	case SiteScreenshotStatusReady:
+		*s = SiteScreenshotStatusReady
+		return nil
+	case SiteScreenshotStatusFailed:
+		*s = SiteScreenshotStatusFailed
 		return nil
 	default:
 		return errors.Errorf("invalid value: %q", data)
