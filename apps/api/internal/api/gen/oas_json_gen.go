@@ -41242,6 +41242,39 @@ func (s *OptSiteLifecycleReason) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode encodes SiteScreenshotStatus as json.
+func (o OptSiteScreenshotStatus) Encode(e *jx.Encoder) {
+	if !o.Set {
+		return
+	}
+	e.Str(string(o.Value))
+}
+
+// Decode decodes SiteScreenshotStatus from json.
+func (o *OptSiteScreenshotStatus) Decode(d *jx.Decoder) error {
+	if o == nil {
+		return errors.New("invalid: unable to decode OptSiteScreenshotStatus to nil")
+	}
+	o.Set = true
+	if err := o.Value.Decode(d); err != nil {
+		return err
+	}
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s OptSiteScreenshotStatus) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *OptSiteScreenshotStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes SiteShare as json.
 func (o OptSiteShare) Encode(e *jx.Encoder) {
 	if !o.Set {
@@ -50647,6 +50680,269 @@ func (s *ReadinessStatus) UnmarshalJSON(data []byte) error {
 	return s.Decode(d)
 }
 
+// Encode implements json.Marshaler.
+func (s *RefreshSiteScreenshotAccepted) Encode(e *jx.Encoder) {
+	e.ObjStart()
+	s.encodeFields(e)
+	e.ObjEnd()
+}
+
+// encodeFields encodes fields.
+func (s *RefreshSiteScreenshotAccepted) encodeFields(e *jx.Encoder) {
+	{
+		e.FieldStart("status")
+		s.Status.Encode(e)
+	}
+	{
+		e.FieldStart("updated_at")
+		json.EncodeDateTime(e, s.UpdatedAt)
+	}
+}
+
+var jsonFieldsNameOfRefreshSiteScreenshotAccepted = [2]string{
+	0: "status",
+	1: "updated_at",
+}
+
+// Decode decodes RefreshSiteScreenshotAccepted from json.
+func (s *RefreshSiteScreenshotAccepted) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RefreshSiteScreenshotAccepted to nil")
+	}
+	var requiredBitSet [1]uint8
+
+	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
+		switch string(k) {
+		case "status":
+			requiredBitSet[0] |= 1 << 0
+			if err := func() error {
+				if err := s.Status.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"status\"")
+			}
+		case "updated_at":
+			requiredBitSet[0] |= 1 << 1
+			if err := func() error {
+				v, err := json.DecodeDateTime(d)
+				s.UpdatedAt = v
+				if err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"updated_at\"")
+			}
+		default:
+			return d.Skip()
+		}
+		return nil
+	}); err != nil {
+		return errors.Wrap(err, "decode RefreshSiteScreenshotAccepted")
+	}
+	// Validate required fields.
+	var failures []validate.FieldError
+	for i, mask := range [1]uint8{
+		0b00000011,
+	} {
+		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
+			// Mask only required fields and check equality to mask using XOR.
+			//
+			// If XOR result is not zero, result is not equal to expected, so some fields are missed.
+			// Bits of fields which would be set are actually bits of missed fields.
+			missed := bits.OnesCount8(result)
+			for bitN := 0; bitN < missed; bitN++ {
+				bitIdx := bits.TrailingZeros8(result)
+				fieldIdx := i*8 + bitIdx
+				var name string
+				if fieldIdx < len(jsonFieldsNameOfRefreshSiteScreenshotAccepted) {
+					name = jsonFieldsNameOfRefreshSiteScreenshotAccepted[fieldIdx]
+				} else {
+					name = strconv.Itoa(fieldIdx)
+				}
+				failures = append(failures, validate.FieldError{
+					Name:  name,
+					Error: validate.ErrFieldRequired,
+				})
+				// Reset bit.
+				result &^= 1 << bitIdx
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RefreshSiteScreenshotAccepted) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RefreshSiteScreenshotAccepted) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RefreshSiteScreenshotAcceptedStatus as json.
+func (s RefreshSiteScreenshotAcceptedStatus) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes RefreshSiteScreenshotAcceptedStatus from json.
+func (s *RefreshSiteScreenshotAcceptedStatus) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RefreshSiteScreenshotAcceptedStatus to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch RefreshSiteScreenshotAcceptedStatus(v) {
+	case RefreshSiteScreenshotAcceptedStatusPending:
+		*s = RefreshSiteScreenshotAcceptedStatusPending
+	default:
+		*s = RefreshSiteScreenshotAcceptedStatus(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s RefreshSiteScreenshotAcceptedStatus) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RefreshSiteScreenshotAcceptedStatus) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RefreshSiteScreenshotConflict as json.
+func (s *RefreshSiteScreenshotConflict) Encode(e *jx.Encoder) {
+	unwrapped := (*Error)(s)
+
+	unwrapped.Encode(e)
+}
+
+// Decode decodes RefreshSiteScreenshotConflict from json.
+func (s *RefreshSiteScreenshotConflict) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RefreshSiteScreenshotConflict to nil")
+	}
+	var unwrapped Error
+	if err := func() error {
+		if err := unwrapped.Decode(d); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = RefreshSiteScreenshotConflict(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RefreshSiteScreenshotConflict) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RefreshSiteScreenshotConflict) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RefreshSiteScreenshotNotFound as json.
+func (s *RefreshSiteScreenshotNotFound) Encode(e *jx.Encoder) {
+	unwrapped := (*Error)(s)
+
+	unwrapped.Encode(e)
+}
+
+// Decode decodes RefreshSiteScreenshotNotFound from json.
+func (s *RefreshSiteScreenshotNotFound) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RefreshSiteScreenshotNotFound to nil")
+	}
+	var unwrapped Error
+	if err := func() error {
+		if err := unwrapped.Decode(d); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = RefreshSiteScreenshotNotFound(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RefreshSiteScreenshotNotFound) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RefreshSiteScreenshotNotFound) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes RefreshSiteScreenshotNotImplemented as json.
+func (s *RefreshSiteScreenshotNotImplemented) Encode(e *jx.Encoder) {
+	unwrapped := (*Error)(s)
+
+	unwrapped.Encode(e)
+}
+
+// Decode decodes RefreshSiteScreenshotNotImplemented from json.
+func (s *RefreshSiteScreenshotNotImplemented) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode RefreshSiteScreenshotNotImplemented to nil")
+	}
+	var unwrapped Error
+	if err := func() error {
+		if err := unwrapped.Decode(d); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return errors.Wrap(err, "alias")
+	}
+	*s = RefreshSiteScreenshotNotImplemented(unwrapped)
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s *RefreshSiteScreenshotNotImplemented) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *RefreshSiteScreenshotNotImplemented) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
 // Encode encodes RefreshSiteUpdatesConflict as json.
 func (s *RefreshSiteUpdatesConflict) Encode(e *jx.Encoder) {
 	unwrapped := (*Error)(s)
@@ -56000,6 +56296,60 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.ScreenshotURL.Set {
+			e.FieldStart("screenshot_url")
+			s.ScreenshotURL.Encode(e)
+		}
+	}
+	{
+		if s.ScreenshotURL2x.Set {
+			e.FieldStart("screenshot_url_2x")
+			s.ScreenshotURL2x.Encode(e)
+		}
+	}
+	{
+		if s.ScreenshotStatus.Set {
+			e.FieldStart("screenshot_status")
+			s.ScreenshotStatus.Encode(e)
+		}
+	}
+	{
+		if s.ScreenshotCapturedAt.Set {
+			e.FieldStart("screenshot_captured_at")
+			s.ScreenshotCapturedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
+		if s.ScreenshotFailedReason.Set {
+			e.FieldStart("screenshot_failed_reason")
+			s.ScreenshotFailedReason.Encode(e)
+		}
+	}
+	{
+		if s.Up.Set {
+			e.FieldStart("up")
+			s.Up.Encode(e)
+		}
+	}
+	{
+		if s.UptimePct.Set {
+			e.FieldStart("uptime_pct")
+			s.UptimePct.Encode(e)
+		}
+	}
+	{
+		if s.AvgLatencyMs.Set {
+			e.FieldStart("avg_latency_ms")
+			s.AvgLatencyMs.Encode(e)
+		}
+	}
+	{
+		if s.TLSExpiresAt.Set {
+			e.FieldStart("tls_expires_at")
+			s.TLSExpiresAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		e.FieldStart("created_at")
 		json.EncodeDateTime(e, s.CreatedAt)
 	}
@@ -56009,7 +56359,7 @@ func (s *Site) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfSite = [30]string{
+var jsonFieldsNameOfSite = [39]string{
 	0:  "id",
 	1:  "tenant_id",
 	2:  "url",
@@ -56038,8 +56388,17 @@ var jsonFieldsNameOfSite = [30]string{
 	25: "last_backup_status",
 	26: "client_id",
 	27: "client_name",
-	28: "created_at",
-	29: "updated_at",
+	28: "screenshot_url",
+	29: "screenshot_url_2x",
+	30: "screenshot_status",
+	31: "screenshot_captured_at",
+	32: "screenshot_failed_reason",
+	33: "up",
+	34: "uptime_pct",
+	35: "avg_latency_ms",
+	36: "tls_expires_at",
+	37: "created_at",
+	38: "updated_at",
 }
 
 // Decode decodes Site from json.
@@ -56047,7 +56406,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 	if s == nil {
 		return errors.New("invalid: unable to decode Site to nil")
 	}
-	var requiredBitSet [4]uint8
+	var requiredBitSet [5]uint8
 
 	if err := d.ObjBytes(func(d *jx.Decoder, k []byte) error {
 		switch string(k) {
@@ -56355,8 +56714,98 @@ func (s *Site) Decode(d *jx.Decoder) error {
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"client_name\"")
 			}
+		case "screenshot_url":
+			if err := func() error {
+				s.ScreenshotURL.Reset()
+				if err := s.ScreenshotURL.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screenshot_url\"")
+			}
+		case "screenshot_url_2x":
+			if err := func() error {
+				s.ScreenshotURL2x.Reset()
+				if err := s.ScreenshotURL2x.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screenshot_url_2x\"")
+			}
+		case "screenshot_status":
+			if err := func() error {
+				s.ScreenshotStatus.Reset()
+				if err := s.ScreenshotStatus.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screenshot_status\"")
+			}
+		case "screenshot_captured_at":
+			if err := func() error {
+				s.ScreenshotCapturedAt.Reset()
+				if err := s.ScreenshotCapturedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screenshot_captured_at\"")
+			}
+		case "screenshot_failed_reason":
+			if err := func() error {
+				s.ScreenshotFailedReason.Reset()
+				if err := s.ScreenshotFailedReason.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"screenshot_failed_reason\"")
+			}
+		case "up":
+			if err := func() error {
+				s.Up.Reset()
+				if err := s.Up.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"up\"")
+			}
+		case "uptime_pct":
+			if err := func() error {
+				s.UptimePct.Reset()
+				if err := s.UptimePct.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"uptime_pct\"")
+			}
+		case "avg_latency_ms":
+			if err := func() error {
+				s.AvgLatencyMs.Reset()
+				if err := s.AvgLatencyMs.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"avg_latency_ms\"")
+			}
+		case "tls_expires_at":
+			if err := func() error {
+				s.TLSExpiresAt.Reset()
+				if err := s.TLSExpiresAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"tls_expires_at\"")
+			}
 		case "created_at":
-			requiredBitSet[3] |= 1 << 4
+			requiredBitSet[4] |= 1 << 5
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.CreatedAt = v
@@ -56368,7 +56817,7 @@ func (s *Site) Decode(d *jx.Decoder) error {
 				return errors.Wrap(err, "decode field \"created_at\"")
 			}
 		case "updated_at":
-			requiredBitSet[3] |= 1 << 5
+			requiredBitSet[4] |= 1 << 6
 			if err := func() error {
 				v, err := json.DecodeDateTime(d)
 				s.UpdatedAt = v
@@ -56388,11 +56837,12 @@ func (s *Site) Decode(d *jx.Decoder) error {
 	}
 	// Validate required fields.
 	var failures []validate.FieldError
-	for i, mask := range [4]uint8{
+	for i, mask := range [5]uint8{
 		0b11111111,
 		0b01010000,
 		0b00000000,
-		0b00110000,
+		0b00000000,
+		0b01100000,
 	} {
 		if result := (requiredBitSet[i] & mask) ^ mask; result != 0 {
 			// Mask only required fields and check equality to mask using XOR.
@@ -63902,6 +64352,48 @@ func (s SiteLoginProtectionConfigUpdateMode) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements stdjson.Unmarshaler.
 func (s *SiteLoginProtectionConfigUpdateMode) UnmarshalJSON(data []byte) error {
+	d := jx.DecodeBytes(data)
+	return s.Decode(d)
+}
+
+// Encode encodes SiteScreenshotStatus as json.
+func (s SiteScreenshotStatus) Encode(e *jx.Encoder) {
+	e.Str(string(s))
+}
+
+// Decode decodes SiteScreenshotStatus from json.
+func (s *SiteScreenshotStatus) Decode(d *jx.Decoder) error {
+	if s == nil {
+		return errors.New("invalid: unable to decode SiteScreenshotStatus to nil")
+	}
+	v, err := d.StrBytes()
+	if err != nil {
+		return err
+	}
+	// Try to use constant string.
+	switch SiteScreenshotStatus(v) {
+	case SiteScreenshotStatusPending:
+		*s = SiteScreenshotStatusPending
+	case SiteScreenshotStatusReady:
+		*s = SiteScreenshotStatusReady
+	case SiteScreenshotStatusFailed:
+		*s = SiteScreenshotStatusFailed
+	default:
+		*s = SiteScreenshotStatus(v)
+	}
+
+	return nil
+}
+
+// MarshalJSON implements stdjson.Marshaler.
+func (s SiteScreenshotStatus) MarshalJSON() ([]byte, error) {
+	e := jx.Encoder{}
+	s.Encode(&e)
+	return e.Bytes(), nil
+}
+
+// UnmarshalJSON implements stdjson.Unmarshaler.
+func (s *SiteScreenshotStatus) UnmarshalJSON(data []byte) error {
 	d := jx.DecodeBytes(data)
 	return s.Decode(d)
 }

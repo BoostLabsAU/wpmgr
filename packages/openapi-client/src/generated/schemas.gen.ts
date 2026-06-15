@@ -253,6 +253,58 @@ export const SiteSchema = {
       description:
         "Display name of the agency client this site is grouped under (m63). Absent when the site has no client.",
     },
+    screenshot_url: {
+      type: "string",
+      format: "uri",
+      description:
+        "M72 — Presigned GCS GET URL for the site's 1x WebP screenshot thumbnail (640×400 effective).\nAbsent/null when the screenshot has never been captured or is pending.\nThe URL is time-bounded (1 h); clients must NOT cache it past the TTL and should\nrefetch on reconnect. NEVER put the raw WordPress site URL here; this is always a\nCP-presigned storage URL.\n",
+    },
+    screenshot_url_2x: {
+      type: "string",
+      format: "uri",
+      description:
+        "M72 — Presigned GCS GET URL for the site's 2x WebP screenshot thumbnail (1280×800 effective).\nAbsent/null when not captured or pending.\n",
+    },
+    screenshot_status: {
+      type: "string",
+      enum: ["pending", "ready", "failed"],
+      description:
+        'M72 — Current screenshot capture status. Absent/null means "never captured" (treat as no screenshot).\npending = capture job is enqueued or running.\nready   = last capture completed; screenshot_url is valid.\nfailed  = last capture failed; screenshot_failed_reason explains why.\n',
+    },
+    screenshot_captured_at: {
+      type: "string",
+      format: "date-time",
+      description:
+        "M72 — When the current screenshot was captured. Absent/null when pending or never captured.",
+    },
+    screenshot_failed_reason: {
+      type: "string",
+      description:
+        "M72 — Human-readable reason for the last failed capture. Absent/null when not failed.",
+    },
+    up: {
+      type: "boolean",
+      description:
+        "Current up/down from the most-recent uptime probe. Absent/null when the site has never been probed.\ntrue = last probe received a non-error 2xx response; false = last probe failed or timed out.\n",
+    },
+    uptime_pct: {
+      type: "number",
+      format: "double",
+      description:
+        "Uptime percentage over the trailing 30 days, rounded to 2 decimal places (e.g. 99.98).\nAbsent/null when the site has no probes in the 30-day window.\n",
+    },
+    avg_latency_ms: {
+      type: "integer",
+      format: "int32",
+      description:
+        "Average total response latency in milliseconds over successful (up=true) probes in the\ntrailing 30 days, rounded to the nearest millisecond.\nAbsent/null when there are no successful probes in the window.\n",
+    },
+    tls_expires_at: {
+      type: "string",
+      format: "date-time",
+      description:
+        "RFC 3339 timestamp of the TLS certificate expiry captured on the most-recent uptime probe.\nAbsent/null when the site is non-HTTPS or has never been probed.\n",
+    },
     created_at: {
       type: "string",
       format: "date-time",

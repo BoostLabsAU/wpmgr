@@ -7293,6 +7293,38 @@ func (s ReadinessStatus) Validate() error {
 	}
 }
 
+func (s *RefreshSiteScreenshotAccepted) Validate() error {
+	if s == nil {
+		return validate.ErrNilPointer
+	}
+
+	var failures []validate.FieldError
+	if err := func() error {
+		if err := s.Status.Validate(); err != nil {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "status",
+			Error: err,
+		})
+	}
+	if len(failures) > 0 {
+		return &validate.Error{Fields: failures}
+	}
+	return nil
+}
+
+func (s RefreshSiteScreenshotAcceptedStatus) Validate() error {
+	switch s {
+	case "pending":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
+}
+
 func (s *RegisterRequest) Validate() error {
 	if s == nil {
 		return validate.ErrNilPointer
@@ -8474,6 +8506,42 @@ func (s *Site) Validate() error {
 	}(); err != nil {
 		failures = append(failures, validate.FieldError{
 			Name:  "last_backup_status",
+			Error: err,
+		})
+	}
+	if err := func() error {
+		if value, ok := s.ScreenshotStatus.Get(); ok {
+			if err := func() error {
+				if err := value.Validate(); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "screenshot_status",
+			Error: err,
+		})
+	}
+	if err := func() error {
+		if value, ok := s.UptimePct.Get(); ok {
+			if err := func() error {
+				if err := (validate.Float{}).Validate(float64(value)); err != nil {
+					return errors.Wrap(err, "float")
+				}
+				return nil
+			}(); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		failures = append(failures, validate.FieldError{
+			Name:  "uptime_pct",
 			Error: err,
 		})
 	}
@@ -9871,6 +9939,19 @@ func (s SiteLoginProtectionConfigUpdateMode) Validate() error {
 	case "audit":
 		return nil
 	case "protect":
+		return nil
+	default:
+		return errors.Errorf("invalid value: %v", s)
+	}
+}
+
+func (s SiteScreenshotStatus) Validate() error {
+	switch s {
+	case "pending":
+		return nil
+	case "ready":
+		return nil
+	case "failed":
 		return nil
 	default:
 		return errors.Errorf("invalid value: %v", s)

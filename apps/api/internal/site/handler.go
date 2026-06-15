@@ -641,6 +641,42 @@ func toAPI(s Site) gen.Site {
 		out.ClientName = gen.NewOptString(s.ClientName)
 	}
 
+	// M72 — screenshot fields (all optional; absent = never captured).
+	if s.ScreenshotStatus != nil {
+		out.ScreenshotStatus = gen.NewOptSiteScreenshotStatus(gen.SiteScreenshotStatus(*s.ScreenshotStatus))
+	}
+	if s.ScreenshotURL != nil {
+		if u, err := url.Parse(*s.ScreenshotURL); err == nil {
+			out.ScreenshotURL = gen.NewOptURI(*u)
+		}
+	}
+	if s.ScreenshotURL2x != nil {
+		if u, err := url.Parse(*s.ScreenshotURL2x); err == nil {
+			out.ScreenshotURL2x = gen.NewOptURI(*u)
+		}
+	}
+	if s.ScreenshotCapturedAt != nil {
+		out.ScreenshotCapturedAt = gen.NewOptDateTime(*s.ScreenshotCapturedAt)
+	}
+	if s.ScreenshotFailedReason != nil {
+		out.ScreenshotFailedReason = gen.NewOptString(*s.ScreenshotFailedReason)
+	}
+
+	// Uptime summary fields (all optional; absent = site has never been probed).
+	if s.UptimeUp != nil {
+		out.Up = gen.NewOptBool(*s.UptimeUp)
+	}
+	if s.UptimePct30d != nil {
+		out.UptimePct = gen.NewOptFloat64(*s.UptimePct30d)
+	}
+	if s.AvgLatencyMs != nil {
+		avg := *s.AvgLatencyMs
+		out.AvgLatencyMs = gen.NewOptInt32(int32(avg))
+	}
+	if s.TLSExpiresAt != nil {
+		out.TLSExpiresAt = gen.NewOptDateTime(*s.TLSExpiresAt)
+	}
+
 	if len(s.Components) > 0 {
 		var comp struct {
 			Plugins    []Component `json:"plugins"`

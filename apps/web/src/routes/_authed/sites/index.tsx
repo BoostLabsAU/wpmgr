@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Archive } from "lucide-react";
+import { z } from "zod";
 
 import { useClients } from "@/features/clients/use-clients";
 import { SetClientDialog } from "@/features/clients/set-client-dialog";
@@ -11,9 +12,11 @@ import { FilterEmpty, SitesPageEmpty } from "@/components/empty";
 import { PageHeader } from "@/components/shared/page-header";
 import { useSites, useDeleteSite } from "@/features/sites/use-sites";
 import { SitesTable } from "@/features/sites/sites-table";
+import { SitesGrid, SitesGridSkeleton } from "@/features/sites/sites-grid";
 import { SitesToolbar } from "@/features/sites/sites-toolbar";
 import { useSitesSelection } from "@/features/sites/use-sites-selection";
 import { useSitesDensity } from "@/features/sites/use-sites-density";
+import { useSitesView, useCardSize } from "@/features/sites/use-sites-view";
 import { AddSiteDialog } from "@/features/sites/add-site-dialog";
 import { useSitesLiveSync } from "@/features/sites/use-sites-live";
 import {
@@ -30,79 +33,150 @@ import {
 import { useMe, canOperate } from "@/features/auth/use-auth";
 import { toast } from "@/components/toast";
 import { cn } from "@/lib/utils";
+import { connectionStateOf } from "@/features/sites/connection-state";
 import type { Site } from "@wpmgr/api";
 
+// ---------------------------------------------------------------------------
+// Search param schema
+//
+// All filter axes live in the URL so they persist across reload and are
+// shareable. The route writes via `navigate({ search: prev => ({...}) },
+// { replace: true })` with a 200-300ms debounce on the free-text query.
+//
+// CRITICAL INVARIANT: the `selected` set (useSitesSelection) reads the FULL
+// `sites` array, NOT `visibleSites`. Filtering out a selected site must keep
+// it in the bulk target — users who select 47 sites and filter down to "Down"
+// sites should still hit all 47 when they click "Update plugins".
+// ---------------------------------------------------------------------------
+
+const searchSchema = z.object({
+  q: z.string().optional(),
+  status: z.array(z.string()).optional(),
+  tags: z.array(z.string()).optional(),
+  client: z.string().optional(),
+  archived: z.boolean().optional(),
+  view: z.enum(["list", "grid"]).optional(),
+});
+
+type SitesSearch = z.infer<typeof searchSchema>;
+
 export const Route = createFileRoute("/_authed/sites/")({
+  validateSearch: searchSchema,
   component: SitesPage,
 });
+
+// ---------------------------------------------------------------------------
+// Human-readable label for each ConnectionState value
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps a `connection_state` value to a display label. Used by the Status
+ * filter dropdown so operators see "Connected" not "connected".
+ *
+ * Verified values from connection-state.ts:
+ *   connected | degraded | disconnected | pending_enrollment | revoked | archived
+ */
+const CONNECTION_STATE_LABELS: Record<string, string> = {
+  connected: "Connected",
+  degraded: "Degraded",
+  disconnected: "Disconnected",
+  pending_enrollment: "Pending",
+  revoked: "Revoked",
+  archived: "Archived",
+};
+
+function stateLabel(rawState: string): string {
+  return CONNECTION_STATE_LABELS[rawState] ?? rawState;
+}
+
+// ---------------------------------------------------------------------------
+// Page component
+// ---------------------------------------------------------------------------
 
 function SitesPage() {
   const { data: me } = useMe();
   const operate = canOperate(me);
   const autoLogin = canAutoLogin(me);
 
-  // Toolbar-driven search (Sprint 3 is local state; Sprint 4 will plumb this
-  // into useSites() with debounce — see TODOs below).
-  const [search, setSearch] = useState("");
+  // ── URL search params (P1: all filter axes) ──────────────────────────────
+  // Use navigate instead of useState so filters survive reload and are shareable.
+  const navigate = useNavigate({ from: Route.fullPath });
+  const search = Route.useSearch();
 
-  // Sprint 3 keeps server-side tag filtering off until the toolbar's Tag
-  // dropdown is wired (Sprint 4); the toolbar fires console.debug events for
-  // every filter change so the wiring path stays observable.
-  const appliedTag = "";
+  // The search input is URL-controlled (search.q). We write synchronously on
+  // every keystroke so the URL stays in sync — TanStack Router's `replace: true`
+  // pushes no history entries so the back button is not spammed.
+  // Note: no debounce here because the React Compiler's rules disallow both
+  // reading refs during render (the guard pattern) and synchronous setState in
+  // effects (the useEffect sync pattern). The URL-as-single-source-of-truth
+  // approach eliminates both concerns.
+  const handleSearchChange = useCallback(
+    (next: string) => {
+      void navigate({
+        search: (prev: SitesSearch) => ({ ...prev, q: next || undefined }),
+        replace: true,
+      });
+    },
+    [navigate],
+  );
 
-  // Phase 5 — the "Archived" filter chip flips the list to the archived bucket
-  // (the default list hides archived sites).
-  const [showArchived, setShowArchived] = useState(false);
+  // Memoize the fallback arrays so their stable references don't force useMemo
+  // hooks downstream to re-compute on every render (the ?. [] fallback creates a
+  // new array reference each time when status/tags are absent from the URL).
+  const selectedStatuses = useMemo(() => search.status ?? [], [search.status]);
+  const selectedTags = useMemo(() => search.tags ?? [], [search.tags]);
+  const appliedClientId = search.client ?? null;
+  const showArchived = search.archived ?? false;
 
-  // m63 — applied client filter (null = all clients).
-  const [appliedClientId, setAppliedClientId] = useState<string | null>(null);
+  // ── View mode (P2) ─────────────────────────────────────────────────────────
+  const [view, setView] = useSitesView(search.view, (next) => {
+    void navigate({
+      search: (prev: SitesSearch) => ({ ...prev, view: next }),
+      replace: true,
+    });
+  });
+  const [cardSize, setCardSize] = useCardSize();
+
+  // ── Data ───────────────────────────────────────────────────────────────────
+
   const { data: clientsData } = useClients();
   const clientOptions = useMemo(
     () => (clientsData ?? []).map((c) => ({ id: c.id, name: c.name })),
     [clientsData],
   );
 
-  // m63 — Set-client bulk action dialog.
   const [setClientOpen, setSetClientOpen] = useState(false);
 
   const { data: sites, isPending, isError, error, refetch, isFetching } =
-    useSites(appliedTag, {
+    useSites(undefined, {
       view: showArchived ? "archived" : "active",
       clientId: appliedClientId ?? undefined,
     });
 
-  // When the active bucket is empty, also fetch the archived bucket so we can
-  // surface a "Disconnected sites" panel above the onboarding empty state.
-  // We skip the fetch entirely when the active list is still loading, errored,
-  // or non-empty to avoid unnecessary requests.
+  // When the active bucket is empty, also fetch archived so we can surface a
+  // "Disconnected sites" panel above the onboarding empty state.
   const activeIsEmpty = !isPending && !isError && (sites?.length ?? 0) === 0;
-  const { data: archivedSites } = useSites(appliedTag, {
+  const { data: archivedSites } = useSites(undefined, {
     view: "archived",
     clientId: appliedClientId ?? undefined,
   });
-  // Only show the panel when: active bucket is genuinely empty AND archived has
-  // sites. When showArchived is on we already show the archived list via the
-  // main table, so the panel is not needed.
   const disconnectedSites =
     activeIsEmpty && !showArchived && (archivedSites?.length ?? 0) > 0
       ? (archivedSites ?? [])
       : null;
 
-  // Phase 5 — keep the list + detail caches live over SSE (no polling).
-  // Cardinality events invalidate the list; in-place events patch the cache.
+  // Phase 5 — keep the list + detail caches live over SSE.
   useSitesLiveSync();
 
   // Selection and density lifted to the route so the toolbar and table share
-  // the same instances — selecting in the table flips the toolbar to action
-  // mode, and the density toggle in the toolbar drives row height in the
-  // table.
+  // the same instances.
   const selection = useSitesSelection();
   const densityState = useSitesDensity();
 
   const [wizardTarget, setWizardTarget] = useState<WizardTarget | null>(null);
 
-  // Aggregate the available client (tag) and tag values for the filter
-  // dropdowns. Cheap pre-pass — the sites array is already in memory.
+  // ── Derived filter options ─────────────────────────────────────────────────
+
   const tagOptions = useMemo(() => {
     const set = new Set<string>();
     for (const s of sites ?? []) {
@@ -111,31 +185,138 @@ function SitesPage() {
     return Array.from(set).sort();
   }, [sites]);
 
-  // Locally narrow by the toolbar's search term. Real text search ships with
-  // the server-side filter wiring (Sprint 4).
+  /**
+   * Status options are derived from the actual connection_state values present
+   * in the loaded data, displayed as human-readable labels. Computing from live
+   * data means we never show "Revoked" if no revoked sites exist.
+   *
+   * The display label is what we store in selectedStatuses (the URL param) so
+   * the filter works even if an operator edits the URL by hand.
+   */
+  const statusOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const s of sites ?? []) {
+      const label = stateLabel(connectionStateOf(s));
+      set.add(label);
+    }
+    return Array.from(set).sort();
+  }, [sites]);
+
+  // ── visibleSites — pure derive over the query cache ───────────────────────
+  //
+  // CRITICAL INVARIANTS (preserve and do not refactor without re-reading):
+  //
+  // 1. `selectedSites` reads the FULL `sites` array, NOT `visibleSites`.
+  //    Filtering out a site from the view must NOT remove it from bulk targets.
+  //
+  // 2. Selection state lives in the useSitesSelection module-level singleton.
+  //    We never reconcile it against visible rows — the Set persists across
+  //    filter changes by design.
+  //
+  // 3. The header "select all" / grid "select all" must scope to the VISIBLE
+  //    (filtered) rows only — handled via visibleIds passed to the toolbar.
+  //
+  // 4. useSitesLiveSync is untouched here; filters are a pure client-side
+  //    derive over the TanStack Query cache, not a re-fetch trigger.
+
   const visibleSites = useMemo(() => {
     if (!sites) return [];
-    const q = search.trim().toLowerCase();
-    if (!q) return sites;
-    return sites.filter((s) =>
-      [s.name, s.url, ...(s.tags ?? [])]
-        .join(" ")
-        .toLowerCase()
-        .includes(q),
-    );
-  }, [sites, search]);
 
+    const q = (search.q ?? "").trim().toLowerCase();
+    const hasQ = q.length > 0;
+    const hasStatus = selectedStatuses.length > 0;
+    const hasTags = selectedTags.length > 0;
+
+    // Fast path: no active filters.
+    if (!hasQ && !hasStatus && !hasTags) return sites;
+
+    return sites.filter((s) => {
+      // Text search — matches name, url, or any tag.
+      if (hasQ) {
+        const haystack = [s.name, s.url, ...(s.tags ?? [])]
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(q)) return false;
+      }
+
+      // Status filter — OR within selected statuses.
+      // We compare against the display label (same value stored in the URL).
+      if (hasStatus) {
+        const label = stateLabel(connectionStateOf(s));
+        if (!selectedStatuses.includes(label)) return false;
+      }
+
+      // Tags filter — OR within selected tags (a site is visible if it has
+      // ANY of the selected tags).
+      if (hasTags) {
+        const siteTags = s.tags ?? [];
+        if (!siteTags.some((t) => selectedTags.includes(t))) return false;
+      }
+
+      return true;
+    });
+  }, [sites, search.q, selectedStatuses, selectedTags]);
+
+  // INVARIANT: read from the FULL sites array, not visibleSites.
   const selectedSites: Site[] = (sites ?? []).filter((s) =>
     selection.selected.has(s.id),
   );
 
-  // One-click login wired here so the table stays presentational. The mutation
-  // returns a short-lived redirect URL that we open in a new tab.
-  const loginMutation = useAutoLogin();
+  // Visible ids for the toolbar's "Select all" controls.
+  const visibleIds = useMemo(
+    () => visibleSites.map((s) => s.id),
+    [visibleSites],
+  );
 
-  // openAutoLoginRef holds the latest handleOpenAutoLogin so the toast "Try
-  // again" action can call it without the callback closing over itself (which
-  // would violate the rules-of-hooks immutability constraint).
+  // ── Active filter count (for the "Clear filters" pill) ────────────────────
+
+  const activeFilterCount = useMemo(() => {
+    let count = 0;
+    if (search.q?.trim()) count++;
+    if (selectedStatuses.length > 0) count++;
+    if (selectedTags.length > 0) count++;
+    if (appliedClientId) count++;
+    return count;
+  }, [search.q, selectedStatuses, selectedTags, appliedClientId]);
+
+  const handleClearAllFilters = useCallback(() => {
+    void navigate({
+      search: (prev: SitesSearch) => ({
+        ...prev,
+        q: undefined,
+        status: undefined,
+        tags: undefined,
+        client: undefined,
+      }),
+      replace: true,
+    });
+  }, [navigate]);
+
+  // ── Filter description for FilterEmpty ────────────────────────────────────
+
+  const filterDescription = useMemo(() => {
+    const parts: string[] = [];
+    if (search.q?.trim()) parts.push(`"${search.q.trim()}"`);
+    if (selectedStatuses.length > 0)
+      parts.push(`status:${selectedStatuses.join(",")}`);
+    if (selectedTags.length > 0) parts.push(`tags:${selectedTags.join(",")}`);
+    if (appliedClientId) {
+      const client = clientOptions.find((c) => c.id === appliedClientId);
+      if (client) parts.push(`client:${client.name}`);
+    }
+    return parts.join(" ");
+  }, [search.q, selectedStatuses, selectedTags, appliedClientId, clientOptions]);
+
+  const showFilterEmpty =
+    !isPending &&
+    !isError &&
+    sites !== undefined &&
+    sites.length > 0 &&
+    visibleSites.length === 0;
+
+  // ── Auto-login ─────────────────────────────────────────────────────────────
+
+  const loginMutation = useAutoLogin();
   const openAutoLoginRef = useRef((_site: Site) => {});
 
   const handleOpenAutoLogin = useCallback(
@@ -163,34 +344,24 @@ function SitesPage() {
     [autoLogin, loginMutation],
   );
 
-  // Keep the ref current so any already-rendered toast retains a live handle
-  // to the latest version of the callback.
   useEffect(() => {
     openAutoLoginRef.current = handleOpenAutoLogin;
   }, [handleOpenAutoLogin]);
 
-  // -------------------------------------------------------------------------
-  // Phase 5 — Disconnect / Undo / Reconnect
-  // -------------------------------------------------------------------------
+  // ── Disconnect / Undo / Reconnect ─────────────────────────────────────────
 
   const revoke = useRevokeSite();
   const restore = useRestoreSite();
   const enrollmentCode = useCreateEnrollmentCode();
 
-  // Bulk delete (hard remove the selected sites + their WPMgr history).
   const deleteSite = useDeleteSite();
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [bulkDeleting, setBulkDeleting] = useState(false);
 
-  // Disconnect confirm target (DestructiveConfirm — type the hostname).
   const [disconnectTarget, setDisconnectTarget] = useState<Site | null>(null);
-
-  // Remove confirm target — hard-delete an archived/disconnected site.
   const [removeTarget, setRemoveTarget] = useState<Site | null>(null);
   const [removing, setRemoving] = useState(false);
 
-  // Reconnect: when set, the AddSiteDialog opens directly at step B with a
-  // freshly-minted enrollment code bound to the existing site.
   const [reconnectTarget, setReconnectTarget] = useState<{
     siteId: string;
     url: string;
@@ -198,8 +369,6 @@ function SitesPage() {
     expiresAt: string;
   } | null>(null);
 
-  // Onboarding handoff: when the OnboardingWizard fires its terminal CTA the
-  // URL the user entered lands here, which opens AddSiteDialog pre-filled.
   const [onboardingUrl, setOnboardingUrl] = useState<string | null>(null);
 
   const handleDisconnect = useCallback((site: Site) => {
@@ -215,7 +384,6 @@ function SitesPage() {
         onSuccess: () => {
           setDisconnectTarget(null);
           const host = hostOf(site.url);
-          // 60s Undo → POST /:id/restore. The row also updates live via SSE.
           toast.success(`${host} disconnected.`, {
             description: "Backups and monitoring are paused. History is kept.",
             action: {
@@ -225,7 +393,7 @@ function SitesPage() {
                   { siteId: site.id },
                   {
                     onSuccess: () =>
-                      toast.success(`${host} reconnecting…`),
+                      toast.success(`${host} reconnecting...`),
                     onError: (err) =>
                       toast.error(`Could not undo`, {
                         description: err.message,
@@ -247,8 +415,7 @@ function SitesPage() {
 
   const handleReconnect = useCallback(
     (site: Site) => {
-      // Mint a fresh code, then open the modal at step B pre-bound to this site.
-      toast.info(`Generating an enrollment code for ${hostOf(site.url)}…`);
+      toast.info(`Generating an enrollment code for ${hostOf(site.url)}...`);
       enrollmentCode.mutate(
         { siteId: site.id },
         {
@@ -294,17 +461,10 @@ function SitesPage() {
     }
   }, [removeTarget, deleteSite]);
 
-  // -------------------------------------------------------------------------
-  // Bulk action handlers (Sprint 3 wires the obvious ones, stubs the rest)
-  // -------------------------------------------------------------------------
+  // ── Bulk action handlers ───────────────────────────────────────────────────
 
   const openUpdateWizardForSelection = useCallback(
     (kind: "plugins" | "themes" | "core") => {
-      // The existing UpdateWizard is component-agnostic; Sprint 4 will pass
-      // `kind` through so it preselects the right step. For now we surface
-      // the intent so the wire-up landing zone is unambiguous.
-      // TODO(sprint-4): pipe `kind` into UpdateWizard initial step.
-
       console.debug("[sites] bulk update", {
         kind,
         siteIds: Array.from(selection.selected),
@@ -318,29 +478,21 @@ function SitesPage() {
   );
 
   const handleBulkBackup = useCallback(() => {
-    // TODO(sprint-4): wire to POST /api/v1/backups/bulk (endpoint exists in
-    // the API; needs a confirm modal + toast). Stubbed for the transform
-    // animation review.
     toast.success(`Backup queued for ${selection.count} sites`, {
       description: "We will surface per-site results as they finish.",
       action: {
         label: "View activity",
         onClick: () => {
-          // TODO(sprint-4): deep link to the activity drawer once it lands.
-
           console.debug("[sites] open activity for bulk backup");
         },
       },
     });
-
     console.debug("[sites] bulk backup", {
       siteIds: Array.from(selection.selected),
     });
   }, [selection]);
 
   const handleBulkRestore = useCallback(() => {
-    // TODO(sprint-4): restore is currently per-site; a fleet-wide restore
-    // wizard is a separate design surface.
     toast.info("Fleet-wide restore lands in Sprint 4");
   }, []);
 
@@ -352,10 +504,6 @@ function SitesPage() {
       return;
     }
     const ids = Array.from(selection.selected);
-    // Browsers throttle popups; we open the first 8 immediately and queue
-    // the rest behind a confirm in Sprint 4.
-    // TODO(sprint-4): replace inline loop with the existing useAutoLogin
-    // queue + per-site progress toast.
     const cap = Math.min(ids.length, 8);
     toast.info(`Opening ${cap} sites in wp-admin`);
     for (let i = 0; i < cap; i++) {
@@ -378,7 +526,6 @@ function SitesPage() {
   }, [autoLogin, loginMutation, selectedSites, selection]);
 
   const handleBulkTag = useCallback(() => {
-    // TODO(sprint-4): open a tag-picker modal (bulk-drawer subagent owns it).
     toast.info(`Tagging ${selection.count} sites lands in Sprint 4`);
   }, [selection.count]);
 
@@ -387,7 +534,6 @@ function SitesPage() {
   }, []);
 
   const handleBulkPauseMonitoring = useCallback(() => {
-    // TODO(sprint-4): wire to the monitoring service pause endpoint.
     toast.info(`Pausing monitoring on ${selection.count} sites lands in Sprint 4`);
   }, [selection.count]);
 
@@ -396,8 +542,6 @@ function SitesPage() {
     setBulkDeleteOpen(true);
   }, [selection.count]);
 
-  // DELETE each selected site (the API is per-site). Tolerates partial failure:
-  // already-gone rows (404) just count as failed and the list refetches clean.
   const confirmBulkDelete = useCallback(async () => {
     const ids = Array.from(selection.selected);
     if (ids.length === 0) {
@@ -420,13 +564,7 @@ function SitesPage() {
     }
   }, [selection, deleteSite]);
 
-  // Build a human-readable filter summary for the empty-search state.
-  const filterDescription = search.trim()
-    ? `"${search.trim()}"`
-    : "";
-
-  const showFilterEmpty =
-    !isPending && !isError && sites !== undefined && sites.length > 0 && visibleSites.length === 0;
+  // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
     <section aria-labelledby="sites-heading" className="space-y-4">
@@ -443,7 +581,12 @@ function SitesPage() {
       />
 
       {isPending ? (
-        <SitesTableSkeleton />
+        // Show the appropriate skeleton based on the current view.
+        view === "grid" ? (
+          <SitesGridSkeleton />
+        ) : (
+          <SitesTableSkeleton />
+        )
       ) : isError ? (
         <PageError
           what="Could not load sites."
@@ -471,12 +614,57 @@ function SitesPage() {
           <SitesToolbar
             selection={selection}
             densityState={densityState}
-            search={search}
-            onSearchChange={setSearch}
+            search={search.q ?? ""}
+            onSearchChange={handleSearchChange}
             tagOptions={tagOptions}
+            selectedTags={selectedTags}
+            onTagToggle={(tag) => {
+              const next = selectedTags.includes(tag)
+                ? selectedTags.filter((t) => t !== tag)
+                : [...selectedTags, tag];
+              void navigate({
+                search: (prev: SitesSearch) => ({ ...prev, tags: next.length ? next : undefined }),
+                replace: true,
+              });
+            }}
+            onTagsClear={() => {
+              void navigate({
+                search: (prev: SitesSearch) => ({ ...prev, tags: undefined }),
+                replace: true,
+              });
+            }}
+            statusOptions={statusOptions}
+            selectedStatuses={selectedStatuses}
+            onStatusToggle={(status) => {
+              const next = selectedStatuses.includes(status)
+                ? selectedStatuses.filter((s) => s !== status)
+                : [...selectedStatuses, status];
+              void navigate({
+                search: (prev: SitesSearch) => ({ ...prev, status: next.length ? next : undefined }),
+                replace: true,
+              });
+            }}
+            onStatusesClear={() => {
+              void navigate({
+                search: (prev: SitesSearch) => ({ ...prev, status: undefined }),
+                replace: true,
+              });
+            }}
             clientOptions={clientOptions}
             appliedClientId={appliedClientId}
-            onClientFilterChange={setAppliedClientId}
+            onClientFilterChange={(clientId) => {
+              void navigate({
+                search: (prev: SitesSearch) => ({ ...prev, client: clientId ?? undefined }),
+                replace: true,
+              });
+            }}
+            activeFilterCount={activeFilterCount}
+            onClearAllFilters={handleClearAllFilters}
+            view={view}
+            onViewChange={setView}
+            cardSize={cardSize}
+            onCardSizeChange={setCardSize}
+            visibleIds={visibleIds}
             canOperate={operate}
             onBulkUpdate={openUpdateWizardForSelection}
             onBulkBackup={handleBulkBackup}
@@ -488,14 +676,22 @@ function SitesPage() {
             onBulkDelete={handleBulkDelete}
             addSiteSlot={operate ? <AddSiteDialog /> : <AddSitePlaceholder />}
           />
-          {/* Phase 5 — archived filter chip. Toggles the list between the
-              default (active) bucket and the archived bucket. */}
+
+          {/* Phase 5 — archived filter chip */}
           {operate ? (
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 aria-pressed={showArchived}
-                onClick={() => setShowArchived((v) => !v)}
+                onClick={() => {
+                  void navigate({
+                    search: (prev: SitesSearch) => ({
+                      ...prev,
+                      archived: showArchived ? undefined : true,
+                    }),
+                    replace: true,
+                  });
+                }}
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                   showArchived
@@ -512,7 +708,15 @@ function SitesPage() {
           {showFilterEmpty ? (
             <FilterEmpty
               description={filterDescription}
-              onClearFilters={() => setSearch("")}
+              onClearFilters={handleClearAllFilters}
+            />
+          ) : view === "grid" ? (
+            <SitesGrid
+              sites={visibleSites}
+              cardSize={cardSize}
+              onOpenAutoLogin={autoLogin ? handleOpenAutoLogin : undefined}
+              onDisconnect={operate ? handleDisconnect : undefined}
+              onReconnect={operate ? handleReconnect : undefined}
             />
           ) : (
             <SitesTable
@@ -541,7 +745,6 @@ function SitesPage() {
         />
       ) : null}
 
-      {/* Phase 5 — Disconnect confirm (type the hostname to confirm). */}
       {operate ? (
         <DestructiveConfirm
           open={disconnectTarget !== null}
@@ -562,14 +765,13 @@ function SitesPage() {
               </p>
               <p>
                 Backups and monitoring stop. The site is archived with its full
-                history kept — you can reconnect later.
+                history kept. You can reconnect later.
               </p>
             </div>
           }
         />
       ) : null}
 
-      {/* Bulk delete — hard remove the selected sites (type the count to confirm). */}
       {operate ? (
         <DestructiveConfirm
           open={bulkDeleteOpen}
@@ -588,12 +790,12 @@ function SitesPage() {
                   ? "this site"
                   : `these ${selection.count} sites`}{" "}
                 and all associated WPMgr history (backup metadata, scans,
-                monitoring, activity). The WordPress site itself is not touched —
+                monitoring, activity). The WordPress site itself is not touched,
                 only its WPMgr record.
               </p>
               <p>
-                To stop managing a site without losing its history, disconnect /
-                archive it instead.
+                To stop managing a site without losing its history, disconnect
+                or archive it instead.
               </p>
               <p>
                 Type <strong>{selection.count}</strong> to confirm.
@@ -603,7 +805,6 @@ function SitesPage() {
         />
       ) : null}
 
-      {/* Remove confirm — hard-delete a single archived/disconnected site. */}
       {operate ? (
         <DestructiveConfirm
           open={removeTarget !== null}
@@ -637,8 +838,6 @@ function SitesPage() {
         />
       ) : null}
 
-      {/* Onboarding handoff: finishing the wizard with a URL opens AddSiteDialog
-          pre-filled at step A so the user continues into the real connect flow. */}
       {operate ? (
         <AddSiteDialog
           open={onboardingUrl !== null}
@@ -647,8 +846,6 @@ function SitesPage() {
         />
       ) : null}
 
-      {/* Phase 5 — Reconnect: open the Add-site modal at step B with a fresh,
-          pre-bound enrollment code for the existing site. */}
       {operate ? (
         <AddSiteDialog
           open={reconnectTarget !== null}
@@ -657,7 +854,6 @@ function SitesPage() {
         />
       ) : null}
 
-      {/* m63 — Set-client bulk action: assign the selected sites to a client. */}
       {operate ? (
         <SetClientDialog
           open={setClientOpen}
@@ -670,9 +866,10 @@ function SitesPage() {
   );
 }
 
-// Table-shaped skeleton so the loading state has the same spatial footprint as
-// the real table. Row count (6) is enough to fill a typical viewport without
-// over-committing on screen real estate.
+// ---------------------------------------------------------------------------
+// Loading skeletons
+// ---------------------------------------------------------------------------
+
 function SitesTableSkeleton() {
   return (
     <div
@@ -682,14 +879,12 @@ function SitesTableSkeleton() {
       className="overflow-hidden rounded-lg border border-border"
     >
       <span className="sr-only">Loading sites</span>
-      {/* Header row */}
       <div className="flex h-11 items-center gap-4 border-b border-border bg-background px-4">
         <Skeleton className="size-4 rounded" />
         <Skeleton className="h-3 w-24" />
         <Skeleton className="ml-4 h-3 w-16" />
         <Skeleton className="ml-auto h-3 w-12" />
       </div>
-      {/* Body rows */}
       {Array.from({ length: 6 }).map((_, i) => (
         <div
           key={i}
@@ -711,16 +906,14 @@ function SitesTableSkeleton() {
   );
 }
 
-// Read-only operators see the toolbar without an Add Site primary; we render
-// an inert placeholder so the row layout stays stable across roles.
+// Read-only operators see the toolbar without an Add Site primary.
 function AddSitePlaceholder() {
   return null;
 }
 
 /**
  * Compact panel shown above the onboarding empty state when the active bucket
- * is empty but there are archived/disconnected sites. Lets the operator
- * reconnect without having to find the archived filter chip.
+ * is empty but there are archived/disconnected sites.
  */
 function DisconnectedSitesPanel({
   sites,

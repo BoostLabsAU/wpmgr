@@ -65,6 +65,8 @@ import (
 	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
 	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshotadapter"
 	"github.com/mosamlife/wpmgr/apps/api/internal/security"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server"
 	"github.com/mosamlife/wpmgr/apps/api/internal/settings"
@@ -938,6 +940,30 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	mediaAgentH := mediahandler.NewAgentHandler(mediaSvc)
 
 	// ---------------------------------------------------------------------------
+	// M72 — Site Screenshots. The capture worker runs in cmd/media-encoder (the
+	// only binary with headless Chromium). The API binary only client.Inserts
+	// screenshot.CaptureArgs. The screenshot blobstore reuses the same S3/GCS
+	// bucket as the Media Optimizer (mediaStore); when S3 is not configured,
+	// screenshots are disabled (service is built with nil enqueuer/store).
+	// ---------------------------------------------------------------------------
+	screenshotRepo := screenshot.NewRepo(pool)
+	var screenshotSvc *screenshot.Service
+	var screenshotH *screenshot.Handler
+	if mediaStore != nil {
+		screenshotSvc = screenshot.NewService(screenshotRepo, mediaStore, nil, nil) // waker wired below after mediaWaker is built
+		// Wire the screenshotadapter enricher so repo.List populates screenshot
+		// fields (status, presigned URL 1x/2x, captured_at) on every site list call.
+		screenshotEnricher := screenshotadapter.New(screenshotRepo, mediaStore)
+		site.SetScreenshotEnricher(siteRepo, screenshotEnricher)
+		logger.Info("screenshots enabled: enricher wired, capture queue: site_screenshot")
+	} else {
+		// S3 not configured: wire a no-store service so the handler returns 501 cleanly.
+		screenshotSvc = screenshot.NewService(screenshotRepo, nil, nil, nil)
+		logger.Warn("WPMGR_S3_BUCKET is empty: site screenshots disabled")
+	}
+	screenshotH = screenshot.NewHandler(screenshotSvc, siteRepo)
+
+	// ---------------------------------------------------------------------------
 	// Performance Suite (ADR-046, Phase 6): RUCSS engine/worker + perf control
 	// plane. The RUCSS used-CSS objects + the agent-posted HTML/CSS source bundles
 	// reuse the same blobstore as the Media Optimizer (mediaStore). The RUCSS
@@ -1231,6 +1257,27 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// so this binary still has no CGO dependency.
 	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(riverClient))
 
+	// M72 Site Screenshots: wire the River enqueuer into the screenshot service
+	// now that the client is started. The site_screenshot queue is registered in
+	// cmd/media-encoder only; the API uses SkipUnknownJobCheck so Insert still works.
+	if screenshotSvc != nil && mediaStore != nil {
+		screenshotEnqueuer := screenshot.NewEnqueuer(riverClient)
+		screenshotSvc.SetEnqueuer(screenshotEnqueuer)
+		// Hook into the connection service so the first enrollment triggers a capture.
+		if cs, ok := connSvc.(interface {
+			SetOnEnrollHook(hook site.OnEnrollHook)
+		}); ok {
+			cs.SetOnEnrollHook(func(ctx context.Context, tenantID, siteID uuid.UUID, siteURL string) {
+				if _, err := screenshotSvc.EnqueueCapture(ctx, tenantID, siteID, siteURL, screenshot.ReasonEnroll); err != nil {
+					logger.Warn("screenshot: enroll trigger failed",
+						slog.String("site_id", siteID.String()),
+						slog.Any("error", err))
+				}
+			})
+			logger.Info("screenshot: post-enroll capture trigger wired")
+		}
+	}
+
 	// Cloud scale-to-zero: the media-encoder is a separate, min-instances=0 Cloud
 	// Run service running a PULL River worker. Nothing cold-starts it when we
 	// enqueue (enqueue is a DB write, not an HTTP call to the encoder), so a waker
@@ -1240,6 +1287,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// compose profile), where the waker disables itself.
 	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger)
 	mediaSvc.SetWaker(mediaWaker)
+	// M72: wire the same waker into the screenshot service so enqueuing a capture
+	// also cold-starts the scale-to-zero encoder (it runs both media_encode and
+	// site_screenshot queues).
+	if screenshotSvc != nil {
+		screenshotSvc.SetWaker(mediaWaker)
+	}
 	go mediaWaker.Run(ctx)
 
 	// m59 — wire the email agent command client now that River has started and
@@ -1689,6 +1742,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		AdminH: adminH,
 		// M56 — RUM ingest endpoint (public, no auth).
 		RumH: rumH,
+		// M72 — site screenshots.
+		ScreenshotH: screenshotH,
 		// m63 — agency clients.
 		ClientH: clientH,
 		// m64 — white-label client reports.

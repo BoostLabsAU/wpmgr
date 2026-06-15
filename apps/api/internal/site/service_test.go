@@ -138,6 +138,10 @@ func (f *fakeRepo) ListAllSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, 
 	return nil, nil
 }
 
+func (f *fakeRepo) GetSiteURL(_ context.Context, tenantID, siteID uuid.UUID) (string, bool, error) {
+	return "https://example.com", true, nil
+}
+
 func orDefault(s string) string {
 	if s == "" {
 		return "pending"

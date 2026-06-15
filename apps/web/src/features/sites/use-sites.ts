@@ -12,6 +12,7 @@ import {
   deleteSite,
   createPairingCode,
   setSiteTags,
+  refreshSiteScreenshot,
   type Site,
   type SiteList,
   type PairingCode,
@@ -186,6 +187,59 @@ export function useSetSiteTags(): UseMutationResult<
       queryClient.setQueryData(sitesKeys.detail(site.id), site);
     },
     onSettled: (_data, _error, { siteId }) => {
+      void queryClient.invalidateQueries({ queryKey: sitesKeys.detail(siteId) });
+      void queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
+    },
+  });
+}
+
+/**
+ * Enqueue a fresh screenshot capture for a site. On success the server returns
+ * `status: "pending"` immediately; we optimistically patch the site's list and
+ * detail cache to show the "capturing" thumbnail state while the job runs, then
+ * invalidate both so the completed screenshot appears once the SSE event fires
+ * or the next poll wins.
+ *
+ * Expected non-2xx:
+ *   409 — site not enrolled (no agent to take the shot)
+ *   501 — screenshot feature not configured on this instance
+ */
+export function useRefreshScreenshot(): UseMutationResult<void, Error, string> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (siteId: string) => {
+      const { error, response } = await refreshSiteScreenshot({
+        path: { siteId },
+      });
+      if (response?.status === 409)
+        throw new Error("Site is not enrolled; cannot capture screenshot.");
+      if (response?.status === 501)
+        throw new Error("Screenshot capture is not configured on this instance.");
+      if (error) throw toError(error);
+    },
+    onMutate: (siteId: string) => {
+      // Optimistic: patch the list cache entry to "pending" so the thumbnail
+      // immediately shows the "capturing" state while the job queues.
+      const patchSite = (site: Site): Site => ({
+        ...site,
+        screenshot_status: "pending" as const,
+        // Clear the stale URL so the thumbnail does not show an outdated image
+        // while the new one is being captured.
+        screenshot_url: undefined,
+        screenshot_url_2x: undefined,
+      });
+      // Patch every list cache key that contains this site.
+      queryClient.setQueriesData<Site[]>(
+        { queryKey: sitesKeys.lists() },
+        (prev) => prev?.map((s) => (s.id === siteId ? patchSite(s) : s)),
+      );
+      // Patch the detail cache if present.
+      const prev = queryClient.getQueryData<Site>(sitesKeys.detail(siteId));
+      if (prev) {
+        queryClient.setQueryData<Site>(sitesKeys.detail(siteId), patchSite(prev));
+      }
+    },
+    onSuccess: (_data, siteId) => {
       void queryClient.invalidateQueries({ queryKey: sitesKeys.detail(siteId) });
       void queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
     },

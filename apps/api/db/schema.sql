@@ -2638,3 +2638,60 @@ CREATE POLICY site_object_cache_stats_history_tenant_isolation ON site_object_ca
 -- GC path only deletes; inserts flow through tenant_isolation via InTenantTx.
 CREATE POLICY site_object_cache_stats_history_agent ON site_object_cache_stats_history
     USING (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- site_screenshots -- M72: one row per site, upserted on each capture.
+-- The screenshot bytes live in object storage (screenshots/{tenant_id}/{site_id}/{ulid}.webp).
+-- A ULID in the key makes every capture a unique object (no CDN staleness);
+-- the worker deletes the prior key on success (best-effort).
+-- ---------------------------------------------------------------------------
+CREATE TABLE site_screenshots (
+    site_id           uuid        NOT NULL,
+    tenant_id         uuid        NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+    screenshot_key    text        NOT NULL DEFAULT '',
+    screenshot_key_2x text        NOT NULL DEFAULT '',
+    width             integer     NOT NULL DEFAULT 0,
+    height            integer     NOT NULL DEFAULT 0,
+    status            text        NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending','ready','failed')),
+    failed_reason     text,
+    captured_at       timestamptz,
+    etag              text,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT site_screenshots_pkey PRIMARY KEY (site_id)
+);
+
+CREATE INDEX site_screenshots_tenant_idx ON site_screenshots (tenant_id);
+
+ALTER TABLE site_screenshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_screenshots FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_screenshots_tenant_isolation ON site_screenshots
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_screenshots_agent ON site_screenshots
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- M3: AS RESTRICTIVE collaborator site-scope policy (mirrors backup_snapshots_site_scope).
+CREATE POLICY "site_screenshots_site_scope" ON "public"."site_screenshots"
+    AS RESTRICTIVE FOR ALL
+    USING (
+        coalesce(current_setting('app.site_scope', true), '') <> 'on'
+        OR "site_id" = ANY (
+            string_to_array(
+                nullif(current_setting('app.allowed_site_ids', true), ''), ','
+            )::uuid[]
+        )
+    )
+    WITH CHECK (
+        coalesce(current_setting('app.site_scope', true), '') <> 'on'
+        OR "site_id" = ANY (
+            string_to_array(
+                nullif(current_setting('app.allowed_site_ids', true), ''), ','
+            )::uuid[]
+        )
+    );

@@ -2170,6 +2170,20 @@ func (UnimplementedHandler) RefreshSiteDiagnostics(ctx context.Context, params R
 	return r, ht.ErrNotImplemented
 }
 
+// RefreshSiteScreenshot implements refreshSiteScreenshot operation.
+//
+// Marks the site's screenshot status as `pending` and enqueues a
+// `site_screenshot_capture` job in the media-encoder queue. Returns 202
+// immediately. The web client should poll the site GET / subscribe to SSE
+// for `screenshot.updated` events to learn when the capture completes.
+// Requires site:read (same gate as updates/refresh). Returns 409 when the
+// site is not enrolled; 404 when the site is not in this tenant.
+//
+// POST /api/v1/sites/{siteId}/screenshot/refresh
+func (UnimplementedHandler) RefreshSiteScreenshot(ctx context.Context, params RefreshSiteScreenshotParams) (r RefreshSiteScreenshotRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // RefreshSiteUpdates implements refreshSiteUpdates operation.
 //
 // Enqueues a CP->agent refresh-inventory command for the site. The agent

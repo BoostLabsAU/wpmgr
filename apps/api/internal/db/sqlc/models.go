@@ -843,6 +843,21 @@ type SitePerfConfig struct {
 	UpdatedAt                  time.Time          `json:"updated_at"`
 }
 
+type SiteScreenshot struct {
+	SiteID          uuid.UUID          `json:"site_id"`
+	TenantID        uuid.UUID          `json:"tenant_id"`
+	ScreenshotKey   string             `json:"screenshot_key"`
+	ScreenshotKey2x string             `json:"screenshot_key_2x"`
+	Width           int32              `json:"width"`
+	Height          int32              `json:"height"`
+	Status          string             `json:"status"`
+	FailedReason    *string            `json:"failed_reason"`
+	CapturedAt      pgtype.Timestamptz `json:"captured_at"`
+	Etag            *string            `json:"etag"`
+	CreatedAt       time.Time          `json:"created_at"`
+	UpdatedAt       time.Time          `json:"updated_at"`
+}
+
 type SiteShare struct {
 	ID        uuid.UUID          `json:"id"`
 	TenantID  uuid.UUID          `json:"tenant_id"`

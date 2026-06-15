@@ -1639,6 +1639,17 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/diagnostics/refresh
 	RefreshSiteDiagnostics(ctx context.Context, params RefreshSiteDiagnosticsParams) (RefreshSiteDiagnosticsRes, error)
+	// RefreshSiteScreenshot invokes refreshSiteScreenshot operation.
+	//
+	// Marks the site's screenshot status as `pending` and enqueues a
+	// `site_screenshot_capture` job in the media-encoder queue. Returns 202
+	// immediately. The web client should poll the site GET / subscribe to SSE
+	// for `screenshot.updated` events to learn when the capture completes.
+	// Requires site:read (same gate as updates/refresh). Returns 409 when the
+	// site is not enrolled; 404 when the site is not in this tenant.
+	//
+	// POST /api/v1/sites/{siteId}/screenshot/refresh
+	RefreshSiteScreenshot(ctx context.Context, params RefreshSiteScreenshotParams) (RefreshSiteScreenshotRes, error)
 	// RefreshSiteUpdates invokes refreshSiteUpdates operation.
 	//
 	// Enqueues a CP->agent refresh-inventory command for the site. The agent
@@ -20928,6 +20939,104 @@ func (c *Client) sendRefreshSiteDiagnostics(ctx context.Context, params RefreshS
 
 	stage = "DecodeResponse"
 	result, err := decodeRefreshSiteDiagnosticsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// RefreshSiteScreenshot invokes refreshSiteScreenshot operation.
+//
+// Marks the site's screenshot status as `pending` and enqueues a
+// `site_screenshot_capture` job in the media-encoder queue. Returns 202
+// immediately. The web client should poll the site GET / subscribe to SSE
+// for `screenshot.updated` events to learn when the capture completes.
+// Requires site:read (same gate as updates/refresh). Returns 409 when the
+// site is not enrolled; 404 when the site is not in this tenant.
+//
+// POST /api/v1/sites/{siteId}/screenshot/refresh
+func (c *Client) RefreshSiteScreenshot(ctx context.Context, params RefreshSiteScreenshotParams) (RefreshSiteScreenshotRes, error) {
+	res, err := c.sendRefreshSiteScreenshot(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendRefreshSiteScreenshot(ctx context.Context, params RefreshSiteScreenshotParams) (res RefreshSiteScreenshotRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("refreshSiteScreenshot"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/screenshot/refresh"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, RefreshSiteScreenshotOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/screenshot/refresh"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeRefreshSiteScreenshotResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

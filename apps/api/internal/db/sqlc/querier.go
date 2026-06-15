@@ -524,6 +524,11 @@ type Querier interface {
 	// Fetch the single instance SMTP row. Run under Pool.InAgentTx (app.agent='on').
 	GetSMTPSettings(ctx context.Context) (SmtpSetting, error)
 	GetScheduleRun(ctx context.Context, arg GetScheduleRunParams) (BackupScheduleRun, error)
+	// M72 Screenshots queries. Every statement is tenant-scoped both explicitly
+	// (tenant_id in the WHERE/VALUES) and by RLS (app.tenant_id / app.agent policy).
+	// The repo wraps each call in InTenantTx (operator) or InAgentTx (worker).
+	// updated_at is set here via now(); there is no trigger.
+	GetScreenshot(ctx context.Context, arg GetScreenshotParams) (SiteScreenshot, error)
 	GetSite(ctx context.Context, arg GetSiteParams) (Site, error)
 	// Cross-tenant read of one site's alert state (app.agent GUC) for the probe job.
 	GetSiteAlertState(ctx context.Context, siteID uuid.UUID) (SiteAlertState, error)
@@ -772,6 +777,10 @@ type Querier interface {
 	// expansion (pin a carry-forward chunk's old origin generation under a live
 	// tip) without a second round-trip.
 	ListCompletedSnapshotsForSite(ctx context.Context, arg ListCompletedSnapshotsForSiteParams) ([]ListCompletedSnapshotsForSiteRow, error)
+	// Cross-tenant enumeration of connected sites for the weekly screenshot fanout.
+	// Returns only sites in the 'connected' state (not degraded/pending/archived).
+	// Runs under the app.agent GUC (sites_agent policy) since it spans tenants.
+	ListConnectedSiteIDsForScreenshot(ctx context.Context) ([]ListConnectedSiteIDsForScreenshotRow, error)
 	// Newest first; used by the per-site lifecycle timeline.
 	ListConnectionHistory(ctx context.Context, arg ListConnectionHistoryParams) ([]SiteConnectionHistory, error)
 	// Cross-tenant enumeration of enabled schedules whose next_run_at has passed,
@@ -888,6 +897,10 @@ type Querier interface {
 	ListRucssResultsForSite(ctx context.Context, arg ListRucssResultsForSiteParams) ([]RucssResult, error)
 	// All runs for a site (upcoming + past), newest scheduled_for first.
 	ListScheduleRunsBySite(ctx context.Context, arg ListScheduleRunsBySiteParams) ([]BackupScheduleRun, error)
+	// Batch lookup for the sites list: one query for N site IDs (matches the
+	// ListLatestBackupsForSites / ListClientNamesForSites batched-JOIN pattern).
+	// Returns only rows that exist; absent sites produce no row (treated as nil by caller).
+	ListScreenshotsForSites(ctx context.Context, arg ListScreenshotsForSitesParams) ([]SiteScreenshot, error)
 	// Shared-with-me, ENRICHED with each site's url + name and the owning org's name.
 	// Runs under InUserTx: site_shares_self_read exposes the share rows, the M22
 	// sites_shared_read policy exposes the (cross-tenant) site rows, and tenants has
@@ -1281,6 +1294,13 @@ type Querier interface {
 	// (schedule_id, scheduled_for) — e.g. CP restart — updates status only when
 	// the existing row is still 'scheduled' so a queued/running row is untouched.
 	UpsertScheduleRun(ctx context.Context, arg UpsertScheduleRunParams) (BackupScheduleRun, error)
+	// Called by the capture worker (InAgentTx) when a capture fails permanently.
+	UpsertScreenshotFailed(ctx context.Context, arg UpsertScreenshotFailedParams) (SiteScreenshot, error)
+	// Called by the CP (operator or enroll trigger) before enqueuing the capture job.
+	// Sets status=pending, clears failed_reason; does NOT touch screenshot keys.
+	UpsertScreenshotPending(ctx context.Context, arg UpsertScreenshotPendingParams) (SiteScreenshot, error)
+	// Called by the capture worker (InAgentTx) on a successful capture.
+	UpsertScreenshotReady(ctx context.Context, arg UpsertScreenshotReadyParams) (SiteScreenshot, error)
 	// Cross-tenant upsert of a site's alert state (app.agent GUC). The probe worker
 	// writes the new transition memory after each probe.
 	UpsertSiteAlertState(ctx context.Context, arg UpsertSiteAlertStateParams) (SiteAlertState, error)

@@ -12,18 +12,33 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
+// OnEnrollHook is called once, best-effort, after a site's first successful
+// enrollment (pending_enrollment→connected). The siteURL is the site's
+// agent-reported URL. Implementations must be goroutine-safe and must not
+// block the enrolling request (use a goroutine internally if needed).
+// Wired via connService.SetOnEnrollHook; nil disables the trigger.
+type OnEnrollHook func(ctx context.Context, tenantID, siteID uuid.UUID, siteURL string)
+
 // connService is the concrete ConnectionService (ADR-041). It is the single
 // owner of every connection-state transition: each mutating method loads the
 // current state, validates via CanTransition (in the repo's locked tx), writes
 // the new state + a site_connection_history row + (for operator actions) a
 // hash-chained audit entry, then publishes the SSE event AFTER commit.
 type connService struct {
-	repo      Repo
-	validator *domain.Validator
-	audit     *audit.Recorder
-	pub       EventPublisher
-	clock     domain.Clock
-	minter    RevokeTokenMinter // may be nil (no CP signing key)
+	repo         Repo
+	validator    *domain.Validator
+	audit        *audit.Recorder
+	pub          EventPublisher
+	clock        domain.Clock
+	minter       RevokeTokenMinter // may be nil (no CP signing key)
+	onEnrollHook OnEnrollHook      // optional; nil disables
+}
+
+// SetOnEnrollHook wires a post-enroll hook (e.g. to trigger a site screenshot
+// capture). Called from cmd/wpmgr after the screenshot service is built.
+// Thread-safe: wiring happens at boot before any concurrent requests are served.
+func (s *connService) SetOnEnrollHook(hook OnEnrollHook) {
+	s.onEnrollHook = hook
 }
 
 // NewConnectionService builds the concrete ConnectionService. Mirrors the
@@ -171,6 +186,12 @@ func (s *connService) ConsumeEnrollmentCode(ctx context.Context, in ConsumeEnrol
 	})
 	s.recordAudit(ctx, res.Site.TenantID, res.Site.ID, audit.ActorSystem, uuid.Nil, audit.ActionSiteConnected, nil)
 	s.publishStateChange(ctx, res.Site.TenantID, res.Site.ID, EventSiteStateChanged, StatePendingEnrollment, StateConnected, res.Site, map[string]any{"enrolled": true})
+	// Best-effort post-enroll hook (e.g. trigger a first-time screenshot capture).
+	// Runs after publish so the SSE state change lands first. Non-blocking: the
+	// hook implementation must not stall the enrolling request.
+	if s.onEnrollHook != nil {
+		go s.onEnrollHook(ctx, res.Site.TenantID, res.Site.ID, res.Site.URL)
+	}
 	return res.Site, nil
 }
 

@@ -1,0 +1,34 @@
+# Reusable Cloud Build config for the WPMgr media-encoder image.
+#
+# Mirrors cloudbuild.api.yaml but builds infra/Dockerfile.media-encoder. The
+# binary stamps its version via -ldflags -X main.version (ARG VERSION). As of
+# 0.49.0 this image also ships headless Chromium (debian:trixie-slim base) for
+# server-side website screenshot capture, so the build is larger than the
+# api/web images.
+#
+#   gcloud builds submit --config infra/cloudbuild.media-encoder.yaml \
+#     --substitutions=_IMAGE=<registry>/media-encoder,_VERSION=<x.y.z> \
+#     --region <cloud-build-region> .
+#
+# Deploy (media-encoder FIRST, before api/web, per the deploy ordering):
+#   gcloud run deploy wpmgr-media-encoder --image <registry>/media-encoder:<x.y.z> --region <run-region>
+substitutions:
+  _IMAGE: 'media-encoder'
+  _VERSION: '0.0.0-dev'
+steps:
+  - name: 'gcr.io/cloud-builders/docker'
+    env:
+      - 'DOCKER_BUILDKIT=1'
+    args:
+      - 'build'
+      - '-f'
+      - 'infra/Dockerfile.media-encoder'
+      - '--build-arg'
+      - 'VERSION=${_VERSION}'
+      - '-t'
+      - '${_IMAGE}:${_VERSION}'
+      - '.'
+images:
+  - '${_IMAGE}:${_VERSION}'
+options:
+  machineType: 'E2_HIGHCPU_8'
