@@ -214,6 +214,26 @@ func TestDeleteSnapshotForUser_RunningRefused(t *testing.T) {
 	}
 }
 
+// A locked snapshot is exempt from manual delete just as it is from the auto-GC
+// (see gc.go: locked metas are pulled out of the deleteSet). The operator must
+// unlock first — that is what makes a lock a real protection, not just a hint.
+func TestDeleteSnapshotForUser_LockedRefused(t *testing.T) {
+	repo := newDeleteCancelFakeRepo()
+	svc := buildDeleteCancelSvc(repo)
+	tenantID := uuid.New()
+	snap := Snapshot{ID: uuid.New(), TenantID: tenantID, SiteID: uuid.New(), Status: StatusCompleted, Locked: true}
+	repo.setSnapshot(snap)
+
+	err := svc.DeleteSnapshotForUser(context.Background(), tenantID, snap.ID)
+	de, ok := domain.AsDomain(err)
+	if !ok || de.Kind != domain.KindValidation || de.Code != "snapshot_locked" {
+		t.Fatalf("err = %v, want Validation snapshot_locked", err)
+	}
+	if repo.deleted[snap.ID] {
+		t.Fatalf("locked snapshot must NOT be deleted")
+	}
+}
+
 // --- post-cancel late-submit rejection --------------------------------------
 
 func TestSubmitManifest_RejectsCanceledSnapshot(t *testing.T) {
