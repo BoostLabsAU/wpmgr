@@ -130,6 +130,12 @@ final class CacheManager
     public function startBuffer(): void
     {
         $writer = new CacheWriter($this->config(), $this->cacheRoot());
+        // Full-page output buffer with a callback handler: this is the standard
+        // page-cache capture pattern. PHP finalizes the buffer at request end,
+        // invoking CacheWriter::handle() with the complete response. The buffer
+        // is intentionally held open for the entire request lifecycle so the
+        // handler receives the full page output — an in-scope ob_get_clean() is
+        // not applicable here because the response is not yet complete.
         ob_start([$writer, 'handle']);
     }
 

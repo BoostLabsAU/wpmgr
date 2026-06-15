@@ -133,6 +133,22 @@ When the self-host Gravatars optimization is enabled, the plugin downloads avata
 
 When the "self-host third-party assets" optimization is enabled, the plugin downloads cross-origin script and stylesheet URLs that your own pages already reference, to serve those assets locally. It contacts whatever third-party hosts your pages embed. Data sent: a plain GET request to the URL already present in your page. Trigger: on cache build when this optimization is on. No single provider; the specific hosts depend on your site's content.
 
+**Postmark (https://api.postmarkapp.com)**
+
+Postmark is a transactional email delivery service operated by Wildbit LLC. When Postmark is the configured email transport for this site, the plugin POSTs outgoing email to https://api.postmarkapp.com/email. Data sent: sender address, recipient addresses (To/Cc/Bcc), subject, message body (HTML and/or plain text), and any attachments. Trigger: only when Postmark is selected as the active email provider and an outgoing email is sent from this site. Terms https://postmarkapp.com/terms-of-service -- Privacy https://postmarkapp.com/privacy-policy
+
+**Amazon SES (https://email.{region}.amazonaws.com)**
+
+Amazon Simple Email Service (SES) is an email delivery service operated by Amazon Web Services, Inc. When Amazon SES is the configured email transport for this site, the plugin POSTs a raw MIME message to https://email.{region}.amazonaws.com/ (where {region} is the AWS region you configure, e.g. us-east-1). Data sent: sender address, recipient addresses (To/Cc/Bcc), subject, message body (HTML and/or plain text), and any attachments, encoded as a raw MIME message signed with AWS Signature Version 4. Trigger: only when Amazon SES is selected as the active email provider and an outgoing email is sent from this site. Terms https://aws.amazon.com/service-terms/ -- Privacy https://aws.amazon.com/privacy/
+
+**Mailgun (https://api.mailgun.net, https://api.eu.mailgun.net)**
+
+Mailgun is an email delivery service operated by Sinch Email (formerly Mailgun Technologies, Inc.). When Mailgun is the configured email transport for this site, the plugin POSTs outgoing email to https://api.mailgun.net/v3/{domain}/messages (US region) or https://api.eu.mailgun.net/v3/{domain}/messages (EU region). Data sent: sender address, recipient addresses (To/Cc/Bcc), subject, message body (HTML and/or plain text), and attachment metadata. Trigger: only when Mailgun is selected as the active email provider and an outgoing email is sent from this site. Terms https://www.mailgun.com/legal/terms/ -- Privacy https://www.mailgun.com/legal/privacy-policy/
+
+**SendGrid (https://api.sendgrid.com)**
+
+SendGrid is a cloud email delivery service operated by Twilio Inc. When SendGrid is the configured email transport for this site, the plugin POSTs outgoing email to https://api.sendgrid.com/v3/mail/send. Data sent: sender address, recipient addresses (To/Cc/Bcc), subject, message body (HTML and/or plain text), and any attachments. Trigger: only when SendGrid is selected as the active email provider and an outgoing email is sent from this site. Terms https://www.twilio.com/en-us/legal/tos -- Privacy https://www.twilio.com/en-us/legal/privacy
+
 == Third-party / Credits ==
 
 **matthiasmullie/minify (MIT)**
@@ -148,7 +164,7 @@ No other third-party libraries are bundled in the plugin zip. Image encoding and
 This plugin ships two minified JavaScript files. Their human-readable source and build tooling are in the public repository at https://github.com/mosamlife/wpmgr.
 
 * **assets/wpmgr-rum.min.js** -- Real User Monitoring collector. TypeScript source: apps/tracker/src/index.ts and apps/tracker/src/vitals.ts. Build: cd apps/tracker && npm install && npm run build (esbuild IIFE bundle, also bundles Google web-vitals under its Apache-2.0 license).
-* **assets/wpmgr-delay.min.js** -- deferred-script runtime. The readable source ships alongside the plugin at assets/src/wpmgr-delay.js in the same repository.
+* **assets/wpmgr-delay.min.js** -- deferred-script runtime. The readable source ships alongside the plugin at assets/wpmgr-delay.js in the same repository.
 
 == Screenshots ==
 

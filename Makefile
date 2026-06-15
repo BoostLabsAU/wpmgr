@@ -150,15 +150,29 @@ agent-zip-wporg: agent-vendor ## Package the wp.org-distributable plugin zip (fl
 	# site_transient_update_plugins hook (B2 / G8). NOTICE.md and README.md are
 	# excluded because wp.org rejects unexpected Markdown files (B4 / C8).
 	# Dev-only files mirror the existing agent-zip excludes.
+	# vendor/bin/ and vendor/*/bin/ are excluded because wp.org does not permit
+	# CLI entrypoints (minifyjs, minifycss) — the matthiasmullie/minify library is
+	# used via its PHP API only (no shell-out to the bin scripts anywhere in the
+	# agent). vendor/*/LICENSE files are excluded because wp.org flags them as
+	# unexpected non-code files; the library licences are already referenced in the
+	# plugin's own LICENSE / readme.txt.
 	rsync -a --delete \
 		--exclude 'tests/' --exclude 'tests-e2e/' --exclude 'tools/' --exclude '*.dist' --exclude '.phpunit.cache/' \
 		--exclude '.phpunit.result.cache' --exclude 'composer.lock' \
 		--exclude '.DS_Store' --exclude '*.zip' \
+		--exclude '.distignore' --exclude '.gitignore' --exclude '.gitattributes' \
 		--exclude 'phpstan.neon' --exclude 'phpstan-baseline.neon' \
 		--exclude 'NOTICE.md' --exclude 'README.md' \
 		--exclude 'patchwork.json' \
 		--exclude 'includes/support/class-update-checker.php' \
 		apps/agent/ release/fleet-agent-for-wpmgr/
+	# Remove CLI entrypoints and LICENSE files that wp.org does not permit.
+	# rsync --exclude patterns for vendor/*/bin/ do not recurse into arbitrary
+	# depth (e.g. vendor/matthiasmullie/minify/bin/ is 3 levels deep), so a
+	# post-stage find+delete is more reliable than path-based excludes.
+	find release/fleet-agent-for-wpmgr/vendor/bin -mindepth 0 -maxdepth 0 -type d -exec rm -rf {} + 2>/dev/null || true
+	find release/fleet-agent-for-wpmgr/vendor -mindepth 2 -type d -name bin -exec rm -rf {} + 2>/dev/null || true
+	find release/fleet-agent-for-wpmgr/vendor -mindepth 2 -type f -name LICENSE -delete 2>/dev/null || true
 	# Rename the main plugin file to match the wp.org slug. WordPress derives the
 	# plugin's displayed name, slug, and update identity from the top-level .php
 	# filename inside the archive folder — renaming is mandatory for the wp.org slug.

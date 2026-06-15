@@ -295,10 +295,18 @@ final class ObjectCacheDropinInstaller
 		// but escape it anyway so static analysis can verify the query.
 		$optionsTable = esc_sql( $wpdb->options ?? '' );
 		if ( $optionsTable !== '' ) {
+			// Build the two LIKE patterns through esc_like so special characters
+			// in the prefix are safe; the patterns themselves are not user input.
+			$likeTransient     = $wpdb->esc_like( '_transient_' ) . '%';
+			$likeSiteTransient = $wpdb->esc_like( '_site_transient_' ) . '%';
 			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- no WP API for bulk transient delete; anti-replay / transient purge; caching would defeat the purpose
 			$count += (int) $wpdb->query(
-				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $optionsTable is $wpdb->options, a trusted WP core property, not user input
-				"DELETE FROM `{$optionsTable}` WHERE option_name LIKE '_transient_%' OR option_name LIKE '_site_transient_%'"
+				$wpdb->prepare(
+					// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- only the table identifier is interpolated ($wpdb->options, a trusted WP core property, not user input); the LIKE values are bound as %s placeholders
+					"DELETE FROM `{$optionsTable}` WHERE option_name LIKE %s OR option_name LIKE %s",
+					$likeTransient,
+					$likeSiteTransient
+				)
 			);
 		}
 
