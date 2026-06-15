@@ -139,6 +139,7 @@ final class ActivityLog
 
         // ---- Auth ---------------------------------------------------------
         add_action('wp_login', [$this, 'onLogin'], 10, 2);
+        add_action('wpmgr_autologin_success', [$this, 'onAutologinSuccess'], 10, 2);
         add_action('wp_login_failed', [$this, 'onLoginFailed'], 10, 1);
         add_action('wp_logout', [$this, 'onLogout'], 10, 0);
         add_action('after_password_reset', [$this, 'onPasswordReset'], 10, 1);
@@ -410,6 +411,32 @@ final class ActivityLog
             (string) $userId,
             (string) $login,
             ['severity' => self::SEV_LOW]
+        );
+    }
+
+    /**
+     * Operator one-click login via the WPMgr autologin route. That path issues
+     * the session cookie WITHOUT firing wp_login (which would arm a 2FA
+     * interstitial), so onLogin() never observes it. We record it here from the
+     * dedicated wpmgr_autologin_success action so out-of-band operator access
+     * stays in the audit trail. Marked MEDIUM and tagged with the method so it
+     * is distinguishable from an interactive password login.
+     *
+     * @param int    $userId Resolved WP user the cookie was minted for.
+     * @param string $jti    Autologin token identifier (audit correlation).
+     * @return void
+     */
+    public function onAutologinSuccess($userId, $jti = ''): void
+    {
+        $userId = (int) $userId;
+        $user   = function_exists('get_userdata') ? get_userdata($userId) : false;
+        $label  = (is_object($user) && isset($user->user_login)) ? (string) $user->user_login : '';
+        $this->record(
+            'user.login',
+            'user',
+            (string) $userId,
+            $label,
+            ['severity' => self::SEV_MEDIUM, 'method' => 'wpmgr_one_click', 'jti' => (string) $jti]
         );
     }
 

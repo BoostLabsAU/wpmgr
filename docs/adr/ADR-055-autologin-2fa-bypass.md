@@ -16,7 +16,7 @@ The one-click autologin route (`GET /wpmgr/v1/autologin`) was producing **502 Ba
 
 3. **wp_login re-fire on re-click**: When the operator clicks the one-click login a second time (fresh valid JWT from the web UI on each click), the user is already logged in. Re-calling `issueAuthCookie()` and `do_action('wp_login')` over a live session triggers 2FA/security plugins that hook `wp_login` and tear down the session or show an interstitial, causing the 502.
 
-4. **2FA challenge loop**: The official Two Factor plugin hooks `wp_login` at `PHP_INT_MAX` and tears down sessions that are not marked as already two-factor–verified. Any autologin attempt on a site with Two Factor active would be immediately invalidated.
+4. **2FA challenge interstitials**: `wp_login` is the sole producer of the Solid Security interstitial (`ITSEC_Lib_Login_Interstitial`, registered at priority -1000, calls `show_interstitial()` + `die()`) and the official Two Factor plugin's session-teardown enforcement (hooked at `PHP_INT_MAX`, destroys sessions not marked as two-factor-verified and calls `show_two_factor_login()` + `exit`). Both plugins were triggered on every first-login autologin attempt where `wp_login` was fired.
 
 ---
 
@@ -28,7 +28,7 @@ The one-click autologin route (`GET /wpmgr/v1/autologin`) was producing **502 Ba
 
 ### D2 — Wrap the post-verify body in try/catch(\Throwable)
 
-Steps 4–10 (consume, resolveUser, rolesAllowed, replay mark, issueAuthCookie, success hook, redirect) are enclosed in a single `try { ... } catch (\Throwable $e)` block. A catchable exception from any hooked plugin in this body returns `fail('autologin_error', 500, $jti)` — a structured JSON error — instead of an FPM 502. Hard `exit()`/`die()` calls inside a hook still cannot be caught; that is an accepted residual given the same-user fast-path removes the most common trigger.
+Steps 4–10 (consume, resolveUser, rolesAllowed, replay mark, issueAuthCookie, success hook, redirect) are enclosed in a single `try { ... } catch (\Throwable $e)` block. A catchable exception from any hooked plugin in this body returns `fail('autologin_error', 500, $jti)` — a structured JSON error — instead of an FPM 502. Hard `exit()`/`die()` calls inside a hook still cannot be caught; that is an accepted residual given the same-user fast-path and the wp_login suppression (D6) remove the most common triggers.
 
 ### D3 — Same-user fast-path skips cookie re-issue
 
@@ -48,18 +48,51 @@ The bypass is unconditional once the JWT+role gate passes. It is implemented usi
 
 | Plugin | Mechanism | Scope |
 |---|---|---|
-| **Official Two Factor** (`wordpress/two-factor`) | `add_filter('attach_session_information', ...)` injects `two-factor-login` (timestamp) and `two-factor-provider` (user's configured provider from `_two_factor_provider` meta) into the auth cookie's session data before `wp_set_auth_cookie()`. `Two_Factor_Core::is_current_user_session_two_factor()` reads these exact fields. If the user has no provider meta, no marker is injected. Filter removed immediately after `wp_set_auth_cookie()`. | Request-scoped filter |
-| **WP 2FA (Melapress)** | `add_filter('wp_2fa_should_redirect_unconfigured', '__return_false')` — the plugin's documented public lever, suppresses its `admin_init` enforcement redirect. Removed immediately after `wp_set_auth_cookie()`. | Request-scoped filter |
+| **Official Two Factor** (`wordpress/two-factor`) | `add_filter('attach_session_information', ...)` injects `two-factor-login` (timestamp) and `two-factor-provider` (user's configured provider from `_two_factor_provider` meta) into the auth cookie's session data before `wp_set_auth_cookie()`. This is a **convenience marker**: it allows the operator to edit the Two Factor settings screen without re-validating, and provides future-proofing. The primary interstitial bypass is D6 (not firing `wp_login`). If the user has no provider meta, no marker is injected. Filter removed immediately after `wp_set_auth_cookie()`. | Request-scoped filter |
+| **WP 2FA (Melapress)** | `add_filter('wp_2fa_should_redirect_unconfigured', '__return_false')` — the plugin's documented public lever, suppresses its `admin_init` enforcement redirect. Orthogonal to D6; removed immediately after `wp_set_auth_cookie()`. | Request-scoped filter |
 | **Wordfence Login Security** | Enforces via the `authenticate` filter chain. `wp_set_auth_cookie()` never passes through `authenticate`. Already bypassed; no action. | N/A |
 | **miniOrange (common mode)** | Same as Wordfence — `authenticate` filter only. Already bypassed; no action. | N/A |
 
-#### `wp_login` ordering
+**Latent bug corrected:** The previous approach (inject markers + fire `wp_login`) did NOT reliably prevent the Two Factor plugin's teardown on a genuine first login because the teardown predicate is `is_current_user_session_two_factor()`, which checks the session store — but on a first login the cookie session is new and the marker injection races against the session being flushed. D6 (not firing `wp_login` at all) removes this bug class entirely. The same-user fast-path (D3) had masked the failure on re-clicks.
 
-`do_action('wp_login', ...)` is fired **after** `wp_set_auth_cookie()` (and after the session markers are written into the cookie session). The Two Factor plugin hooks `wp_login` at `PHP_INT_MAX` priority and checks `is_current_user_session_two_factor()` against the cookie's session data. Firing after the markers are written means the plugin finds a verified session and does not tear it down.
+### D5 — SecuPress detection fast-path (superseded by D7 — see below)
 
-#### Residual (accepted)
+*(Combined into D7.)*
 
-**Solid Security** (`itsec_login_interstitial`) and **Shield Security** (login-intent) use post-login interstitials enforced on the subsequent page load, reading their own internal session state. There is no public, documented verified-session marker for these plugins. We do not forge their internal state. Sites using these plugins may still see a 2FA challenge on the first page after autologin. This is documented here as an **accepted residual**: the autologin still succeeds; the 2FA step the user encounters is that plugin's own security policy, which we respect.
+### D6 — Do not fire `wp_login` on the autologin path
+
+`wp_login` is not fired anywhere on the autologin path. This is the primary mechanism that defeats both the Solid Security interstitial and the official Two Factor interstitial.
+
+**Mechanism (verified against WP.org SVN trunk):**
+- `issueAuthCookie()` in WP core fires `do_action('wp_login', $userLogin, $user)` after setting the auth cookie.
+- Solid Security's `ITSEC_Lib_Login_Interstitial` is registered on `wp_login` at priority -1000. It calls `ITSEC_Login_Interstitial_Session::create()` followed by `show_interstitial()` which ends in `die()`.
+- The official Two Factor plugin hooks `wp_login` at `PHP_INT_MAX`. It calls `Two_Factor_Core::show_two_factor_login()` and `exit` for sessions it does not consider two-factor-verified.
+- Neither plugin re-checks on `init` or `admin_init`. Not firing `wp_login` fully bypasses both with no residual admin gate.
+
+`wp_login` is a post-authentication notification hook, not an authorization control. The authorization gate (Ed25519 JWT + CP role allow-list) is the authority.
+
+**Audit/logging note:** Third-party plugins hooked on `wp_login` for login logging will not record autologin events. Operators should hook `wpmgr_autologin_success` for autologin-specific audit, or rely on CP-side audit (the consume callback returns an `audit_id`).
+
+### D7 — SecuPress hard-bail (409, token not consumed)
+
+SecuPress (free and pro) distrusts out-of-band cookies in its passwordless/magic-link flow and would loop the browser rather than accepting a cookie issued outside its own authentication path. Unlike the plugins handled by D4/D6, there is no filter lever or session marker that resolves the conflict.
+
+Detection: if `{WP_PLUGIN_DIR}/secupress/secupress.php` or `.../secupress-pro/secupress-pro.php` exists, `securityPluginHardBail()` returns the slug `'secupress'`.
+
+The bail fires **after** JWT verify and local replay check, but **before** the CP consume call and replay `mark()`. This means:
+- A guaranteed-failing attempt does NOT burn the single-use token.
+- The operator can disable SecuPress and retry with the same link.
+- The response is 409 `wpmgr_autologin_unsupported_security_plugin`.
+
+`securityPluginHardBail()` is `protected` (not `private`) so a test subclass can override it as a seam without real filesystem calls.
+
+---
+
+## Residual (accepted)
+
+**Shield Security** (login-intent interstitial) may still present a challenge on the first page load after autologin. Shield reads its own internal session state (no public verified-session marker); we decline to forge that state. The autologin still succeeds and the auth cookie is valid — Shield's challenge is that plugin's own security policy, which we respect.
+
+**Solid Security** and the **official Two Factor plugin** are now **resolved** by D6 (not firing `wp_login`).
 
 ---
 
@@ -69,13 +102,16 @@ The bypass is unconditional once the JWT+role gate passes. It is implemented usi
 - Re-click no longer causes a 502 on sites with 2FA active.
 - Re-click on a same-user session is a no-op (no cookie churn, no `wp_login` re-fire).
 - Any catchable hook-plugin Throwable in the post-verify path returns a structured 500.
-- Two Factor and WP 2FA users can reach wp-admin via autologin without a second challenge.
+- Solid Security and Two Factor interstitials are fully bypassed (D6).
+- WP 2FA users can reach wp-admin without a second challenge (D4).
+- SecuPress conflicts surface as a clean 409 without burning the token (D7).
 - All bypass mechanisms are strictly request-scoped — no persistent state changes.
 
 **Negative / Accepted:**
 - Hard `exit()`/`die()` in a hook still produces a 502 (uncatchable).
-- Solid Security and Shield may still challenge on first page load after autologin.
+- Shield Security may still challenge on first page load after autologin.
 - `CONSUME_TIMEOUT` lowered to 5 s means a very slow CP (> 5 s response) will return 410 instead of eventually succeeding. Operators with high-latency CP connections should ensure the CP is reachable within 5 s.
+- Audit/login-logging plugins hooked on `wp_login` will not record the autologin. Operators should hook `wpmgr_autologin_success` and/or rely on CP-side audit (the consume callback returns an `audit_id`).
 
 ---
 
@@ -86,3 +122,4 @@ The bypass is unconditional once the JWT+role gate passes. It is implemented usi
 - The `wp_2fa_should_redirect_unconfigured` filter only affects the current PHP request. It is removed before the method returns and cannot persist across requests.
 - No user meta is modified (we only read `_two_factor_provider`, never write it).
 - The same-user fast-path still requires a valid JWT, a successful CP consume, a resolved local user, and a passing role allow-list before the fast-path branch is taken. There is no short-circuit of the authorization gate.
+- The SecuPress bail fires before the token is consumed, preserving the single-use invariant even for bailed attempts.

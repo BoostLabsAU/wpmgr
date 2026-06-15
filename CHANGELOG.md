@@ -6,6 +6,19 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.48.2] - 2026-06-15
+
+### Fixed
+
+- **One-click login no longer triggers a second 2FA challenge.** On sites running Solid Security (and the official Two Factor plugin), one-click login landed on the plugin's own 2FA interstitial instead of the dashboard. The agent's autologin was firing WordPress's `wp_login` action, which is the sole trigger those plugins use to arm a post-login challenge. The autologin path now establishes the session without firing `wp_login`, so it lands straight in wp-admin. The signed single-use token plus the control-plane role allow-list remain the authorization gate (a stronger proof of operator intent than an interactive challenge). The session two-factor markers are still set as a convenience so the operator can edit the 2FA settings screen without re-verifying.
+
+### Added
+
+- **Operator one-click logins are recorded in the activity log.** Because the autologin no longer fires `wp_login`, it is logged from a dedicated success signal instead, tagged as a one-click login so it stays in the audit trail.
+- **SecuPress sites are refused with a clear message.** SecuPress replaces the login flow with its own passwordless/magic-link scheme that distrusts externally-set sessions, so one-click login cannot work there. The agent now declines with an operator-readable error ("sign in normally") instead of looping, and does not consume the single-use token.
+
+Agent 0.48.2. No control-plane or migration change.
+
 ## [0.48.1] - 2026-06-15
 
 ### Fixed

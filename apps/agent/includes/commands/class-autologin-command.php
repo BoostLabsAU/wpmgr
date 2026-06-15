@@ -18,7 +18,7 @@
  *   6. We intersect the user's roles with the CP-supplied allow-list.
  *   7. We MARK replay BEFORE issuing the cookie so a parallel presentation of
  *      the same token cannot race two cookies through.
- *   8. We clear any existing auth, set the WP cookie, fire `wp_login`.
+ *   8. We clear any existing auth and set the WP auth cookie.
  *   9. We sanitize redirect_to (same-origin, strict charset) and wp_safe_redirect.
  *
  * Notes:
@@ -53,7 +53,7 @@ use WPMgr\Agent\Signer;
 /**
  * Verifies a one-click-login JWT, single-uses it, and issues a WP auth cookie.
  */
-final class AutologinCommand implements CommandInterface
+class AutologinCommand implements CommandInterface
 {
     /** CP-side path for the single-use consume callback. */
     public const PATH_CONSUME = '/agent/v1/autologin/consume';
@@ -178,6 +178,16 @@ final class AutologinCommand implements CommandInterface
         if ($this->replay->seen($jti)) {
             $finished = true;
             return $this->fail('replay_detected', 410, $jti);
+        }
+
+        // ---- Step 3b: hard-bail on fundamentally incompatible security plugins.
+        //      We check BEFORE consuming the single-use token so a guaranteed-failing
+        //      attempt does not burn the token and the operator can retry after
+        //      disabling the conflicting plugin. ----
+        $incompatiblePlugin = $this->securityPluginHardBail();
+        if ($incompatiblePlugin !== null) {
+            $finished = true;
+            return $this->fail('autologin_unsupported_security_plugin', 409, $jti);
         }
 
         // ---- Steps 4–10: post-verify body — catch any hooked-plugin Throwable
@@ -445,36 +455,42 @@ final class AutologinCommand implements CommandInterface
     }
 
     /**
-     * Clear any existing auth, set the new auth cookie, and fire wp_login.
+     * Clear any existing auth and set the new WP auth cookie.
      *
      * 2FA bypass rationale: the authorization gate for this path is the
      * Ed25519-signed single-use JWT + CP role allow-list — that is already a
      * stronger proof of operator intent than an interactive TOTP/push challenge.
-     * We suppress per-plugin 2FA re-challenges using strictly request-scoped
-     * filters and WP session markers that are removed before this method returns.
-     * Nothing is persisted to options, user meta, or global state.
+     * We do NOT fire wp_login on this path (see below). Request-scoped filters
+     * handle the remaining per-plugin suppressions; nothing is persisted to
+     * options, user meta, or global state.
      *
-     * Bypass coverage:
-     *   - Official Two Factor plugin: injecting the session-verification markers
-     *     (two-factor-login, two-factor-provider) into the auth cookie's session
-     *     data via the attach_session_information filter causes
-     *     Two_Factor_Core::is_current_user_session_two_factor() to return true,
-     *     so the plugin treats the session as already verified.
-     *   - WP 2FA (Melapress): the wp_2fa_should_redirect_unconfigured filter
-     *     suppresses its admin_init enforcement redirect for this request only.
-     *   - Wordfence Login Security / miniOrange (common mode): these enforce via
-     *     the authenticate filter chain, which wp_set_auth_cookie() never
-     *     triggers. No action required; noted here so a future reader does not
-     *     add redundant handling.
-     *   - Solid Security (itsec_login_interstitial) and Shield (login-intent):
-     *     these use post-login interstitials with no public verified-session
-     *     marker. They may still challenge on the subsequent page load. This is
-     *     documented in ADR-055 as an accepted residual.
+     * Bypass mechanism — do not fire wp_login:
+     *   wp_login is the sole trigger for Solid Security's ITSEC_Lib_Login_Interstitial
+     *   (registered on wp_login at priority -1000, calls show_interstitial() + die())
+     *   and for the official Two Factor plugin's session-teardown enforcement (hooked
+     *   at PHP_INT_MAX, destroys sessions not marked as two-factor-verified and calls
+     *   show_two_factor_login() + exit). Neither plugin re-checks on init or admin_init,
+     *   so omitting wp_login fully bypasses both with no residual admin gate. The
+     *   authorization gate (Ed25519 JWT + CP role allow-list) is the authority; wp_login
+     *   is a post-auth notification, not an authorization control.
      *
-     * wp_login ordering: we fire wp_login AFTER setting the session markers so
-     * that hooked session/audit plugins observe the login with the markers
-     * already present. The Two Factor plugin hooks wp_login at PHP_INT_MAX and
-     * tears down sessions that lack its markers — the ordering avoids that.
+     * Bypass coverage (remaining per-plugin):
+     *   - Official Two Factor plugin: inject session-verification markers
+     *     (two-factor-login, two-factor-provider) into the auth cookie session via
+     *     attach_session_information so Two_Factor_Core::is_current_user_session_two_factor()
+     *     returns true. This is now a CONVENIENCE marker (allows editing the Two Factor
+     *     settings screen without re-validating) and future-proofing — not the primary
+     *     interstitial bypass (that is handled by not firing wp_login). Only injected when
+     *     the user has a _two_factor_provider meta; filter is removed immediately after
+     *     wp_set_auth_cookie().
+     *   - WP 2FA (Melapress): the wp_2fa_should_redirect_unconfigured filter suppresses
+     *     its admin_init enforcement redirect for this request only. Orthogonal to the
+     *     wp_login change; removed immediately after wp_set_auth_cookie().
+     *   - Wordfence Login Security / miniOrange (common mode): enforce via the authenticate
+     *     filter chain, which wp_set_auth_cookie() never triggers. No action required.
+     *   - Shield Security (login-intent): uses a post-login interstitial on the next page
+     *     load, reading its own internal session state. No public verified-session marker
+     *     exists. Documented in ADR-055 as an accepted residual.
      *
      * @param \WP_User $user Resolved user.
      * @return void
@@ -538,13 +554,42 @@ final class AutologinCommand implements CommandInterface
                 remove_filter('wp_2fa_should_redirect_unconfigured', '__return_false'); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- removing our own transient attachment; see add_filter above
             }
         }
+    }
 
-        // Fire wp_login AFTER session markers are written so hooked plugins
-        // (including the Two Factor plugin at PHP_INT_MAX priority) see an
-        // already-verified session and do not tear it down or re-challenge.
-        if (function_exists('do_action')) {
-            do_action('wp_login', $userLogin, $user); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- 'wp_login' is a WordPress core action; must fire unprefixed so audit/session plugins observe the login
+    /**
+     * Returns the slug of a detected security plugin that is fundamentally
+     * incompatible with cookie-based autologin, or null if none is detected.
+     *
+     * SecuPress (free and pro) distrusts out-of-band cookies in its passwordless /
+     * magic-link flow and would loop the browser rather than accepting a cookie
+     * issued outside its own authentication path. When detected, we refuse early
+     * (409) WITHOUT consuming the single-use token, so the operator can retry
+     * after disabling the conflicting plugin.
+     *
+     * The method is protected (not private) so a test subclass can override it
+     * as a seam to avoid real filesystem calls.
+     *
+     * @return string|null Plugin slug ('secupress') or null.
+     */
+    protected function securityPluginHardBail(): ?string
+    {
+        if (defined('WP_PLUGIN_DIR')) {
+            $dir = (string) WP_PLUGIN_DIR;
+        } elseif (defined('WP_CONTENT_DIR')) {
+            $dir = ((string) WP_CONTENT_DIR) . '/plugins';
+        } else {
+            $dir = '';
         }
+
+        if ($dir === '') {
+            return null;
+        }
+
+        if (file_exists($dir . '/secupress/secupress.php') || file_exists($dir . '/secupress-pro/secupress-pro.php')) {
+            return 'secupress';
+        }
+
+        return null;
     }
 
     /**
