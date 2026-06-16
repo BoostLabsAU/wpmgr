@@ -6,6 +6,18 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-06-16
+
+### Added
+
+- **Two-factor authentication for the dashboard.** Operators can now protect their account with a second factor: an authenticator app (TOTP) and/or a passkey or security key (WebAuthn/FIDO2). Setup is a guided flow (scan a QR code or enter the key, confirm a live code, then save one-time recovery codes), and a new Settings to Security screen manages factors, recovery codes, and trusted devices. At login, a second step asks for the code or passkey; "remember this device" can skip it for 30 days, and every trusted device is listed and revocable. This matters because the agent intentionally bypasses 2FA on the WordPress sites it manages (for one-click login), so the dashboard is the single front door to every site and is now hardened accordingly. Two-factor is optional per user; superadmins see a reminder to enable it.
+
+### Security
+
+- Second factors are built on the standard primitives (RFC 6238 TOTP and WebAuthn). The TOTP secret is encrypted at rest, recovery codes are hashed and single-use, used codes are burned to prevent replay, and a cloned authenticator is detected and rejected. Verification attempts are rate-limited and locked out across attempts. A two-factor account cannot obtain a session on any login path (password, SSO, email verification) without completing the second step, changing or resetting the password revokes trusted devices, and disabling a factor or regenerating codes requires re-entering the password. All two-factor events are written to the audit log.
+
+Control plane plus dashboard at 0.50.0; one migration (auto-applied on boot); no agent change. Passkeys require accessing the dashboard on its primary domain; the authenticator-app factor works everywhere.
+
 ## [0.49.2] - 2026-06-16
 
 ### Changed
