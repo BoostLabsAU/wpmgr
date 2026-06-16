@@ -21,7 +21,6 @@ import { Camera, ImageOff } from "lucide-react";
 import type { Site } from "@wpmgr/api";
 
 import { cn } from "@/lib/utils";
-import { relativeTime } from "@/lib/utils";
 
 // ─── Deterministic hue from hostname ─────────────────────────────────────────
 
@@ -119,7 +118,9 @@ export interface SiteCardThumbnailProps {
 export function SiteCardThumbnail({
   site,
   className,
-  hideCaption = false,
+  // hideCaption retained in the prop interface; caption was moved to the card
+  // footer as a labeled metadata row — the overlay itself no longer exists.
+  hideCaption: _hideCaption = false,
 }: SiteCardThumbnailProps) {
   const [imgError, setImgError] = useState(false);
 
@@ -138,11 +139,6 @@ export function SiteCardThumbnail({
   } catch {
     hostname = site.url.replace(/^https?:\/\//i, "").replace(/\/$/, "");
   }
-
-  const capturedLabel =
-    state === "ready" && site.screenshot_captured_at && !hideCaption
-      ? relativeTime(site.screenshot_captured_at)
-      : null;
 
   return (
     <div
@@ -184,15 +180,8 @@ export function SiteCardThumbnail({
         <NeverPlaceholder hostname={hostname} siteName={site.name ?? ""} />
       )}
 
-      {/* "captured X ago" caption — shown when ready and not hidden */}
-      {capturedLabel ? (
-        <span
-          aria-hidden="true"
-          className="absolute bottom-1 right-1.5 rounded bg-black/50 px-1.5 py-0.5 font-mono text-[10px] text-white/80 backdrop-blur-sm"
-        >
-          {capturedLabel}
-        </span>
-      ) : null}
+      {/* Caption overlay removed — "captured X ago" moved to the card footer
+          as a labeled metadata row to prevent text-over-image overlap. */}
     </div>
   );
 }

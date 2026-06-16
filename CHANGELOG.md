@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.49.2] - 2026-06-16
+
+### Changed
+
+- **Sites grid card redesign.** The grid card was rebuilt for clarity and consistency. The unlabeled icon row is now a labeled "Site configuration" group (Page Cache, Object Cache, HTTPS, Backups, Multisite), each with a text label and an on/off state shown by a filled-versus-hollow dot, not color alone. All metadata is now a labeled key/value list (Versions, Host, Client, Tags, Screenshot) so no value is bare. Every section reserves its height with a calm empty state, so cards line up row-for-row regardless of which optional data a site has. The screenshot freshness moved off the image (no more caption overlapping the thumbnail) into a labeled footer line, and the card action buttons carry clear labels.
+
+Dashboard only at 0.49.2; no control-plane, migration, or agent change.
+
 ## [0.49.1] - 2026-06-16
 
 ### Fixed
