@@ -38,6 +38,15 @@ func NewService(repo Repo, v *domain.Validator, clock domain.Clock) *Service {
 // it is constructed after and injected here).
 func (s *Service) SetConnectionService(cs ConnectionService) { s.conn = cs }
 
+// SetScreenshotEnricher wires the M72 screenshot enricher onto THIS service's
+// underlying repo, so List() populates screenshot_status + presigned URLs. It
+// MUST be used instead of the free SetScreenshotEnricher(repo, e) at boot: the
+// list path is served by this service's own repo instance, and wiring the
+// enricher onto any other repo instance is a silent no-op (the enrichment never
+// runs and every card falls back to the "never" placeholder). No-op if the repo
+// does not support enrichment.
+func (s *Service) SetScreenshotEnricher(e ScreenshotEnricher) { SetScreenshotEnricher(s.repo, e) }
+
 // Create validates and persists a new site under the given tenant.
 func (s *Service) Create(ctx context.Context, in CreateInput) (Site, error) {
 	if in.TenantID == uuid.Nil {

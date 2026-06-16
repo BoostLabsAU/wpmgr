@@ -954,7 +954,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// Wire the screenshotadapter enricher so repo.List populates screenshot
 		// fields (status, presigned URL 1x/2x, captured_at) on every site list call.
 		screenshotEnricher := screenshotadapter.New(screenshotRepo, mediaStore)
-		site.SetScreenshotEnricher(siteRepo, screenshotEnricher)
+		// Wire onto the SERVICE's own repo — siteSvc.List() is served by the repo
+		// instance held inside siteSvc (constructed at NewService), NOT by the
+		// separate siteRepo created later for the connection/health machinery.
+		// Wiring the enricher onto siteRepo silently no-ops the list enrichment.
+		siteSvc.SetScreenshotEnricher(screenshotEnricher)
 		logger.Info("screenshots enabled: enricher wired, capture queue: site_screenshot")
 	} else {
 		// S3 not configured: wire a no-store service so the handler returns 501 cleanly.

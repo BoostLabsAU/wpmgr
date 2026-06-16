@@ -242,6 +242,31 @@ export function useRefreshScreenshot(): UseMutationResult<void, Error, string> {
     onSuccess: (_data, siteId) => {
       void queryClient.invalidateQueries({ queryKey: sitesKeys.detail(siteId) });
       void queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
+      // The POST only ENQUEUES the capture; the worker finishes a few seconds
+      // later (cold-start + render). Without a follow-up refetch the card would
+      // sit on "capturing" until a manual reload. Poll the list until this
+      // site's screenshot flips off "pending" (ready or failed), bounded to
+      // ~15 ticks x 3s = 45s so a stuck job can't poll forever.
+      let attempts = 0;
+      const maxAttempts = 15;
+      const poll = async (): Promise<void> => {
+        attempts += 1;
+        await queryClient.invalidateQueries({ queryKey: sitesKeys.lists() });
+        let status: string | undefined;
+        for (const [, data] of queryClient.getQueriesData<Site[]>({
+          queryKey: sitesKeys.lists(),
+        })) {
+          const s = data?.find((x) => x.id === siteId);
+          if (s) {
+            status = s.screenshot_status;
+            break;
+          }
+        }
+        if (status !== undefined && status !== "pending") return; // ready/failed
+        if (attempts >= maxAttempts) return;
+        setTimeout(() => void poll(), 3000);
+      };
+      setTimeout(() => void poll(), 3000);
     },
   });
 }

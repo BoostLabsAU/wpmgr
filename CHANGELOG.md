@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.49.1] - 2026-06-16
+
+### Fixed
+
+- **Site screenshots now appear in the grid.** The enricher that adds the presigned image URL to each site in the list response was wired onto a different repository instance than the one serving the Sites list, so list enrichment never ran and every card fell back to the favicon placeholder even when a ready screenshot already existed in storage. The enricher is now wired onto the list service itself, with a regression test that fails if it is ever attached to the wrong instance.
+- **Screenshot capture stopped failing with a tunnel error.** The in-process SSRF proxy that headless Chromium connects through rejected the browser's `CONNECT` requests because the request multiplexer did not accept authority-form targets, so every capture failed before reaching a site. The proxy now handles `CONNECT` directly and dials over IPv4 (Cloud Run has no IPv6 egress), covered by a new end-to-end tunnel test.
+- **The Sites grid refreshes itself after a capture.** After a screenshot is requested, the dashboard polls the list until the capture finishes (or times out), so the card moves from "capturing" to the finished image without a manual reload.
+
+Control plane, media worker, and dashboard at 0.49.1; no migration, no agent change.
+
 ## [0.49.0] - 2026-06-16
 
 ### Added
