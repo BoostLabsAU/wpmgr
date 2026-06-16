@@ -78,10 +78,22 @@ export class EmailNotVerifiedError extends Error {
   }
 }
 
-export function useLogin(): UseMutationResult<Me, Error, LoginRequest> {
+/**
+ * Result of a login attempt. Either the session is fully established (me
+ * present) or the server requires a second factor (challenge present).
+ */
+export type LoginResult =
+  | { kind: "ok"; me: Me }
+  | {
+      kind: "2fa_required";
+      challenge: string;
+      factors: { totp: boolean; webauthn: boolean; recovery: boolean };
+    };
+
+export function useLogin(): UseMutationResult<LoginResult, Error, LoginRequest> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: LoginRequest) => {
+    mutationFn: async (body: LoginRequest): Promise<LoginResult> => {
       const { data, error, response } = await login({ body });
       if (response?.status === 401) {
         throw new UnauthorizedError("Invalid email or password");
@@ -95,13 +107,33 @@ export function useLogin(): UseMutationResult<Me, Error, LoginRequest> {
           throw new EmailNotVerifiedError();
         }
       }
+      // 202 = 2FA challenge required. The SDK treats 202 as a non-error
+      // response and puts the body in `data`.
+      if (response?.status === 202) {
+        const raw = data as unknown as {
+          two_factor_required: boolean;
+          challenge: string;
+          factors: { totp: boolean; webauthn: boolean; recovery: boolean };
+        };
+        if (raw?.two_factor_required) {
+          return {
+            kind: "2fa_required",
+            challenge: raw.challenge,
+            factors: raw.factors,
+          };
+        }
+      }
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response");
-      return data;
+      return { kind: "ok", me: data };
     },
-    onSuccess: (me) => {
-      // Seed the cache so the guard/header see the user immediately.
-      queryClient.setQueryData(authKeys.me, me);
+    onSuccess: (result) => {
+      if (result.kind === "ok") {
+        // Seed the cache so the guard/header see the user immediately.
+        queryClient.setQueryData(authKeys.me, result.me);
+      }
+      // For 2fa_required we do NOT seed the cache — the session is not yet
+      // established. The caller will navigate to the challenge page.
     },
   });
 }

@@ -40,6 +40,18 @@ const (
 
 	// trustedDeviceDefaultTTL is the default "remember this device" window.
 	trustedDeviceDefaultTTL = 30 * 24 * time.Hour
+
+	// S2: cross-challenge rate-limit constants.
+	// twoFAUserLockoutPerMinute is the number of failed factor attempts allowed
+	// per user per rolling 60-second window ACROSS all challenges. A fresh
+	// challenge per login without this cross-challenge limit means the per-
+	// challenge cap of 5 is trivially bypassed by issuing a new challenge each
+	// time. Safe default: 10 attempts/min covers legitimate clock-skew retries.
+	twoFAUserLockoutPerMinute = 10
+	// twoFAIPLockoutPerMinute caps total 2FA verification attempts from a
+	// single IP across all users. Prevents a single attacker from cycling
+	// through accounts. Safe default: 30/min.
+	twoFAIPLockoutPerMinute = 30
 )
 
 // TwoFactorService holds all Phase 2 2FA business logic. It is embedded (via
@@ -54,6 +66,11 @@ type TwoFactorService struct {
 	totpFactor *twofactor.TOTPFactor
 	waFactor   *twofactor.WebAuthnFactor
 	cryptbox   *cryptbox.AgeIdentity
+	// limiter is the shared rate limiter from the main auth Service (S2). It is
+	// used to enforce a cross-challenge per-user and per-IP lockout on factor
+	// verification, preventing brute-force via repeated challenge issuance.
+	// nil = no rate limiting (non-production, or limiter not wired).
+	limiter RateLimiter
 }
 
 // SetTwoFactorDeps injects the 2FA dependencies into the auth Service.
@@ -65,6 +82,7 @@ func (s *Service) SetTwoFactorDeps(totpFactor *twofactor.TOTPFactor, waFactor *t
 		totpFactor: totpFactor,
 		waFactor:   waFactor,
 		cryptbox:   box,
+		limiter:    s.limiter, // inherit from the parent service (set via SetMailer)
 	}
 }
 
@@ -95,21 +113,22 @@ func (s *Service) RequestTwoFactorChallenge(ctx context.Context, userID uuid.UUI
 
 // VerifyTOTPChallenge validates a TOTP code against the active challenge. On
 // success it returns the user + their memberships for session issuance.
-func (s *Service) VerifyTOTPChallenge(ctx context.Context, challengeID uuid.UUID, code string) (LoginResult, error) {
+// ip is the caller's IP address, used for the S2 cross-challenge rate limit.
+func (s *Service) VerifyTOTPChallenge(ctx context.Context, challengeID uuid.UUID, code string, ip *netip.Addr) (LoginResult, error) {
 	if s.twofa == nil {
 		return LoginResult{}, domain.ServiceUnavailable("2fa_not_configured", "two-factor authentication is not configured")
 	}
-	return s.twofa.verifyTOTP(ctx, challengeID, code)
+	return s.twofa.verifyTOTP(ctx, challengeID, code, ip)
 }
 
 // VerifyRecoveryCodeChallenge validates a recovery code against the active
 // challenge. On success it returns the user + memberships for session issuance
-// and the remaining code count.
-func (s *Service) VerifyRecoveryCodeChallenge(ctx context.Context, challengeID uuid.UUID, code string) (LoginResult, int64, error) {
+// and the remaining code count. ip is used for the S2 cross-challenge rate limit.
+func (s *Service) VerifyRecoveryCodeChallenge(ctx context.Context, challengeID uuid.UUID, code string, ip *netip.Addr) (LoginResult, int64, error) {
 	if s.twofa == nil {
 		return LoginResult{}, 0, domain.ServiceUnavailable("2fa_not_configured", "two-factor authentication is not configured")
 	}
-	return s.twofa.verifyRecoveryCode(ctx, challengeID, code)
+	return s.twofa.verifyRecoveryCode(ctx, challengeID, code, ip)
 }
 
 // BeginWebAuthnChallenge starts the WebAuthn assertion for an active challenge.
@@ -122,12 +141,12 @@ func (s *Service) BeginWebAuthnChallenge(ctx context.Context, challengeID uuid.U
 }
 
 // FinishWebAuthnChallenge validates the WebAuthn assertion. On success it
-// returns the user + memberships.
-func (s *Service) FinishWebAuthnChallenge(ctx context.Context, challengeID uuid.UUID, assertionJSON []byte) (LoginResult, error) {
+// returns the user + memberships. ip is used for the S2 cross-challenge rate limit.
+func (s *Service) FinishWebAuthnChallenge(ctx context.Context, challengeID uuid.UUID, assertionJSON []byte, ip *netip.Addr) (LoginResult, error) {
 	if s.twofa == nil {
 		return LoginResult{}, domain.ServiceUnavailable("2fa_not_configured", "two-factor authentication is not configured")
 	}
-	return s.twofa.finishWebAuthnLogin(ctx, challengeID, assertionJSON)
+	return s.twofa.finishWebAuthnLogin(ctx, challengeID, assertionJSON, ip)
 }
 
 // --- TOTP Enrollment ---
@@ -237,6 +256,25 @@ func (s *Service) VerifyTrustedDevice(ctx context.Context, rawToken string) (Tru
 	return s.twofa.verifyTrustedDevice(ctx, rawToken)
 }
 
+// VerifyTrustedDeviceNoTouch looks up the device by token hash WITHOUT bumping
+// last_used_at. Used by the login handler to perform the B1 user-binding check
+// before committing the touch. Call TouchTrustedDevice after confirming ownership.
+func (s *Service) VerifyTrustedDeviceNoTouch(ctx context.Context, rawToken string) (TrustedDevice, error) {
+	if s.twofa == nil {
+		return TrustedDevice{}, domain.ServiceUnavailable("2fa_not_configured", "two-factor authentication is not configured")
+	}
+	return s.twofa.verifyTrustedDeviceNoTouch(ctx, rawToken)
+}
+
+// TouchTrustedDevice bumps last_used_at for a verified device. Called by the
+// login handler after confirming device ownership (B1 invariant).
+func (s *Service) TouchTrustedDevice(ctx context.Context, deviceID uuid.UUID) error {
+	if s.twofa == nil {
+		return nil // no-op; 2FA not configured
+	}
+	return s.twofa.repo.twoFA().TouchTrustedDevice(ctx, deviceID)
+}
+
 // ListTrustedDevices returns all active trusted devices for the Security UI.
 func (s *Service) ListTrustedDevices(ctx context.Context, userID uuid.UUID) ([]TrustedDevice, error) {
 	if s.twofa == nil {
@@ -302,7 +340,7 @@ func (t *TwoFactorService) requestChallenge(ctx context.Context, userID uuid.UUI
 	return TwoFactorChallengeResult{ChallengeID: id, Factors: factors}, nil
 }
 
-func (t *TwoFactorService) verifyTOTP(ctx context.Context, challengeID uuid.UUID, code string) (LoginResult, error) {
+func (t *TwoFactorService) verifyTOTP(ctx context.Context, challengeID uuid.UUID, code string, ip *netip.Addr) (LoginResult, error) {
 	// Load and validate challenge, then run all TOTP checks + consume inside
 	// a single InAgentTx so the step stamp and challenge consume are atomic.
 	var result LoginResult
@@ -314,6 +352,13 @@ func (t *TwoFactorService) verifyTOTP(ctx context.Context, challengeID uuid.UUID
 		return LoginResult{}, err
 	}
 	challengeUserID = challenge.UserID
+
+	// S2: enforce cross-challenge per-user + per-IP rate limits BEFORE doing any
+	// crypto work, so a locked-out user gets a fast rejection. The IP comes from
+	// the calling handler (current request IP).
+	if err := t.checkCrossChallengeLimits(ctx, challengeUserID, ip); err != nil {
+		return LoginResult{}, err
+	}
 
 	// Phase 2: load the user's TOTP secret.
 	state, err := t.repo.twoFA().GetTwoFactorState(ctx, challengeUserID)
@@ -389,12 +434,17 @@ func (t *TwoFactorService) verifyTOTP(ctx context.Context, challengeID uuid.UUID
 	return result, nil
 }
 
-func (t *TwoFactorService) verifyRecoveryCode(ctx context.Context, challengeID uuid.UUID, rawCode string) (LoginResult, int64, error) {
+func (t *TwoFactorService) verifyRecoveryCode(ctx context.Context, challengeID uuid.UUID, rawCode string, ip *netip.Addr) (LoginResult, int64, error) {
 	challenge, err := t.repo.twoFA().GetActiveChallenge(ctx, challengeID)
 	if err != nil {
 		return LoginResult{}, 0, err
 	}
 	userID := challenge.UserID
+
+	// S2: enforce cross-challenge per-user + per-IP rate limits.
+	if err := t.checkCrossChallengeLimits(ctx, userID, ip); err != nil {
+		return LoginResult{}, 0, err
+	}
 
 	// Normalize the submitted code (strip hyphens, upper-case).
 	normalized := twofactor.NormalizeRecoveryCode(rawCode)
@@ -500,12 +550,17 @@ func (t *TwoFactorService) beginWebAuthnLogin(ctx context.Context, challengeID u
 	return assertionJSON, nil
 }
 
-func (t *TwoFactorService) finishWebAuthnLogin(ctx context.Context, challengeID uuid.UUID, assertionJSON []byte) (LoginResult, error) {
+func (t *TwoFactorService) finishWebAuthnLogin(ctx context.Context, challengeID uuid.UUID, assertionJSON []byte, ip *netip.Addr) (LoginResult, error) {
 	challenge, err := t.repo.twoFA().GetActiveChallenge(ctx, challengeID)
 	if err != nil {
 		return LoginResult{}, err
 	}
 	userID := challenge.UserID
+
+	// S2: enforce cross-challenge per-user + per-IP rate limits.
+	if err := t.checkCrossChallengeLimits(ctx, userID, ip); err != nil {
+		return LoginResult{}, err
+	}
 
 	if len(challenge.WebAuthnSession) == 0 {
 		return LoginResult{}, domain.Validation("webauthn_session_missing", "WebAuthn session not found; call BeginWebAuthnChallenge first")
@@ -543,6 +598,17 @@ func (t *TwoFactorService) finishWebAuthnLogin(ctx context.Context, challengeID 
 	credRow, err := t.repo.twoFA().GetWebAuthnCredentialByCredentialID(ctx, cred.ID)
 	if err != nil {
 		return LoginResult{}, err
+	}
+	// S4: assert that the matched credential belongs to the user who issued the
+	// challenge. GetWebAuthnCredentialByCredentialID queries by binary credential
+	// ID only (no user filter), so a compromised/cloned credential that shares a
+	// binary ID with a different user could otherwise pass the assertion and be
+	// attributed to the wrong user. The RLS isolation test in B3 covers this.
+	if credRow.UserID != userID {
+		// Credential ID exists but is owned by a different user. Treat this as a
+		// failed assertion (not an internal error) to avoid leaking information.
+		_ = t.bumpAttemptAndMaybeExpire(ctx, challengeID, userID, "credential_user_mismatch")
+		return LoginResult{}, domain.Unauthorized("webauthn_verify_failed", "WebAuthn verification failed")
 	}
 
 	// Atomically bump sign_count and consume the challenge.
@@ -881,14 +947,24 @@ func (t *TwoFactorService) issueTrustedDevice(ctx context.Context, userID uuid.U
 	return rawToken, device, nil
 }
 
+// verifyTrustedDevice looks up the device by token hash and bumps last_used_at
+// atomically. Callers that need to check ownership BEFORE touching should use
+// verifyTrustedDeviceNoTouch + touchTrustedDevice separately.
 func (t *TwoFactorService) verifyTrustedDevice(ctx context.Context, rawToken string) (TrustedDevice, error) {
-	tokenHash := sha256HexToken(rawToken)
-	device, err := t.repo.twoFA().GetTrustedDeviceByTokenHash(ctx, tokenHash)
+	device, err := t.verifyTrustedDeviceNoTouch(ctx, rawToken)
 	if err != nil {
 		return TrustedDevice{}, err
 	}
 	_ = t.repo.twoFA().TouchTrustedDevice(ctx, device.ID)
 	return device, nil
+}
+
+// verifyTrustedDeviceNoTouch looks up the device by token hash WITHOUT bumping
+// last_used_at. Used by the login handler to perform the B1 ownership check
+// before deciding whether to touch the record.
+func (t *TwoFactorService) verifyTrustedDeviceNoTouch(ctx context.Context, rawToken string) (TrustedDevice, error) {
+	tokenHash := sha256HexToken(rawToken)
+	return t.repo.twoFA().GetTrustedDeviceByTokenHash(ctx, tokenHash)
 }
 
 func (t *TwoFactorService) revokeTrustedDevice(ctx context.Context, deviceID, userID uuid.UUID, memberships []Membership) error {
@@ -913,6 +989,32 @@ func (t *TwoFactorService) revokeAllTrustedDevices(ctx context.Context, userID u
 }
 
 // --- helpers ---
+
+// checkCrossChallengeLimits enforces the S2 per-user and per-IP rate limits on
+// 2FA verification across challenges. Returns a domain.RateLimited error when
+// either limit is exceeded. ip may be a zero netip.Addr (limit skipped for IP).
+//
+// The per-user limit prevents an attacker from bypassing the per-challenge cap
+// of 5 by simply issuing a new challenge on each login attempt. The per-IP
+// limit prevents a single host from cycling through accounts.
+func (t *TwoFactorService) checkCrossChallengeLimits(ctx context.Context, userID uuid.UUID, ip *netip.Addr) error {
+	if t.limiter == nil {
+		return nil
+	}
+	// Per-user lockout.
+	if ok, retryAfter := t.limiter.Allow(ctx, "2fa-user:"+userID.String(), twoFAUserLockoutPerMinute); !ok {
+		_ = retryAfter
+		return domain.RateLimited("too_many_attempts", "too many 2FA verification attempts; wait before trying again")
+	}
+	// Per-IP lockout.
+	if ip != nil && ip.IsValid() {
+		if ok, retryAfter := t.limiter.Allow(ctx, "2fa-ip:"+ip.String(), twoFAIPLockoutPerMinute); !ok {
+			_ = retryAfter
+			return domain.RateLimited("too_many_attempts", "too many requests from this address; wait before trying again")
+		}
+	}
+	return nil
+}
 
 // bumpAttemptAndMaybeExpire increments the attempt counter. If the limit is
 // reached it locks the challenge via ExpireTwoFactorChallenge.

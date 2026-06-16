@@ -120,12 +120,16 @@ Two-factor authentication is optional per-user in v1. Superadmin accounts show a
 1. **Encrypted secret at rest.** TOTP shared secret encrypted with age X25519 before write; decrypted only at challenge verification time. Never returned to any API response after enrollment.
 2. **Hashed single-use recovery codes.** argon2id hash stored; plaintext shown exactly once at enrollment and on explicit regenerate. Consumed via `used_at` timestamp.
 3. **WebAuthn sign-count replay protection.** `webauthn_credentials.sign_count` is updated on every successful assertion. The go-webauthn library enforces that the asserted sign count is strictly greater than the stored value (authenticator clone detection).
-4. **Rate limiting.** Max 5 failed factor attempts per challenge; the challenge is locked (used_at stamped) after exhaustion. Recovery-code attempts are rate-limited per IP via the existing `RateLimiter` interface.
+4. **Rate limiting.** Max 5 failed factor attempts per challenge; the challenge is locked (used_at stamped) after exhaustion. Additionally, cross-challenge rate limits apply: 10 attempts per minute per user and 30 attempts per minute per IP. Both limits fire at factor-completion endpoints, preventing an attacker from cycling through many short-lived challenges to bypass the per-challenge lockout.
 5. **Re-auth required to disable.** Disabling 2FA requires the current password. A stolen session token alone cannot disable 2FA.
 6. **Audit events.** `ActionTOTPEnrolled`, `ActionTOTPVerified`, `ActionTOTPDisabled`, `ActionTOTPCodesRegenerated`, `ActionTOTPFailed` are added to the audit action constants in Phase 2.
-7. **Trusted-device cookie.** Issued as a separate `wpmgr_device` HttpOnly Secure cookie distinct from the session cookie. The token is stored hashed in `trusted_devices`. Revocation immediately invalidates all matching rows; the cookie is rendered invalid on the next login check.
-8. **Clock-skew tolerance.** TOTP validation uses `Skew: 1` (one period = 30 seconds in each direction). Not `Skew: 2` or higher.
+7. **Trusted-device cookie.** Issued as a separate `wpmgr_2fa_device` HttpOnly Secure cookie distinct from the session cookie. The token is stored as a SHA-256 hex hash in `trusted_devices.token_hash`. The cookie is bound to the authenticating user: a cookie belonging to user A presented during user B's login is ignored, not treated as a bypass. Revocation immediately invalidates all matching rows. All trusted devices are also revoked on password change or password reset.
+8. **Clock-skew tolerance.** TOTP validation uses a ±1-period (30 second) skew window. Each step in the window is probed individually with `Skew:0`; only the exact matched step is returned and burned for replay protection. Not `Skew:2` or higher.
 9. **No TOTP secret display after enrollment.** The secret is shown exactly during the enrollment wizard, then never returned by any endpoint.
+10. **Single 2FA gate.** All session-issuing paths (password login, verifyEmail, OIDC callback, Bootstrap first-user) route through a single internal gate function (`issueSessionOrChallenge`). There is no parallel path that can issue a session for a 2FA-enabled user without a completed challenge.
+11. **WebAuthn credential ownership assertion.** After `GetWebAuthnCredentialByCredentialID`, the service asserts that `credRow.UserID == challenge.UserID` before accepting the assertion. A credential registered by user A cannot satisfy user B's challenge even if the raw credential ID is known.
+12. **Production RP origin guard.** On production boot, `http://` and loopback/localhost WebAuthn RP origins are rejected with a fatal configuration error. This prevents misconfigured self-hosted deployments from weakening the WebAuthn binding.
+13. **Explicit authenticator selection.** `AuthenticatorSelection.UserVerification` is set to `protocol.VerificationPreferred` explicitly in `NewWebAuthn`, not left to the library default. UV-capable devices verify a PIN/biometric; older FIDO U2F keys remain compatible as a second factor on top of the WPMgr password.
 
 ### Standards
 
@@ -156,3 +160,18 @@ NIST SP 800-63B Section 5.1.5 (out-of-band authenticators) and Section 5.1.4 (si
 - Five new tables are added; all are pre-tenant (auth-flow scope), using `app.agent='on'` RLS.
 - The `go-webauthn/webauthn` library is v0.x and pinned to v0.17.4. API changes require a coordinated update.
 - `WPMGR_AUTH_WEBAUTHN_RPID` and `WPMGR_AUTH_WEBAUTHN_RPORIGINS` must be set by self-hosted operators when they deploy Phase 6. Defaults cover the hosted instance.
+
+---
+
+## Future hardening
+
+The following items were reviewed during the Phase 7 security gate and accepted as deferred for v1. They are tracked here so a future security review can find them quickly.
+
+**CSRF / Origin-check on unauthenticated 2FA endpoints (deferred — N4, N6).**  
+`POST /auth/2fa/*` endpoints are currently stateless (challenge UUID is the credential) and do not carry a CSRF token. The OIDC callback is protected by the OAuth state parameter, not a CSRF token. The risk is mitigated by the SameSite=Lax session cookie and the per-user/per-IP rate limits, but a CSRF double-submit token on the challenge-completion endpoints would add defence-in-depth. Deferred because the threat window (attacker must guess a valid challenge UUID while the user is simultaneously in the 2FA flow) is narrow. Add when implementing the dashboard Content-Security-Policy.
+
+**Re-authentication before adding a new WebAuthn credential (deferred — S5).**  
+Currently `POST /auth/2fa/webauthn/finish-registration` requires only a valid session, not the current password. An attacker with a stolen session cookie could add their own hardware key. Deferred pending UX review: requiring a password during credential registration is correct but may surprise users who just enrolled TOTP. Mitigated by the audit event (tracked to session) and the ability to list and revoke credentials from the Security settings. Implement before org-enforced 2FA is added.
+
+**Per-factor cross-challenge rate-limit granularity (minor improvement).**  
+The current cross-challenge rate limit is shared across all factor types (TOTP, recovery, WebAuthn). A future improvement would count TOTP and recovery attempts separately, so that exhausting recovery-code attempts does not lock out the TOTP path. Low priority: the 10/min per-user limit is wide enough that a legitimate user completing the normal flow never hits it.

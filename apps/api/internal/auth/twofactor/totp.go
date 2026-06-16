@@ -69,25 +69,35 @@ func (f *TOTPFactor) BeginLogin(_ context.Context, _ uuid.UUID) (any, error) {
 // responsibility because it requires a database transaction; this method only
 // validates the code's mathematical correctness.
 func (f *TOTPFactor) ValidateCode(code, secret string) (bool, int64, error) {
-	valid, err := totp.ValidateCustom(code, secret, time.Now(), totp.ValidateOpts{
-		Period:    30,
-		Skew:      1,
-		Digits:    otp.DigitsSix,
-		Algorithm: otp.AlgorithmSHA1,
-	})
-	if err != nil {
-		return false, 0, fmt.Errorf("totp validate: %w", err)
+	now := time.Now()
+	period := int64(30)
+	skew := int64(1)
+
+	// S3: probe each candidate step in the skew window and return the EXACT step
+	// that matched. Returning the current step regardless of which step actually
+	// matched was a replay-protection gap: if the user presented a code for
+	// step N-1, we stored step N as last_step, allowing them to use that same
+	// N-1 code again in the next call (because N-1 != N so it would not be
+	// rejected). By returning the actual matched step we burn the exact step the
+	// code was derived from, closing the replay window within the skew tolerance.
+	currentStep := now.Unix() / period
+	for delta := -skew; delta <= skew; delta++ {
+		candidate := currentStep + delta
+		t := time.Unix(candidate*period, 0)
+		ok, err := totp.ValidateCustom(code, secret, t, totp.ValidateOpts{
+			Period:    uint(period),
+			Skew:      0, // we handle skew ourselves to know which step matched
+			Digits:    otp.DigitsSix,
+			Algorithm: otp.AlgorithmSHA1,
+		})
+		if err != nil {
+			return false, 0, fmt.Errorf("totp validate: %w", err)
+		}
+		if ok {
+			return true, candidate, nil
+		}
 	}
-	// Compute the accepted time-step so the service can persist it for replay
-	// protection. We recompute it from the same formula the library uses
-	// internally: floor(unix_seconds / period). If the code matches a skewed
-	// step (current-1 or current+1) we still return the CURRENT step to avoid
-	// the edge-case where the user is in the same window but on a skewed step:
-	// the goal is to reject the SAME step from being used twice, not to reject
-	// slightly-skewed codes. Accepting the same code twice in a +-1 window is
-	// the accepted trade-off for clock-skew tolerance.
-	step := time.Now().Unix() / 30
-	return valid, step, nil
+	return false, 0, nil
 }
 
 // BeginRegistration generates a new TOTP secret for the given user + email and

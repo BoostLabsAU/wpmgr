@@ -106,7 +106,8 @@ func (h *Handler) twoFATOTPComplete(c *gin.Context) {
 		return
 	}
 
-	res, err := h.svc.VerifyTOTPChallenge(c.Request.Context(), challengeID, body.Code)
+	ip := clientAddr(c)
+	res, err := h.svc.VerifyTOTPChallenge(c.Request.Context(), challengeID, body.Code, &ip)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -117,8 +118,12 @@ func (h *Handler) twoFATOTPComplete(c *gin.Context) {
 		return
 	}
 
+	label := body.DeviceLabel
+	if label == "" {
+		label = labelFromUserAgent(c.Request.UserAgent())
+	}
 	if body.RememberDevice {
-		h.issueDeviceCookie(c, res)
+		h.issueDeviceCookieWithLabel(c, res, label)
 	}
 
 	remaining, _ := h.svc.CountRecoveryCodes(c.Request.Context(), res.User.ID)
@@ -150,7 +155,8 @@ func (h *Handler) twoFARecoveryComplete(c *gin.Context) {
 		return
 	}
 
-	res, remaining, err := h.svc.VerifyRecoveryCodeChallenge(c.Request.Context(), challengeID, body.Code)
+	ip := clientAddr(c)
+	res, remaining, err := h.svc.VerifyRecoveryCodeChallenge(c.Request.Context(), challengeID, body.Code, &ip)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -161,8 +167,12 @@ func (h *Handler) twoFARecoveryComplete(c *gin.Context) {
 		return
 	}
 
+	label := body.DeviceLabel
+	if label == "" {
+		label = labelFromUserAgent(c.Request.UserAgent())
+	}
 	if body.RememberDevice {
-		h.issueDeviceCookie(c, res)
+		h.issueDeviceCookieWithLabel(c, res, label)
 	}
 
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
@@ -226,7 +236,8 @@ func (h *Handler) twoFAWebAuthnFinish(c *gin.Context) {
 		return
 	}
 
-	res, err := h.svc.FinishWebAuthnChallenge(c.Request.Context(), challengeID, body.Assertion)
+	ip := clientAddr(c)
+	res, err := h.svc.FinishWebAuthnChallenge(c.Request.Context(), challengeID, body.Assertion, &ip)
 	if err != nil {
 		httpx.Error(c, err)
 		return
@@ -237,8 +248,12 @@ func (h *Handler) twoFAWebAuthnFinish(c *gin.Context) {
 		return
 	}
 
+	label := body.DeviceLabel
+	if label == "" {
+		label = labelFromUserAgent(c.Request.UserAgent())
+	}
 	if body.RememberDevice {
-		h.issueDeviceCookie(c, res)
+		h.issueDeviceCookieWithLabel(c, res, label)
 	}
 
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
@@ -682,15 +697,56 @@ func (h *Handler) twoFARevokeAllTrustedDevices(c *gin.Context) {
 // Trusted-device cookie helpers
 // ---------------------------------------------------------------------------
 
-// issueDeviceCookie calls IssueTrustedDevice and sets the wpmgr_2fa_device
-// cookie. Failures are silently ignored: the user is already authenticated;
-// a failed device-trust write must not break the login response.
-func (h *Handler) issueDeviceCookie(c *gin.Context, res LoginResult) {
+// labelFromUserAgent derives a human-readable device label from the User-Agent
+// header. It returns a short browser/OS description. Falls back to "browser"
+// when the UA is empty or unrecognised.
+//
+// N5: callers use this when the client does not supply an explicit device_label.
+func labelFromUserAgent(ua string) string {
+	if ua == "" {
+		return "browser"
+	}
+	// Minimal heuristic: identify the most common browser families and OS.
+	// This avoids a third-party UA parser dependency.
+	switch {
+	case containsAny(ua, "Firefox/"):
+		return "Firefox"
+	case containsAny(ua, "Edg/", "Edge/"):
+		return "Edge"
+	case containsAny(ua, "Chrome/", "CriOS/"):
+		return "Chrome"
+	case containsAny(ua, "Safari/") && !containsAny(ua, "Chrome/"):
+		return "Safari"
+	default:
+		return "browser"
+	}
+}
+
+func containsAny(s string, substrs ...string) bool {
+	for _, sub := range substrs {
+		if len(sub) > 0 {
+			for i := 0; i+len(sub) <= len(s); i++ {
+				if s[i:i+len(sub)] == sub {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// issueDeviceCookieWithLabel calls IssueTrustedDevice with the given label and
+// sets the wpmgr_2fa_device cookie. Failures are silently ignored: the user is
+// already authenticated; a failed device-trust write must not break the response.
+//
+// N5: callers derive the label from the client-supplied device_label field,
+// falling back to labelFromUserAgent(). The old hardcoded "browser" label is gone.
+func (h *Handler) issueDeviceCookieWithLabel(c *gin.Context, res LoginResult, label string) {
 	ip := clientAddr(c)
 	ua := c.Request.UserAgent()
 
 	memberships := res.Memberships
-	rawToken, _, err := h.svc.IssueTrustedDevice(c.Request.Context(), res.User.ID, "browser", ua, &ip, memberships)
+	rawToken, _, err := h.svc.IssueTrustedDevice(c.Request.Context(), res.User.ID, label, ua, &ip, memberships)
 	if err != nil {
 		return // best-effort; do not fail the authenticated response
 	}
@@ -704,6 +760,12 @@ func (h *Handler) issueDeviceCookie(c *gin.Context, res LoginResult) {
 		SameSite: http.SameSiteLaxMode,
 		MaxAge:   int(trustedDeviceDefaultTTL / time.Second),
 	})
+}
+
+// issueDeviceCookie is a convenience wrapper that derives the label from the
+// User-Agent. Kept for any future callers that do not have an explicit label.
+func (h *Handler) issueDeviceCookie(c *gin.Context, res LoginResult) {
+	h.issueDeviceCookieWithLabel(c, res, labelFromUserAgent(c.Request.UserAgent()))
 }
 
 // clearDeviceCookie expires the trusted-device cookie immediately.

@@ -195,7 +195,17 @@ END $$;
 -- -----------------------------------------------------------------------
 -- trusted_devices
 -- "Remember this device" entries per user (30-day window by default).
--- token_hash: argon2id hash of the opaque cookie value.
+-- token_hash: SHA-256 (hex) of the opaque 32-byte random cookie value.
+--   The raw token is set as the cookie; only the SHA-256 digest is stored
+--   so a DB dump cannot be used to forge device cookies (analogous to the
+--   password_reset_tokens.token_hash design). argon2id is NOT used here
+--   because trusted-device lookup is on a fast path (every 2FA login with
+--   a returning device) and SHA-256 over a high-entropy (256-bit) random
+--   token provides the same security guarantee without the argon2id cost.
+-- challenge_nonce in two_factor_challenges: 256-bit random hex string;
+--   not currently used as a second secret in the verification flow (the
+--   challenge UUID is the bearer credential). Retained as vestigial for
+--   a potential future HMAC-binding enhancement.
 -- revoked_at: soft-delete (NULL = active).
 -- -----------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS "public"."trusted_devices" (

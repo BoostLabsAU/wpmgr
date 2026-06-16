@@ -114,6 +114,7 @@ const SETTINGS_GROUP: NavGroup = {
   // page later, at which point the `to` here can flip to that.
   items: [
     { label: "Account", to: "/settings/account" },
+    { label: "Security", to: "/settings/security" },
     { label: "Organisation", to: "/settings/organization" },
     { label: "API keys", to: "/settings/api-keys" },
     { label: "Destinations", to: "/settings/destinations" },

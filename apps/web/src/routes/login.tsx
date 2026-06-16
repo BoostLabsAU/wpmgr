@@ -80,7 +80,23 @@ function LoginPage() {
     setResendSent(false);
 
     await loginMutation.mutateAsync(values, {
-      onSuccess: () => {
+      onSuccess: (result) => {
+        if (result.kind === "2fa_required") {
+          // Navigate to the challenge page, passing the challenge UUID and
+          // which factors are available as search params.
+          void navigate({
+            to: "/2fa-challenge",
+            search: {
+              challenge: result.challenge,
+              totp: result.factors.totp,
+              webauthn: result.factors.webauthn,
+              recovery_factor: result.factors.recovery,
+              redirect: search.redirect,
+            },
+          });
+          return;
+        }
+
         // Force a fresh /auth/me so the middleware-resolved role/scope/portal
         // fields are present (the login response Me may not carry them yet).
         void queryClient

@@ -18,6 +18,7 @@ import { Route as LoginRouteImport } from './routes/login'
 import { Route as ForgotPasswordRouteImport } from './routes/forgot-password'
 import { Route as AcceptRouteImport } from './routes/accept'
 import { Route as AuthedRouteImport } from './routes/_authed'
+import { Route as R2faChallengeRouteImport } from './routes/2fa-challenge'
 import { Route as PortalRouteRouteImport } from './routes/portal/route'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as PortalIndexRouteImport } from './routes/portal/index'
@@ -38,6 +39,7 @@ import { Route as PortalSitesSiteIdRouteImport } from './routes/portal/sites.$si
 import { Route as AuthedUpdatesRunIdRouteImport } from './routes/_authed/updates/$runId'
 import { Route as AuthedSitesSiteIdRouteImport } from './routes/_authed/sites/$siteId'
 import { Route as AuthedSettingsSmtpRouteImport } from './routes/_authed/settings/smtp'
+import { Route as AuthedSettingsSecurityRouteImport } from './routes/_authed/settings/security'
 import { Route as AuthedSettingsOrganizationRouteImport } from './routes/_authed/settings/organization'
 import { Route as AuthedSettingsMembersRouteImport } from './routes/_authed/settings/members'
 import { Route as AuthedSettingsDestinationsRouteImport } from './routes/_authed/settings/destinations'
@@ -108,6 +110,11 @@ const AcceptRoute = AcceptRouteImport.update({
 } as any)
 const AuthedRoute = AuthedRouteImport.update({
   id: '/_authed',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const R2faChallengeRoute = R2faChallengeRouteImport.update({
+  id: '/2fa-challenge',
+  path: '/2fa-challenge',
   getParentRoute: () => rootRouteImport,
 } as any)
 const PortalRouteRoute = PortalRouteRouteImport.update({
@@ -208,6 +215,11 @@ const AuthedSitesSiteIdRoute = AuthedSitesSiteIdRouteImport.update({
 const AuthedSettingsSmtpRoute = AuthedSettingsSmtpRouteImport.update({
   id: '/settings/smtp',
   path: '/settings/smtp',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedSettingsSecurityRoute = AuthedSettingsSecurityRouteImport.update({
+  id: '/settings/security',
+  path: '/settings/security',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedSettingsOrganizationRoute =
@@ -361,6 +373,7 @@ const AuthedClientsClientIdMembersRoute =
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/portal': typeof PortalRouteRouteWithChildren
+  '/2fa-challenge': typeof R2faChallengeRoute
   '/accept': typeof AcceptRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -388,6 +401,7 @@ export interface FileRoutesByFullPath {
   '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/settings/security': typeof AuthedSettingsSecurityRoute
   '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
@@ -417,6 +431,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/2fa-challenge': typeof R2faChallengeRoute
   '/accept': typeof AcceptRoute
   '/forgot-password': typeof ForgotPasswordRoute
   '/login': typeof LoginRoute
@@ -443,6 +458,7 @@ export interface FileRoutesByTo {
   '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/settings/security': typeof AuthedSettingsSecurityRoute
   '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/portal/sites/$siteId': typeof PortalSitesSiteIdRoute
@@ -473,6 +489,7 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/portal': typeof PortalRouteRouteWithChildren
+  '/2fa-challenge': typeof R2faChallengeRoute
   '/_authed': typeof AuthedRouteWithChildren
   '/accept': typeof AcceptRoute
   '/forgot-password': typeof ForgotPasswordRoute
@@ -501,6 +518,7 @@ export interface FileRoutesById {
   '/_authed/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/_authed/settings/members': typeof AuthedSettingsMembersRoute
   '/_authed/settings/organization': typeof AuthedSettingsOrganizationRoute
+  '/_authed/settings/security': typeof AuthedSettingsSecurityRoute
   '/_authed/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/_authed/sites/$siteId': typeof AuthedSitesSiteIdRouteWithChildren
   '/_authed/updates/$runId': typeof AuthedUpdatesRunIdRoute
@@ -533,6 +551,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/portal'
+    | '/2fa-challenge'
     | '/accept'
     | '/forgot-password'
     | '/login'
@@ -560,6 +579,7 @@ export interface FileRouteTypes {
     | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
+    | '/settings/security'
     | '/settings/smtp'
     | '/sites/$siteId'
     | '/updates/$runId'
@@ -589,6 +609,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/2fa-challenge'
     | '/accept'
     | '/forgot-password'
     | '/login'
@@ -615,6 +636,7 @@ export interface FileRouteTypes {
     | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
+    | '/settings/security'
     | '/settings/smtp'
     | '/updates/$runId'
     | '/portal/sites/$siteId'
@@ -644,6 +666,7 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/portal'
+    | '/2fa-challenge'
     | '/_authed'
     | '/accept'
     | '/forgot-password'
@@ -672,6 +695,7 @@ export interface FileRouteTypes {
     | '/_authed/settings/destinations'
     | '/_authed/settings/members'
     | '/_authed/settings/organization'
+    | '/_authed/settings/security'
     | '/_authed/settings/smtp'
     | '/_authed/sites/$siteId'
     | '/_authed/updates/$runId'
@@ -703,6 +727,7 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   PortalRouteRoute: typeof PortalRouteRouteWithChildren
+  R2faChallengeRoute: typeof R2faChallengeRoute
   AuthedRoute: typeof AuthedRouteWithChildren
   AcceptRoute: typeof AcceptRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
@@ -777,6 +802,13 @@ declare module '@tanstack/react-router' {
       path: ''
       fullPath: '/'
       preLoaderRoute: typeof AuthedRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/2fa-challenge': {
+      id: '/2fa-challenge'
+      path: '/2fa-challenge'
+      fullPath: '/2fa-challenge'
+      preLoaderRoute: typeof R2faChallengeRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/portal': {
@@ -917,6 +949,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/smtp'
       fullPath: '/settings/smtp'
       preLoaderRoute: typeof AuthedSettingsSmtpRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/settings/security': {
+      id: '/_authed/settings/security'
+      path: '/settings/security'
+      fullPath: '/settings/security'
+      preLoaderRoute: typeof AuthedSettingsSecurityRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/settings/organization': {
@@ -1199,6 +1238,7 @@ interface AuthedRouteChildren {
   AuthedSettingsDestinationsRoute: typeof AuthedSettingsDestinationsRoute
   AuthedSettingsMembersRoute: typeof AuthedSettingsMembersRoute
   AuthedSettingsOrganizationRoute: typeof AuthedSettingsOrganizationRoute
+  AuthedSettingsSecurityRoute: typeof AuthedSettingsSecurityRoute
   AuthedSettingsSmtpRoute: typeof AuthedSettingsSmtpRoute
   AuthedSitesSiteIdRoute: typeof AuthedSitesSiteIdRouteWithChildren
   AuthedUpdatesRunIdRoute: typeof AuthedUpdatesRunIdRoute
@@ -1227,6 +1267,7 @@ const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedSettingsDestinationsRoute: AuthedSettingsDestinationsRoute,
   AuthedSettingsMembersRoute: AuthedSettingsMembersRoute,
   AuthedSettingsOrganizationRoute: AuthedSettingsOrganizationRoute,
+  AuthedSettingsSecurityRoute: AuthedSettingsSecurityRoute,
   AuthedSettingsSmtpRoute: AuthedSettingsSmtpRoute,
   AuthedSitesSiteIdRoute: AuthedSitesSiteIdRouteWithChildren,
   AuthedUpdatesRunIdRoute: AuthedUpdatesRunIdRoute,
@@ -1243,6 +1284,7 @@ const AuthedRouteWithChildren =
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   PortalRouteRoute: PortalRouteRouteWithChildren,
+  R2faChallengeRoute: R2faChallengeRoute,
   AuthedRoute: AuthedRouteWithChildren,
   AcceptRoute: AcceptRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,

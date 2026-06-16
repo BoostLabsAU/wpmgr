@@ -5,6 +5,51 @@ import (
 	"strings"
 )
 
+// validateWebAuthnOrigins checks that every WPMGR_AUTH_WEBAUTHN_RPORIGINS entry
+// uses HTTPS and is not a loopback/localhost origin. Called by Validate in
+// production only. Self-hosted operators who deploy HTTP or use localhost must
+// set WPMGR_ENV != "production".
+//
+// N3: mirrors the project's existing insecure-TLS loud-warn/fail pattern.
+func validateWebAuthnOrigins(origins string) *Issue {
+	if origins == "" {
+		return nil
+	}
+	for _, o := range strings.Split(origins, ",") {
+		o = strings.TrimSpace(o)
+		if o == "" {
+			continue
+		}
+		lower := strings.ToLower(o)
+		if strings.HasPrefix(lower, "http://") {
+			return &Issue{
+				Name:   "WPMGR_AUTH_WEBAUTHN_RPORIGINS",
+				Reason: "contains an http:// origin (" + o + ") — WebAuthn requires HTTPS in production; use https://",
+			}
+		}
+		// Detect loopback / localhost in the origin host.
+		host := lower
+		if idx := strings.Index(host, "://"); idx >= 0 {
+			host = host[idx+3:]
+		}
+		// Strip port.
+		if idx := strings.LastIndex(host, ":"); idx >= 0 {
+			host = host[:idx]
+		}
+		// Strip path.
+		if idx := strings.IndexByte(host, '/'); idx >= 0 {
+			host = host[:idx]
+		}
+		if host == "localhost" || host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".localhost") {
+			return &Issue{
+				Name:   "WPMGR_AUTH_WEBAUTHN_RPORIGINS",
+				Reason: "contains a loopback/localhost origin (" + o + ") — not permitted in production; use your public domain",
+			}
+		}
+	}
+	return nil
+}
+
 // Issue describes a single configuration problem detected by Validate. Name is
 // the environment-variable name (safe to log and surface to operators); Reason
 // is a short, human-readable explanation that NEVER contains a secret value.
@@ -74,6 +119,14 @@ func Validate(cfg Config) []Issue {
 				Name:   "WPMGR_SITE_DEST_AGE_SECRET",
 				Reason: "required in production — an empty value uses an ephemeral key that orphans stored secrets on restart",
 			})
+		}
+	}
+
+	// 4. WebAuthn RP origins (production-only: must not be http:// or loopback).
+	// N3: mirrors the insecure-TLS loud-fail pattern for other production guards.
+	if cfg.IsProduction() {
+		if issue := validateWebAuthnOrigins(cfg.Auth.WebAuthnRPOrigins); issue != nil {
+			issues = append(issues, *issue)
 		}
 	}
 

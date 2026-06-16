@@ -13,6 +13,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 )
@@ -123,11 +124,21 @@ func ParseRPOrigins(csv string) []string {
 // Returns an error if the go-webauthn library rejects the configuration
 // (e.g. empty RPID or malformed origin). Callers should call this once at
 // application startup and treat an error as a fatal misconfiguration.
+//
+// N1: AuthenticatorSelection is set explicitly to UserVerificationPreferred.
+// We do NOT leave it at the library default (which may or may not match what
+// the comments claim). UserVerificationPreferred is correct for a 2FA scenario:
+// the device is the second factor on top of a password, so UV-capable devices
+// will still verify, but older FIDO U2F keys that do not support a PIN can also
+// function. The comment in webauthn_factor.go documents this security decision.
 func NewWebAuthn(cfg Config) (*webauthn.WebAuthn, error) {
 	wc := &webauthn.Config{
 		RPID:          cfg.RPID,
 		RPDisplayName: cfg.RPDisplayName,
 		RPOrigins:     cfg.RPOrigins,
+		AuthenticatorSelection: protocol.AuthenticatorSelection{
+			UserVerification: protocol.VerificationPreferred,
+		},
 	}
 	return webauthn.New(wc)
 }
