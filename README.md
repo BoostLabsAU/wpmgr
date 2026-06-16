@@ -79,6 +79,7 @@ WPMgr lets you enroll, monitor, update, back up, and secure a fleet of WordPress
 
 ### Monitoring & health
 
+- **Sites grid view with screenshots** — A list/grid toggle on the Sites dashboard. Each grid card is led by a real screenshot captured server-side (headless Chromium in the media-encoder, SSRF-guarded) and refreshed on connect, weekly, and on demand. Cards show capability status (page cache, object cache, HTTPS, backups, multisite), version/host/client/tag metadata, uptime, latency, SSL expiry, and backup health. The Status and Tags filters compose with search and persist in the URL. See [docs/features/sites.md](./docs/features/sites.md).
 - **Active uptime monitoring** — SSRF-hardened probes classify up/down with a full timing breakdown: DNS, connect, TLS handshake, TTFB, total.
 - **Uptime % + latency charts** — Windowed reports over 7 d / 30 d / 90 d; downsampled server-side. Tenant-wide status summary across the whole fleet.
 - **TLS certificate tracking** — Expiry, issuer, and subject captured on every HTTPS probe; flags "renew soon" at < 14 days.
@@ -98,6 +99,7 @@ WPMgr lets you enroll, monitor, update, back up, and secure a fleet of WordPress
 
 ### Security
 
+- **Dashboard two-factor authentication** — Protect your account with a TOTP authenticator app and/or a WebAuthn passkey or security key. A guided setup wizard walks through QR scan (or manual key entry), live-code confirmation, and saving 10 one-time recovery codes. A second-step challenge appears at login with an optional "remember this device for 30 days" (revocable per device). The Settings → Security screen manages authenticator apps, passkeys, recovery codes, and trusted devices. TOTP secret is age-encrypted at rest; recovery codes are argon2id-hashed and single-use; cloned-authenticator detection (WebAuthn sign-count); brute-force lockout; re-auth required to disable; all events in the audit log. Every session-issuing path (password login, SSO, email verify) gates through one function — no parallel path can bypass it. Self-hosted operators must set `WPMGR_AUTH_WEBAUTHN_RPID` and `WPMGR_AUTH_WEBAUTHN_RP_ORIGINS` for passkeys to work on their own domain; the authenticator-app factor works on any origin. See [docs/features/2fa.md](./docs/features/2fa.md).
 - **Core file-integrity scan** — Resumable, cursor-paginated MD5 walk diffed against the official WordPress.org Checksums API for the site's exact version + locale.
 - **Three finding types** — `core_modified` (high), `core_missing` (medium), `core_unknown_injected` (high). Only flags within core paths; operator-mutated files (`wp-content/`, `wp-config.php`, cache drop-ins, etc.) are allow-listed to minimize false positives.
 - **Checksum caching** — 30-day positive TTL (releases are immutable), 6-hour negative TTL, transparent `en_US` locale fallback. Repeated fleet scans never hammer the public wp.org API.

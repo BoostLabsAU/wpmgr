@@ -169,6 +169,17 @@ export const FEATURES: {
             "TLS expiry warnings and PHP fatal tracking",
           ],
         },
+        {
+          icon: "LayoutGrid",
+          title: "Sites grid and screenshots",
+          summary: "A list or grid view of the fleet, each card led by a live screenshot of the site.",
+          bullets: [
+            "Screenshot captured server-side, refreshed weekly and on demand",
+            "Capability icons: cache, object cache, HTTPS, backups, multisite",
+            "Uptime, latency, SSL expiry, and backup health on the card",
+            "Status and tags filters compose and persist in the URL",
+          ],
+        },
       ],
     },
     {
@@ -377,6 +388,17 @@ export const FEATURES: {
             "Verification link before any access",
             "No manual provisioning",
             "Lock it down when onboarding is done",
+          ],
+        },
+        {
+          icon: "ShieldCheck",
+          title: "Dashboard two-factor auth",
+          summary: "Protect dashboard access with an authenticator app or a passkey.",
+          bullets: [
+            "TOTP and WebAuthn passkeys, set up in a guided wizard",
+            "Remember a device for 30 days, revoke any device instantly",
+            "Recovery codes for lost-device access, single-use and hashed",
+            "Secret encrypted at rest, all events in the audit log",
           ],
         },
       ],
