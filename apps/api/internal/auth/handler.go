@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -28,11 +29,21 @@ type Handler struct {
 	sessions  *SessionManager
 	oidc      *OIDCProvider
 	newTenant TenantCreator
+	// secureCookies mirrors cfg.IsProduction(). Controls the Secure flag on
+	// the trusted-device cookie. Set after construction via SetSecureCookies.
+	secureCookies bool
 }
 
 // NewHandler builds an auth Handler.
 func NewHandler(svc *Service, sessions *SessionManager, oidc *OIDCProvider, newTenant TenantCreator) *Handler {
 	return &Handler{svc: svc, sessions: sessions, oidc: oidc, newTenant: newTenant}
+}
+
+// SetSecureCookies configures whether the Secure flag is set on the
+// trusted-device cookie. Call this after NewHandler, before serving.
+// Pass cfg.IsProduction() at startup.
+func (h *Handler) SetSecureCookies(secure bool) {
+	h.secureCookies = secure
 }
 
 // Register mounts the auth routes on the root engine group.
@@ -52,6 +63,8 @@ func (h *Handler) Register(r gin.IRouter) {
 	g.POST("/verification/resend", h.resendVerification)
 	g.GET("/oidc/login", h.oidcLogin)
 	g.GET("/oidc/callback", h.oidcCallback)
+	// ADR-056 Phase 3 — dashboard 2FA challenge-completion + management.
+	h.RegisterTwoFactor(g)
 }
 
 type loginBody struct {
@@ -70,8 +83,58 @@ func (h *Handler) login(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
-	if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
-		httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+
+	// ADR-056 Phase 3: two-factor enforcement.
+	// INVARIANT: a 2FA-enabled user must NEVER receive a full session without
+	// either completing a factor challenge or presenting a valid trusted-device
+	// cookie. The two paths are:
+	//
+	//   1. two_factor_enabled == false: issue session directly (unchanged path).
+	//   2. two_factor_enabled == true:
+	//      a. Valid trusted-device cookie present AND bound to this user: bypass
+	//         challenge, issue session.
+	//      b. No valid trusted device (or device bound to a different user):
+	//         return 202 + challenge nonce; no session.
+	if res.User.TwoFactorEnabled {
+		// Check for a valid trusted-device cookie (bypass path).
+		//
+		// INVARIANT (B1): the device record's user_id MUST match the user who just
+		// supplied the correct password (res.User.ID). A cookie issued for user A
+		// must never bypass the 2FA challenge for user B, even if user B's password
+		// is also correct. Without this binding check, an attacker who knows user
+		// B's password and possesses user A's device cookie could sign in as B
+		// without completing a factor challenge.
+		//
+		// On a mismatch we silently fall through to the normal 202-challenge path
+		// (we do NOT error) so we neither reveal that the cookie belonged to a
+		// different user nor break the login UX for the correct user.
+		//
+		// TouchTrustedDevice (last_used_at bump) is intentionally called AFTER the
+		// ownership check so it only stamps the correct user's device record.
+		if rawToken := readDeviceCookie(c); rawToken != "" {
+			device, verr := h.svc.VerifyTrustedDeviceNoTouch(c.Request.Context(), rawToken)
+			if verr == nil && device.ID != uuid.Nil && device.UserID == res.User.ID {
+				// Ownership confirmed: bump last_used_at now, then issue session.
+				_ = h.svc.TouchTrustedDevice(c.Request.Context(), device.ID)
+				if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
+					httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+					return
+				}
+				out := toMe(res.User, res.Memberships, res.ActiveTenant)
+				c.JSON(http.StatusOK, &out)
+				return
+			}
+			// Trusted-device check failed or owner mismatch: fall through to
+			// challenge issuance. The cookie may be expired, revoked, tampered,
+			// or bound to a different user; proceed normally without leaking why.
+		}
+	}
+
+	// issueSessionOrChallenge enforces the B2 invariant for the remaining paths:
+	// for a 2FA-enabled user it creates a challenge and returns 202; for a non-2FA
+	// user it issues the session directly. The trusted-device bypass above already
+	// handled the 2FA+valid-device case and returned early.
+	if !h.issueSessionOrChallenge(c, res, "") {
 		return
 	}
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
@@ -104,14 +167,17 @@ func (h *Handler) register(c *gin.Context) {
 	// yet): it is created verified + active and gets an immediate session. Every
 	// later signup is OPEN self-serve, returns a generic pending response, and
 	// must verify by email before logging in (ADR-045 Phase 3).
+	//
+	// Bootstrap creates a brand-new user who cannot yet have 2FA enrolled, so
+	// the 2FA gate here is defensive (makes the code correct uniformly) rather
+	// than protecting against a real threat today.
 	if count, _ := h.svc.CountUsers(c.Request.Context()); count == 0 {
 		res, err := h.svc.Bootstrap(c.Request.Context(), in, h.newTenant)
 		if err != nil {
 			httpx.Error(c, err)
 			return
 		}
-		if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
-			httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+		if !h.issueSessionOrChallenge(c, res, "") {
 			return
 		}
 		out := toMe(res.User, res.Memberships, res.ActiveTenant)
@@ -128,8 +194,72 @@ func (h *Handler) register(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"ok": true, "pending": true})
 }
 
+// issueSessionOrChallenge is the SINGLE session-issuing helper used by every
+// human login path. It enforces the core 2FA invariant:
+//
+//	INVARIANT (B2): no human login path may issue a full session for a
+//	2FA-enrolled user without a completed factor challenge.
+//
+// For non-2FA users it calls sessions.Login and writes the 200+Me response.
+//
+// For 2FA-enabled users it creates a challenge and returns 202+{challenge,factors}
+// instead of calling sessions.Login. It returns issued=false in that case so
+// the caller knows NOT to write any further response.
+//
+// For the OIDC callback path (a browser redirect, not JSON) the caller must
+// pass oidcRedirectBase as a non-empty string; the handler then redirects to
+// <oidcRedirectBase>/login?two_factor_challenge=<challengeID> instead of
+// writing a JSON 202. For all other paths pass oidcRedirectBase="".
+func (h *Handler) issueSessionOrChallenge(c *gin.Context, res LoginResult, oidcRedirectBase string) (issued bool) {
+	if res.User.TwoFactorEnabled {
+		ip := clientAddr(c)
+		result, cherr := h.svc.RequestTwoFactorChallenge(c.Request.Context(), res.User.ID, &ip)
+		if cherr != nil {
+			httpx.Error(c, cherr)
+			return false
+		}
+		if oidcRedirectBase != "" {
+			// Browser redirect flow (OIDC callback): redirect to the SPA 2FA
+			// challenge route carrying the challenge ID AND the available factors as
+			// query params, matching the /2fa-challenge route's search schema so the
+			// page renders the right methods without a separate lookup.
+			// Contract documented in docs/2fa-api-contract.md §OIDC redirect.
+			q := url.Values{}
+			q.Set("challenge", result.ChallengeID.String())
+			q.Set("totp", strconv.FormatBool(result.Factors.TOTP))
+			q.Set("webauthn", strconv.FormatBool(result.Factors.WebAuthnCount > 0))
+			q.Set("recovery_factor", "true")
+			target := oidcRedirectBase + "/2fa-challenge?" + q.Encode()
+			c.Redirect(http.StatusFound, target)
+		} else {
+			c.JSON(http.StatusAccepted, gin.H{
+				"two_factor_required": true,
+				"challenge":           result.ChallengeID,
+				"factors": gin.H{
+					"totp":     result.Factors.TOTP,
+					"webauthn": result.Factors.WebAuthnCount > 0,
+					"recovery": true,
+				},
+			})
+		}
+		return false
+	}
+
+	// No second factor: issue the session directly.
+	if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
+		httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+		return false
+	}
+	return true
+}
+
 // verifyEmail handles POST /auth/verify-email. Consumes the token, activates the
 // account, and establishes a session so the user lands logged in.
+//
+// A user normally cannot have 2FA already enrolled before email verification
+// (enrollment requires a full session), but we run the gate defensively via
+// issueSessionOrChallenge to make this path future-proof and to satisfy the
+// B2 invariant uniformly across all session-issuing paths.
 func (h *Handler) verifyEmail(c *gin.Context) {
 	var body struct {
 		Token string `json:"token"`
@@ -143,8 +273,7 @@ func (h *Handler) verifyEmail(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
-	if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
-		httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+	if !h.issueSessionOrChallenge(c, res, "") {
 		return
 	}
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
@@ -184,6 +313,12 @@ func (h *Handler) logout(c *gin.Context) {
 		httpx.Error(c, domain.Internal("logout_failed", "failed to destroy session").WithCause(err))
 		return
 	}
+	// ADR-056: do NOT clear the trusted-device cookie on logout. "Remember this
+	// device for 30 days" is meant to survive sign-out: it lets the user skip the
+	// SECOND factor (never the password) on a known device. Clearing it here made
+	// every subsequent sign-in re-prompt for 2FA and mint a duplicate trusted
+	// device. Trusted devices are invalidated instead on password change/reset
+	// (the compromise lever) and on explicit revoke or 2FA-disable.
 	c.Status(http.StatusNoContent)
 }
 
@@ -347,10 +482,21 @@ func (h *Handler) oidcCallback(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
-	if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
-		httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+
+	// B2 INVARIANT: if the OIDC user has 2FA enrolled, we must NOT issue a full
+	// session here. The OIDC callback is a browser redirect, so we redirect the
+	// browser to the SPA challenge route instead of writing a JSON 202. The SPA
+	// reads the two_factor_challenge query parameter and enters the challenge UI.
+	// See docs/2fa-api-contract.md §"OIDC callback redirect".
+	//
+	// h.svc.baseURL is the public base URL (WPMGR_PUBLIC_BASE_URL). When 2FA is
+	// not enrolled issueSessionOrChallenge issues the session and returns true;
+	// we then redirect to the SPA home (the callback was always a browser redirect).
+	if !h.issueSessionOrChallenge(c, res, h.svc.baseURL) {
+		// 2FA challenge redirect was already written by issueSessionOrChallenge.
 		return
 	}
+	// Non-2FA path: session was issued; redirect the browser to the SPA home.
 	out := toMe(res.User, res.Memberships, res.ActiveTenant)
 	c.JSON(http.StatusOK, &out)
 }
@@ -435,12 +581,13 @@ func enrichMePortal(ctx context.Context, me *gen.Me, p domain.Principal, repo *R
 
 func toAPIUser(u User) gen.User {
 	out := gen.User{
-		ID:           u.ID,
-		Email:        u.Email,
-		Name:         u.Name,
-		CreatedAt:    u.CreatedAt,
-		UpdatedAt:    u.UpdatedAt,
-		IsSuperadmin: gen.NewOptBool(u.IsSuperadmin),
+		ID:               u.ID,
+		Email:            u.Email,
+		Name:             u.Name,
+		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        u.UpdatedAt,
+		IsSuperadmin:     gen.NewOptBool(u.IsSuperadmin),
+		TwoFactorEnabled: gen.NewOptBool(u.TwoFactorEnabled),
 	}
 	if u.LastLoginAt != nil {
 		out.LastLoginAt = gen.NewOptDateTime(*u.LastLoginAt)

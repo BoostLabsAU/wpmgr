@@ -13,28 +13,35 @@
 // be stopped via Stop() when capture is complete.
 //
 // Security invariants enforced by this proxy:
-//   1. Every connect (top nav + sub-resources + redirects) goes through the SSRF
-//      dialer — private IPs, link-local, and loopback are rejected at dial time.
-//   2. Only tcp network is accepted — no unix socket connections.
-//   3. The proxy only implements CONNECT (used by Chrome in --proxy-server mode)
-//      and plain GET (for http:// URLs). https:// targets use CONNECT tunnels
-//      whose inner TLS is terminated between Chromium and the target; the proxy
-//      sees only the CONNECT host:port, which is what we validate.
-//   4. The proxy is strictly loopback-bound: it never listens on a non-loopback
-//      interface and must not be reachable from outside the process.
+//  1. Every connect (top nav + sub-resources + redirects) goes through the SSRF
+//     dialer — private IPs, link-local, and loopback are rejected at dial time.
+//  2. Only tcp4 network is used — IPv4 only (correct for Cloud Run which has no
+//     IPv6 egress; avoids dual-stack blackhole timeouts on hosts with AAAA records).
+//     The ssrf.Safe Control hook still validates the resolved IPv4 address.
+//  3. The proxy only implements CONNECT (used by Chrome in --proxy-server mode)
+//     and plain GET (for http:// URLs). https:// targets use CONNECT tunnels
+//     whose inner TLS is terminated between Chromium and the target; the proxy
+//     sees only the CONNECT host:port, which is what we validate.
+//  4. The proxy is strictly loopback-bound: it never listens on a non-loopback
+//     interface and must not be reachable from outside the process.
+//  5. The server is HTTP/1.1-only (TLSNextProto: empty map). HTTP/2 does not
+//     support Hijack; confining to HTTP/1.1 ensures hijack always succeeds and
+//     CONNECT requests are routed via a bare http.HandlerFunc (no ServeMux path
+//     matching, which can mis-route authority-form CONNECT URIs).
 package ssrfproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"time"
 
 	"code.dny.dev/ssrf"
-	"net/netip"
 )
 
 // Proxy is a loopback-bound CONNECT proxy whose dialer enforces the SSRF guard.
@@ -76,17 +83,34 @@ func New(logger *slog.Logger) (*Proxy, error) {
 	}
 
 	p := &Proxy{listener: ln, logger: logger}
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+	// Use a bare http.HandlerFunc — NOT http.NewServeMux().
+	//
+	// http.ServeMux routes requests by matching the URL path. For HTTP CONNECT
+	// the request-URI is in "authority form" (host:port, no leading slash), so
+	// ServeMux does NOT reliably match it against the "/" catch-all; on some Go
+	// versions the CONNECT request falls through to a 404 or is rejected before
+	// reaching our handler. The bare HandlerFunc receives every request regardless
+	// of URI form and dispatches on Method only.
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodConnect {
 			p.handleCONNECT(w, r, dialer)
 		} else {
 			p.handleHTTP(w, r, dialer)
 		}
 	})
+
 	p.srv = &http.Server{
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Confine to HTTP/1.1. HTTP/2 does not support connection hijacking
+		// (ResponseWriter does not implement http.Hijacker under h2), so a CONNECT
+		// request over an HTTP/2 connection would hit the "hijack not supported"
+		// path and fail silently. An empty TLSNextProto map tells net/http NOT to
+		// auto-configure h2 (see net/http docs: "If TLSNextProto is not nil, HTTP/2
+		// support is not enabled automatically"). The proxy listens on plain TCP
+		// (no TLS), so HTTP/2 is not normally negotiated here anyway — belt-and-suspenders.
+		TLSNextProto: make(map[string]func(*http.Server, *tls.Conn, http.Handler)),
 	}
 	go func() {
 		if err := p.srv.Serve(ln); err != nil && err != http.ErrServerClosed {
@@ -114,7 +138,9 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request, dialer *ne
 	// The target is r.Host (e.g. "example.com:443"). The SSRF guard runs inside
 	// the dialer's Control hook at connect time, after DNS resolution.
 	target := r.Host
+	p.logger.Debug("ssrfproxy: CONNECT", slog.String("target", target))
 	if target == "" {
+		p.logger.Warn("ssrfproxy: CONNECT missing target")
 		http.Error(w, "missing CONNECT target", http.StatusBadRequest)
 		return
 	}
@@ -122,14 +148,29 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request, dialer *ne
 	// Reject non-standard ports at the string level before dialing. Chromium
 	// should only ever CONNECT on :443, but a rogue page might try :6379.
 	if err := rejectNonWebPort(target); err != nil {
-		p.logger.Warn("ssrfproxy: CONNECT rejected (non-web port)", slog.String("target", target))
+		p.logger.Warn("ssrfproxy: CONNECT rejected (non-web port)",
+			slog.String("target", target), slog.Any("error", err))
 		http.Error(w, "forbidden: "+err.Error(), http.StatusForbidden)
 		return
 	}
 
-	upstream, err := dialer.DialContext(r.Context(), "tcp", target)
+	// Dial with "tcp4" (IPv4 only).
+	//
+	// Cloud Run containers have no IPv6 egress. WordPress hosts increasingly have
+	// AAAA records (e.g. Cloudflare-proxied sites). Go's default "tcp" dialer
+	// attempts IPv6 first (Happy Eyeballs), and on a host with no IPv6 egress the
+	// IPv6 SYN never completes — the dial either times out (slow) or returns an
+	// immediate "network unreachable" depending on kernel routing. In both cases
+	// Chromium sees ERR_TUNNEL_CONNECTION_FAILED. Forcing "tcp4" resolves only A
+	// records and dials the IPv4 address directly.
+	//
+	// The ssrf.Safe Control hook continues to validate the resolved IPv4 address
+	// against the RFC1918/loopback/link-local deny list — security posture is
+	// unchanged.
+	upstream, err := dialer.DialContext(r.Context(), "tcp4", target)
 	if err != nil {
-		p.logger.Warn("ssrfproxy: CONNECT dial failed", slog.String("target", target), slog.Any("error", err))
+		p.logger.Warn("ssrfproxy: CONNECT dial failed",
+			slog.String("target", target), slog.Any("error", err))
 		http.Error(w, "forbidden or unreachable: "+err.Error(), http.StatusForbidden)
 		return
 	}
@@ -138,12 +179,21 @@ func (p *Proxy) handleCONNECT(w http.ResponseWriter, r *http.Request, dialer *ne
 	// Hijack the client connection and start bidirectional copy.
 	hj, ok := w.(http.Hijacker)
 	if !ok {
+		// This should never happen: the server is HTTP/1.1-only and net/http's
+		// HTTP/1.1 ResponseWriter always implements Hijacker. If it does occur
+		// (e.g. a middleware wraps the ResponseWriter) we must log before returning
+		// so the failure is visible in Cloud Logging rather than being silent.
+		p.logger.Error("ssrfproxy: CONNECT hijack not supported — ResponseWriter does not implement http.Hijacker",
+			slog.String("target", target))
 		http.Error(w, "hijack not supported", http.StatusInternalServerError)
 		return
 	}
 	clientConn, _, err := hj.Hijack()
 	if err != nil {
-		http.Error(w, "hijack failed: "+err.Error(), http.StatusInternalServerError)
+		p.logger.Error("ssrfproxy: CONNECT hijack failed",
+			slog.String("target", target), slog.Any("error", err))
+		// After a failed Hijack the connection state is undefined; we can't
+		// reliably write an HTTP error. Log and return.
 		return
 	}
 	defer clientConn.Close()
@@ -170,7 +220,11 @@ func (p *Proxy) handleHTTP(w http.ResponseWriter, r *http.Request, dialer *net.D
 	}
 
 	transport := &http.Transport{
-		DialContext:       dialer.DialContext,
+		// Force IPv4 dials (tcp4) for the same reason as handleCONNECT: Cloud Run
+		// has no IPv6 egress, and "tcp" dials IPv6 first on dual-stack hosts.
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, "tcp4", addr)
+		},
 		ForceAttemptHTTP2: false, // proxy-mode HTTP is HTTP/1.1
 	}
 	// Remove hop-by-hop headers.

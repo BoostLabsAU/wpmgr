@@ -14,6 +14,7 @@
     "e2e:install": "playwright install chromium"
   },
   "dependencies": {
+    "@github/webauthn-json": "^2.1.1",
     "@hookform/resolvers": "^5.4.0",
     "@number-flow/react": "^0.6.0",
     "@radix-ui/react-alert-dialog": "^1.1.16",
@@ -36,6 +37,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-hook-form": "^7.76.0",
+    "react-qr-code": "^2.2.0",
     "react-virtuoso": "^4.18.7",
     "recharts": "^3.8.1",
     "sonner": "^2.0.7",

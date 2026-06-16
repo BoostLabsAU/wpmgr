@@ -69128,9 +69128,15 @@ func (s *User) encodeFields(e *jx.Encoder) {
 			s.IsSuperadmin.Encode(e)
 		}
 	}
+	{
+		if s.TwoFactorEnabled.Set {
+			e.FieldStart("two_factor_enabled")
+			s.TwoFactorEnabled.Encode(e)
+		}
+	}
 }
 
-var jsonFieldsNameOfUser = [7]string{
+var jsonFieldsNameOfUser = [8]string{
 	0: "id",
 	1: "email",
 	2: "name",
@@ -69138,6 +69144,7 @@ var jsonFieldsNameOfUser = [7]string{
 	4: "updated_at",
 	5: "last_login_at",
 	6: "is_superadmin",
+	7: "two_factor_enabled",
 }
 
 // Decode decodes User from json.
@@ -69228,6 +69235,16 @@ func (s *User) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"is_superadmin\"")
+			}
+		case "two_factor_enabled":
+			if err := func() error {
+				s.TwoFactorEnabled.Reset()
+				if err := s.TwoFactorEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"two_factor_enabled\"")
 			}
 		default:
 			return d.Skip()

@@ -32181,6 +32181,8 @@ type User struct {
 	UpdatedAt    time.Time   `json:"updated_at"`
 	LastLoginAt  OptDateTime `json:"last_login_at"`
 	IsSuperadmin OptBool     `json:"is_superadmin"`
+	// Whether the user has an active second factor (TOTP or WebAuthn) enrolled.
+	TwoFactorEnabled OptBool `json:"two_factor_enabled"`
 }
 
 // GetID returns the value of ID.
@@ -32218,6 +32220,11 @@ func (s *User) GetIsSuperadmin() OptBool {
 	return s.IsSuperadmin
 }
 
+// GetTwoFactorEnabled returns the value of TwoFactorEnabled.
+func (s *User) GetTwoFactorEnabled() OptBool {
+	return s.TwoFactorEnabled
+}
+
 // SetID sets the value of ID.
 func (s *User) SetID(val uuid.UUID) {
 	s.ID = val
@@ -32251,6 +32258,11 @@ func (s *User) SetLastLoginAt(val OptDateTime) {
 // SetIsSuperadmin sets the value of IsSuperadmin.
 func (s *User) SetIsSuperadmin(val OptBool) {
 	s.IsSuperadmin = val
+}
+
+// SetTwoFactorEnabled sets the value of TwoFactorEnabled.
+func (s *User) SetTwoFactorEnabled(val OptBool) {
+	s.TwoFactorEnabled = val
 }
 
 type VerifyAuditForbidden Error

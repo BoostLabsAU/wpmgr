@@ -8,16 +8,23 @@
  * Card anatomy (top to bottom):
  *   1. Hero band          — SiteCardThumbnail (16:10 comfortable / 16:9 compact)
  *   2. Header row         — site name link + SiteRowActions menu
- *   3. Status rail        — ConnectionStateBadge + hostname (mono)
- *   4. Capability strip   — cache / object-cache / HTTPS / backups / multisite
+ *   3. Status rail        — ConnectionStateBadge + hostname (mono, reserved slot)
+ *   4. Capability group   — labeled 2-col grid: Page Cache / Object Cache /
+ *                           HTTPS / Backups / Multisite — always visible
  *   5. Chip flow          — UpdateChip / calm "Up to date" | BackupChip / calm
  *                           "No backups yet" | SslChip (when tls_expires_at)
- *   6. Uptime row         — pct + latency + StatusDot (text only; no sparkline)
- *   7. Meta footer        — WP/PHP/agent versions, host_provider, client, tags
+ *   6. Uptime row         — pct + latency + StatusDot, reserved slot
+ *   7. Meta footer        — labeled DefinitionList: Versions / Host / Client /
+ *                           Tags / Screenshot; comfortable=always, compact=hover
+ *
+ * Alignment discipline:
+ *   Every section renders with a calm empty/default state when data is absent so
+ *   all cards in a grid row align baseline-to-baseline regardless of which
+ *   optional fields are populated.
  *
  * Density:
- *   comfortable — all sections inline
- *   compact     — hero 16:9, footer hover-reveal, caption hidden
+ *   comfortable — all sections inline, caption in footer
+ *   compact     — hero 16:9, footer hover-reveal
  */
 import { Link } from "@tanstack/react-router";
 import {
@@ -28,6 +35,7 @@ import {
   Lock,
   RefreshCcw,
 } from "lucide-react";
+import type { ReactNode } from "react";
 import type { Site } from "@wpmgr/api";
 
 import { Badge } from "@/components/ui/badge";
@@ -40,16 +48,20 @@ import {
   UpdateChip,
   type BackupChipStatus,
 } from "@/components/status";
+import { DefinitionList } from "@/components/shared/definition-list";
 import {
   connectionStateOf,
   asConnectedSite,
 } from "@/features/sites/connection-state";
 import { SiteRowActions } from "@/features/sites/site-row-actions";
 import { SiteCardThumbnail } from "@/features/sites/site-card-thumbnail";
-import { CapabilityStrip, type CapabilityItem } from "@/features/sites/capability-strip";
+import {
+  CapabilityGroup,
+  type CapabilityItem,
+} from "@/features/sites/capability-strip";
 import { useSitesSelection } from "@/features/sites/use-sites-selection";
 import type { CardSize } from "@/features/sites/use-sites-view";
-import { cn } from "@/lib/utils";
+import { cn, relativeTime } from "@/lib/utils";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -63,55 +75,48 @@ function hostnameFromUrl(url: string): string {
 
 /**
  * Derive the capability item list for a site. Items are always in the same
- * order so the strip is stable across re-renders. On/off is encoded by the
- * `enabled` flag which maps to opacity — never hue.
+ * order so the grid is stable across re-renders. On/off encoded by the
+ * `enabled` flag — never hue alone.
  */
 function buildCapabilityItems(site: Site): CapabilityItem[] {
-  // Page cache: infer from components list (wpmgr-page-cache plugin active).
   const hasPageCache =
     site.components?.plugins?.some(
       (p) => p.slug === "wpmgr-page-cache" && p.active === true,
     ) ?? false;
 
-  // Object cache: infer from components list (wpmgr-object-cache plugin active).
   const hasObjectCache =
     site.components?.plugins?.some(
       (p) => p.slug === "wpmgr-object-cache" && p.active === true,
     ) ?? false;
 
-  // HTTPS: the site URL uses https.
   const isHttps = site.url.startsWith("https://");
-
-  // Backups on: any non-null last_backup_status means we have attempted backups.
   const hasBackups = site.last_backup_status != null;
-
-  // Multisite: the multisite flag.
   const isMultisite = site.multisite;
 
   return [
     {
       icon: HardDrive,
-      label: `Page cache: ${hasPageCache ? "enabled" : "not detected"}`,
+      label: "Page Cache",
       enabled: hasPageCache,
     },
     {
       icon: Database,
-      label: `Object cache: ${hasObjectCache ? "enabled" : "not detected"}`,
+      label: "Object Cache",
       enabled: hasObjectCache,
     },
     {
       icon: Lock,
-      label: `HTTPS: ${isHttps ? "enabled" : "not using HTTPS"}`,
+      label: "HTTPS",
       enabled: isHttps,
     },
     {
       icon: RefreshCcw,
-      label: `Backups: ${hasBackups ? "enabled" : "not configured"}`,
+      label: "Backups",
       enabled: hasBackups,
     },
     {
       icon: Globe,
-      label: `Multisite: ${isMultisite ? "yes" : "single site"}`,
+      label: "Multisite",
       enabled: isMultisite,
     },
   ];
@@ -171,6 +176,42 @@ export function SiteCard({
   if (site.php_version) versionParts.push(`PHP ${site.php_version}`);
   if (site.agent_version) versionParts.push(`agent ${site.agent_version}`);
   const versionString = versionParts.join(" · ");
+
+  // Screenshot capture label for the metadata footer row.
+  const screenshotValue = site.screenshot_captured_at
+    ? relativeTime(site.screenshot_captured_at)
+    : "never captured";
+
+  // Tags: max 2 shown + overflow badge, or en-dash when absent.
+  const tagsValue: ReactNode = site.tags && site.tags.length > 0
+    ? (
+      <span className="flex flex-wrap gap-1">
+        {site.tags.slice(0, 2).map((tag) => (
+          <Badge key={tag} variant="muted" className="rounded-sm text-xs">
+            {tag}
+          </Badge>
+        ))}
+        {site.tags.length > 2 ? (
+          <Badge variant="muted" className="rounded-sm text-xs">
+            +{site.tags.length - 2}
+          </Badge>
+        ) : null}
+      </span>
+    )
+    : undefined; // DefinitionList renders en-dash for undefined
+
+  // Client value: small dot indicator when present.
+  const clientValue: ReactNode = site.client_name
+    ? (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <span
+          aria-hidden="true"
+          className="inline-block size-1.5 shrink-0 rounded-full border border-border bg-muted"
+        />
+        <span className="truncate">{site.client_name}</span>
+      </span>
+    )
+    : undefined;
 
   return (
     <div
@@ -236,28 +277,32 @@ export function SiteCard({
         </div>
 
         {/* ── 3. Status rail ───────────────────────────────────────────── */}
+        {/* Reserved height: hostname slot is always rendered (min-h-5) so
+            cards with/without a distinct hostname stay aligned. */}
         <div className="flex min-w-0 flex-col gap-1">
           <ConnectionStateBadge
             state={connectionState}
             lastSeenAt={site.last_seen_at ?? null}
             disconnectedReason={disconnectedReason}
           />
-          {/* Hostname (mono) — only when site name differs from hostname */}
-          {site.name && site.name !== hostname ? (
-            <span className="truncate font-mono text-xs text-muted-foreground">
-              {hostname}
-            </span>
-          ) : null}
+          {/* Hostname (mono) — always reserve the slot height */}
+          <div className="min-h-4">
+            {site.name && site.name !== hostname ? (
+              <span className="truncate font-mono text-xs text-muted-foreground">
+                {hostname}
+              </span>
+            ) : null}
+          </div>
         </div>
 
-        {/* ── 4. Capability strip ──────────────────────────────────────── */}
-        {/* Always rendered at fixed height to prevent layout shift when
-            data loads. The strip itself handles the empty-array case. */}
-        <div className="h-4 flex items-center">
-          <CapabilityStrip items={capabilityItems} />
-        </div>
+        {/* ── 4. Capability group ──────────────────────────────────────── */}
+        {/* Always rendered (fixed height via grid) — never conditionally
+            omitted — so cards align row-for-row regardless of data. */}
+        <CapabilityGroup items={capabilityItems} />
 
         {/* ── 5. Chip flow ─────────────────────────────────────────────── */}
+        {/* Always renders all three slots (updates / backup / ssl) with calm
+            empty text so chip-row height is consistent across cards. */}
         <div className="flex flex-wrap items-center gap-1.5">
           {/* Updates: chip when >0, calm check when 0 */}
           {updatesCount > 0 ? (
@@ -286,9 +331,9 @@ export function SiteCard({
         </div>
 
         {/* ── 6. Uptime row ────────────────────────────────────────────── */}
-        {/* Reserved-height slot to prevent layout shift when monitoring
-            data later arrives. Text-only (no sparkline; backend deferred). */}
-        <div className="flex h-5 items-center">
+        {/* Reserved-height slot (min-h-5) prevents layout shift when
+            monitoring data arrives later. Text-only (no sparkline; deferred). */}
+        <div className="flex min-h-5 items-center">
           {site.uptime_pct != null ? (
             <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
               <StatusDot
@@ -296,7 +341,8 @@ export function SiteCard({
                 label={site.up === false ? "Down" : "Up"}
               />
               <span className="tabular-nums">
-                Uptime{" "}
+                {site.up === false ? "Down" : "Up"}
+                {" · Uptime "}
                 <span className="font-medium text-foreground tabular-nums">
                   {site.uptime_pct.toFixed(2)}%
                 </span>
@@ -316,52 +362,44 @@ export function SiteCard({
         </div>
 
         {/* ── 7. Meta footer ───────────────────────────────────────────── */}
-        {/* comfortable: always visible; compact: hover-reveal */}
+        {/* comfortable: always visible; compact: hover-reveal via group-hover.
+            Uses DefinitionList so every value has a visible label prefix.
+            Always renders all rows with calm empty states (en-dash) for
+            absent values — this is the primary alignment anchor. */}
         <div
           className={cn(
-            "flex flex-col gap-1 border-t border-border/50 pt-2 text-xs text-muted-foreground",
+            "border-t border-border/50 pt-2",
             isCompact &&
-              "opacity-0 transition-opacity group-hover:opacity-100",
+              "opacity-0 transition-opacity duration-200 group-hover:opacity-100",
           )}
         >
-          {/* Versions line */}
-          {versionString ? (
-            <span className="truncate font-mono tabular-nums">
-              {versionString}
-            </span>
-          ) : null}
-
-          {/* Host provider */}
-          {site.host_provider ? (
-            <span className="truncate">{site.host_provider}</span>
-          ) : null}
-
-          {/* Client */}
-          {site.client_name ? (
-            <span className="flex items-center gap-1.5">
-              <span
-                aria-hidden="true"
-                className="inline-block size-1.5 shrink-0 rounded-full border border-border bg-muted"
-              />
-              <span className="truncate">{site.client_name}</span>
-            </span>
-          ) : null}
-
-          {/* Tags: max 2 + overflow badge */}
-          {site.tags && site.tags.length > 0 ? (
-            <div className="flex flex-wrap gap-1">
-              {site.tags.slice(0, 2).map((tag) => (
-                <Badge key={tag} variant="muted" className="rounded-sm text-xs">
-                  {tag}
-                </Badge>
-              ))}
-              {site.tags.length > 2 ? (
-                <Badge variant="muted" className="rounded-sm text-xs">
-                  +{site.tags.length - 2}
-                </Badge>
-              ) : null}
-            </div>
-          ) : null}
+          <DefinitionList
+            className="gap-y-1 text-xs"
+            rows={[
+              {
+                label: "Versions",
+                value: versionString || undefined,
+                mono: true,
+                tabular: true,
+              },
+              {
+                label: "Host",
+                value: site.host_provider || undefined,
+              },
+              {
+                label: "Client",
+                value: clientValue,
+              },
+              {
+                label: "Tags",
+                value: tagsValue,
+              },
+              {
+                label: "Screenshot",
+                value: screenshotValue,
+              },
+            ]}
+          />
         </div>
 
       </div>

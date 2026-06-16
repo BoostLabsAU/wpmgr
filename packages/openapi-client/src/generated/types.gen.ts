@@ -582,6 +582,10 @@ export type User = {
   updated_at: string;
   last_login_at?: string;
   is_superadmin?: boolean;
+  /**
+   * Whether the user has an active second factor (TOTP or WebAuthn) enrolled.
+   */
+  two_factor_enabled?: boolean;
 };
 
 export type Membership = {

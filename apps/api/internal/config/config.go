@@ -263,6 +263,16 @@ type AuthConfig struct {
 	SessionSecret  string        `koanf:"session_secret"`
 	IdleTimeout    time.Duration `koanf:"idle_timeout"`
 	AbsoluteExpiry time.Duration `koanf:"absolute_expiry"`
+
+	// WebAuthn relying party configuration (ADR-056 Phase 1).
+	// RPID is the effective domain for WebAuthn (e.g. "manage.wpmgr.app").
+	// RPOrigins is a comma-separated list of allowed origins
+	// (e.g. "https://manage.wpmgr.app"). Self-hosted operators MUST set these
+	// to match their WPMGR_PUBLIC_BASE_URL; defaults cover the hosted instance.
+	// RPDisplayName is the human-readable site name shown in passkey prompts.
+	WebAuthnRPID          string `koanf:"webauthn_rpid"`
+	WebAuthnRPOrigins     string `koanf:"webauthn_rp_origins"`
+	WebAuthnRPDisplayName string `koanf:"webauthn_rp_display_name"`
 }
 
 // OIDCConfig holds the OpenID Connect relying-party configuration. When Issuer
@@ -384,6 +394,11 @@ func defaults() map[string]any {
 		"auth.session_secret":           "",
 		"auth.idle_timeout":             "168h", // 7 days idle
 		"auth.absolute_expiry":          "720h", // 30 days hard cap
+		// ADR-056: WebAuthn relying party defaults (hosted instance).
+		// Self-hosted operators override via WPMGR_AUTH_WEBAUTHN_RPID etc.
+		"auth.webauthn_rpid":            "manage.wpmgr.app",
+		"auth.webauthn_rp_origins":      "https://manage.wpmgr.app",
+		"auth.webauthn_rp_display_name": "WPMgr",
 		"oidc.issuer":                   "",
 		"oidc.client_id":                "",
 		"oidc.client_secret":            "",

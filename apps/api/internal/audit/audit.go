@@ -195,6 +195,53 @@ const (
 	ActionObjectCacheFlushed = "site.objectcache.flushed"
 	// ActionObjectCacheTested: metadata: ok (bool), config_hash.
 	ActionObjectCacheTested = "site.objectcache.tested"
+
+	// Dashboard 2FA (ADR-056, Phase 2). These actions are account-scoped:
+	// they are recorded under the user's first tenant when one exists; otherwise
+	// best-effort under a client-member tenant. All carry ActorUser.
+	//
+	// ActionTOTPEnrolled: metadata: confirmed_at (RFC3339).
+	ActionTOTPEnrolled = "auth.2fa.totp.enrolled"
+	// ActionTOTPDisabled: metadata: reason ("user_request").
+	ActionTOTPDisabled = "auth.2fa.totp.disabled"
+	// ActionTOTPVerified: metadata: challenge_id.
+	ActionTOTPVerified = "auth.2fa.totp.verified"
+	// ActionTOTPFailed: metadata: challenge_id, reason ("invalid_code"|"replay"|"expired").
+	ActionTOTPFailed = "auth.2fa.totp.failed"
+	// ActionTOTPCodesRegenerated: recorded when recovery codes are regenerated
+	// (replaces the old batch). metadata: count (int).
+	ActionTOTPCodesRegenerated = "auth.2fa.recovery_codes.regenerated"
+	// ActionRecoveryCodeUsed: one code consumed at login. metadata: remaining (int).
+	ActionRecoveryCodeUsed = "auth.2fa.recovery_code.used"
+	// ActionWebAuthnCredentialAdded: metadata: credential_id (hex), label.
+	ActionWebAuthnCredentialAdded = "auth.2fa.webauthn.credential.added"
+	// ActionWebAuthnCredentialRemoved: metadata: credential_id (hex), label.
+	ActionWebAuthnCredentialRemoved = "auth.2fa.webauthn.credential.removed"
+	// ActionWebAuthnVerified: metadata: challenge_id, credential_id (hex).
+	ActionWebAuthnVerified = "auth.2fa.webauthn.verified"
+	// ActionWebAuthnFailed: metadata: challenge_id, reason.
+	ActionWebAuthnFailed = "auth.2fa.webauthn.failed"
+	// ActionClonedAuthenticatorDetected: a WebAuthn assertion returned a
+	// sign_count that was not greater than the stored value, indicating a
+	// possible cloned authenticator. The assertion is REJECTED. metadata:
+	// credential_id (hex), stored_count, presented_count.
+	// This is a security-critical event; it is always audited regardless of
+	// whether the user has a tenant so the record is not lost.
+	ActionClonedAuthenticatorDetected = "auth.2fa.webauthn.cloned_authenticator"
+	// Action2FAChallengeIssued: a login challenge was issued. metadata:
+	// challenge_id, factors_available ([]string).
+	Action2FAChallengeIssued = "auth.2fa.challenge.issued"
+	// Action2FAChallengeExpired: a challenge was locked due to too many failed
+	// attempts. metadata: challenge_id, attempts (int).
+	Action2FAChallengeExpired = "auth.2fa.challenge.expired"
+	// ActionTrustedDeviceAdded: "remember this device" trust was granted.
+	// metadata: device_id, label, expires_at (RFC3339).
+	ActionTrustedDeviceAdded = "auth.2fa.trusted_device.added"
+	// ActionTrustedDeviceRevoked: a device trust was revoked. metadata: device_id.
+	ActionTrustedDeviceRevoked = "auth.2fa.trusted_device.revoked"
+	// ActionTrustedDevicesRevokedAll: all device trusts were revoked for a user
+	// (e.g. on password change or 2FA disable). metadata: count (int).
+	ActionTrustedDevicesRevokedAll = "auth.2fa.trusted_device.revoked_all"
 )
 
 // Entry is one audit record.

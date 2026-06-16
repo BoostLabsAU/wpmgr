@@ -6,6 +6,53 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.2] - 2026-06-16
+
+### Fixed
+
+- **"Remember this device" now actually persists.** Signing out was clearing the trusted-device marker, so every sign-in asked for the second factor again and each time added a duplicate trusted device. A trusted device now survives sign-out for its full window (you still enter your password; only the second step is skipped), and is cleared only when you change or reset your password, disable two-factor, or revoke the device.
+
+Control plane only at 0.50.2; no migration, no agent change.
+
+## [0.50.1] - 2026-06-16
+
+### Fixed
+
+- **Two-factor sign-in landed on the login page instead of the dashboard.** After entering a valid code, the dashboard navigated before the new session was confirmed, so a route guard bounced back to sign-in until a manual refresh. It now fetches the authenticated session first and then routes, matching the password-login path.
+- **Passkeys could not be added or used.** The browser passkey ceremony double-wrapped the options the server sent, so the browser reported a missing relying-party key. The options are now passed through as-is for both registering and signing in with a passkey.
+
+Dashboard only at 0.50.1; no control-plane, migration, or agent change.
+
+## [0.50.0] - 2026-06-16
+
+### Added
+
+- **Two-factor authentication for the dashboard.** Operators can now protect their account with a second factor: an authenticator app (TOTP) and/or a passkey or security key (WebAuthn/FIDO2). Setup is a guided flow (scan a QR code or enter the key, confirm a live code, then save one-time recovery codes), and a new Settings to Security screen manages factors, recovery codes, and trusted devices. At login, a second step asks for the code or passkey; "remember this device" can skip it for 30 days, and every trusted device is listed and revocable. This matters because the agent intentionally bypasses 2FA on the WordPress sites it manages (for one-click login), so the dashboard is the single front door to every site and is now hardened accordingly. Two-factor is optional per user; superadmins see a reminder to enable it.
+
+### Security
+
+- Second factors are built on the standard primitives (RFC 6238 TOTP and WebAuthn). The TOTP secret is encrypted at rest, recovery codes are hashed and single-use, used codes are burned to prevent replay, and a cloned authenticator is detected and rejected. Verification attempts are rate-limited and locked out across attempts. A two-factor account cannot obtain a session on any login path (password, SSO, email verification) without completing the second step, changing or resetting the password revokes trusted devices, and disabling a factor or regenerating codes requires re-entering the password. All two-factor events are written to the audit log.
+
+Control plane plus dashboard at 0.50.0; one migration (auto-applied on boot); no agent change. Passkeys require accessing the dashboard on its primary domain; the authenticator-app factor works everywhere.
+
+## [0.49.2] - 2026-06-16
+
+### Changed
+
+- **Sites grid card redesign.** The grid card was rebuilt for clarity and consistency. The unlabeled icon row is now a labeled "Site configuration" group (Page Cache, Object Cache, HTTPS, Backups, Multisite), each with a text label and an on/off state shown by a filled-versus-hollow dot, not color alone. All metadata is now a labeled key/value list (Versions, Host, Client, Tags, Screenshot) so no value is bare. Every section reserves its height with a calm empty state, so cards line up row-for-row regardless of which optional data a site has. The screenshot freshness moved off the image (no more caption overlapping the thumbnail) into a labeled footer line, and the card action buttons carry clear labels.
+
+Dashboard only at 0.49.2; no control-plane, migration, or agent change.
+
+## [0.49.1] - 2026-06-16
+
+### Fixed
+
+- **Site screenshots now appear in the grid.** The enricher that adds the presigned image URL to each site in the list response was wired onto a different repository instance than the one serving the Sites list, so list enrichment never ran and every card fell back to the favicon placeholder even when a ready screenshot already existed in storage. The enricher is now wired onto the list service itself, with a regression test that fails if it is ever attached to the wrong instance.
+- **Screenshot capture stopped failing with a tunnel error.** The in-process SSRF proxy that headless Chromium connects through rejected the browser's `CONNECT` requests because the request multiplexer did not accept authority-form targets, so every capture failed before reaching a site. The proxy now handles `CONNECT` directly and dials over IPv4 (Cloud Run has no IPv6 egress), covered by a new end-to-end tunnel test.
+- **The Sites grid refreshes itself after a capture.** After a screenshot is requested, the dashboard polls the list until the capture finishes (or times out), so the card moves from "capturing" to the finished image without a manual reload.
+
+Control plane, media worker, and dashboard at 0.49.1; no migration, no agent change.
+
 ## [0.49.0] - 2026-06-16
 
 ### Added

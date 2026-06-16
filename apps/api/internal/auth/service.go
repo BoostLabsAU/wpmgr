@@ -25,6 +25,9 @@ type Service struct {
 	email   EmailEnqueuer
 	baseURL string
 	limiter RateLimiter
+	// twofa holds the Phase 2 two-factor service logic. Injected via
+	// SetTwoFactorDeps after startup. nil when 2FA is not configured.
+	twofa *TwoFactorService
 }
 
 // NewService builds an auth Service.
@@ -449,6 +452,13 @@ func (s *Service) ChangePassword(ctx context.Context, userID uuid.UUID, currentP
 	// session keeps working (its auth_at is refreshed below).
 	if err := s.repo.UpdatePasswordHash(ctx, userID, hash); err != nil {
 		return err
+	}
+	// S1: revoke all trusted devices so "remember this device" bypass tokens
+	// cannot outlive a password change. Best-effort; a failure here does NOT
+	// block the password change (the user is still protected by the changed
+	// password and by session invalidation via password_changed_at).
+	if s.twofa != nil {
+		_ = s.twofa.repo.twoFA().RevokeAllTrustedDevices(ctx, userID)
 	}
 	// Best-effort: burn any outstanding reset tokens + notify the account owner.
 	_ = s.repo.pool.InAgentTx(ctx, func(tx pgx.Tx) error {

@@ -156,6 +156,13 @@ func (s *Service) ResetPassword(ctx context.Context, token, newPwd string, ip ne
 	if err := s.repo.UpdatePasswordHash(ctx, userID, newHash); err != nil {
 		return domain.Internal("password_write_failed", "failed to set new password").WithCause(err)
 	}
+	// S1: revoke all trusted devices after a password reset. This is the
+	// post-compromise lever: an attacker who reset the password via a leaked
+	// link cannot reuse "remember this device" bypass tokens to avoid 2FA.
+	// Best-effort; a failure here does NOT block the reset.
+	if s.twofa != nil {
+		_ = s.twofa.repo.twoFA().RevokeAllTrustedDevices(ctx, userID)
+	}
 	// Burn any other outstanding reset tokens for this user.
 	_ = s.repo.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
 		return sqlc.New(tx).InvalidateUserPasswordResetTokens(ctx, userID)

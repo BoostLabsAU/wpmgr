@@ -274,7 +274,7 @@ func (q *Queries) CountUsers(ctx context.Context) (int64, error) {
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (email, password_hash, oidc_subject, oidc_issuer, name)
 VALUES ($1, $2, $3, $4, $5)
-RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin
+RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin, two_factor_enabled, totp_secret_encrypted, totp_confirmed_at, totp_last_step, totp_provisional_secret_encrypted, totp_provisional_expires_at
 `
 
 type CreateUserParams struct {
@@ -308,12 +308,18 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.Status,
 		&i.EmailVerifiedAt,
 		&i.IsSuperadmin,
+		&i.TwoFactorEnabled,
+		&i.TotpSecretEncrypted,
+		&i.TotpConfirmedAt,
+		&i.TotpLastStep,
+		&i.TotpProvisionalSecretEncrypted,
+		&i.TotpProvisionalExpiresAt,
 	)
 	return i, err
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE email = $1
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin, two_factor_enabled, totp_secret_encrypted, totp_confirmed_at, totp_last_step, totp_provisional_secret_encrypted, totp_provisional_expires_at FROM users WHERE email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error) {
@@ -333,12 +339,18 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.Status,
 		&i.EmailVerifiedAt,
 		&i.IsSuperadmin,
+		&i.TwoFactorEnabled,
+		&i.TotpSecretEncrypted,
+		&i.TotpConfirmedAt,
+		&i.TotpLastStep,
+		&i.TotpProvisionalSecretEncrypted,
+		&i.TotpProvisionalExpiresAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE id = $1
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin, two_factor_enabled, totp_secret_encrypted, totp_confirmed_at, totp_last_step, totp_provisional_secret_encrypted, totp_provisional_expires_at FROM users WHERE id = $1
 `
 
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -358,12 +370,18 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.Status,
 		&i.EmailVerifiedAt,
 		&i.IsSuperadmin,
+		&i.TwoFactorEnabled,
+		&i.TotpSecretEncrypted,
+		&i.TotpConfirmedAt,
+		&i.TotpLastStep,
+		&i.TotpProvisionalSecretEncrypted,
+		&i.TotpProvisionalExpiresAt,
 	)
 	return i, err
 }
 
 const getUserByOIDC = `-- name: GetUserByOIDC :one
-SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2
+SELECT id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin, two_factor_enabled, totp_secret_encrypted, totp_confirmed_at, totp_last_step, totp_provisional_secret_encrypted, totp_provisional_expires_at FROM users WHERE oidc_issuer = $1 AND oidc_subject = $2
 `
 
 type GetUserByOIDCParams struct {
@@ -388,6 +406,12 @@ func (q *Queries) GetUserByOIDC(ctx context.Context, arg GetUserByOIDCParams) (U
 		&i.Status,
 		&i.EmailVerifiedAt,
 		&i.IsSuperadmin,
+		&i.TwoFactorEnabled,
+		&i.TotpSecretEncrypted,
+		&i.TotpConfirmedAt,
+		&i.TotpLastStep,
+		&i.TotpProvisionalSecretEncrypted,
+		&i.TotpProvisionalExpiresAt,
 	)
 	return i, err
 }
@@ -408,7 +432,7 @@ const linkUserOIDC = `-- name: LinkUserOIDC :one
 UPDATE users
 SET oidc_issuer = $2, oidc_subject = $3, updated_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin
+RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin, two_factor_enabled, totp_secret_encrypted, totp_confirmed_at, totp_last_step, totp_provisional_secret_encrypted, totp_provisional_expires_at
 `
 
 type LinkUserOIDCParams struct {
@@ -434,6 +458,12 @@ func (q *Queries) LinkUserOIDC(ctx context.Context, arg LinkUserOIDCParams) (Use
 		&i.Status,
 		&i.EmailVerifiedAt,
 		&i.IsSuperadmin,
+		&i.TwoFactorEnabled,
+		&i.TotpSecretEncrypted,
+		&i.TotpConfirmedAt,
+		&i.TotpLastStep,
+		&i.TotpProvisionalSecretEncrypted,
+		&i.TotpProvisionalExpiresAt,
 	)
 	return i, err
 }
