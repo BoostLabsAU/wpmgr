@@ -62,7 +62,7 @@ for (const file of walk(ROOT)) {
 //   visuals   3   (cache-trend / rum-distribution / media-compare)
 // ---------------------------------------------------------------------------
 
-const EXPECTED = { clusters: 5, features: 21, links: 3, visuals: 3 };
+const EXPECTED = { clusters: 5, features: 23, links: 3, visuals: 3 };
 
 const VALID_VISUALS = ["cache-trend", "rum-distribution", "media-compare"];
 
