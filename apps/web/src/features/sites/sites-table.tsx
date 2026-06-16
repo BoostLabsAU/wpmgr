@@ -3,7 +3,6 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
   type HTMLAttributes,
   type TableHTMLAttributes,
 } from "react";
@@ -183,6 +182,26 @@ const COL_UPDATES_PX = 120;
 const COL_BACKUP_PX = 160;
 const COL_UPTIME_PX = 70;
 const COL_ACTIONS_PX = 80;
+
+// Single source of column geometry for BOTH the sticky header and the
+// virtualized body, rendered once as a <colgroup> on the table (matches
+// FleetTable). Putting widths only on the <th> cells let the header and the
+// virtualized rows drift out of alignment; the colgroup makes the column tracks
+// authoritative and shared. ORDER MUST MATCH buildColumns(). `undefined` marks
+// the flexible column (Site) that absorbs the remaining width.
+const COLUMN_WIDTHS_PX: ReadonlyArray<number | undefined> = [
+  COL_CHECKBOX_PX, // select
+  undefined, // url (Site) — flexible
+  COL_CLIENT_PX, // client
+  COL_TAGS_PX, // tags
+  COL_WP_PX, // wp_version
+  COL_PHP_PX, // php_version
+  COL_AGENT_PX, // agent_version
+  COL_UPDATES_PX, // updates_count
+  COL_BACKUP_PX, // backup_status
+  COL_UPTIME_PX, // uptime_sparkline
+  COL_ACTIONS_PX, // actions
+];
 
 // ---------------------------------------------------------------------------
 // Column definitions
@@ -482,6 +501,7 @@ const VirtuosoScroller = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElemen
 
 function VirtuosoTable({
   style,
+  children,
   ...rest
 }: TableHTMLAttributes<HTMLTableElement>) {
   return (
@@ -489,7 +509,17 @@ function VirtuosoTable({
       {...rest}
       style={{ ...style, width: "100%", minWidth: "860px", tableLayout: "fixed" }}
       className="border-collapse"
-    />
+    >
+      {/* Authoritative column geometry shared by the sticky header and the
+          virtualized body. Without this, per-<th> widths do not propagate to
+          the body rows and the columns drift. */}
+      <colgroup>
+        {COLUMN_WIDTHS_PX.map((w, i) => (
+          <col key={i} style={w != null ? { width: w } : undefined} />
+        ))}
+      </colgroup>
+      {children}
+    </table>
   );
 }
 
@@ -638,10 +668,7 @@ export function SitesTable({
           totalCount={sortedRows.length}
           components={virtuosoComponents}
           fixedHeaderContent={() => (
-            <TableHeaderRow
-              headerGroups={table.getHeaderGroups()}
-              columns={columns}
-            />
+            <TableHeaderRow headerGroups={table.getHeaderGroups()} />
           )}
           itemContent={(_, row) => <TableBodyCells row={row} />}
         />
@@ -657,12 +684,10 @@ export function SitesTable({
 
 function TableHeaderRow({
   headerGroups,
-  columns,
 }: {
   headerGroups: ReturnType<
     ReturnType<typeof useReactTable<SiteRow>>["getHeaderGroups"]
   >;
-  columns: ColumnDef<SiteRow>[];
 }) {
   return (
     <>
@@ -672,20 +697,17 @@ function TableHeaderRow({
           className="h-11 border-b border-border bg-background"
         >
           {headerGroup.headers.map((header) => {
-            const col = columns.find((c) => c.id === header.column.id);
-            const width = (col?.size ?? 0) || undefined;
+            // Column widths come from the <colgroup> (single source of geometry);
+            // the header cells deliberately carry no width so they cannot drift
+            // from the body rows.
             const sortDir = header.column.getIsSorted();
             const canSort = header.column.getCanSort();
-            const style: CSSProperties = width
-              ? { width, minWidth: width }
-              : {};
             const isFirst = header.column.id === "select";
             const isActions = header.column.id === "actions";
             return (
               <th
                 key={header.id}
                 scope="col"
-                style={style}
                 className={cn(
                   "px-3 text-left align-middle text-xs font-medium uppercase tracking-wide text-muted-foreground",
                   isFirst && "pl-4 pr-2",

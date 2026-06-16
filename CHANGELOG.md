@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.3] - 2026-06-16
+
+### Fixed
+
+- **Sites table columns now line up with their headers.** In the list view the row cells could drift one column to the right of the header labels (the site name appeared under Client, versions shifted over). The table now uses a single colgroup as the authoritative column geometry shared by the sticky header and the virtualized rows, matching the fleet tables.
+
+Dashboard only at 0.50.3; no control-plane, migration, or agent change.
+
 ## [0.50.2] - 2026-06-16
 
 ### Fixed
