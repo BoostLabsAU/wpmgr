@@ -614,12 +614,13 @@ export function SitesTable({
             style={{ ...style, height: rowHeight }}
             data-state={selected ? "selected" : undefined}
             className={cn(
-              "relative border-b border-border transition-colors duration-[80ms] hover:bg-muted",
-              selected && "bg-muted",
-              // 2px left ring on selected rows. Tailwind has no directional
-              // ring utility, so we paint a 2px strip via the `before:` pseudo.
-              selected &&
-                "before:absolute before:left-0 before:top-0 before:bottom-0 before:w-0.5 before:bg-primary before:content-['']",
+              "border-b border-border transition-colors duration-[80ms] hover:bg-muted",
+              // Selection is indicated by a background tint only. We deliberately
+              // do NOT use `position: relative` + an absolute `before:` strip on
+              // the row: a relatively-positioned table row with an abspos child
+              // drops out of the `table-layout: fixed` column grid, so selected
+              // rows would lose their column widths and drift from the header.
+              selected && "bg-primary/5",
             )}
           />
         );

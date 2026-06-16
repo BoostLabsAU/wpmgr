@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.4] - 2026-06-16
+
+### Fixed
+
+- **Sites table no longer misaligns when rows are selected.** Selected rows used a relatively-positioned row with an absolute accent strip, which pulled the row out of the fixed table column grid so its cells drifted from the headers. Selection is now shown with a background tint that does not affect layout, so selected and unselected rows stay aligned.
+
+Dashboard only at 0.50.4; no control-plane, migration, or agent change.
+
 ## [0.50.3] - 2026-06-16
 
 ### Fixed
