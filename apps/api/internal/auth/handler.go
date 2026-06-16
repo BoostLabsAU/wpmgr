@@ -28,11 +28,21 @@ type Handler struct {
 	sessions  *SessionManager
 	oidc      *OIDCProvider
 	newTenant TenantCreator
+	// secureCookies mirrors cfg.IsProduction(). Controls the Secure flag on
+	// the trusted-device cookie. Set after construction via SetSecureCookies.
+	secureCookies bool
 }
 
 // NewHandler builds an auth Handler.
 func NewHandler(svc *Service, sessions *SessionManager, oidc *OIDCProvider, newTenant TenantCreator) *Handler {
 	return &Handler{svc: svc, sessions: sessions, oidc: oidc, newTenant: newTenant}
+}
+
+// SetSecureCookies configures whether the Secure flag is set on the
+// trusted-device cookie. Call this after NewHandler, before serving.
+// Pass cfg.IsProduction() at startup.
+func (h *Handler) SetSecureCookies(secure bool) {
+	h.secureCookies = secure
 }
 
 // Register mounts the auth routes on the root engine group.
@@ -52,6 +62,8 @@ func (h *Handler) Register(r gin.IRouter) {
 	g.POST("/verification/resend", h.resendVerification)
 	g.GET("/oidc/login", h.oidcLogin)
 	g.GET("/oidc/callback", h.oidcCallback)
+	// ADR-056 Phase 3 — dashboard 2FA challenge-completion + management.
+	h.RegisterTwoFactor(g)
 }
 
 type loginBody struct {
@@ -70,6 +82,59 @@ func (h *Handler) login(c *gin.Context) {
 		httpx.Error(c, err)
 		return
 	}
+
+	// ADR-056 Phase 3: two-factor enforcement.
+	// INVARIANT: a 2FA-enabled user must NEVER receive a full session without
+	// either completing a factor challenge or presenting a valid trusted-device
+	// cookie. The two paths are:
+	//
+	//   1. two_factor_enabled == false: issue session directly (unchanged path).
+	//   2. two_factor_enabled == true:
+	//      a. Valid trusted-device cookie present: bypass challenge, issue session.
+	//      b. No valid trusted device: return 202 + challenge nonce; no session.
+	if res.User.TwoFactorEnabled {
+		// Check for a valid trusted-device cookie (bypass path).
+		if rawToken := readDeviceCookie(c); rawToken != "" {
+			device, verr := h.svc.VerifyTrustedDevice(c.Request.Context(), rawToken)
+			if verr == nil && device.ID != uuid.Nil {
+				// Trusted device verified: issue the full session directly.
+				if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
+					httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
+					return
+				}
+				out := toMe(res.User, res.Memberships, res.ActiveTenant)
+				c.JSON(http.StatusOK, &out)
+				return
+			}
+			// Trusted-device check failed: fall through to challenge issuance.
+			// The cookie may be expired, revoked, or tampered; proceed normally.
+		}
+
+		// Issue a 2FA challenge. Return 202 + the random nonce to the client.
+		// The nonce is 32 bytes of crypto/rand hex (256-bit entropy, unguessable).
+		// Do NOT issue a session here.
+		ip := clientAddr(c)
+		result, cherr := h.svc.RequestTwoFactorChallenge(c.Request.Context(), res.User.ID, &ip)
+		if cherr != nil {
+			httpx.Error(c, cherr)
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{
+			"two_factor_required": true,
+			// challenge is the UUID of the challenge row, returned as-is; the
+			// nonce (unguessable 32-byte hex) is stored in the DB row. The client
+			// passes the challenge ID to the /2fa/* endpoints.
+			"challenge": result.ChallengeID,
+			"factors": gin.H{
+				"totp":     result.Factors.TOTP,
+				"webauthn": result.Factors.WebAuthnCount > 0,
+				"recovery": true, // recovery codes are always available if enrolled
+			},
+		})
+		return
+	}
+
+	// No second factor: issue the session directly (unchanged non-2FA path).
 	if err := h.sessions.Login(c.Request.Context(), res.User.ID, res.ActiveTenant); err != nil {
 		httpx.Error(c, domain.Internal("session_failed", "failed to establish session").WithCause(err))
 		return
@@ -184,6 +249,9 @@ func (h *Handler) logout(c *gin.Context) {
 		httpx.Error(c, domain.Internal("logout_failed", "failed to destroy session").WithCause(err))
 		return
 	}
+	// ADR-056: clear the trusted-device cookie on logout so the 2FA bypass
+	// does not survive after the user explicitly signs out.
+	h.clearDeviceCookie(c)
 	c.Status(http.StatusNoContent)
 }
 
@@ -435,12 +503,13 @@ func enrichMePortal(ctx context.Context, me *gen.Me, p domain.Principal, repo *R
 
 func toAPIUser(u User) gen.User {
 	out := gen.User{
-		ID:           u.ID,
-		Email:        u.Email,
-		Name:         u.Name,
-		CreatedAt:    u.CreatedAt,
-		UpdatedAt:    u.UpdatedAt,
-		IsSuperadmin: gen.NewOptBool(u.IsSuperadmin),
+		ID:               u.ID,
+		Email:            u.Email,
+		Name:             u.Name,
+		CreatedAt:        u.CreatedAt,
+		UpdatedAt:        u.UpdatedAt,
+		IsSuperadmin:     gen.NewOptBool(u.IsSuperadmin),
+		TwoFactorEnabled: gen.NewOptBool(u.TwoFactorEnabled),
 	}
 	if u.LastLoginAt != nil {
 		out.LastLoginAt = gen.NewOptDateTime(*u.LastLoginAt)

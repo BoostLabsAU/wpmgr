@@ -912,6 +912,32 @@ type Tenant struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+type TrustedDevice struct {
+	ID         uuid.UUID          `json:"id"`
+	UserID     uuid.UUID          `json:"user_id"`
+	TokenHash  string             `json:"token_hash"`
+	Label      string             `json:"label"`
+	UserAgent  string             `json:"user_agent"`
+	Ip         *netip.Addr        `json:"ip"`
+	CreatedAt  time.Time          `json:"created_at"`
+	ExpiresAt  time.Time          `json:"expires_at"`
+	LastUsedAt pgtype.Timestamptz `json:"last_used_at"`
+	RevokedAt  pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type TwoFactorChallenge struct {
+	ID              uuid.UUID          `json:"id"`
+	UserID          uuid.UUID          `json:"user_id"`
+	ChallengeNonce  string             `json:"challenge_nonce"`
+	Kind            string             `json:"kind"`
+	WebauthnSession []byte             `json:"webauthn_session"`
+	ExpiresAt       time.Time          `json:"expires_at"`
+	UsedAt          pgtype.Timestamptz `json:"used_at"`
+	Attempts        int32              `json:"attempts"`
+	RequestedIp     *netip.Addr        `json:"requested_ip"`
+	CreatedAt       time.Time          `json:"created_at"`
+}
+
 type UpdateRun struct {
 	ID          uuid.UUID          `json:"id"`
 	TenantID    uuid.UUID          `json:"tenant_id"`
@@ -943,17 +969,55 @@ type UpdateTask struct {
 }
 
 type User struct {
-	ID                uuid.UUID          `json:"id"`
-	Email             string             `json:"email"`
-	PasswordHash      *string            `json:"password_hash"`
-	OidcSubject       *string            `json:"oidc_subject"`
-	OidcIssuer        *string            `json:"oidc_issuer"`
-	Name              string             `json:"name"`
-	CreatedAt         time.Time          `json:"created_at"`
-	UpdatedAt         time.Time          `json:"updated_at"`
-	LastLoginAt       pgtype.Timestamptz `json:"last_login_at"`
-	PasswordChangedAt pgtype.Timestamptz `json:"password_changed_at"`
-	Status            string             `json:"status"`
-	EmailVerifiedAt   pgtype.Timestamptz `json:"email_verified_at"`
-	IsSuperadmin      bool               `json:"is_superadmin"`
+	ID                             uuid.UUID          `json:"id"`
+	Email                          string             `json:"email"`
+	PasswordHash                   *string            `json:"password_hash"`
+	OidcSubject                    *string            `json:"oidc_subject"`
+	OidcIssuer                     *string            `json:"oidc_issuer"`
+	Name                           string             `json:"name"`
+	CreatedAt                      time.Time          `json:"created_at"`
+	UpdatedAt                      time.Time          `json:"updated_at"`
+	LastLoginAt                    pgtype.Timestamptz `json:"last_login_at"`
+	PasswordChangedAt              pgtype.Timestamptz `json:"password_changed_at"`
+	Status                         string             `json:"status"`
+	EmailVerifiedAt                pgtype.Timestamptz `json:"email_verified_at"`
+	IsSuperadmin                   bool               `json:"is_superadmin"`
+	TwoFactorEnabled               bool               `json:"two_factor_enabled"`
+	TotpSecretEncrypted            []byte             `json:"totp_secret_encrypted"`
+	TotpConfirmedAt                pgtype.Timestamptz `json:"totp_confirmed_at"`
+	TotpLastStep                   *int64             `json:"totp_last_step"`
+	TotpProvisionalSecretEncrypted []byte             `json:"totp_provisional_secret_encrypted"`
+	TotpProvisionalExpiresAt       pgtype.Timestamptz `json:"totp_provisional_expires_at"`
+}
+
+type UserRecoveryCode struct {
+	ID        uuid.UUID          `json:"id"`
+	UserID    uuid.UUID          `json:"user_id"`
+	CodeHash  string             `json:"code_hash"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
+	CreatedAt time.Time          `json:"created_at"`
+}
+
+type WebauthnCredential struct {
+	ID              uuid.UUID          `json:"id"`
+	UserID          uuid.UUID          `json:"user_id"`
+	CredentialID    []byte             `json:"credential_id"`
+	PublicKey       []byte             `json:"public_key"`
+	AttestationType string             `json:"attestation_type"`
+	Aaguid          []byte             `json:"aaguid"`
+	SignCount       int64              `json:"sign_count"`
+	Transports      []string           `json:"transports"`
+	Name            string             `json:"name"`
+	BackupEligible  bool               `json:"backup_eligible"`
+	BackupState     bool               `json:"backup_state"`
+	CreatedAt       time.Time          `json:"created_at"`
+	LastUsedAt      pgtype.Timestamptz `json:"last_used_at"`
+}
+
+type WebauthnRegistrationSession struct {
+	ID        uuid.UUID `json:"id"`
+	UserID    uuid.UUID `json:"user_id"`
+	Session   []byte    `json:"session"`
+	ExpiresAt time.Time `json:"expires_at"`
+	CreatedAt time.Time `json:"created_at"`
 }

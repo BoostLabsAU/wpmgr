@@ -32,6 +32,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/apikey"
 	"github.com/mosamlife/wpmgr/apps/api/internal/audit"
 	"github.com/mosamlife/wpmgr/apps/api/internal/auth"
+	"github.com/mosamlife/wpmgr/apps/api/internal/auth/twofactor"
 	"github.com/mosamlife/wpmgr/apps/api/internal/autologin"
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
@@ -1680,13 +1681,33 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		logger.Warn("ADR-042 self-update disabled: object storage or WPMGR_AGENT_SIGNING_PRIVATE_KEY not configured")
 	}
 
+	// ADR-056 Phase 3 — wire two-factor authentication into the auth handler.
+	// TOTPFactor and WebAuthnFactor are stateless and shared across goroutines.
+	// The same siteDestAgeID (age X25519) used for SMTP credential encryption
+	// protects TOTP secrets at rest (same threat model: protection against a
+	// DB dump, not a fully-compromised CP process).
+	totpFactor := twofactor.NewTOTPFactor(cfg.Auth.WebAuthnRPDisplayName)
+	waInstance, waErr := twofactor.NewWebAuthn(twofactor.Config{
+		RPID:          cfg.Auth.WebAuthnRPID,
+		RPOrigins:     twofactor.ParseRPOrigins(cfg.Auth.WebAuthnRPOrigins),
+		RPDisplayName: cfg.Auth.WebAuthnRPDisplayName,
+	})
+	if waErr != nil {
+		return fmt.Errorf("webauthn config: %w", waErr)
+	}
+	waFactor := twofactor.NewWebAuthnFactor(waInstance)
+	authSvc.SetTwoFactorDeps(totpFactor, waFactor, siteDestAgeID)
+
+	authH := auth.NewHandler(authSvc, sessions, oidcProvider, newTenant)
+	authH.SetSecureCookies(cfg.IsProduction())
+
 	srv := server.New(server.Deps{
 		Config:          cfg,
 		Logger:          logger,
 		Pool:            pool,
 		Sessions:        sessions,
 		Auth:            authn,
-		AuthH:           auth.NewHandler(authSvc, sessions, oidcProvider, newTenant),
+		AuthH:           authH,
 		MembersH:        auth.NewMembersHandler(authSvc, invitationSvc),
 		APIKeyH:         apikey.NewHandler(apiKeySvc, auditRec),
 		AuditH:          audit.NewHandler(auditRec),

@@ -25,6 +25,9 @@ type Service struct {
 	email   EmailEnqueuer
 	baseURL string
 	limiter RateLimiter
+	// twofa holds the Phase 2 two-factor service logic. Injected via
+	// SetTwoFactorDeps after startup. nil when 2FA is not configured.
+	twofa *TwoFactorService
 }
 
 // NewService builds an auth Service.

@@ -54,10 +54,17 @@ func userToModel(u sqlc.User) User {
 		IsSuperadmin: u.IsSuperadmin,
 		CreatedAt:    u.CreatedAt,
 		UpdatedAt:    u.UpdatedAt,
+		// m73: two-factor authentication fields (ADR-056).
+		TwoFactorEnabled:    u.TwoFactorEnabled,
+		TOTPSecretEncrypted: u.TotpSecretEncrypted,
 	}
 	if u.LastLoginAt.Valid {
 		t := u.LastLoginAt.Time
 		m.LastLoginAt = &t
+	}
+	if u.TotpConfirmedAt.Valid {
+		t := u.TotpConfirmedAt.Time
+		m.TOTPConfirmedAt = &t
 	}
 	return m
 }
@@ -158,13 +165,17 @@ func (r *Repo) TouchLogin(ctx context.Context, userID uuid.UUID) error {
 func (r *Repo) UpdateName(ctx context.Context, userID uuid.UUID, name string) (User, error) {
 	row := r.pool.QueryRow(ctx,
 		`UPDATE users SET name = $1, updated_at = now() WHERE id = $2
-		 RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at, last_login_at, password_changed_at, status, email_verified_at, is_superadmin`,
+		 RETURNING id, email, password_hash, oidc_subject, oidc_issuer, name, created_at, updated_at,
+		           last_login_at, password_changed_at, status, email_verified_at, is_superadmin,
+		           two_factor_enabled, totp_secret_encrypted, totp_confirmed_at`,
 		name, userID,
 	)
 	var u sqlc.User
 	if err := row.Scan(
 		&u.ID, &u.Email, &u.PasswordHash, &u.OidcSubject, &u.OidcIssuer,
-		&u.Name, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.PasswordChangedAt, &u.Status, &u.EmailVerifiedAt, &u.IsSuperadmin,
+		&u.Name, &u.CreatedAt, &u.UpdatedAt, &u.LastLoginAt, &u.PasswordChangedAt,
+		&u.Status, &u.EmailVerifiedAt, &u.IsSuperadmin,
+		&u.TwoFactorEnabled, &u.TotpSecretEncrypted, &u.TotpConfirmedAt,
 	); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return User{}, domain.NotFound("user_not_found", "user not found")

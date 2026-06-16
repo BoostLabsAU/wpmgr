@@ -2695,3 +2695,147 @@ CREATE POLICY "site_screenshots_site_scope" ON "public"."site_screenshots"
             )::uuid[]
         )
     );
+
+-- ---------------------------------------------------------------------------
+-- m73: two-factor authentication (ADR-056)
+-- users columns, six new tables; all RLS under app.agent='on' (pre-tenant auth flow).
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS two_factor_enabled    bool   NOT NULL DEFAULT false;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret_encrypted bytea;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_confirmed_at     timestamptz;
+-- totp_last_step: last accepted TOTP time-step for replay protection (Phase 2).
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_last_step                    bigint;
+-- Provisional TOTP secret: unconfirmed secret between BeginRegistration and
+-- FinishRegistration. Cleared on confirmation or TTL expiry.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_provisional_secret_encrypted bytea;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_provisional_expires_at       timestamptz;
+
+-- user_recovery_codes: 10 single-use account-level backup codes.
+-- code_hash: argon2id hash of the plaintext code (never stored plaintext).
+-- used_at IS NULL = available; IS NOT NULL = consumed.
+CREATE TABLE IF NOT EXISTS user_recovery_codes (
+    id         uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id    uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    code_hash  text        NOT NULL,
+    used_at    timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS user_recovery_codes_user_idx
+    ON user_recovery_codes (user_id);
+
+ALTER TABLE user_recovery_codes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_recovery_codes FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY user_recovery_codes_agent ON user_recovery_codes
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- webauthn_credentials: registered passkeys / FIDO2 hardware keys per user.
+-- credential_id: the credential ID returned by the authenticator (variable length bytes).
+-- sign_count: must strictly increase on each assertion; tracked for clone detection.
+-- transports: authenticator transport hints (e.g. ["internal","usb"]).
+CREATE TABLE IF NOT EXISTS webauthn_credentials (
+    id               uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id          uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    credential_id    bytea       NOT NULL UNIQUE,
+    public_key       bytea       NOT NULL,
+    attestation_type text        NOT NULL DEFAULT '',
+    aaguid           bytea       NOT NULL DEFAULT ''::bytea,
+    sign_count       bigint      NOT NULL DEFAULT 0,
+    transports       text[],
+    name             text        NOT NULL DEFAULT '',
+    backup_eligible  bool        NOT NULL DEFAULT false,
+    backup_state     bool        NOT NULL DEFAULT false,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    last_used_at     timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS webauthn_credentials_user_idx
+    ON webauthn_credentials (user_id);
+
+ALTER TABLE webauthn_credentials ENABLE ROW LEVEL SECURITY;
+ALTER TABLE webauthn_credentials FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY webauthn_credentials_agent ON webauthn_credentials
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- two_factor_challenges: transient factor-agnostic login challenges.
+-- kind: 'login' (the only kind in Phase 1; 'recover' added in Phase 2).
+-- webauthn_session: go-webauthn SessionData JSON, populated only for kind='webauthn'.
+-- attempts: incremented on each failed verify; challenge locked after 5 attempts.
+CREATE TABLE IF NOT EXISTS two_factor_challenges (
+    id               uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id          uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    challenge_nonce  text        NOT NULL,
+    kind             text        NOT NULL DEFAULT 'login',
+    webauthn_session jsonb,
+    expires_at       timestamptz NOT NULL,
+    used_at          timestamptz,
+    attempts         integer     NOT NULL DEFAULT 0,
+    requested_ip     inet,
+    created_at       timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS two_factor_challenges_nonce_key
+    ON two_factor_challenges (challenge_nonce) WHERE used_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS two_factor_challenges_user_active_idx
+    ON two_factor_challenges (user_id)
+    WHERE used_at IS NULL;
+
+ALTER TABLE two_factor_challenges ENABLE ROW LEVEL SECURITY;
+ALTER TABLE two_factor_challenges FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY two_factor_challenges_agent ON two_factor_challenges
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- webauthn_registration_sessions: stash go-webauthn SessionData during credential
+-- registration (BeginRegistration -> FinishRegistration). TTL'd, account-scoped.
+CREATE TABLE IF NOT EXISTS webauthn_registration_sessions (
+    id         uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id    uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    session    jsonb       NOT NULL,
+    expires_at timestamptz NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS webauthn_registration_sessions_user_idx
+    ON webauthn_registration_sessions (user_id);
+
+ALTER TABLE webauthn_registration_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE webauthn_registration_sessions FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY webauthn_registration_sessions_agent ON webauthn_registration_sessions
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- trusted_devices: "remember this device" entries per user.
+-- token_hash: argon2id hash of the opaque device trust token stored in the cookie.
+-- expires_at: when the trust expires (user-chosen window, default 30 days).
+-- revoked_at: soft-delete; NULL = active.
+CREATE TABLE IF NOT EXISTS trusted_devices (
+    id           uuid        NOT NULL DEFAULT gen_random_uuid() PRIMARY KEY,
+    user_id      uuid        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token_hash   text        NOT NULL UNIQUE,
+    label        text        NOT NULL DEFAULT '',
+    user_agent   text        NOT NULL DEFAULT '',
+    ip           inet,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL,
+    last_used_at timestamptz,
+    revoked_at   timestamptz
+);
+
+CREATE INDEX IF NOT EXISTS trusted_devices_user_idx
+    ON trusted_devices (user_id);
+
+ALTER TABLE trusted_devices ENABLE ROW LEVEL SECURITY;
+ALTER TABLE trusted_devices FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY trusted_devices_agent ON trusted_devices
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

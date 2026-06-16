@@ -1073,6 +1073,11 @@ export const UserSchema = {
     is_superadmin: {
       type: "boolean",
     },
+    two_factor_enabled: {
+      type: "boolean",
+      description:
+        "Whether the user has an active second factor (TOTP or WebAuthn) enrolled.",
+    },
   },
 } as const;
 

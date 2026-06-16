@@ -22,6 +22,17 @@ type User struct {
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
 	LastLoginAt  *time.Time
+
+	// m73: two-factor authentication (ADR-056).
+	// TwoFactorEnabled reports whether the user has an active second factor.
+	// TOTPSecretEncrypted is the age-X25519 ciphertext of the base32 TOTP
+	// shared secret; nil when no TOTP is enrolled. TOTPConfirmedAt is when
+	// TOTP enrollment was confirmed (nil if never enrolled or unenrolled).
+	// These fields are populated by repo.GetUserByID / GetUserByEmail (sqlc
+	// SELECT * from the users table includes all columns).
+	TwoFactorEnabled     bool
+	TOTPSecretEncrypted  []byte
+	TOTPConfirmedAt      *time.Time
 }
 
 // Membership binds a user to a tenant with a role.

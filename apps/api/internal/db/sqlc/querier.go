@@ -96,6 +96,14 @@ type Querier interface {
 	ClearActiveDBScanJob(ctx context.Context, siteID uuid.UUID) error
 	// Clears the grace-window previous hash once the rotation grace period expires.
 	ClearBeaconKeyHashPrev(ctx context.Context, siteID uuid.UUID) error
+	// Clear the provisional secret after enrollment is confirmed (or on explicit
+	// cancel). Idempotent: safe to call even if the columns are already NULL.
+	ClearUserTOTPProvisional(ctx context.Context, userID uuid.UUID) error
+	// Disable TOTP by nulling the secret and confirmed_at.
+	// The secret bytes are cleared so a DB dump after disablement reveals nothing.
+	// two_factor_enabled is recomputed by the service after this call (it may
+	// remain true if WebAuthn credentials still exist).
+	ClearUserTOTPSecret(ctx context.Context, userID uuid.UUID) error
 	CompleteBackupSnapshot(ctx context.Context, arg CompleteBackupSnapshotParams) (BackupSnapshot, error)
 	CompleteReport(ctx context.Context, arg CompleteReportParams) (GeneratedReport, error)
 	// Consume path (app.agent). Atomic single-shot UPDATE that wins exactly once
@@ -112,12 +120,19 @@ type Querier interface {
 	// expired. Returns the row (incl. user_id) only when the consume succeeded, so
 	// the caller cannot distinguish wrong/expired/used by anything but "no row".
 	ConsumePasswordResetToken(ctx context.Context, tokenHash []byte) (PasswordResetToken, error)
+	// Atomically consume a single recovery code by ID.
+	// Returns the row only when the update succeeds (used_at was NULL).
+	ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCodeParams) (UserRecoveryCode, error)
 	// Enroll path (app.enroll GUC): the ATOMIC single-use consume. Marks the code
 	// consumed only if it is still unconsumed AND unexpired, recording the source
 	// IP. Exactly one concurrent caller wins (the conditional UPDATE is the lock);
 	// a loser gets pgx.ErrNoRows. Returns the resolved tenant_id + site_id so the
 	// caller can transition the bound site. NULL site_id ⇒ legacy create-at-enroll.
 	ConsumeSiteBoundPairingCode(ctx context.Context, arg ConsumeSiteBoundPairingCodeParams) (ConsumeSiteBoundPairingCodeRow, error)
+	// Mark a challenge used on successful verification.
+	ConsumeTwoFactorChallenge(ctx context.Context, id uuid.UUID) (TwoFactorChallenge, error)
+	// Count remaining (unused) recovery codes. Shown in the Security settings card.
+	CountActiveRecoveryCodes(ctx context.Context, userID uuid.UUID) (int64, error)
 	// Best-effort per-tenant in-flight task count, used by the parallelism guard so
 	// one tenant cannot saturate the worker pool. Runs in the tenant's RLS scope.
 	CountRunningTasksForTenant(ctx context.Context, tenantID uuid.UUID) (int64, error)
@@ -127,6 +142,9 @@ type Querier interface {
 	// Counts tasks not yet in a terminal state, used to decide when a run completes.
 	CountUnfinishedTasksForRun(ctx context.Context, arg CountUnfinishedTasksForRunParams) (int64, error)
 	CountUsers(ctx context.Context) (int64, error)
+	// Count registered WebAuthn credentials for a user. Used to recompute
+	// two_factor_enabled after credential deletion.
+	CountWebAuthnCredentials(ctx context.Context, userID uuid.UUID) (int64, error)
 	CreateAPIKey(ctx context.Context, arg CreateAPIKeyParams) (ApiKey, error)
 	// M4 backup queries. Every statement is tenant-scoped both explicitly
 	// (tenant_id in the WHERE/VALUES) and by RLS (the app.tenant_id policy).
@@ -181,6 +199,8 @@ type Querier interface {
 	// is NEVER consulted for a delete. Retained only so the generated querier keeps
 	// compiling; the GC delete path no longer calls it.
 	DecrementChunkRefcount(ctx context.Context, arg DecrementChunkRefcountParams) (DecrementChunkRefcountRow, error)
+	// Purge all recovery codes for a user (before inserting a regenerated batch).
+	DeleteAllRecoveryCodes(ctx context.Context, userID uuid.UUID) error
 	DeleteBackupSnapshot(ctx context.Context, arg DeleteBackupSnapshotParams) (int64, error)
 	// Hard-delete a site that has NEVER connected: the delete is conditional on
 	// all three never-connected predicates so the check and the delete are atomic
@@ -206,6 +226,8 @@ type Querier interface {
 	DeleteEmailLogsOlderThan(ctx context.Context, arg DeleteEmailLogsOlderThanParams) (int64, error)
 	// Operator delete (un-suppress). Must be tenant-scoped (InTenantTx).
 	DeleteEmailSuppression(ctx context.Context, arg DeleteEmailSuppressionParams) error
+	// Periodic GC: purge all expired registration sessions.
+	DeleteExpiredWebAuthnRegistrationSessions(ctx context.Context) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) (int64, error)
 	// Prunes daily rollup rows older than @since_day across ALL tenants.
 	DeleteOldRumDailyRollups(ctx context.Context, sinceDay pgtype.Date) (int64, error)
@@ -227,6 +249,12 @@ type Querier interface {
 	DeleteReport(ctx context.Context, arg DeleteReportParams) (int64, error)
 	DeleteShare(ctx context.Context, arg DeleteShareParams) (int64, error)
 	DeleteSite(ctx context.Context, arg DeleteSiteParams) (int64, error)
+	// Remove a single credential by its primary key and user_id guard.
+	DeleteWebAuthnCredential(ctx context.Context, arg DeleteWebAuthnCredentialParams) (int64, error)
+	// Remove the registration session after FinishRegistration (or on failure).
+	DeleteWebAuthnRegistrationSession(ctx context.Context, id uuid.UUID) error
+	// Lock a challenge by setting used_at (reached attempt limit or timeout).
+	ExpireTwoFactorChallenge(ctx context.Context, id uuid.UUID) error
 	FailBackupSnapshot(ctx context.Context, arg FailBackupSnapshotParams) (BackupSnapshot, error)
 	FailReport(ctx context.Context, arg FailReportParams) (GeneratedReport, error)
 	// Records a terminal task state (succeeded|failed|rolled_back|skipped) with the
@@ -270,6 +298,8 @@ type Querier interface {
 	// site-scoped principal. Run under InUserTx (app.user_id set) or directly with
 	// explicit params.
 	GetActiveSharesForUserTenant(ctx context.Context, arg GetActiveSharesForUserTenantParams) ([]SiteShare, error)
+	// Load an active (unused, non-expired) challenge by ID.
+	GetActiveTwoFactorChallenge(ctx context.Context, id uuid.UUID) (TwoFactorChallenge, error)
 	// M5 uptime alerting: per-tenant alert config + per-site alert state.
 	// Tenant-scoped read of the tenant's default alert channel.
 	GetAlertConfig(ctx context.Context, tenantID uuid.UUID) (AlertConfig, error)
@@ -603,6 +633,8 @@ type Querier interface {
 	// Shared tenant name lookup (used by the aggregator for agency branding).
 	// ---------------------------------------------------------------------------
 	GetTenantName(ctx context.Context, id uuid.UUID) (string, error)
+	// Verify a device trust cookie token (hashed before lookup comparison).
+	GetTrustedDeviceByTokenHash(ctx context.Context, tokenHash string) (TrustedDevice, error)
 	// Update section: succeeded/failed tasks grouped by target_type in [from, to).
 	GetUpdateReportStats(ctx context.Context, arg GetUpdateReportStatsParams) ([]GetUpdateReportStatsRow, error)
 	GetUpdateRun(ctx context.Context, arg GetUpdateRunParams) (UpdateRun, error)
@@ -612,12 +644,27 @@ type Querier interface {
 	GetUserByOIDC(ctx context.Context, arg GetUserByOIDCParams) (User, error)
 	// Lightweight per-request lookup for the session reject-stale check.
 	GetUserPasswordChangedAt(ctx context.Context, id uuid.UUID) (pgtype.Timestamptz, error)
+	// Read the last accepted TOTP time-step for replay-protection comparison.
+	// Returns NULL when no code has ever been accepted (new enrollment).
+	GetUserTOTPLastStep(ctx context.Context, userID uuid.UUID) (*int64, error)
+	// Retrieve the provisional TOTP secret for confirmation. Returns the row only
+	// when the provisional TTL has not yet expired.
+	GetUserTOTPProvisional(ctx context.Context, userID uuid.UUID) (GetUserTOTPProvisionalRow, error)
+	// Lightweight read for the 2FA branch in the login handler (Phase 2).
+	GetUserTwoFactorState(ctx context.Context, userID uuid.UUID) (GetUserTwoFactorStateRow, error)
+	// Load a credential by its binary credential_id (used during assertion).
+	GetWebAuthnCredentialByCredentialID(ctx context.Context, credentialID []byte) (WebauthnCredential, error)
+	// Load and return the registration session for a user (most recent, non-expired).
+	GetWebAuthnRegistrationSession(ctx context.Context, userID uuid.UUID) (WebauthnRegistrationSession, error)
 	// Permanently removes the client row. ON DELETE SET NULL on sites.client_id
 	// handles the unassignment automatically in the same statement.
 	HardDeleteClient(ctx context.Context, arg HardDeleteClientParams) (int64, error)
 	IncrEmailAttempts(ctx context.Context, id uuid.UUID) error
 	// Increment resent_count on a specific log entry. Runs under InTenantTx.
 	IncrEmailLogResentCount(ctx context.Context, arg IncrEmailLogResentCountParams) error
+	// Increment the failed-attempt counter. Returns updated row so caller can
+	// check whether the attempt limit (5) has been reached.
+	IncrementChallengeAttempts(ctx context.Context, id uuid.UUID) (TwoFactorChallenge, error)
 	IncrementChunkRefcount(ctx context.Context, arg IncrementChunkRefcountParams) (BackupChunk, error)
 	IncrementInviteAttempts(ctx context.Context, id uuid.UUID) (Invitation, error)
 	// Enroll path (app.enroll GUC): record a failed validation attempt.
@@ -690,6 +737,12 @@ type Querier interface {
 	InsertObjectCacheStatsHistory(ctx context.Context, arg InsertObjectCacheStatsHistoryParams) (SiteObjectCacheStatsHistory, error)
 	// Record a new reset token. Run under Pool.InAgentTx (app.agent='on').
 	InsertPasswordResetToken(ctx context.Context, arg InsertPasswordResetTokenParams) (PasswordResetToken, error)
+	// -----------------------------------------------------------------------
+	// user_recovery_codes
+	// -----------------------------------------------------------------------
+	// Insert one hashed recovery code. Called 10 times during enrollment.
+	// Run under InAgentTx.
+	InsertRecoveryCode(ctx context.Context, arg InsertRecoveryCodeParams) error
 	// ---------------------------------------------------------------------------
 	// rucss_jobs
 	// ---------------------------------------------------------------------------
@@ -706,6 +759,26 @@ type Querier interface {
 	// prune). The app mints the ULID event_id; NOTIFY carries only the id.
 	// ---------------------------------------------------------------------------
 	InsertSiteEvent(ctx context.Context, arg InsertSiteEventParams) (SiteEvent, error)
+	// -----------------------------------------------------------------------
+	// trusted_devices
+	// -----------------------------------------------------------------------
+	// Create a new trusted-device record after the user checks "remember this device".
+	InsertTrustedDevice(ctx context.Context, arg InsertTrustedDeviceParams) (TrustedDevice, error)
+	// -----------------------------------------------------------------------
+	// two_factor_challenges
+	// -----------------------------------------------------------------------
+	// Create a new factor-agnostic login challenge. Returns the created row.
+	InsertTwoFactorChallenge(ctx context.Context, arg InsertTwoFactorChallengeParams) (TwoFactorChallenge, error)
+	// -----------------------------------------------------------------------
+	// webauthn_credentials
+	// -----------------------------------------------------------------------
+	// Persist a newly registered WebAuthn credential after FinishRegistration.
+	InsertWebAuthnCredential(ctx context.Context, arg InsertWebAuthnCredentialParams) (WebauthnCredential, error)
+	// -----------------------------------------------------------------------
+	// webauthn_registration_sessions
+	// -----------------------------------------------------------------------
+	// Stash go-webauthn SessionData between BeginRegistration and FinishRegistration.
+	InsertWebAuthnRegistrationSession(ctx context.Context, arg InsertWebAuthnRegistrationSessionParams) (WebauthnRegistrationSession, error)
 	// ---------------------------------------------------------------------------
 	// email_webhook_events  (Phase 4a — dedup / audit)
 	// ---------------------------------------------------------------------------
@@ -723,6 +796,9 @@ type Querier interface {
 	IsSuppressed(ctx context.Context, arg IsSuppressedParams) (bool, error)
 	LinkUserOIDC(ctx context.Context, arg LinkUserOIDCParams) (User, error)
 	ListAPIKeys(ctx context.Context, arg ListAPIKeysParams) ([]ApiKey, error)
+	// All unused recovery codes for a user (used_at IS NULL).
+	// Ordered by created_at ASC, id ASC for stable pagination.
+	ListActiveRecoveryCodes(ctx context.Context, userID uuid.UUID) ([]UserRecoveryCode, error)
 	// Cross-tenant enumeration for the evaluator (app.agent GUC). Only enabled
 	// configs are returned.
 	ListAlertConfigsAllTenants(ctx context.Context) ([]AlertConfig, error)
@@ -953,11 +1029,17 @@ type Querier interface {
 	// periodic retention GC. Runs cross-tenant under the app.agent GUC (the
 	// backup_snapshots_gc SELECT policy); the prune then runs per tenant.
 	ListTenantsWithCompletedSnapshots(ctx context.Context) ([]uuid.UUID, error)
+	// All active trusted devices for the Security settings UI.
+	// Ordered by created_at DESC, id DESC.
+	ListTrustedDevicesForUser(ctx context.Context, userID uuid.UUID) ([]TrustedDevice, error)
 	// Runs that have not yet fired: status 'scheduled' or 'queued', scheduled_for
 	// in the future. Used for the UI upcoming preview (typically 1–3 rows).
 	ListUpcomingScheduleRuns(ctx context.Context, arg ListUpcomingScheduleRunsParams) ([]BackupScheduleRun, error)
 	ListUpdateRuns(ctx context.Context, arg ListUpdateRunsParams) ([]UpdateRun, error)
 	ListUpdateTasksForRun(ctx context.Context, arg ListUpdateTasksForRunParams) ([]UpdateTask, error)
+	// All registered credentials for a user (for the Security settings list).
+	// Ordered by created_at DESC, id DESC.
+	ListWebAuthnCredentialsForUser(ctx context.Context, userID uuid.UUID) ([]WebauthnCredential, error)
 	// M56 Real User Monitoring (RUM) queries.
 	// All writes run under InRumIngestTx (app.rum_ingest='on').
 	// Dashboard reads run under InTenantTx (app.tenant_id set).
@@ -1063,10 +1145,14 @@ type Querier interface {
 	// archived → disconnected (operator un-archive). Clears archived_at.
 	RestoreSite(ctx context.Context, arg RestoreSiteParams) (Site, error)
 	RevokeAPIKey(ctx context.Context, arg RevokeAPIKeyParams) (int64, error)
+	// Revoke all active trusted devices for a user (e.g. on password change or 2FA disable).
+	RevokeAllTrustedDevicesForUser(ctx context.Context, userID uuid.UUID) error
 	// Soft-revoke a still-pending invitation. Idempotent / race-safe: only an
 	// un-accepted, un-revoked row is touched (RETURNING -> ErrNoRows if it was
 	// accepted or already revoked between load and update).
 	RevokeInvitation(ctx context.Context, arg RevokeInvitationParams) (Invitation, error)
+	// Revoke a single trusted device by ID + user_id guard.
+	RevokeTrustedDevice(ctx context.Context, arg RevokeTrustedDeviceParams) error
 	// Stamp the in-flight db_clean job id + start time for the watchdog.
 	// Runs under app.agent (cross-tenant scheduled path) or InTenantTx (operator).
 	SetActiveDBCleanJob(ctx context.Context, arg SetActiveDBCleanJobParams) error
@@ -1106,6 +1192,25 @@ type Querier interface {
 	// sessions (ADR-045 Phase 2).
 	SetUserPasswordHash(ctx context.Context, arg SetUserPasswordHashParams) error
 	SetUserPending(ctx context.Context, id uuid.UUID) error
+	// Persist the accepted TOTP time-step immediately after a successful verify.
+	// Called inside the same InAgentTx as the challenge consumption so the step
+	// is stamped atomically with the challenge being marked used.
+	SetUserTOTPLastStep(ctx context.Context, arg SetUserTOTPLastStepParams) error
+	// Store the provisional (unconfirmed) TOTP secret between BeginRegistration
+	// and FinishRegistration. Overwriting is safe: the user may restart enrollment.
+	SetUserTOTPProvisional(ctx context.Context, arg SetUserTOTPProvisionalParams) error
+	// two_factor.sql — sqlc queries for ADR-056 dashboard 2FA (m73).
+	// All writes run under Pool.InAgentTx (app.agent='on').
+	// Named parameters use @param convention (sqlc named params).
+	// -----------------------------------------------------------------------
+	// users: TOTP column setters
+	// -----------------------------------------------------------------------
+	// Store the age-encrypted TOTP shared secret during enrollment confirmation.
+	// Sets totp_confirmed_at so the enrollment timestamp is visible in the UI.
+	SetUserTOTPSecret(ctx context.Context, arg SetUserTOTPSecretParams) error
+	// Toggle two_factor_enabled without touching the secret (disable path).
+	// The secret and confirmed_at are intentionally retained for audit purposes.
+	SetUserTwoFactorEnabled(ctx context.Context, arg SetUserTwoFactorEnabledParams) error
 	// Top failure samples for the digest (subject + truncated error, no bodies).
 	// Runs under InAgentTx.
 	TopFailureSamples(ctx context.Context, arg TopFailureSamplesParams) ([]TopFailureSamplesRow, error)
@@ -1125,6 +1230,8 @@ type Querier interface {
 	// service performs explicitly).
 	TouchSiteHeartbeat(ctx context.Context, arg TouchSiteHeartbeatParams) (Site, error)
 	TouchSiteSeen(ctx context.Context, arg TouchSiteSeenParams) (Site, error)
+	// Update last_used_at on a trusted device (called when it is reused at login).
+	TouchTrustedDevice(ctx context.Context, id uuid.UUID) error
 	TouchUserLogin(ctx context.Context, id uuid.UUID) error
 	// M5.6 / ADR-032: agent runner posts a JSONB progress payload at every phpbu
 	// stage transition + per-chunk during the custom PresignedS3 Sync. We always
@@ -1176,6 +1283,8 @@ type Querier interface {
 	// UpdateTenantName renames a tenant. tenants has no RLS, so the handler verifies
 	// the caller's membership + admin/owner role before calling this.
 	UpdateTenantName(ctx context.Context, arg UpdateTenantNameParams) (Tenant, error)
+	// Bump the sign_count and last_used_at after a successful assertion.
+	UpdateWebAuthnCredentialSignCount(ctx context.Context, arg UpdateWebAuthnCredentialSignCountParams) error
 	// Stamps the agent-reported woo_theme_fragments_supported flag and records when
 	// the probe ran (woo_fragments_probed_at). Agent write path (InAgentTx) — the
 	// agent is the sole writer; operators can never set this via the API.
