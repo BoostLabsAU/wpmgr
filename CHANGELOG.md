@@ -6,6 +6,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.1] - 2026-06-16
+
+### Fixed
+
+- **Two-factor sign-in landed on the login page instead of the dashboard.** After entering a valid code, the dashboard navigated before the new session was confirmed, so a route guard bounced back to sign-in until a manual refresh. It now fetches the authenticated session first and then routes, matching the password-login path.
+- **Passkeys could not be added or used.** The browser passkey ceremony double-wrapped the options the server sent, so the browser reported a missing relying-party key. The options are now passed through as-is for both registering and signing in with a passkey.
+
+Dashboard only at 0.50.1; no control-plane, migration, or agent change.
+
 ## [0.50.0] - 2026-06-16
 
 ### Added

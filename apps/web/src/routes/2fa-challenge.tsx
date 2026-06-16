@@ -16,6 +16,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { getMe } from "@wpmgr/api";
+
 import { ensureMe, authKeys } from "@/features/auth/use-auth";
 import {
   useTotpChallenge,
@@ -97,9 +99,28 @@ function TwoFaChallengePage() {
   const isExpiredOrLocked =
     errorCode === "challenge_expired" || errorCode === "too_many_attempts";
 
-  function handleSuccess(me: import("@wpmgr/api").Me) {
-    queryClient.setQueryData(authKeys.me, me);
-    void navigate({ to: search.redirect ?? "/sites" });
+  function handleSuccess(_me: import("@wpmgr/api").Me) {
+    // Mirror the password-login path: force a FRESH /auth/me with the now-set
+    // session cookie (the challenge response Me can omit middleware-resolved
+    // role/scope fields), then navigate only after it resolves so the route
+    // guards observe an authenticated session instead of racing it. Seeding the
+    // cache and navigating immediately bounced to /login until a manual reload.
+    void queryClient
+      .fetchQuery({
+        queryKey: authKeys.me,
+        queryFn: async () => {
+          const { data } = await getMe();
+          return data ?? null;
+        },
+        staleTime: 0,
+      })
+      .then((freshMe) => {
+        if (freshMe?.role === "client") {
+          void navigate({ to: "/portal" });
+        } else {
+          void navigate({ to: search.redirect ?? "/sites" });
+        }
+      });
   }
 
   return (
@@ -438,7 +459,10 @@ function WebAuthnView({
 
       // 2. Run browser assertion ceremony using @github/webauthn-json
       const { get } = await import("@github/webauthn-json");
-      const credential = await get({ publicKey: options as unknown as Parameters<typeof get>[0]["publicKey"] });
+      // The server returns the standard `{ publicKey: {...} }` envelope already
+      // (go-webauthn CredentialAssertion), so pass it straight through — wrapping
+      // it again buries `rp`/`challenge` a level too deep ("Missing key" errors).
+      const credential = await get(options as unknown as Parameters<typeof get>[0]);
 
       // 3. Serialize the assertion back to JSON and base64-encode it for the server.
       // The contract says `assertion` is `[]byte` (base64-encoded raw JSON).

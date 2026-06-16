@@ -90,11 +90,14 @@ export function PasskeyRegisterWizard({ open, onClose }: PasskeyRegisterWizardPr
       // 1. Get creation options from the server
       const options = await beginMutation.mutateAsync();
 
-      // 2. Run the browser create ceremony using @github/webauthn-json
+      // 2. Run the browser create ceremony using @github/webauthn-json.
+      // The server already returns the standard `{ publicKey: {...} }` envelope
+      // (go-webauthn CredentialCreation), so pass it straight through — wrapping
+      // it again buries `rp` a level too deep ("Missing key: rp").
       const { create } = await import("@github/webauthn-json");
-      const credential = await create({
-        publicKey: options as unknown as Parameters<typeof create>[0]["publicKey"],
-      });
+      const credential = await create(
+        options as unknown as Parameters<typeof create>[0],
+      );
 
       // 3. Serialize the attestation to JSON and base64-encode it.
       const attestationJson = JSON.stringify(credential);
