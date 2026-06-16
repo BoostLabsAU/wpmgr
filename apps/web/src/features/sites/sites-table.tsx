@@ -203,6 +203,18 @@ const COLUMN_WIDTHS_PX: ReadonlyArray<number | undefined> = [
   COL_ACTIONS_PX, // actions
 ];
 
+// Minimum table width = the sum of every column at its intended size (the
+// flexible Site column counted at a sensible minimum). When the viewport is
+// narrower than this (mobile), the table keeps these widths and the container
+// scrolls horizontally instead of squeezing the columns into each other — the
+// previous 860px floor was BELOW the fixed columns' total, so on mobile the
+// fixed-layout table compressed every column and the headers overlapped.
+const COL_SITE_MIN_PX = 260;
+const TABLE_MIN_WIDTH_PX = COLUMN_WIDTHS_PX.reduce<number>(
+  (sum, w) => sum + (w ?? COL_SITE_MIN_PX),
+  0,
+);
+
 // ---------------------------------------------------------------------------
 // Column definitions
 // ---------------------------------------------------------------------------
@@ -507,7 +519,7 @@ function VirtuosoTable({
   return (
     <table
       {...rest}
-      style={{ ...style, width: "100%", minWidth: "860px", tableLayout: "fixed" }}
+      style={{ ...style, width: "100%", minWidth: TABLE_MIN_WIDTH_PX, tableLayout: "fixed" }}
       className="border-collapse"
     >
       {/* Authoritative column geometry shared by the sticky header and the
