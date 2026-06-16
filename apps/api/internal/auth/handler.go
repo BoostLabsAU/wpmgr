@@ -313,9 +313,12 @@ func (h *Handler) logout(c *gin.Context) {
 		httpx.Error(c, domain.Internal("logout_failed", "failed to destroy session").WithCause(err))
 		return
 	}
-	// ADR-056: clear the trusted-device cookie on logout so the 2FA bypass
-	// does not survive after the user explicitly signs out.
-	h.clearDeviceCookie(c)
+	// ADR-056: do NOT clear the trusted-device cookie on logout. "Remember this
+	// device for 30 days" is meant to survive sign-out: it lets the user skip the
+	// SECOND factor (never the password) on a known device. Clearing it here made
+	// every subsequent sign-in re-prompt for 2FA and mint a duplicate trusted
+	// device. Trusted devices are invalidated instead on password change/reset
+	// (the compromise lever) and on explicit revoke or 2FA-disable.
 	c.Status(http.StatusNoContent)
 }
 

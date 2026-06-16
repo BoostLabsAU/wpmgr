@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.2] - 2026-06-16
+
+### Fixed
+
+- **"Remember this device" now actually persists.** Signing out was clearing the trusted-device marker, so every sign-in asked for the second factor again and each time added a duplicate trusted device. A trusted device now survives sign-out for its full window (you still enter your password; only the second step is skipped), and is cleared only when you change or reset your password, disable two-factor, or revoke the device.
+
+Control plane only at 0.50.2; no migration, no agent change.
+
 ## [0.50.1] - 2026-06-16
 
 ### Fixed
