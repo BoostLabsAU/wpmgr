@@ -462,7 +462,7 @@ function WebAuthnView({
       // The server returns the standard `{ publicKey: {...} }` envelope already
       // (go-webauthn CredentialAssertion), so pass it straight through — wrapping
       // it again buries `rp`/`challenge` a level too deep ("Missing key" errors).
-      const credential = await get(options as unknown as Parameters<typeof get>[0]);
+      const credential = await get(options);
 
       // 3. Serialize the assertion back to JSON and base64-encode it for the server.
       // The contract says `assertion` is `[]byte` (base64-encoded raw JSON).

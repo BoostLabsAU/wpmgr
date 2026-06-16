@@ -153,11 +153,17 @@ func TestWorker_Timeout(t *testing.T) {
 // TestWorker_MarksFailed_OnChromiumMissing verifies that when Chromium is not
 // found the worker marks the screenshot as failed (not a transient River error).
 func TestWorker_MarksFailed_OnChromiumMissing(t *testing.T) {
+	// Force the chromium-missing path deterministically: point the worker at a
+	// path that cannot exist. Without this the test relied on the ambient
+	// environment NOT having Chromium, which is false on CI runners (they ship
+	// /usr/bin/chromium-browser), so capture would succeed and MarkFailed never
+	// fired — the source of the CI flake.
+	t.Setenv("WPMGR_CHROMIUM_BIN", "/nonexistent/wpmgr-chromium-missing-test")
+
 	repo := &fakeRepo{}
 	store := &fakeStore{}
 	w := capture.NewWorker(repo, store, nil, 1, nil)
 
-	// Chromium will not be found in the test environment.
 	ctx := context.Background()
 	err := w.Work(ctx, &river.Job[screenshot.CaptureArgs]{
 		Args: screenshot.CaptureArgs{

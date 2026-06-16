@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -49,8 +50,19 @@ const (
 // scale2x is the pixel-ratio for the @2x retina thumbnail.
 const scale2x = 2.0
 
-// chromiumBin is the expected system Chromium binary path in the encoder image.
-const chromiumBin = "/usr/bin/chromium-browser"
+// defaultChromiumBin is the system Chromium path baked into the encoder image.
+const defaultChromiumBin = "/usr/bin/chromium-browser"
+
+// chromiumBinPath resolves the Chromium binary path at call time. It honors the
+// WPMGR_CHROMIUM_BIN override (for self-hosters whose Chromium lives elsewhere,
+// and for tests that must force the not-found path deterministically regardless
+// of what the host/CI runner happens to have installed).
+func chromiumBinPath() string {
+	if v := os.Getenv("WPMGR_CHROMIUM_BIN"); v != "" {
+		return v
+	}
+	return defaultChromiumBin
+}
 
 // Repo is the subset of the screenshot repo the worker needs.
 type Repo interface {
@@ -198,6 +210,7 @@ func (w *Worker) Work(ctx context.Context, job *river.Job[screenshot.CaptureArgs
 // This is the authoritative guard: Chromium never touches the network directly.
 func (w *Worker) capture(ctx context.Context, siteURL string) (img1x, img2x []byte, err error) {
 	// Fast-fail when Chromium is not installed (clear error message).
+	chromiumBin := chromiumBinPath()
 	if _, lookupErr := exec.LookPath(chromiumBin); lookupErr != nil {
 		return nil, nil, fmt.Errorf("chromium not found at %s: install chromium in the media-encoder image", chromiumBin)
 	}
