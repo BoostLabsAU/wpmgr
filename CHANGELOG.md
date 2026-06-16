@@ -6,6 +6,14 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.50.5] - 2026-06-16
+
+### Fixed
+
+- **Sites table no longer overlaps its columns on mobile.** The table's minimum width was smaller than the sum of its columns, so on a narrow screen the fixed layout squeezed every column together and the Site and Client headers overlapped. The minimum width now matches the columns, so on a small screen the table keeps its widths and scrolls sideways instead. The grid view remains the more compact option on a phone.
+
+Dashboard only at 0.50.5; no control-plane, migration, or agent change.
+
 ## [0.50.4] - 2026-06-16
 
 ### Fixed
