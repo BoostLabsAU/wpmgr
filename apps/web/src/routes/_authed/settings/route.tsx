@@ -1,8 +1,6 @@
 import { createFileRoute, Link, Outlet, useLocation } from "@tanstack/react-router";
 import {
-  Bell,
   Building2,
-  HardDrive,
   KeyRound,
   Mail,
   ShieldCheck,
@@ -35,9 +33,7 @@ export const SETTINGS_NAV_ITEMS: SettingsNavItem[] = [
   { label: "Security",      to: "/settings/security",     icon: ShieldCheck,  orgOnly: true },
   { label: "Organisation",  to: "/settings/organization", icon: Building2,    orgOnly: true },
   { label: "API keys",      to: "/settings/api-keys",     icon: KeyRound,     orgOnly: true },
-  { label: "Destinations",  to: "/settings/destinations", icon: HardDrive,    orgOnly: true },
   { label: "Email / SMTP",  to: "/settings/smtp",         icon: Mail,         orgOnly: true },
-  { label: "Alerts",        to: "/settings/alerts",       icon: Bell,         orgOnly: true },
   { label: "Members",       to: "/settings/members",      icon: Users,        orgOnly: true },
 ];
 

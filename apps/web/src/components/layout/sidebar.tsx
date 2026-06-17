@@ -106,6 +106,9 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
       { label: "Backups", to: "/backups" },
       { label: "Updates", to: "/updates" },
       { label: "Migrations", to: "/migrations" },
+      // Backup storage targets (managed / local / S3) — a backup concern, not
+      // an account setting, so it lives with Operations.
+      { label: "Destinations", to: "/destinations" },
     ],
   },
   {
@@ -115,6 +118,9 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
     items: [
       { label: "Uptime", to: "/uptime" },
       { label: "Performance", to: "/performance" },
+      // Downtime-notification config — tied to uptime monitoring, not an
+      // account setting, so it lives with Insights.
+      { label: "Alerts", to: "/alerts" },
     ],
   },
   {

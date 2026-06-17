@@ -28,7 +28,9 @@ import { Route as AuthedUptimeRouteImport } from './routes/_authed/uptime'
 import { Route as AuthedSharedWithMeRouteImport } from './routes/_authed/shared-with-me'
 import { Route as AuthedPerformanceRouteImport } from './routes/_authed/performance'
 import { Route as AuthedMigrationsRouteImport } from './routes/_authed/migrations'
+import { Route as AuthedDestinationsRouteImport } from './routes/_authed/destinations'
 import { Route as AuthedAuditRouteImport } from './routes/_authed/audit'
+import { Route as AuthedAlertsRouteImport } from './routes/_authed/alerts'
 import { Route as AuthedAdminRouteImport } from './routes/_authed/admin'
 import { Route as AuthedSettingsRouteRouteImport } from './routes/_authed/settings/route'
 import { Route as AuthedUpdatesIndexRouteImport } from './routes/_authed/updates/index'
@@ -44,9 +46,7 @@ import { Route as AuthedSettingsSmtpRouteImport } from './routes/_authed/setting
 import { Route as AuthedSettingsSecurityRouteImport } from './routes/_authed/settings/security'
 import { Route as AuthedSettingsOrganizationRouteImport } from './routes/_authed/settings/organization'
 import { Route as AuthedSettingsMembersRouteImport } from './routes/_authed/settings/members'
-import { Route as AuthedSettingsDestinationsRouteImport } from './routes/_authed/settings/destinations'
 import { Route as AuthedSettingsApiKeysRouteImport } from './routes/_authed/settings/api-keys'
-import { Route as AuthedSettingsAlertsRouteImport } from './routes/_authed/settings/alerts'
 import { Route as AuthedSettingsAccountRouteImport } from './routes/_authed/settings/account'
 import { Route as AuthedScheduleRunsRunIdRouteImport } from './routes/_authed/schedule-runs/$runId'
 import { Route as AuthedRestoresRestoreIdRouteImport } from './routes/_authed/restores/$restoreId'
@@ -164,9 +164,19 @@ const AuthedMigrationsRoute = AuthedMigrationsRouteImport.update({
   path: '/migrations',
   getParentRoute: () => AuthedRoute,
 } as any)
+const AuthedDestinationsRoute = AuthedDestinationsRouteImport.update({
+  id: '/destinations',
+  path: '/destinations',
+  getParentRoute: () => AuthedRoute,
+} as any)
 const AuthedAuditRoute = AuthedAuditRouteImport.update({
   id: '/audit',
   path: '/audit',
+  getParentRoute: () => AuthedRoute,
+} as any)
+const AuthedAlertsRoute = AuthedAlertsRouteImport.update({
+  id: '/alerts',
+  path: '/alerts',
   getParentRoute: () => AuthedRoute,
 } as any)
 const AuthedAdminRoute = AuthedAdminRouteImport.update({
@@ -245,20 +255,9 @@ const AuthedSettingsMembersRoute = AuthedSettingsMembersRouteImport.update({
   path: '/members',
   getParentRoute: () => AuthedSettingsRouteRoute,
 } as any)
-const AuthedSettingsDestinationsRoute =
-  AuthedSettingsDestinationsRouteImport.update({
-    id: '/destinations',
-    path: '/destinations',
-    getParentRoute: () => AuthedSettingsRouteRoute,
-  } as any)
 const AuthedSettingsApiKeysRoute = AuthedSettingsApiKeysRouteImport.update({
   id: '/api-keys',
   path: '/api-keys',
-  getParentRoute: () => AuthedSettingsRouteRoute,
-} as any)
-const AuthedSettingsAlertsRoute = AuthedSettingsAlertsRouteImport.update({
-  id: '/alerts',
-  path: '/alerts',
   getParentRoute: () => AuthedSettingsRouteRoute,
 } as any)
 const AuthedSettingsAccountRoute = AuthedSettingsAccountRouteImport.update({
@@ -396,7 +395,9 @@ export interface FileRoutesByFullPath {
   '/verify-email': typeof VerifyEmailRoute
   '/settings': typeof AuthedSettingsRouteRouteWithChildren
   '/admin': typeof AuthedAdminRoute
+  '/alerts': typeof AuthedAlertsRoute
   '/audit': typeof AuthedAuditRoute
+  '/destinations': typeof AuthedDestinationsRoute
   '/migrations': typeof AuthedMigrationsRoute
   '/performance': typeof AuthedPerformanceRoute
   '/shared-with-me': typeof AuthedSharedWithMeRoute
@@ -409,9 +410,7 @@ export interface FileRoutesByFullPath {
   '/restores/$restoreId': typeof AuthedRestoresRestoreIdRoute
   '/schedule-runs/$runId': typeof AuthedScheduleRunsRunIdRoute
   '/settings/account': typeof AuthedSettingsAccountRoute
-  '/settings/alerts': typeof AuthedSettingsAlertsRoute
   '/settings/api-keys': typeof AuthedSettingsApiKeysRoute
-  '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
   '/settings/security': typeof AuthedSettingsSecurityRoute
@@ -455,7 +454,9 @@ export interface FileRoutesByTo {
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
   '/admin': typeof AuthedAdminRoute
+  '/alerts': typeof AuthedAlertsRoute
   '/audit': typeof AuthedAuditRoute
+  '/destinations': typeof AuthedDestinationsRoute
   '/migrations': typeof AuthedMigrationsRoute
   '/performance': typeof AuthedPerformanceRoute
   '/shared-with-me': typeof AuthedSharedWithMeRoute
@@ -467,9 +468,7 @@ export interface FileRoutesByTo {
   '/restores/$restoreId': typeof AuthedRestoresRestoreIdRoute
   '/schedule-runs/$runId': typeof AuthedScheduleRunsRunIdRoute
   '/settings/account': typeof AuthedSettingsAccountRoute
-  '/settings/alerts': typeof AuthedSettingsAlertsRoute
   '/settings/api-keys': typeof AuthedSettingsApiKeysRoute
-  '/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/settings/members': typeof AuthedSettingsMembersRoute
   '/settings/organization': typeof AuthedSettingsOrganizationRoute
   '/settings/security': typeof AuthedSettingsSecurityRoute
@@ -516,7 +515,9 @@ export interface FileRoutesById {
   '/verify-email': typeof VerifyEmailRoute
   '/_authed/settings': typeof AuthedSettingsRouteRouteWithChildren
   '/_authed/admin': typeof AuthedAdminRoute
+  '/_authed/alerts': typeof AuthedAlertsRoute
   '/_authed/audit': typeof AuthedAuditRoute
+  '/_authed/destinations': typeof AuthedDestinationsRoute
   '/_authed/migrations': typeof AuthedMigrationsRoute
   '/_authed/performance': typeof AuthedPerformanceRoute
   '/_authed/shared-with-me': typeof AuthedSharedWithMeRoute
@@ -529,9 +530,7 @@ export interface FileRoutesById {
   '/_authed/restores/$restoreId': typeof AuthedRestoresRestoreIdRoute
   '/_authed/schedule-runs/$runId': typeof AuthedScheduleRunsRunIdRoute
   '/_authed/settings/account': typeof AuthedSettingsAccountRoute
-  '/_authed/settings/alerts': typeof AuthedSettingsAlertsRoute
   '/_authed/settings/api-keys': typeof AuthedSettingsApiKeysRoute
-  '/_authed/settings/destinations': typeof AuthedSettingsDestinationsRoute
   '/_authed/settings/members': typeof AuthedSettingsMembersRoute
   '/_authed/settings/organization': typeof AuthedSettingsOrganizationRoute
   '/_authed/settings/security': typeof AuthedSettingsSecurityRoute
@@ -579,7 +578,9 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/settings'
     | '/admin'
+    | '/alerts'
     | '/audit'
+    | '/destinations'
     | '/migrations'
     | '/performance'
     | '/shared-with-me'
@@ -592,9 +593,7 @@ export interface FileRouteTypes {
     | '/restores/$restoreId'
     | '/schedule-runs/$runId'
     | '/settings/account'
-    | '/settings/alerts'
     | '/settings/api-keys'
-    | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
     | '/settings/security'
@@ -638,7 +637,9 @@ export interface FileRouteTypes {
     | '/terms'
     | '/verify-email'
     | '/admin'
+    | '/alerts'
     | '/audit'
+    | '/destinations'
     | '/migrations'
     | '/performance'
     | '/shared-with-me'
@@ -650,9 +651,7 @@ export interface FileRouteTypes {
     | '/restores/$restoreId'
     | '/schedule-runs/$runId'
     | '/settings/account'
-    | '/settings/alerts'
     | '/settings/api-keys'
-    | '/settings/destinations'
     | '/settings/members'
     | '/settings/organization'
     | '/settings/security'
@@ -698,7 +697,9 @@ export interface FileRouteTypes {
     | '/verify-email'
     | '/_authed/settings'
     | '/_authed/admin'
+    | '/_authed/alerts'
     | '/_authed/audit'
+    | '/_authed/destinations'
     | '/_authed/migrations'
     | '/_authed/performance'
     | '/_authed/shared-with-me'
@@ -711,9 +712,7 @@ export interface FileRouteTypes {
     | '/_authed/restores/$restoreId'
     | '/_authed/schedule-runs/$runId'
     | '/_authed/settings/account'
-    | '/_authed/settings/alerts'
     | '/_authed/settings/api-keys'
-    | '/_authed/settings/destinations'
     | '/_authed/settings/members'
     | '/_authed/settings/organization'
     | '/_authed/settings/security'
@@ -896,11 +895,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedMigrationsRouteImport
       parentRoute: typeof AuthedRoute
     }
+    '/_authed/destinations': {
+      id: '/_authed/destinations'
+      path: '/destinations'
+      fullPath: '/destinations'
+      preLoaderRoute: typeof AuthedDestinationsRouteImport
+      parentRoute: typeof AuthedRoute
+    }
     '/_authed/audit': {
       id: '/_authed/audit'
       path: '/audit'
       fullPath: '/audit'
       preLoaderRoute: typeof AuthedAuditRouteImport
+      parentRoute: typeof AuthedRoute
+    }
+    '/_authed/alerts': {
+      id: '/_authed/alerts'
+      path: '/alerts'
+      fullPath: '/alerts'
+      preLoaderRoute: typeof AuthedAlertsRouteImport
       parentRoute: typeof AuthedRoute
     }
     '/_authed/admin': {
@@ -1008,25 +1021,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSettingsMembersRouteImport
       parentRoute: typeof AuthedSettingsRouteRoute
     }
-    '/_authed/settings/destinations': {
-      id: '/_authed/settings/destinations'
-      path: '/destinations'
-      fullPath: '/settings/destinations'
-      preLoaderRoute: typeof AuthedSettingsDestinationsRouteImport
-      parentRoute: typeof AuthedSettingsRouteRoute
-    }
     '/_authed/settings/api-keys': {
       id: '/_authed/settings/api-keys'
       path: '/api-keys'
       fullPath: '/settings/api-keys'
       preLoaderRoute: typeof AuthedSettingsApiKeysRouteImport
-      parentRoute: typeof AuthedSettingsRouteRoute
-    }
-    '/_authed/settings/alerts': {
-      id: '/_authed/settings/alerts'
-      path: '/alerts'
-      fullPath: '/settings/alerts'
-      preLoaderRoute: typeof AuthedSettingsAlertsRouteImport
       parentRoute: typeof AuthedSettingsRouteRoute
     }
     '/_authed/settings/account': {
@@ -1204,9 +1203,7 @@ const PortalRouteRouteWithChildren = PortalRouteRoute._addFileChildren(
 
 interface AuthedSettingsRouteRouteChildren {
   AuthedSettingsAccountRoute: typeof AuthedSettingsAccountRoute
-  AuthedSettingsAlertsRoute: typeof AuthedSettingsAlertsRoute
   AuthedSettingsApiKeysRoute: typeof AuthedSettingsApiKeysRoute
-  AuthedSettingsDestinationsRoute: typeof AuthedSettingsDestinationsRoute
   AuthedSettingsMembersRoute: typeof AuthedSettingsMembersRoute
   AuthedSettingsOrganizationRoute: typeof AuthedSettingsOrganizationRoute
   AuthedSettingsSecurityRoute: typeof AuthedSettingsSecurityRoute
@@ -1216,9 +1213,7 @@ interface AuthedSettingsRouteRouteChildren {
 
 const AuthedSettingsRouteRouteChildren: AuthedSettingsRouteRouteChildren = {
   AuthedSettingsAccountRoute: AuthedSettingsAccountRoute,
-  AuthedSettingsAlertsRoute: AuthedSettingsAlertsRoute,
   AuthedSettingsApiKeysRoute: AuthedSettingsApiKeysRoute,
-  AuthedSettingsDestinationsRoute: AuthedSettingsDestinationsRoute,
   AuthedSettingsMembersRoute: AuthedSettingsMembersRoute,
   AuthedSettingsOrganizationRoute: AuthedSettingsOrganizationRoute,
   AuthedSettingsSecurityRoute: AuthedSettingsSecurityRoute,
@@ -1286,7 +1281,9 @@ const AuthedSitesSiteIdRouteWithChildren =
 interface AuthedRouteChildren {
   AuthedSettingsRouteRoute: typeof AuthedSettingsRouteRouteWithChildren
   AuthedAdminRoute: typeof AuthedAdminRoute
+  AuthedAlertsRoute: typeof AuthedAlertsRoute
   AuthedAuditRoute: typeof AuthedAuditRoute
+  AuthedDestinationsRoute: typeof AuthedDestinationsRoute
   AuthedMigrationsRoute: typeof AuthedMigrationsRoute
   AuthedPerformanceRoute: typeof AuthedPerformanceRoute
   AuthedSharedWithMeRoute: typeof AuthedSharedWithMeRoute
@@ -1308,7 +1305,9 @@ interface AuthedRouteChildren {
 const AuthedRouteChildren: AuthedRouteChildren = {
   AuthedSettingsRouteRoute: AuthedSettingsRouteRouteWithChildren,
   AuthedAdminRoute: AuthedAdminRoute,
+  AuthedAlertsRoute: AuthedAlertsRoute,
   AuthedAuditRoute: AuthedAuditRoute,
+  AuthedDestinationsRoute: AuthedDestinationsRoute,
   AuthedMigrationsRoute: AuthedMigrationsRoute,
   AuthedPerformanceRoute: AuthedPerformanceRoute,
   AuthedSharedWithMeRoute: AuthedSharedWithMeRoute,

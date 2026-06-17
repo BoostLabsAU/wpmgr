@@ -14,7 +14,7 @@ import { useMe, canOperate } from "@/features/auth/use-auth";
 import { useSites } from "@/features/sites/use-sites";
 import { DestinationsList } from "@/features/destinations/destinations-list";
 
-export const Route = createFileRoute("/_authed/settings/destinations")({
+export const Route = createFileRoute("/_authed/destinations")({
   component: DestinationsSettingsPage,
 });
 
