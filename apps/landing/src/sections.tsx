@@ -88,9 +88,16 @@ export function NavBar() {
             <Icon name="Github" size={17} />
           </a>
           <ThemeToggle />
-          <Button href={SITE.github} target="_blank" rel="noreferrer noopener" className="hidden sm:inline-flex">
+          <Button
+            href={SITE.github}
+            target="_blank"
+            rel="noreferrer noopener"
+            variant="secondary"
+            className="hidden sm:inline-flex"
+          >
             Self-host it
           </Button>
+          <Button href={SITE.signup}>Get started free</Button>
         </div>
       </Container>
     </header>
