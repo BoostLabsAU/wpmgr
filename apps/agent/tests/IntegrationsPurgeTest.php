@@ -23,6 +23,7 @@ namespace WPMgr\Agent\Tests;
 use Brain\Monkey;
 use Brain\Monkey\Functions;
 use WPMgr\Agent\Integrations\Cloudflare;
+use WPMgr\Agent\Integrations\CloudPanel;
 use WPMgr\Agent\Integrations\Cloudways;
 use WPMgr\Agent\Integrations\GridPane;
 use WPMgr\Agent\Integrations\Integrations;
@@ -39,6 +40,7 @@ use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 /**
  * @covers \WPMgr\Agent\Integrations\Integrations
  * @covers \WPMgr\Agent\Integrations\Integration
+ * @covers \WPMgr\Agent\Integrations\CloudPanel
  * @covers \WPMgr\Agent\Integrations\Varnish
  * @covers \WPMgr\Agent\Integrations\WPEngine
  */
@@ -50,6 +52,41 @@ final class IntegrationsPurgeTest extends TestCase
     /** @var list<array{string,string,array<string,mixed>}> wp_remote_request calls (url, method, args). */
     private array $http = [];
 
+    /** @var string CloudPanel temp root for this test class. */
+    private static string $cloudpanelTempRoot = '';
+
+    /** @var string CloudPanel settings override path for this test class. */
+    private static string $cloudpanelSettingsPath = '';
+
+    /** @var string CloudPanel PageSpeed override base path for this test class. */
+    private static string $cloudpanelPageSpeedPath = '';
+
+    public static function set_up_before_class(): void
+    {
+        parent::set_up_before_class();
+
+        self::$cloudpanelTempRoot     = rtrim(sys_get_temp_dir(), '\\/') . '/wpmgr_cloudpanel_' . uniqid('', true);
+        self::$cloudpanelSettingsPath = self::$cloudpanelTempRoot . '/settings.json';
+        self::$cloudpanelPageSpeedPath = self::$cloudpanelTempRoot . '/pagespeed';
+
+        if (!is_dir(self::$cloudpanelTempRoot)) {
+            mkdir(self::$cloudpanelTempRoot, 0755, true);
+        }
+
+        if (!defined('WPMGR_CLOUDPANEL_SETTINGS_PATH')) {
+            define('WPMGR_CLOUDPANEL_SETTINGS_PATH', self::$cloudpanelSettingsPath);
+        }
+        if (!defined('WPMGR_CLOUDPANEL_PAGESPEED_PATH')) {
+            define('WPMGR_CLOUDPANEL_PAGESPEED_PATH', self::$cloudpanelPageSpeedPath);
+        }
+    }
+
+    public static function tear_down_after_class(): void
+    {
+        self::removeCloudPanelPath(self::$cloudpanelTempRoot);
+        parent::tear_down_after_class();
+    }
+
     protected function set_up(): void
     {
         parent::set_up();
@@ -57,6 +94,7 @@ final class IntegrationsPurgeTest extends TestCase
 
         $this->hooks = [];
         $this->http  = [];
+        $this->cleanCloudPanelState();
 
         // Capture hook registrations so we can both assert them and dispatch.
         Functions\when('add_action')->alias(function (string $hook, $cb, $prio = 10, $args = 1) {
@@ -89,6 +127,8 @@ final class IntegrationsPurgeTest extends TestCase
 
     protected function tear_down(): void
     {
+        $this->cleanCloudPanelState();
+
         unset($GLOBALS['kinsta_cache'], $GLOBALS['cloudflareHooks']);
         unset(
             $_SERVER['HTTP_X_VARNISH'],
@@ -109,16 +149,73 @@ final class IntegrationsPurgeTest extends TestCase
         }
     }
 
+    /** Remove CloudPanel temp state between tests. */
+    private function cleanCloudPanelState(): void
+    {
+        if (self::$cloudpanelSettingsPath !== '') {
+            self::removeCloudPanelPath(self::$cloudpanelSettingsPath);
+        }
+        if (self::$cloudpanelPageSpeedPath !== '') {
+            self::removeCloudPanelPath(self::$cloudpanelPageSpeedPath);
+        }
+    }
+
+    /** Write a CloudPanel settings.json for the current test. */
+    private function writeCloudPanelSettings(array $data): void
+    {
+        $dir = dirname(self::$cloudpanelSettingsPath);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        file_put_contents(self::$cloudpanelSettingsPath, json_encode($data, JSON_THROW_ON_ERROR));
+    }
+
+    /** Build the path to a host's PageSpeed cache directory. */
+    private function cloudpanelPageSpeedHostPath(string $host): string
+    {
+        return self::$cloudpanelPageSpeedPath . '/pagespeed_cache/v3/' . $host;
+    }
+
+    /** Create a nested file under a host's PageSpeed cache directory. */
+    private function writeCloudPanelPageSpeedFile(string $host, string $relativePath, string $contents): void
+    {
+        $path = $this->cloudpanelPageSpeedHostPath($host) . '/' . ltrim($relativePath, '/');
+        $dir  = dirname($path);
+        if (!is_dir($dir)) {
+            mkdir($dir, 0755, true);
+        }
+        file_put_contents($path, $contents);
+    }
+
+    /** Recursively delete a file or directory. */
+    private static function removeCloudPanelPath(string $path): void
+    {
+        if (!file_exists($path)) {
+            return;
+        }
+
+        if (is_dir($path) && !is_link($path)) {
+            $items = new \FilesystemIterator($path, \FilesystemIterator::SKIP_DOTS);
+            foreach ($items as $item) {
+                self::removeCloudPanelPath($item->getPathname());
+            }
+            @rmdir($path);
+            return;
+        }
+
+        @unlink($path);
+    }
+
     // ------------------------------------------------------------------ loader
 
     public function test_loader_registers_all_integrations_on_purge_actions(): void
     {
         (new Integrations())->boot();
 
-        // 11 integrations each register the three purge:before hooks.
-        $this->assertCount(11, $this->hooks['wpmgr_purge_urls:before'] ?? []);
-        $this->assertCount(11, $this->hooks['wpmgr_purge_pages:before'] ?? []);
-        $this->assertCount(11, $this->hooks['wpmgr_purge_everything:before'] ?? []);
+        // 12 integrations each register the three purge:before hooks.
+        $this->assertCount(12, $this->hooks['wpmgr_purge_urls:before'] ?? []);
+        $this->assertCount(12, $this->hooks['wpmgr_purge_pages:before'] ?? []);
+        $this->assertCount(12, $this->hooks['wpmgr_purge_everything:before'] ?? []);
     }
 
     public function test_loader_boot_is_idempotent(): void
@@ -128,7 +225,7 @@ final class IntegrationsPurgeTest extends TestCase
         $loader->boot();
 
         // Still one registration per integration despite the double boot.
-        $this->assertCount(11, $this->hooks['wpmgr_purge_everything:before'] ?? []);
+        $this->assertCount(12, $this->hooks['wpmgr_purge_everything:before'] ?? []);
     }
 
     // -------------------------------------------------- no-op when host absent
@@ -201,6 +298,7 @@ final class IntegrationsPurgeTest extends TestCase
     {
         return [
             'Varnish'    => [Varnish::class],
+            'CloudPanel' => [CloudPanel::class],
             'Cloudflare' => [Cloudflare::class],
             'Kinsta'     => [Kinsta::class],
             'SiteGround' => [SiteGround::class],
@@ -286,5 +384,121 @@ final class IntegrationsPurgeTest extends TestCase
 
         // No per-URL WPE purge exists → full flush.
         $this->assertContains('purge_varnish_cache', \WpeCommon::$calls);
+    }
+
+    // --------------------------------------------------------- CloudPanel (host)
+
+    public function test_cloudpanel_full_purge_sends_host_and_tag_purges(): void
+    {
+        $this->writeCloudPanelSettings([
+            'enabled'        => true,
+            'server'         => '127.0.0.1:6081',
+            'cacheTagPrefix' => 'testtag',
+        ]);
+        $_SERVER['HTTP_HOST'] = 'shop.example';
+
+        (new CloudPanel())->onPurgeEverything();
+
+        $this->assertCount(2, $this->http);
+
+        [$url1, $method1, $args1] = $this->http[0];
+        $this->assertSame('PURGE', $method1);
+        $this->assertSame('http://127.0.0.1:6081/', $url1);
+        $this->assertSame('shop.example', $args1['headers']['Host']);
+        $this->assertFalse($args1['blocking']);
+        $this->assertFalse($args1['sslverify']);
+        $this->assertFalse($args1['reject_unsafe_urls']);
+
+        [$url2, $method2, $args2] = $this->http[1];
+        $this->assertSame('PURGE', $method2);
+        $this->assertSame('http://127.0.0.1:6081/', $url2);
+        $this->assertSame('testtag', $args2['headers']['X-Cache-Tags']);
+        $this->assertFalse($args2['blocking']);
+        $this->assertFalse($args2['sslverify']);
+        $this->assertFalse($args2['reject_unsafe_urls']);
+    }
+
+    public function test_cloudpanel_url_purge_preserves_path_and_query(): void
+    {
+        $this->writeCloudPanelSettings([
+            'enabled'        => true,
+            'server'         => '127.0.0.1:6081',
+            'cacheTagPrefix' => 'testtag',
+        ]);
+
+        (new CloudPanel())->onPurgeUrls([
+            'https://shop.example/cart/?id=1',
+            'https://cdn.example/about/us/',
+        ]);
+
+        $this->assertCount(2, $this->http);
+
+        [$url1, $method1, $args1] = $this->http[0];
+        $this->assertSame('PURGE', $method1);
+        $this->assertSame('http://127.0.0.1:6081/cart/?id=1', $url1);
+        $this->assertSame('shop.example', $args1['headers']['Host']);
+
+        [$url2, $method2, $args2] = $this->http[1];
+        $this->assertSame('PURGE', $method2);
+        $this->assertSame('http://127.0.0.1:6081/about/us/', $url2);
+        $this->assertSame('cdn.example', $args2['headers']['Host']);
+    }
+
+    public function test_cloudpanel_full_purge_wipes_pagespeed_host_cache(): void
+    {
+        $this->writeCloudPanelSettings([
+            'enabled'        => true,
+            'server'         => '127.0.0.1:6081',
+            'cacheTagPrefix' => 'testtag',
+        ]);
+        $_SERVER['HTTP_HOST'] = 'shop.example';
+
+        $hostDir = $this->cloudpanelPageSpeedHostPath('shop.example');
+        $this->writeCloudPanelPageSpeedFile('shop.example', 'page.html', 'cached');
+        $this->writeCloudPanelPageSpeedFile('shop.example', 'nested/inner.txt', 'cached');
+
+        $siblingDir = $this->cloudpanelPageSpeedHostPath('other.example');
+        mkdir($siblingDir, 0755, true);
+        file_put_contents($siblingDir . '/sibling.txt', 'cached');
+
+        (new CloudPanel())->onPurgeEverything();
+
+        $this->assertDirectoryExists($hostDir);
+        $this->assertFileDoesNotExist($hostDir . '/page.html');
+        $this->assertFileDoesNotExist($hostDir . '/nested/inner.txt');
+        $this->assertDirectoryDoesNotExist($hostDir . '/nested');
+        $this->assertFileExists($siblingDir . '/sibling.txt');
+    }
+
+    /**
+     * @return array<string,array{0:array<string,mixed>|null}>
+     */
+    public static function cloudpanelInvalidSettings(): array
+    {
+        return [
+            'missing settings file' => [null],
+            'disabled'              => [['enabled' => false, 'server' => '127.0.0.1:6081', 'cacheTagPrefix' => 'testtag']],
+            'empty server'          => [['enabled' => true, 'server' => '', 'cacheTagPrefix' => 'testtag']],
+            'empty cacheTagPrefix'  => [['enabled' => true, 'server' => '127.0.0.1:6081', 'cacheTagPrefix' => '']],
+        ];
+    }
+
+    /**
+     * @dataProvider cloudpanelInvalidSettings
+     * @param array<string,mixed>|null $settings
+     */
+    public function test_cloudpanel_noops_for_invalid_settings(?array $settings): void
+    {
+        if ($settings !== null) {
+            $this->writeCloudPanelSettings($settings);
+        }
+
+        $_SERVER['HTTP_HOST'] = 'shop.example';
+        $this->writeCloudPanelPageSpeedFile('shop.example', 'keep.txt', 'keep');
+
+        (new CloudPanel())->onPurgeEverything();
+
+        $this->assertSame([], $this->http, 'no HTTP calls when CloudPanel settings do not qualify');
+        $this->assertFileExists($this->cloudpanelPageSpeedHostPath('shop.example') . '/keep.txt');
     }
 }

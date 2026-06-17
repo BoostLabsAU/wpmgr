@@ -214,6 +214,19 @@ the site-root `.htaccess`. Cached pages live at
 The PHP drop-in always serves a hit. A server-level fast-path can short-circuit
 to the static `.html.gz` **before** PHP loads.
 
+### CloudPanel Varnish
+
+On CloudPanel sites, the agent detects Varnish from the CloudPanel settings file
+under the site user's home directory. When present, manual purges, automatic
+content-change purges, and delete-everything purges clear WPMgr's local disk
+cache and CloudPanel Varnish together. The optional CloudPanel WordPress plugin
+is not required.
+
+Full-site purges also try to remove that host's PageSpeed cache contents when
+the CloudPanel PageSpeed cache path exists and is writable by the PHP user. If
+the path is absent or not writable, the PageSpeed cleanup is skipped. Per-URL
+purges do not remove PageSpeed files.
+
 ### nginx location snippet (manual — the agent never edits nginx config)
 
 nginx ignores `.htaccess`, so the agent **cannot** auto-install the fast-path. It
