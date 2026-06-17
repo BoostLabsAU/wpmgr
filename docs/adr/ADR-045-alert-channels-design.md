@@ -20,7 +20,7 @@ Supersedes: nothing. Generalizes the M5/ADR-037 single-config, two-channel alert
 - Per-org (tenant) scoping under existing RLS, RBAC-gated, honoring site-scoped collaborators.
 - "Test fire" affordance reusing the real delivery path.
 - SSRF-hardened egress for user-supplied Telegram/Slack/webhook destinations.
-- Extend `/settings/alerts`, not a parallel UI.
+- Extend `/alerts` (under Insights, next to Uptime), not a parallel UI. (Originally drafted as `/settings/alerts`; moved out of Settings in 0.51.1.)
 
 **Non-goals (explicitly out of scope vs. Alertmanager)**
 - No recursive routing tree, no `continue`/match_re label matching engine.
@@ -41,7 +41,7 @@ The codebase already has the embryo of this system. The design reuses every seam
 | `uptime.Dispatcher` (`internal/uptime/alerts.go`) | Single fan-out point: `Fire()` (uptime down/recovery), `FireSecurityEvent()` (activity high-sev) | Becomes the **evaluator + fan-out over N channels**. Keep it as the only fan-out point; it loops over a tenant's matched channels instead of two hard-coded fields. |
 | `Mailer` / `WebhookPoster` interfaces (`internal/uptime/notify.go`) | `SMTPMailer`/`NoopMailer`, `SSRFWebhookPoster` (HMAC-SHA256, `X-WPMgr-Signature`) | Become two `Channel` implementations. The SMTP mailer and the SSRF webhook poster are reused verbatim under the new interface. |
 | `activity.SecurityAlerter` seam + `siteadapter.go` adapter | Activity ingest calls `NotifySecurity()` after tx commit | Stays as a seam, but the adapter now writes an `alert_event` (`event_type=security.<type>`) rather than calling `FireSecurityEvent` inline. Every NEW source (backup, scan, login-protection, php-error) gets the same thin adapter — no source package imports `uptime`. |
-| `/settings/alerts` (`apps/web/.../alerts.tsx`, `alert-config-form.tsx`) | Email recipients textarea + webhook URL only | Reframed into a multi-channel, multi-rule, delivery-log UI under a new `features/alerts` area. |
+| `/alerts` (`apps/web/.../alerts.tsx`, `alert-config-form.tsx`) | Email recipients textarea + webhook URL only | Reframed into a multi-channel, multi-rule, delivery-log UI under a new `features/alerts` area. Route moved from `/settings/alerts` to `/alerts` (Insights group) in 0.51.1. |
 | OpenAPI `/api/v1/alert-config` (`packages/openapi/openapi.yaml`) | `AlertConfig`/`AlertConfigUpdate` | Add `/api/v1/alert-channels`, `/alert-rules`, `/alert-deliveries`, `/alert-channels/{id}/test`. Regen ogen + hey-api per the codegen pipeline. |
 | `httpclient` (`internal/httpclient/httpclient.go`) | SSRF-hardened `*http.Client`, dial-time IP pinning via `code.dny.dev/ssrf`, `Do`/`DoOnce`, `IsSSRFBlocked` | The egress client for ALL channel sends. No new SSRF code. |
 | age-at-rest (`internal/sitedestination/service.go`, `AgeIdentity`) | `Encrypt/Decrypt` X25519, `*_enc bytea` columns | The secret-at-rest pattern for bot tokens / Slack tokens-or-URLs / webhook signing secrets. Extract `AgeIdentity` into a shared `internal/cryptbox` package so both `sitedestination` and `alerts` depend on it. |
@@ -276,16 +276,16 @@ The generic webhook URL is fully attacker-influenced; treat it as untrusted even
 
 ---
 
-## 10. UI — extend `/settings/alerts`
+## 10. UI — extend `/alerts`
 
-Relocate alert config from `features/monitoring` (uptime-coupled, page copy is "downtime alerts" only) into a new `features/alerts` area; reframe the page from uptime-only to **multi-channel, multi-event routing**. Follow existing settings conventions (PageHeader + shadcn Cards, rhf + zod + `zodResolver` cast where coerce/optional is used, `FormSection`/`FieldError`/`StickySaveBar`, `toast.*`, role gating via `canManage(me)`).
+Relocate alert config from `features/monitoring` (uptime-coupled, page copy is "downtime alerts" only) into a new `features/alerts` area; reframe the page from uptime-only to **multi-channel, multi-event routing**. Follow existing settings conventions (PageHeader + shadcn Cards, rhf + zod + `zodResolver` cast where coerce/optional is used, `FormSection`/`FieldError`/`StickySaveBar`, `toast.*`, role gating via `canManage(me)`). The route lives at `/alerts` under the Insights sidebar group (moved from `/settings/alerts` in 0.51.1).
 
-**`/settings/alerts` becomes three sections (Cards):**
+**`/alerts` becomes three sections (Cards):**
 1. **Channels** — table of `alert_channels` (type icon, name, redacted hint, `verified_at`, enabled toggle). Create/edit dialog per type with type-specific fields (§4.1). Secret fields are write-only with a masked placeholder ("•••• leave blank to keep"). A **"Send test"** button per channel hits the test endpoint and toasts the scrubbed result. Empty state prompts adding the first channel; the legacy backfilled email/webhook channels appear here automatically.
 2. **Rules** — list of `alert_rules` ordered by priority. Editor: name, event-type multiselect (grouped by domain: activity/security/logs/uptime/backup), `min_severity` select, scope (all sites / pick sites — site picker filtered by `canReadSite`), channel multiselect, throttle, optional digest window. A live **"this rule would notify: Slack + Email"** preview (the O(rules) routing is cheap to evaluate client-or-server-side).
 3. **Delivery log** — paginated `alert_deliveries` (event, channel, status badge `sent/failed/throttled/digested`, response code, time), with a manual re-send action and `is_test` filter. Gated like the activity log (bodies can contain sensitive detail).
 
-Sidebar/nav: keep the single `Alerts → /settings/alerts` entry. The page header copy changes from "Configure how this tenant is notified when monitored sites go down" to multi-event framing. New endpoints either get added to OpenAPI (regen ogen + `pnpm -C packages/openapi-client generate`) or use the hand-rolled raw-`client` hook pattern; new feature hooks live in `src/features/alerts/use-alerts.ts` mirroring `use-api-keys.ts`.
+Sidebar/nav: a single `Alerts → /alerts` entry under the Insights group (next to Uptime). The page header copy changes from "Configure how this tenant is notified when monitored sites go down" to multi-event framing. New endpoints either get added to OpenAPI (regen ogen + `pnpm -C packages/openapi-client generate`) or use the hand-rolled raw-`client` hook pattern; new feature hooks live in `src/features/alerts/use-alerts.ts` mirroring `use-api-keys.ts`.
 
 ---
 

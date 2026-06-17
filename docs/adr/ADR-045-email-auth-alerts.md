@@ -499,7 +499,7 @@ Admin invites a teammate by email → invitee receives a branded link, sets thei
 ### Phase 4 — Alert channels (LATER, m33+)
 
 **Deliverables (not built in 1–3)**
-`alert_channels`/`alert_rules`/`alert_deliveries` (+`alert_events`/`alert_state`) tables with dual RLS; `Channel` interface (Email/Webhook/Slack/Telegram) with per-channel render; `NotificationService` fan-out via River `alert_dispatch` jobs; secrets age-encrypted in `*_enc`; webhook egress via `httpclient` (SSRF) + HMAC signing; per-channel test-send + delivery log; backfill `alert_configs` → channels; wire `notify_security` end-to-end (fix `putAlertConfig` + OpenAPI + UI toggle) as the first proof; reframe `/settings/alerts` UI to multi-channel/multi-event.
+`alert_channels`/`alert_rules`/`alert_deliveries` (+`alert_events`/`alert_state`) tables with dual RLS; `Channel` interface (Email/Webhook/Slack/Telegram) with per-channel render; `NotificationService` fan-out via River `alert_dispatch` jobs; secrets age-encrypted in `*_enc`; webhook egress via `httpclient` (SSRF) + HMAC signing; per-channel test-send + delivery log; backfill `alert_configs` → channels; wire `notify_security` end-to-end (fix `putAlertConfig` + OpenAPI + UI toggle) as the first proof; reframe `/alerts` UI to multi-channel/multi-event (route moved from `/settings/alerts` to `/alerts` under Insights in 0.51.1; see ADR-045-alert-channels-design.md §10).
 
 **Definition of done**
 A tenant configures multiple channels + rules; events fan out durably with dedup/throttle, per-channel retry, and a delivery log; test-send validates each channel; webhook SSRF-guarded + signed; existing uptime/security alerts migrated with zero regression.
