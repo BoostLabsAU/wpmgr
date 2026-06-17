@@ -8,7 +8,7 @@ import { AlertConfigForm } from "@/features/monitoring/alert-config-form";
 // alerts per-tenant. Needs an ogen regen once the backend route is wired.
 // Do not add it here until the OpenAPI spec is updated.
 
-export const Route = createFileRoute("/_authed/settings/alerts")({
+export const Route = createFileRoute("/_authed/alerts")({
   component: AlertSettingsPage,
 });
 

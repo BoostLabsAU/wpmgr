@@ -251,5 +251,5 @@ Diagnostic + fix is the next priority. ADR-037 implementation starts only after 
 - `blobstore.Registry` per-destination Store cache
 - age-encrypted secret storage
 - Migration `m7_site_destinations.sql` with RLS + partial unique index for `is_default`
-- New `/settings/destinations` route + per-provider form + test-connection (HeadBucket + PutObject + DeleteObject)
+- New `/destinations` route (under Operations, next to Backups) + per-provider form + test-connection (HeadBucket + PutObject + DeleteObject); moved out of Settings in 0.51.1
 - Sensitive-credential UX: `••••••••` placeholder + "Re-enter to save" amber warning

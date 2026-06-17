@@ -6,6 +6,24 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.51.1] - 2026-06-16
+
+### Changed
+
+- **Destinations and Alerts moved to their natural homes in the sidebar.** Destinations (where backups are stored: control-plane managed storage, a local folder, or an S3-compatible bucket) was previously under Settings but is not an account setting. It now lives at /destinations under the Operations group, next to Backups. Alerts (how the tenant is notified when monitored sites go down) was previously under Settings but is a monitoring concern. It now lives at /alerts under the Insights group, next to Uptime. Settings now holds only true account and organisation configuration: Account, Security, Organisation, API keys, Email / SMTP, and Members.
+
+Dashboard only at 0.51.1; no control-plane, migration, or agent change.
+
+## [0.51.0] - 2026-06-16
+
+### Changed
+
+- **Settings has a real page.** Visiting /settings now renders a dedicated Settings area with a left vertical side-menu listing every account and organisation settings section; the content fills the right panel. On mobile the side-menu collapses to a horizontal scroll strip. Visiting /settings lands on Account. Previously /settings rendered nothing.
+- **Main sidebar sections are collapsible.** The grouped navigation sections (Operations, Insights, Security) can now be opened and closed individually. They start collapsed to keep the sidebar short; the group that contains the page you are currently on auto-expands on load; manual open and close choices are stored and remembered across visits.
+- **Eight settings links in the sidebar became one.** The individual settings links (Account, Security, Organisation, API keys, Email / SMTP, Members, Destinations, Alerts) that occupied the sidebar separately are replaced by a single "Settings" entry that opens the settings area.
+
+Dashboard only at 0.51.0; no control-plane, migration, or agent change.
+
 ## [0.50.5] - 2026-06-16
 
 ### Fixed

@@ -1,7 +1,8 @@
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { Link, useLocation } from "@tanstack/react-router";
 import {
   Activity,
+  ChevronRight,
   Globe,
   LineChart,
   Mail,
@@ -14,7 +15,7 @@ import {
 
 import { FleetHubLogo, Wordmark } from "@/components/brand/logo";
 import { useShellState } from "@/components/layout/app-shell-context";
-import { useMe, isOrgScoped, isSuperadmin } from "@/features/auth/use-auth";
+import { useMe, isSuperadmin } from "@/features/auth/use-auth";
 import { useSites } from "@/features/sites/use-sites";
 import { cn } from "@/lib/utils";
 
@@ -24,16 +25,47 @@ import { cn } from "@/lib/utils";
 // Settings (bottom-aligned). Per-item: 8px / 12px padding, 6px radius,
 // active = accent + 2px left ring primary (DESIGN.md "Sidebar item").
 //
-// Routes that don't exist yet (migrations, uptime, performance,
-// vulnerabilities, audit, the /settings index) render as disabled items with
-// `aria-disabled` and a "Coming soon" tooltip. The brief allows this for
-// Sprint 1; Sprint 4 will fill them in.
+// COLLAPSIBLE GROUPS (Operations, Insights, Security): the group header is a
+// <button> that toggles open/closed. Default = collapsed, except the group
+// containing the active route auto-expands on first render. Manual toggles
+// persist to localStorage["wpmgr.sidebar.groups"] (label->boolean map).
+// Resolution rule: persisted map entry wins; otherwise open iff active route.
 //
-// Collapsed state (64px rail) shows icons only. Active items still highlight;
-// the active group's sub-items move into a flyout that opens on hover/focus
-// of the group icon. Tooltips on the icons use the native `title` attribute
-// - sufficient for the current shadcn primitive set (no Tooltip primitive
-// installed yet).
+// SETTINGS is now a single leaf link to /settings (the settings area owns its
+// own left-sidebar for the 8 sub-sections). The 8 inline sub-items and the
+// org-scoped filtering block are removed from the main sidebar.
+//
+// Collapsed state (64px rail): icons-only. Collapsible groups still show their
+// sub-items as hover/focus flyouts (unchanged). Settings leaf = icon link.
+
+const GROUPS_KEY = "wpmgr.sidebar.groups";
+
+/** Reads the persisted open-state map from localStorage. Safe in private mode. */
+function readGroupsMap(): Record<string, boolean> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(GROUPS_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return parsed as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+/** Writes an updated entry to the persisted map. Safe in private mode. */
+function writeGroupsMap(label: string, open: boolean): void {
+  try {
+    const current = readGroupsMap();
+    window.localStorage.setItem(
+      GROUPS_KEY,
+      JSON.stringify({ ...current, [label]: open }),
+    );
+  } catch {
+    // Private mode / quota denied — toggle still works for the session.
+  }
+}
 
 interface NavItem {
   label: string;
@@ -51,38 +83,44 @@ interface NavGroup {
   count?: number;
   todo?: boolean;
   items?: NavItem[];
+  /** When true this group is collapsible in expanded sidebar mode. */
+  collapsible?: boolean;
 }
 
 // Top groups (rendered above the bottom-aligned Settings entry).
 //
-// Counts are placeholders sourced from a hard-coded mock until the real
-// queries land (Sprint 2 onward). They use mono / tabular-nums so the
-// column reads cleanly even with multi-digit numbers.
+// Operations, Insights, Security are marked collapsible. Sites, Clients, Email,
+// and Shared with me are leaf links and are not collapsible.
 const TOP_GROUPS: ReadonlyArray<NavGroup> = [
   {
     label: "Sites",
     icon: Globe,
     to: "/sites",
-    // count is injected live from useSites() in <Sidebar>; see SITES_LABEL.
+    // count is injected live from useSites() in <Sidebar>; see below.
   },
   {
     label: "Operations",
     icon: Activity,
+    collapsible: true,
     items: [
-      // /backups index doesn't exist yet - only /backups/$snapshotId. Mark
-      // disabled until Sprint 4 adds the index.
       { label: "Backups", to: "/backups" },
       { label: "Updates", to: "/updates" },
-      // /migrations doesn't exist yet.
       { label: "Migrations", to: "/migrations" },
+      // Backup storage targets (managed / local / S3) — a backup concern, not
+      // an account setting, so it lives with Operations.
+      { label: "Destinations", to: "/destinations" },
     ],
   },
   {
     label: "Insights",
     icon: LineChart,
+    collapsible: true,
     items: [
       { label: "Uptime", to: "/uptime" },
       { label: "Performance", to: "/performance" },
+      // Downtime-notification config — tied to uptime monitoring, not an
+      // account setting, so it lives with Insights.
+      { label: "Alerts", to: "/alerts" },
     ],
   },
   {
@@ -98,6 +136,7 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
   {
     label: "Security",
     icon: Shield,
+    collapsible: true,
     items: [
       { label: "Vulnerabilities", to: "/vulnerabilities" },
       { label: "Audit", to: "/audit" },
@@ -105,23 +144,12 @@ const TOP_GROUPS: ReadonlyArray<NavGroup> = [
   },
 ];
 
-const SETTINGS_GROUP: NavGroup = {
+// Settings is now a single leaf link. The 8 sub-sections live in the
+// /settings area (with its own left sidebar managed by Agent A).
+const SETTINGS_LEAF: NavGroup = {
   label: "Settings",
   icon: Settings,
-  // Settings is now a grouped section so the destinations sub-item (ADR-036 P1
-  // storage adapter) has a stable home. The group highlights and the API keys
-  // page is still the "first" target — Sprint 4 may add a real /settings index
-  // page later, at which point the `to` here can flip to that.
-  items: [
-    { label: "Account", to: "/settings/account" },
-    { label: "Security", to: "/settings/security" },
-    { label: "Organisation", to: "/settings/organization" },
-    { label: "API keys", to: "/settings/api-keys" },
-    { label: "Destinations", to: "/settings/destinations" },
-    { label: "Email / SMTP", to: "/settings/smtp" },
-    { label: "Alerts", to: "/settings/alerts" },
-    { label: "Members", to: "/settings/members" },
-  ],
+  to: "/settings",
 };
 
 const SHARED_WITH_ME_GROUP: NavGroup = {
@@ -130,8 +158,7 @@ const SHARED_WITH_ME_GROUP: NavGroup = {
   to: "/shared-with-me",
 };
 
-// Superadmin-only nav entry. Only mounted in the sidebar JSX when
-// me.user.is_superadmin === true (checked via isSuperadmin helper).
+// Superadmin-only nav entry. Only mounted when me.user.is_superadmin === true.
 const ADMIN_GROUP: NavGroup = {
   label: "Admin",
   icon: Shield,
@@ -143,28 +170,14 @@ export function Sidebar() {
   const location = useLocation();
   const pathname = location.pathname;
   const { data: me } = useMe();
-  const orgScoped = isOrgScoped(me);
   const superadmin = isSuperadmin(me);
 
   // Live "Sites" count for the nav badge (active, non-archived) — shares the
-  // sites-list query cache with the Sites page, so it's deduped. The other nav
-  // badges were hardcoded mocks and are intentionally dropped until each domain
-  // has a real count.
+  // sites-list query cache with the Sites page, so it's deduped.
   const { data: sitesData } = useSites();
   const sitesCount = sitesData?.length;
 
-  // Site-scoped collaborators only see a filtered settings group (Account only).
-  const settingsGroup: NavGroup = orgScoped
-    ? SETTINGS_GROUP
-    : {
-        ...SETTINGS_GROUP,
-        items: SETTINGS_GROUP.items?.filter((item) =>
-          item.to === "/settings/account",
-        ),
-      };
-
-  // Close the mobile drawer on route change so navigation always feels
-  // resolved. Effect, not in the click handler, so back/forward also close.
+  // Close the mobile drawer on route change so navigation always feels resolved.
   useEffect(() => {
     setMobileOpen(false);
   }, [pathname, setMobileOpen]);
@@ -199,12 +212,15 @@ export function Sidebar() {
 
         <div className="flex flex-1 flex-col overflow-y-auto px-2 py-3">
           {superadmin ? (
-            // Superadmin is monitoring-only: show ONLY the Admin area. They have
-            // no org and never manage sites/settings, so the rest of the nav is
-            // intentionally hidden.
+            // Superadmin is monitoring-only: show ONLY the Admin area. They
+            // have no org and never manage sites/settings.
             <ul className="flex flex-col gap-0.5">
               <li>
-                <NavGroupItem group={ADMIN_GROUP} pathname={pathname} collapsed={collapsed} />
+                <NavGroupItem
+                  group={ADMIN_GROUP}
+                  pathname={pathname}
+                  collapsed={collapsed}
+                />
               </li>
             </ul>
           ) : (
@@ -218,7 +234,11 @@ export function Sidebar() {
                       : group;
                   return (
                     <li key={group.label}>
-                      <NavGroupItem group={g} pathname={pathname} collapsed={collapsed} />
+                      <NavGroupItem
+                        group={g}
+                        pathname={pathname}
+                        collapsed={collapsed}
+                      />
                     </li>
                   );
                 })}
@@ -231,10 +251,11 @@ export function Sidebar() {
                   />
                 </li>
               </ul>
+              {/* Settings — single leaf link, bottom-aligned. */}
               <ul className="mt-auto flex flex-col gap-0.5 pt-3">
                 <li>
                   <NavGroupItem
-                    group={settingsGroup}
+                    group={SETTINGS_LEAF}
                     pathname={pathname}
                     collapsed={collapsed}
                   />
@@ -278,18 +299,12 @@ function NavGroupItem({ group, pathname, collapsed }: GroupProps) {
   const hasItems = !!group.items?.length;
 
   // Group is "active" when its own route or any sub-item route is the
-  // current pathname (or prefix). Sub-paths under e.g. /sites/$siteId still
-  // light up Sites.
+  // current pathname (or prefix).
   const selfActive = group.to ? isActive(pathname, group.to) : false;
   const childActive =
     hasItems &&
     group.items!.some((item) => item.to && isActive(pathname, item.to));
   const active = selfActive || childActive;
-
-  // Expanded sidebar: render the group as a row, and (when active OR has no
-  // items) render sub-items below.
-  // Collapsed sidebar: render the icon centered, with a hover flyout for
-  // sub-items.
 
   if (collapsed) {
     return (
@@ -297,7 +312,7 @@ function NavGroupItem({ group, pathname, collapsed }: GroupProps) {
     );
   }
 
-  // For leaf groups (Sites, Settings), the row itself is the link.
+  // Leaf groups (no sub-items): the row itself is the link.
   if (!hasItems) {
     return (
       <NavLeaf
@@ -312,11 +327,19 @@ function NavGroupItem({ group, pathname, collapsed }: GroupProps) {
     );
   }
 
-  // Group with sub-items. The header is a section label; the sub-items ALWAYS
-  // render below it so every route is reachable from the expanded sidebar.
-  // (Previously they were gated on `active`, which hid a group's children
-  // unless you were already inside that group — leaving Backups/Migrations/
-  // Uptime/Performance/Vulnerabilities/Audit unreachable from the nav.)
+  // Collapsible group with sub-items.
+  if (group.collapsible) {
+    return (
+      <CollapsibleGroup
+        group={group}
+        pathname={pathname}
+        active={active}
+        childActive={childActive}
+      />
+    );
+  }
+
+  // Non-collapsible group with sub-items (fallback, not currently used).
   return (
     <div>
       <GroupHeader group={group} active={active} />
@@ -338,14 +361,137 @@ function NavGroupItem({ group, pathname, collapsed }: GroupProps) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// CollapsibleGroup — the collapsible variant for expanded sidebar mode.
+// ---------------------------------------------------------------------------
+
+interface CollapsibleGroupProps {
+  group: NavGroup;
+  pathname: string;
+  active: boolean;
+  childActive: boolean;
+}
+
+function CollapsibleGroup({
+  group,
+  pathname,
+  active,
+  childActive,
+}: CollapsibleGroupProps) {
+  const regionId = useId();
+
+  // Determine initial open state:
+  //   1. If localStorage has an explicit entry for this group, use it.
+  //   2. Otherwise, open iff the active route is inside this group.
+  // This means the user's manual choices always win, but un-touched groups
+  // auto-expand when you navigate into them.
+  const [open, setOpen] = useState<boolean>(() => {
+    const map = readGroupsMap();
+    if (Object.prototype.hasOwnProperty.call(map, group.label)) {
+      return map[group.label] === true;
+    }
+    return childActive;
+  });
+
+  // When navigation lands the active route inside this group, always reveal it
+  // — even if the user previously collapsed it. Otherwise navigating via the
+  // URL bar, back/forward, or the command palette would hide the active page
+  // inside a closed group with no content visible. Persist so the next session
+  // starts consistent. Groups the user is NOT navigating into keep their
+  // remembered open/closed state.
+  const prevChildActive = useRef(childActive);
+  useEffect(() => {
+    if (childActive && !prevChildActive.current) {
+      setOpen(true);
+      writeGroupsMap(group.label, true);
+    }
+    prevChildActive.current = childActive;
+  }, [childActive, group.label]);
+
+  const toggle = () => {
+    setOpen((prev) => {
+      const next = !prev;
+      writeGroupsMap(group.label, next);
+      return next;
+    });
+  };
+
+  const Icon = group.icon;
+
+  return (
+    <div>
+      {/* Collapsible group header — a button so Enter/Space work natively. */}
+      <button
+        type="button"
+        id={`${regionId}-trigger`}
+        aria-expanded={open}
+        aria-controls={regionId}
+        onClick={toggle}
+        className={cn(
+          "flex w-full items-center gap-2 rounded-md px-3 py-2",
+          "text-xs uppercase tracking-[0.02em] font-medium",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+          "hover:bg-muted/50",
+          active ? "text-foreground" : "text-muted-foreground",
+          // Left rail when the group (or a child) is active.
+          "border-l-2",
+          active ? "border-primary" : "border-transparent",
+        )}
+      >
+        <Icon aria-hidden="true" className="size-4 shrink-0" />
+        <span className="flex-1 truncate text-left">{group.label}</span>
+        {/* Chevron rotates 90deg when open. Respects prefers-reduced-motion
+            via the global CSS rule (transition-duration collapses to ~0ms). */}
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "size-3.5 shrink-0 text-muted-foreground transition-transform duration-150",
+            open && "rotate-90",
+          )}
+        />
+      </button>
+
+      {/* Collapsible region. Uses the grid-rows [0fr]<->[1fr] technique to
+          animate height without animating height directly (DESIGN.md).
+          overflow-hidden on the inner div clips content during collapse.
+          prefers-reduced-motion: reduce collapses transitions globally via
+          the globals.css rule (duration → 0.01ms). */}
+      <div
+        id={regionId}
+        role="region"
+        aria-labelledby={`${regionId}-trigger`}
+        className={cn(
+          "grid transition-[grid-template-rows] duration-150",
+          open ? "grid-rows-[1fr]" : "grid-rows-[0fr]",
+        )}
+      >
+        <div className="overflow-hidden">
+          <ul className="mt-0.5 flex flex-col gap-0.5 pb-0.5">
+            {group.items!.map((item) => (
+              <li key={item.label}>
+                <NavLeaf
+                  label={item.label}
+                  to={item.to}
+                  count={item.count}
+                  todo={item.todo}
+                  active={item.to ? isActive(pathname, item.to) : false}
+                  variant="sub"
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GroupHeader({ group, active }: { group: NavGroup; active: boolean }) {
   const Icon = group.icon;
   return (
     <div
       className={cn(
         "flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium",
-        // Group headers don't act like links - they label the open section.
-        // Tracking matches the DESIGN.md caption rule for label rows.
         "text-xs uppercase tracking-[0.02em] text-muted-foreground",
         active && "text-foreground",
       )}
@@ -378,9 +524,6 @@ function NavLeaf({ label, to, icon: Icon, count, todo, active, variant }: LeafPr
     active
       ? "bg-accent text-accent-foreground"
       : "text-foreground hover:bg-muted/50",
-    // Left rail accent on active rows. Border on the left edge (Tailwind has
-    // no directional ring; the border is the established equivalent per the
-    // brief).
     "border-l-2",
     active ? "border-primary" : "border-transparent",
   );
@@ -418,6 +561,12 @@ function NavLeaf({ label, to, icon: Icon, count, todo, active, variant }: LeafPr
   );
 }
 
+// ---------------------------------------------------------------------------
+// CollapsedGroup — 64px rail mode. Preserved from the original implementation.
+// Collapsible groups still expose their sub-items as hover/focus flyouts.
+// The single Settings leaf is just an icon link (no flyout needed).
+// ---------------------------------------------------------------------------
+
 function CollapsedGroup({
   group,
   pathname,
@@ -430,13 +579,10 @@ function CollapsedGroup({
   const Icon = group.icon;
   const hasItems = !!group.items?.length;
   const [open, setOpen] = useState(false);
+  const flyoutId = useId();
 
-  // Single icon button - links straight through when the group has its own
-  // route, or opens a flyout on hover/focus when it groups sub-items. The
-  // active 2px primary left rail is rendered as a `before:` pseudo so the
-  // border utility doesn't share a line with `rounded-md` (Tailwind has no
-  // directional ring; per the brief either border-l-2 or `before:` is
-  // valid and the pseudo keeps the surface readable for static analysis).
+  // Single icon button. Active 2px primary left rail via `before:` pseudo so
+  // border-l-2 doesn't conflict with rounded-md (DESIGN.md pattern).
   const iconClass = cn(
     "relative flex h-9 w-full items-center justify-center rounded-md",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
@@ -447,7 +593,7 @@ function CollapsedGroup({
   );
 
   if (!hasItems) {
-    // Leaf group (Sites, Settings) in collapsed mode.
+    // Leaf group (Sites, Settings, etc.) in collapsed mode.
     if (!group.to || group.todo) {
       return (
         <span
@@ -489,14 +635,19 @@ function CollapsedGroup({
         type="button"
         title={group.label}
         aria-label={group.label}
-        aria-haspopup="menu"
         aria-expanded={open}
+        aria-controls={flyoutId}
         className={iconClass}
       >
         <Icon aria-hidden="true" className="size-5" />
       </button>
+      {/* Disclosure panel — a plain labelled list of links, NOT an ARIA menu.
+          A role="menu" here would promise arrow-key roving + Escape semantics
+          we don't implement; for a hover/focus rail flyout, regular links with
+          Tab order + focus-visible rings + aria-current are the correct,
+          fully accessible pattern. */}
       <div
-        role="menu"
+        id={flyoutId}
         aria-label={group.label}
         className={cn(
           "absolute left-full top-0 z-50 ml-1 min-w-[180px] rounded-md border border-border bg-popover p-1 text-popover-foreground transition-opacity duration-150",
@@ -508,7 +659,7 @@ function CollapsedGroup({
         </div>
         <ul className="mt-1 flex flex-col gap-0.5">
           {group.items!.map((item) => (
-            <li key={item.label} role="none">
+            <li key={item.label}>
               <FlyoutItem item={item} pathname={pathname} />
             </li>
           ))}
@@ -546,7 +697,7 @@ function FlyoutItem({
   if (!item.to || item.todo) {
     return (
       <span
-        role="menuitem"
+        role="link"
         aria-disabled="true"
         tabIndex={-1}
         title="Coming soon"
@@ -559,7 +710,6 @@ function FlyoutItem({
   return (
     <Link
       to={item.to}
-      role="menuitem"
       className={className}
       aria-current={active ? "page" : undefined}
     >

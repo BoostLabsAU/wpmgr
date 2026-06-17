@@ -240,7 +240,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
               Manage API keys
             </PaletteItem>
             <PaletteItem
-              onSelect={go("/settings/alerts")}
+              onSelect={go("/alerts")}
               icon={<SettingsIcon className="size-4" aria-hidden="true" />}
             >
               Configure alerts

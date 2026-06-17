@@ -710,7 +710,7 @@ In the templates below the shared boilerplate is written out **in full inside ea
         </td></tr>
 
         <tr><td class="px" style="padding:18px 40px 32px 40px;">
-          <p class="muted" style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#6B7280;">You're receiving this because alert notifications are enabled for {{.OrgName}}. Manage alerts in <a href="{{.AlertSettingsURL}}" style="color:#0E7C8B;text-decoration:underline;">Settings → Alerts</a>.</p>
+          <p class="muted" style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:#6B7280;">You're receiving this because alert notifications are enabled for {{.OrgName}}. Manage alerts in <a href="{{.AlertSettingsURL}}" style="color:#0E7C8B;text-decoration:underline;">Alerts</a>.</p>
         </td></tr>
 
         <tr><td class="px hair" style="padding:24px 40px 28px 40px;border-top:1px solid #D8E2E1;">
