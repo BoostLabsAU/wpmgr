@@ -60,22 +60,26 @@ final class IpUtils
         }
 
         // For REMOTE_ADDR, return directly — it is set by the SAPI and cannot
-        // be spoofed by the client. Light-trim only.
+        // be spoofed by the client. Validate as an IP; reject anything else.
         if ($headerName === 'REMOTE_ADDR') {
-            return trim($raw);
+            $remote = trim($raw);
+            return filter_var($remote, FILTER_VALIDATE_IP) !== false ? $remote : '';
         }
 
         // For forwarded headers: parse comma-separated list, pick the first
         // address that is routable (non-private, non-loopback, non-link-local).
+        // Every candidate is validated with FILTER_VALIDATE_IP — a value that
+        // is not a syntactically valid IP is NEVER returned (and so never
+        // reaches the login-event store), guarding against spoofed header junk.
         $candidates = array_map('trim', explode(',', $raw));
         $fallback   = '';
 
         foreach ($candidates as $candidate) {
-            if ($candidate === '') {
+            if ($candidate === '' || filter_var($candidate, FILTER_VALIDATE_IP) === false) {
                 continue;
             }
             if ($fallback === '') {
-                $fallback = $candidate; // keep first non-empty as fallback
+                $fallback = $candidate; // keep first valid IP as fallback
             }
             if (!self::isPrivate($candidate)) {
                 return $candidate;
