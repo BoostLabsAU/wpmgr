@@ -630,6 +630,11 @@ CREATE INDEX backup_snapshots_chain_gen_idx ON backup_snapshots (chain_id, gener
 -- m49: index for the GC locked-pin check.
 CREATE INDEX backup_snapshots_locked_idx ON backup_snapshots (tenant_id, locked)
     WHERE locked = true;
+-- m75 (issue #68): belt-and-suspenders guard against duplicate in-flight backups.
+-- At most one pending-or-running snapshot per site at a time. Partial so
+-- completed/failed rows are unconstrained and retention GC is unaffected.
+CREATE UNIQUE INDEX backup_snapshots_one_inflight_per_site ON backup_snapshots (site_id)
+    WHERE status IN ('pending', 'running');
 
 ALTER TABLE backup_snapshots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE backup_snapshots FORCE ROW LEVEL SECURITY;

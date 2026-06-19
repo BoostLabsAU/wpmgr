@@ -160,6 +160,18 @@ func (r *secFleetRepo) StreamChainEffectiveFileIndex(_ context.Context, _, _ uui
 func (r *secFleetRepo) UpdateSnapshotCycleStats(_ context.Context, _, _ uuid.UUID, _ CycleStatsInput) error {
 	panic("secFleetRepo.UpdateSnapshotCycleStats not implemented")
 }
+func (r *secFleetRepo) ClaimAndAdvanceDueSchedules(_ context.Context, _ time.Time, _ map[uuid.UUID]time.Time) ([]Schedule, error) {
+	panic("secFleetRepo.ClaimAndAdvanceDueSchedules not implemented")
+}
+func (r *secFleetRepo) CountInFlightSnapshots(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil
+}
+func (r *secFleetRepo) HealOverdueSchedules(_ context.Context, _ time.Time, _ func(Schedule, time.Time) time.Time) (int, error) {
+	return 0, nil
+}
+func (r *secFleetRepo) ReconcileDuplicateInflightSnapshots(_ context.Context) (int, error) {
+	return 0, nil
+}
 
 // compile-time interface check.
 var _ Repo = (*secFleetRepo)(nil)

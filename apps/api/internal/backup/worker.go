@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/audit"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/restore/sqlinspect"
 )
 
@@ -648,10 +650,30 @@ func (ScheduleArgs) Kind() string { return "backup_scheduler" }
 type ScheduleWorker struct {
 	river.WorkerDefaults[ScheduleArgs]
 	svc    *Service
+	pool   schedulerPool // for the per-pass advisory lock
 	logger *slog.Logger
 }
 
-// NewScheduleWorker builds the scheduler worker.
+// schedulerPool is the narrow pool interface needed by ScheduleWorker to acquire
+// a pinned connection for the pg_try_advisory_lock single-flight guard.
+type schedulerPool interface {
+	Acquire(ctx context.Context) (schedulerConn, error)
+}
+
+// schedulerConn is the narrow conn interface used by the advisory lock guard.
+type schedulerConn interface {
+	Exec(ctx context.Context, sql string, args ...any) (interface{ RowsAffected() int64 }, error)
+	QueryRow(ctx context.Context, sql string, args ...any) scannable
+	Release()
+}
+
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+// NewScheduleWorker builds the scheduler worker. pool is used for the
+// cross-instance single-flight advisory lock; pass nil to skip the lock
+// (tests and environments where the pool is unavailable).
 func NewScheduleWorker(svc *Service, logger *slog.Logger) *ScheduleWorker {
 	if logger == nil {
 		logger = slog.Default()
@@ -659,16 +681,83 @@ func NewScheduleWorker(svc *Service, logger *slog.Logger) *ScheduleWorker {
 	return &ScheduleWorker{svc: svc, logger: logger}
 }
 
-// Work enqueues a backup for each due schedule and advances its next_run_at.
+// SetPool wires the db pool for the advisory single-flight guard.
+// Call once after NewScheduleWorker. Optional: when nil the lock is skipped.
+func (w *ScheduleWorker) SetPool(p *db.Pool) { w.pool = &dbPoolAdapter{p: p} }
+
+// dbPoolAdapter wraps *db.Pool to satisfy schedulerPool.
+type dbPoolAdapter struct{ p *db.Pool }
+
+func (a *dbPoolAdapter) Acquire(ctx context.Context) (schedulerConn, error) {
+	conn, err := a.p.Acquire(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return (*pgxPoolConnAdapter)(conn), nil
+}
+
+// pgxPoolConnAdapter adapts *pgxpool.Conn to schedulerConn.
+// pgxpool.Conn satisfies the Exec/QueryRow/Release shape but needs an adapter
+// because the return types differ from the narrow interface.
+type pgxPoolConnAdapter pgxpool.Conn
+
+func (c *pgxPoolConnAdapter) Exec(ctx context.Context, sql string, args ...any) (interface{ RowsAffected() int64 }, error) {
+	return (*pgxpool.Conn)(c).Exec(ctx, sql, args...)
+}
+func (c *pgxPoolConnAdapter) QueryRow(ctx context.Context, sql string, args ...any) scannable {
+	return (*pgxpool.Conn)(c).QueryRow(ctx, sql, args...)
+}
+func (c *pgxPoolConnAdapter) Release() { (*pgxpool.Conn)(c).Release() }
+
+// Work runs one scheduler pass. It takes a session-level advisory lock so at
+// most one scheduler pass runs at a time across concurrent CP instances
+// (including RunOnStart re-fires on rolling deploys). The atomic
+// ClaimDueSchedules path (FOR UPDATE SKIP LOCKED) inside svc is the inner
+// guard that handles any race that slips past the advisory lock window.
 func (w *ScheduleWorker) Work(ctx context.Context, _ *river.Job[ScheduleArgs]) error {
-	due, err := w.svc.DueSchedules(ctx, 200)
+	// Single-flight guard: take a session-level advisory lock on the scheduler
+	// namespace. Two CP instances racing on the same tick will both try to acquire;
+	// the loser skips the pass (returns nil). The winner proceeds.
+	if w.pool != nil {
+		conn, err := w.pool.Acquire(ctx)
+		if err != nil {
+			// Pool exhausted or shutting down: skip this pass rather than pile up.
+			w.logger.Warn("backup_scheduler: could not acquire pool connection for advisory lock, skipping pass",
+				slog.Any("error", err))
+			return nil
+		}
+		defer conn.Release()
+
+		var got bool
+		if serr := conn.QueryRow(ctx,
+			`SELECT pg_try_advisory_lock(hashtext('backup_scheduler'))`,
+		).Scan(&got); serr != nil {
+			w.logger.Warn("backup_scheduler: advisory lock query failed, proceeding without lock",
+				slog.Any("error", serr))
+			// Proceed without the lock — SKIP LOCKED is still the inner guard.
+		} else if !got {
+			// Another instance holds the lock; skip this pass.
+			w.logger.Info("backup_scheduler: advisory lock held by peer, skipping pass")
+			return nil
+		} else {
+			// Release the advisory lock when the pass finishes (session-level, so
+			// it must be explicitly released on the pinned conn, not left to GC).
+			defer func() {
+				_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('backup_scheduler'))`)
+			}()
+		}
+	}
+
+	// Atomic claim: select+lock+advance in one tx. Only claimed schedules are
+	// returned; concurrent passes see 0 rows via SKIP LOCKED.
+	claimed, err := w.svc.ClaimDueSchedules(ctx)
 	if err != nil {
 		return err
 	}
-	for _, sched := range due {
+	for _, sched := range claimed {
 		if eerr := w.svc.EnqueueScheduledBackup(ctx, sched); eerr != nil {
-			// Per-schedule error (e.g. site not enrolled): logged, schedule already
-			// advanced by EnqueueScheduledBackup; continue with the next.
+			// Per-schedule error (e.g. site not enrolled, in-flight guard): log
+			// and continue — the schedule was already advanced, next tick is fine.
 			w.logger.Info("backup schedule skipped",
 				slog.String("schedule_id", sched.ID.String()),
 				slog.Any("reason", eerr))

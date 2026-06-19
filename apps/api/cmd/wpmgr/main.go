@@ -524,6 +524,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		restoreWorker = backup.NewRestoreWorker(backupSvc, backupCmd, auditRec, logger, cpBaseURL, backupJobTimeout)
 		gcWorker = backup.NewGCWorker(backupSvc, logger)
 		scheduleWorker = backup.NewScheduleWorker(backupSvc, logger)
+		scheduleWorker.SetPool(pool)
 		// M5.6 progress watchdog: 120s stall threshold (longest natural silent
 		// gap in the phpbu pipeline is age-encrypt for a multi-GB site).
 		progressWatchdog = backup.NewProgressWatchdogWorker(backupSvc, 120*time.Second, logger)
@@ -1246,6 +1247,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	siteH.SetRecheckLimiter(recheckLimiter)
 	if backupSvc != nil {
 		backupSvc.SetEnqueuer(backup.NewRiverEnqueuer(riverClient))
+		// Issue #68 — data-heal: run once at boot (non-blocking) to
+		// (a) reconcile duplicate in-flight snapshots so the partial-unique index
+		//     applied by migration m75 finds no conflicting rows, and
+		// (b) advance any overdue enabled schedules to their next future slot so
+		//     the scheduler does not immediately fire stale rows on the first tick.
+		go backupSvc.HealOverdueSchedulesAndSnapshots(context.Background(), logger)
 	}
 
 	// S3 scan: wire the River enqueuer into the service + worker now that River
@@ -2223,7 +2230,20 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 		periodics = append(periodics,
 			river.NewPeriodicJob(
 				river.PeriodicInterval(schedInterval),
-				func() (river.JobArgs, *river.InsertOpts) { return backup.ScheduleArgs{}, nil },
+				func() (river.JobArgs, *river.InsertOpts) {
+					return backup.ScheduleArgs{}, &river.InsertOpts{
+						// Deduplicate: at most one pending/running backup_scheduler job
+						// at a time across all CP instances. ByArgs keys on the (empty)
+						// ScheduleArgs JSON {}; ByPeriod caps one per schedInterval window.
+						// This prevents RunOnStart from enqueuing a second job while the
+						// previous tick is still running, and prevents rolling-deploy
+						// double-fires.
+						UniqueOpts: river.UniqueOpts{
+							ByArgs:   true,
+							ByPeriod: schedInterval,
+						},
+					}
+				},
 				&river.PeriodicJobOpts{RunOnStart: true},
 			),
 			river.NewPeriodicJob(

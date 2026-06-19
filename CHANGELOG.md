@@ -6,6 +6,10 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+### Fixed
+
+- **Scheduled backups no longer re-fire every few minutes.** A schedule whose next-run time had slipped into the past (most often after being disabled and re-enabled) was re-triggered on every scheduler tick, producing many runs per night, overlapping runs, and a daily incremental chain climbing several generations in one night. Re-enabling or an already-overdue schedule now advances to the next future run slot; the scheduler claims and advances each due schedule in a single atomic step; only one backup per site can be in flight at a time; and any schedules already stuck in the past are healed automatically on startup. (#68)
+
 ## [0.51.2] - 2026-06-19
 
 ### Changed

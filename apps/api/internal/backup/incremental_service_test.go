@@ -270,6 +270,18 @@ func (r *fakeRepo) FleetListSnapshots(_ context.Context, _ db.ScopedPrincipal, _
 func (r *fakeRepo) FleetBackupHealth(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ []uuid.UUID) ([]FleetBackupHealthItem, error) {
 	panic("fakeRepo.FleetBackupHealth not implemented")
 }
+func (r *fakeRepo) ClaimAndAdvanceDueSchedules(_ context.Context, _ time.Time, _ map[uuid.UUID]time.Time) ([]Schedule, error) {
+	panic("fakeRepo.ClaimAndAdvanceDueSchedules not implemented")
+}
+func (r *fakeRepo) CountInFlightSnapshots(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil // default: no in-flight snapshots
+}
+func (r *fakeRepo) HealOverdueSchedules(_ context.Context, _ time.Time, _ func(Schedule, time.Time) time.Time) (int, error) {
+	return 0, nil
+}
+func (r *fakeRepo) ReconcileDuplicateInflightSnapshots(_ context.Context) (int, error) {
+	return 0, nil
+}
 
 // ---------------------------------------------------------------------------
 // fakeClock — deterministic clock for tests.
