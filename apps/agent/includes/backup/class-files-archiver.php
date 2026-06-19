@@ -101,6 +101,8 @@ final class FilesArchiver
      * Default path exclude list (matched as anchored path prefixes relative to
      * the source dir). These cover wp-content runtime cache and update staging
      * roots without excluding same-named directories inside plugins or themes.
+     * Nested plugin/upload cache stays included intentionally; preserving source
+     * code is safer than excluding secondary cache, so keep these anchored.
      *
      * @var list<string>
      */
