@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
 	agentpkg "github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/api/gen"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/metrics"
 )
 
 // Service holds site business logic. All operations require a tenant ID, which
@@ -26,12 +28,22 @@ type Service struct {
 	// flow); a legacy NULL-site_id code keeps the create-at-enroll path. nil ⇒
 	// every code uses the legacy path (back-compat).
 	conn ConnectionService
+	// uptimeStore is the metrics store used to enrich site-list rows with uptime
+	// fields. When set, List() calls QueryFleetUptime (one batch query) instead
+	// of reading site_uptime_probes directly — this ensures ClickHouse
+	// deployments see real data (ClickHouse never writes to site_uptime_probes).
+	// nil disables uptime enrichment (tests that don't inject a store).
+	uptimeStore metrics.Store
 }
 
 // NewService builds a site Service.
 func NewService(repo Repo, v *domain.Validator, clock domain.Clock) *Service {
 	return &Service{repo: repo, validator: v, clock: clock}
 }
+
+// SetUptimeStore wires the metrics store for uptime enrichment in List().
+// Call once at boot after the store is constructed. No-op when store is nil.
+func (s *Service) SetUptimeStore(store metrics.Store) { s.uptimeStore = store }
 
 // SetConnectionService wires the M21 lifecycle service into the enroll branch.
 // Call once at boot (the lifecycle service depends on this Service's repo, so
@@ -67,12 +79,46 @@ func (s *Service) Get(ctx context.Context, tenantID, id uuid.UUID) (Site, error)
 }
 
 // List returns a page of the tenant's sites, optionally filtered by tag.
+// Uptime fields (UptimeUp, UptimePct30d, AvgLatencyMs, TLSExpiresAt) are
+// enriched via the metrics.Store when one is wired, so both ClickHouse and
+// Postgres deployments populate them. Without a wired store, the fields remain
+// nil (unprobed). The 30-day window matches the previous listLatestUptimeSQL.
 func (s *Service) List(ctx context.Context, in ListInput) ([]Site, error) {
 	if in.TenantID == uuid.Nil {
 		return nil, domain.Forbidden("tenant_required", "a tenant context is required")
 	}
 	in.Limit, in.Offset = normalizePage(in.Limit, in.Offset)
-	return s.repo.List(ctx, in)
+	sites, err := s.repo.List(ctx, in)
+	if err != nil {
+		return nil, err
+	}
+	if len(sites) > 0 && s.uptimeStore != nil {
+		ids := make([]uuid.UUID, len(sites))
+		for i := range sites {
+			ids[i] = sites[i].ID
+		}
+		const window30d = 30 * 24 * time.Hour
+		uptimeMap, uerr := s.uptimeStore.QueryFleetUptime(ctx, in.TenantID, ids, window30d)
+		if uerr != nil {
+			// Non-fatal: log and continue — the site list is still usable without
+			// uptime data (the same tolerance as the old screenshot enrichment path).
+			_ = uerr
+		} else {
+			for i := range sites {
+				um, ok := uptimeMap[sites[i].ID]
+				if !ok {
+					continue
+				}
+				sites[i].UptimeUp = um.Up
+				sites[i].TLSExpiresAt = um.TLSExpiry
+				sites[i].AvgLatencyMs = um.AvgLatencyMs
+				if um.UptimePct7d != nil {
+					sites[i].UptimePct30d = um.UptimePct7d
+				}
+			}
+		}
+	}
+	return sites, nil
 }
 
 // ListAllSiteIDs returns every non-archived site ID for the tenant in a single

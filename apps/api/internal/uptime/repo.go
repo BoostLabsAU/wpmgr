@@ -32,14 +32,13 @@ type Repo interface {
 	UpsertAlertConfig(ctx context.Context, cfg AlertConfig) (AlertConfig, error)
 
 	// Fleet uptime queries (tenant-scoped, InTenantTx). Implemented via raw SQL
-	// because the LEFT JOIN LATERAL probe columns are nullable and sqlc generates
-	// non-nullable types for bool/time.Time/float64, which cause scan failures
-	// when a site has never been probed (follows GetFleetDbHealth precedent in
-	// perf/repo.go).
+	// because sqlc generates non-nullable types for nullable columns.
 
-	// GetFleetStatus returns one FleetStatusItem per requested site, including
-	// the latest probe result and the 7-day uptime/latency aggregates.
-	GetFleetStatus(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetStatusItem, error)
+	// GetFleetSiteInfo returns the Postgres-resident fields for the requested
+	// sites: name, url, connection_state, health_status, in_incident. Probe /
+	// uptime metrics are NOT included — the service layer merges those from the
+	// metrics.Store so both ClickHouse and Postgres deployments work correctly.
+	GetFleetSiteInfo(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetSiteInfo, error)
 
 	// GetFleetIncidents returns open incidents and recently-alerted sites.
 	// NOTE: full historical reconstruction is not possible — see FleetIncidentItem.
@@ -176,14 +175,16 @@ func (r *pgRepo) UpsertAlertConfig(ctx context.Context, cfg AlertConfig) (AlertC
 }
 
 // ---------------------------------------------------------------------------
-// Fleet uptime repo methods (raw SQL — nullable LEFT JOIN LATERAL columns)
+// Fleet uptime repo methods (raw SQL — Postgres-resident fields only)
 // ---------------------------------------------------------------------------
 
-// GetFleetStatus returns one FleetStatusItem per requested site. The query
-// uses LEFT JOIN LATERAL to attach the most-recent probe row and correlated
-// subqueries for the 7-day uptime and average latency aggregates.
-// Runs under InTenantTx (tenant_id filter + RLS).
-func (r *pgRepo) GetFleetStatus(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetStatusItem, error) {
+// GetFleetSiteInfo returns the Postgres-resident fields for each requested
+// site: name, url, connection_state, health_status, in_incident. Probe /
+// uptime metrics are intentionally excluded — the service merges those from
+// the metrics.Store so the endpoint works on both ClickHouse and Postgres
+// deployments (previously these were read directly from site_uptime_probes,
+// which is empty on ClickHouse installs).
+func (r *pgRepo) GetFleetSiteInfo(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) ([]FleetSiteInfo, error) {
 	const q = `
 SELECT
     s.id,
@@ -191,103 +192,29 @@ SELECT
     s.url,
     s.connection_state,
     s.health_status,
-    p.up,
-    p.probed_at,
-    p.total_ms,
-    p.tls_expiry,
-    COALESCE(
-        (SELECT ROUND(100.0 * SUM(CASE WHEN up THEN 1 ELSE 0 END)::numeric / COUNT(*), 2)
-         FROM site_uptime_probes x
-         WHERE x.site_id = s.id
-           AND x.tenant_id = s.tenant_id
-           AND x.probed_at >= NOW() - INTERVAL '7 days'),
-        0.0
-    ) AS uptime_pct_7d,
-    COALESCE(
-        (SELECT AVG(total_ms)
-         FROM site_uptime_probes x
-         WHERE x.site_id = s.id
-           AND x.tenant_id = s.tenant_id
-           AND x.probed_at >= NOW() - INTERVAL '7 days'
-           AND x.up = true),
-        0.0
-    ) AS avg_latency_ms_7d,
     COALESCE(ast.in_incident, false) AS in_incident
 FROM sites s
-LEFT JOIN LATERAL (
-    SELECT up, probed_at, total_ms, tls_expiry
-    FROM site_uptime_probes
-    WHERE site_id = s.id AND tenant_id = s.tenant_id
-    ORDER BY probed_at DESC
-    LIMIT 1
-) p ON true
 LEFT JOIN site_alert_state ast ON ast.site_id = s.id
 WHERE s.tenant_id = $1
   AND s.id = ANY($2::uuid[])
 ORDER BY s.name ASC
 `
-	var out []FleetStatusItem
+	var out []FleetSiteInfo
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := tx.Query(ctx, q, tenantID, siteIDs)
 		if err != nil {
-			return domain.Internal("fleet_uptime_status_failed", "failed to query fleet uptime status").WithCause(err)
+			return domain.Internal("fleet_site_info_failed", "failed to query fleet site info").WithCause(err)
 		}
 		defer rows.Close()
 		for rows.Next() {
-			var (
-				siteID          uuid.UUID
-				siteName        string
-				siteURL         string
-				connectionState string
-				healthStatus    string
-				upVal           *bool
-				probedAt        pgtype.Timestamptz
-				totalMs         *float64
-				tlsExpiry       pgtype.Timestamptz
-				uptimePct7d     float64
-				avgLatencyMs7d  float64
-				inIncident      bool
-			)
+			var info FleetSiteInfo
 			if err := rows.Scan(
-				&siteID, &siteName, &siteURL, &connectionState, &healthStatus,
-				&upVal, &probedAt, &totalMs, &tlsExpiry,
-				&uptimePct7d, &avgLatencyMs7d, &inIncident,
+				&info.SiteID, &info.Name, &info.URL,
+				&info.ConnectionState, &info.HealthStatus, &info.InIncident,
 			); err != nil {
-				return domain.Internal("fleet_uptime_scan_failed", "failed to scan fleet uptime row").WithCause(err)
+				return domain.Internal("fleet_site_info_scan_failed", "failed to scan fleet site info row").WithCause(err)
 			}
-			item := FleetStatusItem{
-				SiteID:           siteID,
-				Name:             siteName,
-				URL:              siteURL,
-				ConnectionState:  connectionState,
-				HealthStatus:     healthStatus,
-				UptimePct7d:      uptimePct7d,
-				InIncident:       inIncident,
-				LatencySparkline: []float64{},
-			}
-			// avg_latency_ms: null when no successful probe in the 7-day window
-			// (avgLatencyMs7d == 0.0 from COALESCE means no data), so only set
-			// a non-nil pointer when there is actual data.
-			if avgLatencyMs7d > 0 {
-				v := avgLatencyMs7d
-				item.AvgLatencyMs = &v
-			}
-			if upVal != nil {
-				item.Up = upVal
-				if probedAt.Valid {
-					t := probedAt.Time
-					item.LastProbeAt = &t
-				}
-				if tlsExpiry.Valid {
-					t := tlsExpiry.Time
-					item.TLSExpiry = &t
-				}
-				// Derive fleet status from probe result.
-				item.Status = deriveFleetStatus(upVal, totalMs, connectionState)
-			} else {
-				item.Status = FleetStatusUnknown
-			}
-			out = append(out, item)
+			out = append(out, info)
 		}
 		return rows.Err()
 	})
@@ -295,7 +222,7 @@ ORDER BY s.name ASC
 		return nil, err
 	}
 	if out == nil {
-		out = []FleetStatusItem{}
+		out = []FleetSiteInfo{}
 	}
 	return out, nil
 }
