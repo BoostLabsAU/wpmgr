@@ -111,6 +111,18 @@ type FleetStatusResponse struct {
 	Items   []FleetStatusItem `json:"items"`
 }
 
+// FleetSiteInfo is the Postgres-resident projection used by GetFleetSiteInfo.
+// It contains only fields that live in the sites / site_alert_state tables —
+// probe / uptime metrics are sourced from the metrics.Store by the service.
+type FleetSiteInfo struct {
+	SiteID          uuid.UUID
+	Name            string
+	URL             string
+	ConnectionState string
+	HealthStatus    string
+	InIncident      bool
+}
+
 // FleetIncidentItem is one open or recently-closed incident for the incidents endpoint.
 // NOTE: Full historical incident reconstruction is NOT possible from site_alert_state:
 // site_alert_state stores only the CURRENT transition memory (last_status,

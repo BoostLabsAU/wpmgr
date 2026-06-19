@@ -89,6 +89,21 @@ type Latest struct {
 	Found      bool
 }
 
+// FleetUptimeRow is the per-site aggregate returned by QueryFleetUptime.
+// All pointer fields are nil when the site has no probe data in the window.
+type FleetUptimeRow struct {
+	// Up is the result of the most-recent probe (nil = never probed).
+	Up *bool
+	// LastProbeAt is the timestamp of the most-recent probe (nil = never probed).
+	LastProbeAt *time.Time
+	// UptimePct7d is the 7-day uptime percentage (nil = no data).
+	UptimePct7d *float64
+	// AvgLatencyMs is the 7-day average total_ms over successful probes (nil = no data).
+	AvgLatencyMs *float64
+	// TLSExpiry is the cert NotAfter from the most-recent probe (nil = non-HTTPS or no probes).
+	TLSExpiry *time.Time
+}
+
 // Store is the uptime metrics store contract. Backends implement it for
 // ClickHouse and Postgres. A disabled backend no-ops every operation and
 // reports Enabled()==false.
@@ -99,6 +114,11 @@ type Store interface {
 	QueryAggregate(ctx context.Context, tenantID, siteID uuid.UUID, window time.Duration) (Aggregate, error)
 	QueryLatest(ctx context.Context, tenantID, siteID uuid.UUID) (Latest, error)
 	QuerySeries(ctx context.Context, tenantID, siteID uuid.UUID, window time.Duration, buckets int) ([]Point, error)
+	// QueryFleetUptime returns a per-site uptime aggregate for a batch of sites in
+	// a single query. Missing sites (no probe data) are absent from the map.
+	// Always scoped to tenantID; siteIDs must belong to that tenant (the caller
+	// verifies ownership in Postgres before reaching this).
+	QueryFleetUptime(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, window time.Duration) (map[uuid.UUID]FleetUptimeRow, error)
 }
 
 // chStore is the ClickHouse-backed metrics store (ADR-028). The original M5
@@ -320,6 +340,73 @@ LIMIT 1`, s.db), tenantID, siteID)
 		l.TLSExpiry = tlsExpiry
 	}
 	return l, nil
+}
+
+// QueryFleetUptime returns a batch uptime aggregate for many sites in one
+// ClickHouse query. Uses argMax to pick the latest probe per site (up,
+// checked_at, tls_expiry) within the same scan that computes the 7d aggregate,
+// so the whole fleet resolves in a single round-trip. Returns a zero map (no
+// error) when the store is disabled.
+func (s *chStore) QueryFleetUptime(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, window time.Duration) (map[uuid.UUID]FleetUptimeRow, error) {
+	if !s.Enabled() || len(siteIDs) == 0 {
+		return map[uuid.UUID]FleetUptimeRow{}, nil
+	}
+	since := time.Now().Add(-window)
+	rows, err := s.conn.Query(ctx, fmt.Sprintf(`
+SELECT
+    site_id,
+    argMax(up,        checked_at) AS latest_up,
+    max(checked_at)               AS latest_at,
+    argMax(tls_expiry, checked_at) AS latest_tls,
+    count()                        AS checks,
+    sum(up)                        AS up_checks,
+    avgOrNullIf(total_ms, up = 1)  AS avg_latency
+FROM %s.uptime_checks
+WHERE tenant_id = ?
+  AND site_id IN ?
+  AND checked_at >= ?
+GROUP BY site_id`, s.db),
+		tenantID, siteIDs, chTime(since))
+	if err != nil {
+		return nil, fmt.Errorf("clickhouse fleet uptime query: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID]FleetUptimeRow, len(siteIDs))
+	for rows.Next() {
+		var (
+			siteID     uuid.UUID
+			latestUpU  uint8
+			latestAt   time.Time
+			latestTLS  time.Time
+			checks     uint64
+			upChecks   uint64
+			avgLatency *float64
+		)
+		if err := rows.Scan(&siteID, &latestUpU, &latestAt, &latestTLS, &checks, &upChecks, &avgLatency); err != nil {
+			return nil, fmt.Errorf("clickhouse fleet uptime scan: %w", err)
+		}
+		row := FleetUptimeRow{}
+		up := latestUpU == 1
+		row.Up = &up
+		if !latestAt.IsZero() {
+			t := latestAt
+			row.LastProbeAt = &t
+		}
+		if latestTLS.Unix() > 0 {
+			t := latestTLS
+			row.TLSExpiry = &t
+		}
+		if checks > 0 {
+			pct := float64(upChecks) / float64(checks) * 100
+			row.UptimePct7d = &pct
+		}
+		if avgLatency != nil {
+			row.AvgLatencyMs = avgLatency
+		}
+		out[siteID] = row
+	}
+	return out, rows.Err()
 }
 
 // QuerySeries returns a downsampled per-bucket series for one site over a window
