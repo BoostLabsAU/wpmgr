@@ -114,6 +114,13 @@ final class IntegrationsPurgeTest extends TestCase
             $this->http[] = [(string) $url, 'POST', is_array($args) ? $args : []];
             return [];
         });
+        Functions\when('home_url')->alias(static function ($path = '/') {
+            $path = is_string($path) ? $path : '/';
+            if ($path === '') {
+                return 'https://shop.example';
+            }
+            return 'https://shop.example' . ($path[0] === '/' ? $path : '/' . $path);
+        });
 
         unset($GLOBALS['kinsta_cache'], $GLOBALS['cloudflareHooks']);
         unset(
@@ -395,7 +402,7 @@ final class IntegrationsPurgeTest extends TestCase
             'server'         => '127.0.0.1:6081',
             'cacheTagPrefix' => 'testtag',
         ]);
-        $_SERVER['HTTP_HOST'] = 'shop.example';
+        $_SERVER['HTTP_HOST'] = 'attacker.example';
 
         (new CloudPanel())->onPurgeEverything();
 
@@ -418,7 +425,21 @@ final class IntegrationsPurgeTest extends TestCase
         $this->assertFalse($args2['reject_unsafe_urls']);
     }
 
-    public function test_cloudpanel_url_purge_preserves_path_and_query(): void
+    public function test_cloudpanel_rejects_public_varnish_endpoint(): void
+    {
+        $this->writeCloudPanelSettings([
+            'enabled'        => true,
+            'server'         => 'https://example.com:9000',
+            'cacheTagPrefix' => 'testtag',
+        ]);
+
+        $this->expectException(\InvalidArgumentException::class);
+        $this->expectExceptionMessage('loopback or private-range');
+
+        (new CloudPanel())->onPurgeEverything();
+    }
+
+    public function test_cloudpanel_url_purge_preserves_path_query_and_skips_offsite_hosts(): void
     {
         $this->writeCloudPanelSettings([
             'enabled'        => true,
@@ -431,17 +452,12 @@ final class IntegrationsPurgeTest extends TestCase
             'https://cdn.example/about/us/',
         ]);
 
-        $this->assertCount(2, $this->http);
+        $this->assertCount(1, $this->http);
 
         [$url1, $method1, $args1] = $this->http[0];
         $this->assertSame('PURGE', $method1);
         $this->assertSame('http://127.0.0.1:6081/cart/?id=1', $url1);
         $this->assertSame('shop.example', $args1['headers']['Host']);
-
-        [$url2, $method2, $args2] = $this->http[1];
-        $this->assertSame('PURGE', $method2);
-        $this->assertSame('http://127.0.0.1:6081/about/us/', $url2);
-        $this->assertSame('cdn.example', $args2['headers']['Host']);
     }
 
     public function test_cloudpanel_full_purge_wipes_pagespeed_host_cache(): void
@@ -451,7 +467,7 @@ final class IntegrationsPurgeTest extends TestCase
             'server'         => '127.0.0.1:6081',
             'cacheTagPrefix' => 'testtag',
         ]);
-        $_SERVER['HTTP_HOST'] = 'shop.example';
+        $_SERVER['HTTP_HOST'] = 'attacker.example';
 
         $hostDir = $this->cloudpanelPageSpeedHostPath('shop.example');
         $this->writeCloudPanelPageSpeedFile('shop.example', 'page.html', 'cached');

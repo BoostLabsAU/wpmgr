@@ -16,6 +16,9 @@ namespace WPMgr\Agent\Integrations;
 
 /**
  * CloudPanel Varnish and PageSpeed purger.
+ *
+ * CloudPanel's Varnish endpoint must resolve to a loopback or private-range
+ * address because requests are sent with unsafe URL rejection disabled.
  */
 final class CloudPanel extends Integration
 {
@@ -79,6 +82,11 @@ final class CloudPanel extends Integration
             return;
         }
 
+        $siteHost = $this->siteHost();
+        if ($siteHost === '') {
+            return;
+        }
+
         $count = 0;
         foreach ($urls as $url) {
             if ($count++ >= self::MAX_URLS) {
@@ -87,6 +95,9 @@ final class CloudPanel extends Integration
 
             $host = $this->urlPart($url, PHP_URL_HOST);
             if (!is_string($host) || $host === '') {
+                continue;
+            }
+            if (!$this->sameHost($host, $siteHost)) {
                 continue;
             }
 
@@ -101,7 +112,7 @@ final class CloudPanel extends Integration
             $query = $this->urlPart($url, PHP_URL_QUERY);
             $this->purge(
                 $settings['endpoint'] . $path . (is_string($query) && $query !== '' ? '?' . $query : ''),
-                ['Host' => $this->cleanHeaderValue($host)]
+                ['Host' => $siteHost]
             );
         }
     }
@@ -191,10 +202,11 @@ final class CloudPanel extends Integration
     }
 
     /**
-     * Normalize a CloudPanel Varnish server string into a request endpoint.
+     * Normalize a loopback/private-range CloudPanel Varnish server string into a request endpoint.
      *
      * @param string $server Raw settings server value.
      * @return string Endpoint without trailing slash, or empty string when invalid.
+     * @throws \InvalidArgumentException When the endpoint host is public or external.
      */
     private function normalizeEndpoint(string $server): string
     {
@@ -229,7 +241,51 @@ final class CloudPanel extends Integration
             return '';
         }
 
+        if (!$this->isPrivateAddress($host)) {
+            throw new \InvalidArgumentException(
+                'CloudPanel Varnish endpoint must be a loopback or private-range address '
+                . '(127.0.0.1, ::1, 10.x, 172.16-31.x, 192.168.x). Received: '
+                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is not direct browser output.
+                . $host
+                . '.'
+            );
+        }
+
         return rtrim($scheme . '://' . $host . ($port !== null ? ':' . $port : ''), '/');
+    }
+
+    /**
+     * Whether a CloudPanel endpoint host is limited to loopback/private ranges.
+     *
+     * @param string $host Parsed endpoint host.
+     * @return bool
+     */
+    private function isPrivateAddress(string $host): bool
+    {
+        $host = strtolower(trim($host));
+        if ($host === '') {
+            return false;
+        }
+        if ($host[0] === '[' && str_ends_with($host, ']')) {
+            $host = substr($host, 1, -1);
+        }
+
+        if ($host === '127.0.0.1' || $host === '::1') {
+            return true;
+        }
+
+        if (!filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            return false;
+        }
+
+        $parts = array_map('intval', explode('.', $host));
+        if (count($parts) !== 4) {
+            return false;
+        }
+
+        return $parts[0] === 10
+            || ($parts[0] === 172 && $parts[1] >= 16 && $parts[1] <= 31)
+            || ($parts[0] === 192 && $parts[1] === 168);
     }
 
     /**
@@ -263,17 +319,16 @@ final class CloudPanel extends Integration
      */
     private function siteHost(): string
     {
-        if (isset($_SERVER['HTTP_HOST']) && is_string($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== '') {
-            return $this->cleanHeaderValue($_SERVER['HTTP_HOST']);
+        if (function_exists('home_url')) {
+            $host = $this->urlPart((string) \home_url('/'), PHP_URL_HOST);
+            if (is_string($host) && $host !== '') {
+                return $this->cleanHeaderValue($host);
+            }
         }
 
         if (isset($_SERVER['SERVER_NAME']) && is_string($_SERVER['SERVER_NAME']) && $_SERVER['SERVER_NAME'] !== '') {
+            // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- cleanHeaderValue() unslashes and sanitizes when WordPress helpers exist.
             return $this->cleanHeaderValue($_SERVER['SERVER_NAME']);
-        }
-
-        if (function_exists('home_url')) {
-            $host = $this->urlPart((string) \home_url('/'), PHP_URL_HOST);
-            return is_string($host) ? $this->cleanHeaderValue($host) : '';
         }
 
         return '';
@@ -338,6 +393,7 @@ final class CloudPanel extends Integration
             }
 
             if ($item->isLink() || $item->isFile()) {
+                // Small TOCTOU window between realpath() and deletion; containment plus symlink checks keep it limited to PageSpeed cache contents.
                 $this->deleteFile($path);
                 continue;
             }
@@ -410,6 +466,7 @@ final class CloudPanel extends Integration
     private function homeDirectories(): array
     {
         $homes = [];
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- Local environment path normalized before use; not emitted.
         foreach ([getenv('HOME'), $_SERVER['HOME'] ?? null] as $home) {
             if (!is_string($home)) {
                 continue;
@@ -466,6 +523,18 @@ final class CloudPanel extends Integration
         }
 
         return trim((string) preg_replace('/[\r\n\t]+/', '', $value));
+    }
+
+    /**
+     * Compare host names without trusting request headers.
+     *
+     * @param string $left  First host.
+     * @param string $right Second host.
+     * @return bool
+     */
+    private function sameHost(string $left, string $right): bool
+    {
+        return strtolower($this->cleanHeaderValue($left)) === strtolower($this->cleanHeaderValue($right));
     }
 
     /**
