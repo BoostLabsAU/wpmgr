@@ -164,6 +164,90 @@ LIMIT 1`, tenantID, siteID)
 	return l, err
 }
 
+// QueryFleetUptime returns a batch uptime aggregate for many sites in one
+// Postgres query using unnest as the anchor so sites with zero probes are
+// absent from the result map (caller treats missing == no data). Runs under
+// InAgentTx (same as QueryLatest/QueryAggregate) with an explicit tenant_id
+// predicate for defense-in-depth and index coverage.
+//
+// The query fetches both the per-site 7d aggregate and the latest probe row in
+// one pass using LEFT JOIN LATERAL, matching the structure of the existing
+// fleet-status raw SQL in the uptime repo (pre-fix reference).
+func (s *pgStore) QueryFleetUptime(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID, window time.Duration) (map[uuid.UUID]FleetUptimeRow, error) {
+	if len(siteIDs) == 0 {
+		return map[uuid.UUID]FleetUptimeRow{}, nil
+	}
+	since := time.Now().Add(-window)
+	out := make(map[uuid.UUID]FleetUptimeRow, len(siteIDs))
+
+	err := s.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+SELECT
+    s.id                                                         AS site_id,
+    lat.up                                                       AS latest_up,
+    lat.probed_at                                                AS latest_at,
+    lat.tls_expiry                                               AS latest_tls,
+    agg.checks,
+    agg.up_checks,
+    agg.avg_latency
+FROM unnest($2::uuid[]) AS s(id)
+LEFT JOIN LATERAL (
+    SELECT up, probed_at, tls_expiry
+    FROM site_uptime_probes
+    WHERE site_id = s.id AND tenant_id = $1
+    ORDER BY probed_at DESC
+    LIMIT 1
+) lat ON true
+LEFT JOIN LATERAL (
+    SELECT
+        COUNT(*)                                         AS checks,
+        COUNT(*) FILTER (WHERE up)                       AS up_checks,
+        AVG(NULLIF(total_ms, 0)) FILTER (WHERE up)       AS avg_latency
+    FROM site_uptime_probes
+    WHERE site_id = s.id AND tenant_id = $1 AND probed_at >= $3
+) agg ON true`,
+			tenantID, siteIDs, since)
+		if err != nil {
+			return fmt.Errorf("postgres fleet uptime query: %w", err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var (
+				siteID     uuid.UUID
+				latestUp   *bool
+				latestAt   *time.Time
+				latestTLS  *time.Time
+				checks     *int64
+				upChecks   *int64
+				avgLatency *float64
+			)
+			if err := rows.Scan(&siteID, &latestUp, &latestAt, &latestTLS, &checks, &upChecks, &avgLatency); err != nil {
+				return fmt.Errorf("postgres fleet uptime scan: %w", err)
+			}
+			// Site has no probe data at all — omit from map.
+			if latestUp == nil {
+				continue
+			}
+			row := FleetUptimeRow{
+				Up:          latestUp,
+				LastProbeAt: latestAt,
+				TLSExpiry:   latestTLS,
+			}
+			if checks != nil && *checks > 0 && upChecks != nil {
+				pct := float64(*upChecks) / float64(*checks) * 100
+				row.UptimePct7d = &pct
+			}
+			if avgLatency != nil {
+				row.AvgLatencyMs = avgLatency
+			}
+			out[siteID] = row
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
 // QuerySeries returns a downsampled per-bucket series for one site over the
 // window. Buckets are date_trunc-aligned: width = window/buckets rounded to
 // whole seconds (min 60s). We use to_timestamp(floor(extract(epoch))/W*W) to

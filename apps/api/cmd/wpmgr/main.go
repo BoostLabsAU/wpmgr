@@ -743,6 +743,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	uptimeWorker := uptime.NewProbeWorker(uptimeRepo, uptimeProber, metricsStore, uptimeDispatcher, uptimeSiteAdapter, logger, cfg.Uptime.ProbeConcurrency, cfg.Uptime.DownThreshold)
 	uptimeSvc := uptime.NewService(uptimeRepo, metricsStore, uptimeSiteAdapter)
 	uptimeH := uptime.NewHandler(uptimeSvc, auditRec)
+	// Wire the metrics store into the site service so site-list uptime fields
+	// are sourced from the active backend (ClickHouse or Postgres) rather than
+	// a direct read of site_uptime_probes (which is empty on ClickHouse installs).
+	siteSvc.SetUptimeStore(metricsStore)
 
 	// P4b — cron kick: periodically fire a GET to wp-cron.php for all enrolled
 	// sites so fully page-cached sites boot PHP and drain WP-Cron even with zero
