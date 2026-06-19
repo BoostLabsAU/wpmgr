@@ -31,6 +31,7 @@ import {
   type WizardTarget,
 } from "@/features/updates/update-wizard";
 import { useMe, canOperate } from "@/features/auth/use-auth";
+import { useBulkBackup } from "@/features/backups/use-bulk-backup";
 import { toast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 import { connectionStateOf } from "@/features/sites/connection-state";
@@ -316,6 +317,8 @@ function SitesPage() {
 
   // ── Auto-login ─────────────────────────────────────────────────────────────
 
+  const bulkBackup = useBulkBackup();
+
   const loginMutation = useAutoLogin();
   const openAutoLoginRef = useRef((_site: Site) => {});
 
@@ -477,26 +480,57 @@ function SitesPage() {
     [selection],
   );
 
-  const handleBulkBackup = useCallback(() => {
-    toast.success(`Backup queued for ${selection.count} sites`, {
-      description: "We will surface per-site results as they finish.",
-      action: {
-        label: "View activity",
-        onClick: () => {
-          console.debug("[sites] open activity for bulk backup");
+  const handleBulkBackup = useCallback(async () => {
+    const ids = Array.from(selection.selected);
+    if (ids.length === 0) return;
+    const { enqueued, skipped, failed } = await bulkBackup(ids);
+
+    // Toast AFTER the calls settle with honest counts.
+    const total = ids.length;
+    const isSingle = total === 1;
+    const firstId = ids[0];
+
+    // Resolve the "View activity" navigation target: single site → site activity
+    // page; multi-site → fleet backups view. Both routes exist.
+    const activityHref =
+      isSingle && firstId
+        ? `/sites/${firstId}/activity`
+        : "/backups";
+
+    if (failed.length > 0 && enqueued.length === 0 && skipped.length === 0) {
+      toast.error(
+        `Backup failed for ${failed.length} ${failed.length === 1 ? "site" : "sites"}`,
+        { description: "Check the site connection and try again." },
+      );
+    } else {
+      const parts: string[] = [];
+      if (enqueued.length > 0)
+        parts.push(`${enqueued.length} queued`);
+      if (skipped.length > 0)
+        parts.push(`${skipped.length} already running`);
+      if (failed.length > 0)
+        parts.push(`${failed.length} failed`);
+
+      toast.success(`Backup started for ${enqueued.length + skipped.length} of ${total} ${total === 1 ? "site" : "sites"}`, {
+        description: parts.join(", "),
+        action: {
+          label: "View activity",
+          onClick: () => {
+            void navigate({
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              to: activityHref as any,
+            });
+          },
         },
-      },
-    });
-    console.debug("[sites] bulk backup", {
-      siteIds: Array.from(selection.selected),
-    });
-  }, [selection]);
+      });
+    }
+  }, [selection, bulkBackup, navigate]);
 
   const handleBulkRestore = useCallback(() => {
     toast.info("Fleet-wide restore lands in Sprint 4");
   }, []);
 
-  const handleBulkOpenWpAdmin = useCallback(() => {
+  const handleBulkOpenWpAdmin = useCallback(async () => {
     if (!autoLogin) {
       toast.error("Auto-login requires admin permissions", {
         description: "Ask an admin to grant the role, then retry.",
@@ -505,25 +539,62 @@ function SitesPage() {
     }
     const ids = Array.from(selection.selected);
     const cap = Math.min(ids.length, 8);
-    toast.info(`Opening ${cap} sites in wp-admin`);
-    for (let i = 0; i < cap; i++) {
-      const site = selectedSites.find((s) => s.id === ids[i]);
-      if (!site) continue;
-      loginMutation.mutate(
-        { siteId: site.id },
-        {
-          onSuccess: (data) => {
-            window.open(data.redirect_url, "_blank", "noopener,noreferrer");
+    const targets = ids
+      .slice(0, cap)
+      .map((id) => selectedSites.find((s) => s.id === id))
+      .filter((s): s is Site => s !== undefined);
+
+    if (targets.length === 0) return;
+
+    // Resolve auto-login URLs for all selected sites.
+    // We do NOT call window.open inside the async onSuccess because browsers
+    // block popups not triggered directly by a user gesture. Instead, we open
+    // the first tab synchronously on the click, then surface the remaining
+    // resolved URLs as toasts with an "Open" action the operator clicks (each
+    // click is its own user gesture, so the pop-up is allowed).
+    toast.info(`Resolving wp-admin links for ${targets.length} ${targets.length === 1 ? "site" : "sites"}...`);
+
+    const results = await Promise.allSettled(
+      targets.map((site) => loginMutation.mutateAsync({ siteId: site.id })),
+    );
+
+    // Open the first resolved URL immediately. On browsers that block
+    // popups this is the only tab we can guarantee opens from this gesture;
+    // the remainder are surfaced via actionable toasts.
+    let firstOpened = false;
+    results.forEach((result, i) => {
+      // targets and results are always the same length (targets.map → allSettled).
+      // Guard for strict noUncheckedIndexedAccess — impossible in practice.
+      const site = targets[i];
+      if (!site) return;
+      if (result.status === "fulfilled") {
+        const url = result.value.redirect_url;
+        if (!firstOpened) {
+          window.open(url, "_blank", "noopener,noreferrer");
+          firstOpened = true;
+        } else {
+          // Each toast action is its own user gesture.
+          toast.info(`${site.name} ready`, {
+            description: "Click to open in wp-admin.",
+            action: {
+              label: "Open",
+              onClick: () =>
+                window.open(url, "_blank", "noopener,noreferrer"),
+            },
+          });
+        }
+      } else {
+        const err: unknown = result.reason;
+        toast.error(`Could not open ${site.name}`, {
+          description: err instanceof Error ? err.message : "Auto-login failed.",
+          action: {
+            label: "Try again",
+            onClick: () => handleOpenAutoLogin(site),
           },
-          onError: (err) => {
-            toast.error(`Could not open ${site.name}`, {
-              description: err.message,
-            });
-          },
-        },
-      );
-    }
-  }, [autoLogin, loginMutation, selectedSites, selection]);
+        });
+      }
+    });
+  }, [autoLogin, loginMutation, selectedSites, selection, handleOpenAutoLogin]);
 
   const handleBulkTag = useCallback(() => {
     toast.info(`Tagging ${selection.count} sites lands in Sprint 4`);
@@ -667,9 +738,9 @@ function SitesPage() {
             visibleIds={visibleIds}
             canOperate={operate}
             onBulkUpdate={openUpdateWizardForSelection}
-            onBulkBackup={handleBulkBackup}
+            onBulkBackup={() => { void handleBulkBackup(); }}
             onBulkRestore={handleBulkRestore}
-            onBulkOpenWpAdmin={handleBulkOpenWpAdmin}
+            onBulkOpenWpAdmin={() => { void handleBulkOpenWpAdmin(); }}
             onBulkTag={handleBulkTag}
             onBulkSetClient={handleBulkSetClient}
             onBulkPauseMonitoring={handleBulkPauseMonitoring}

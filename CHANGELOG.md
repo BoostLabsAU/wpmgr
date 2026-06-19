@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.51.5] - 2026-06-20
+
+### Fixed
+
+- **Bulk and update-triggered backups now actually run.** The Sites "Run backup" bulk action, the command bar's "Run backup on selected sites" and "Run backup on all sites", and the Updates tab's "Take backup first" option previously showed feedback but never enqueued a backup. They now enqueue a real backup for each selected site (the same job a single-site backup creates), report accurate per-site results (including sites skipped because a backup is already running), and the toast's "View activity" link now goes to the right place. "Take backup first" waits for the backup to be queued before starting the update. The Sites "Open in wp-admin" bulk action now opens all selected sites instead of only the first. (#76)
+
 ## [0.51.4] - 2026-06-19
 
 ### Fixed
