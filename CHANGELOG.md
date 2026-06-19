@@ -6,6 +6,21 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.51.2] - 2026-06-19
+
+### Changed
+
+- **The agent now installs its early-boot security helpers only when you turn the feature on.** The login firewall and the fatal-error trap each run as a small must-use helper file. Previously the error-trap helper was written on activation; now neither helper is written until you explicitly enable the corresponding feature, and both are removed when you turn the feature off or deactivate the plugin. A freshly activated agent writes nothing outside its own plugin folder. Error capture inside a normal request continues to work regardless.
+
+### Added
+
+- **Crawlable Terms and Privacy pages.** manage.wpmgr.app/terms and /privacy now serve full static content to link checkers and reviewers that do not run JavaScript, while the in-app pages keep working for normal navigation.
+- **"Get started for free" call to action** on the marketing site, linking to hosted signup.
+
+### Fixed
+
+- **Client IP resolution validates every candidate** before it is recorded, and the optional public-IP lookup now links the provider's terms and privacy pages.
+
 ## [0.51.1] - 2026-06-16
 
 ### Changed
