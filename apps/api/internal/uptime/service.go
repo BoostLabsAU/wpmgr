@@ -161,11 +161,63 @@ func (s *Service) FleetSiteIDs(ctx context.Context, tenantID uuid.UUID, p domain
 
 // GetFleetStatus returns the fleet-wide uptime status for the principal's
 // accessible sites, with summary counts and per-site items.
+//
+// Data sourcing: Postgres-resident fields (name, url, connection_state,
+// health_status, in_incident) come from the repo (GetFleetSiteInfo). Uptime
+// metrics (up, last_probe_at, uptime_pct_7d, avg_latency_ms, tls_expiry) come
+// from the metrics.Store (QueryFleetUptime) — a single batch query per
+// backend. This ensures ClickHouse deployments return real data instead of all-
+// null results: previously the service read from Postgres site_uptime_probes
+// directly, which is never written by the ClickHouse path.
 func (s *Service) GetFleetStatus(ctx context.Context, tenantID uuid.UUID, siteIDs []uuid.UUID) (FleetStatusResponse, error) {
-	items, err := s.repo.GetFleetStatus(ctx, tenantID, siteIDs)
+	// 1. Fetch Postgres-resident site fields (one query, InTenantTx/RLS).
+	infos, err := s.repo.GetFleetSiteInfo(ctx, tenantID, siteIDs)
 	if err != nil {
 		return FleetStatusResponse{}, err
 	}
+
+	// 2. Fetch uptime metrics from the active store (ClickHouse or Postgres) in
+	//    a single batch query — avoids N+1 per-site round-trips.
+	const window7d = 7 * 24 * time.Hour
+	uptimeMap, err := s.store.QueryFleetUptime(ctx, tenantID, siteIDs, window7d)
+	if err != nil {
+		return FleetStatusResponse{}, domain.Internal("fleet_uptime_metrics_failed", "failed to query fleet uptime metrics").WithCause(err)
+	}
+
+	// 3. Merge: build FleetStatusItem per site, deriving status from store data.
+	items := make([]FleetStatusItem, 0, len(infos))
+	for _, info := range infos {
+		item := FleetStatusItem{
+			SiteID:           info.SiteID,
+			Name:             info.Name,
+			URL:              info.URL,
+			ConnectionState:  info.ConnectionState,
+			HealthStatus:     info.HealthStatus,
+			InIncident:       info.InIncident,
+			LatencySparkline: []float64{},
+		}
+
+		if um, ok := uptimeMap[info.SiteID]; ok {
+			item.Up = um.Up
+			item.LastProbeAt = um.LastProbeAt
+			item.TLSExpiry = um.TLSExpiry
+			if um.UptimePct7d != nil {
+				item.UptimePct7d = *um.UptimePct7d
+			}
+			item.AvgLatencyMs = um.AvgLatencyMs
+			// Derive total_ms pointer for deriveFleetStatus threshold check.
+			var totalMsPtr *float64
+			if um.AvgLatencyMs != nil {
+				totalMsPtr = um.AvgLatencyMs
+			}
+			item.Status = deriveFleetStatus(um.Up, totalMsPtr, info.ConnectionState)
+		} else {
+			item.Status = FleetStatusUnknown
+		}
+
+		items = append(items, item)
+	}
+
 	var resp FleetStatusResponse
 	resp.Items = items
 	resp.Summary = FleetStatusCounts{}

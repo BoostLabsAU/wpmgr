@@ -10,6 +10,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
 
+## [0.51.4] - 2026-06-19
+
+### Fixed
+
+- **Insights to Uptime now shows real uptime for every site when the ClickHouse metrics backend is used.** The fleet uptime status endpoint, and the uptime/SSL column in the Sites list, read probe data directly from Postgres, so deployments using ClickHouse for metrics saw every site as "Unknown" with empty uptime, latency, and TLS fields even though the data existed (the per-site Health view and the uptime summary endpoint, which read through the metrics store, worked correctly). Both now read through the metrics store, so ClickHouse and Postgres deployments display correct status, 7-day uptime percentage, average latency, TLS expiry, and last-check time. (#74)
+
 ## [0.51.3] - 2026-06-19
 
 ### Fixed
