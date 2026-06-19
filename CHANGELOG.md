@@ -10,6 +10,31 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
 
+### Fixed
+
+- Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+
+## [0.51.3] - 2026-06-19
+
+### Fixed
+
+- **Scheduled backups no longer re-fire every few minutes.** A schedule whose next-run time had slipped into the past (most often after being disabled and re-enabled) was re-triggered on every scheduler tick, producing many runs per night, overlapping runs, and a daily incremental chain climbing several generations in one night. Re-enabling or an already-overdue schedule now advances to the next future run slot; the scheduler claims and advances each due schedule in a single atomic step; only one backup per site can be in flight at a time; and any schedules already stuck in the past are healed automatically on startup. (#68)
+
+## [0.51.2] - 2026-06-19
+
+### Changed
+
+- **The agent now installs its early-boot security helpers only when you turn the feature on.** The login firewall and the fatal-error trap each run as a small must-use helper file. Previously the error-trap helper was written on activation; now neither helper is written until you explicitly enable the corresponding feature, and both are removed when you turn the feature off or deactivate the plugin. A freshly activated agent writes nothing outside its own plugin folder. Error capture inside a normal request continues to work regardless.
+
+### Added
+
+- **Crawlable Terms and Privacy pages.** manage.wpmgr.app/terms and /privacy now serve full static content to link checkers and reviewers that do not run JavaScript, while the in-app pages keep working for normal navigation.
+- **"Get started for free" call to action** on the marketing site, linking to hosted signup.
+
+### Fixed
+
+- **Client IP resolution validates every candidate** before it is recorded, and the optional public-IP lookup now links the provider's terms and privacy pages.
+
 ## [0.51.1] - 2026-06-16
 
 ### Changed
