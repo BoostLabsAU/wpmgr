@@ -40,7 +40,11 @@
  *     size.
  *
  * S1.2 — error config (ignore-list + level):
- *   - `wpmgr_error_config` wp-option holds `{ "error_level": <int>, "ignore_md5s": [...] }`.
+ *   - `wpmgr_error_config` wp-option holds
+ *     `{ "enabled": <bool>, "error_level": <int>, "ignore_md5s": [...] }`.
+ *   - `enabled`: operator opt-in flag. DEFAULT FALSE (absent key = false). Only
+ *     the mu-plugin FILE write is gated on this; the in-process set_error_handler
+ *     / register_shutdown_function installation (install()) is unconditional.
  *   - `error_level`: bitmask of non-fatal codes to capture; fatals always captured.
  *   - `ignore_md5s`: fingerprints to drop entirely (no INSERT/UPDATE).
  *   - Config is written by the `sync_error_config` signed command and read on
@@ -115,7 +119,7 @@ final class ErrorMonitor
      * wp-options. In production each PHP worker services one request and exits,
      * so "same request" is the only case where invalidation matters.
      *
-     * @var array{error_level:int,ignore_md5s:array<int,string>}|null
+     * @var array{enabled:bool,error_level:int,ignore_md5s:array<int,string>}|null
      */
     private ?array $configCache = null;
 
@@ -125,6 +129,7 @@ final class ErrorMonitor
      *
      * Returns safe defaults when the option is absent, not valid JSON, or
      * contains out-of-range values:
+     *   - enabled: false (absent = NOT opted in; operator must explicitly enable).
      *   - error_level: HANDLEABLE_NON_FATAL (captures everything, preserving
      *     pre-S1.2 behaviour until an operator narrows the mask).
      *   - ignore_md5s: [] (nothing ignored by default).
@@ -137,7 +142,7 @@ final class ErrorMonitor
      *     invalid entries are silently dropped rather than rejecting the whole
      *     config.
      *
-     * @return array{error_level:int,ignore_md5s:array<int,string>}
+     * @return array{enabled:bool,error_level:int,ignore_md5s:array<int,string>}
      */
     private function loadConfig(): array
     {
@@ -146,6 +151,7 @@ final class ErrorMonitor
         }
 
         $defaults = [
+            'enabled'     => false,
             'error_level' => self::HANDLEABLE_NON_FATAL,
             'ignore_md5s' => [],
         ];
@@ -161,6 +167,11 @@ final class ErrorMonitor
             $this->configCache = $defaults;
             return $this->configCache;
         }
+
+        // Validate enabled: must be a bool; absent key defaults false.
+        $enabled = isset($decoded['enabled']) && is_bool($decoded['enabled'])
+            ? $decoded['enabled']
+            : false;
 
         // Validate error_level: must be an integer whose bits are all within E_ALL.
         $level = isset($decoded['error_level']) ? $decoded['error_level'] : self::HANDLEABLE_NON_FATAL;
@@ -180,11 +191,25 @@ final class ErrorMonitor
         }
 
         $this->configCache = [
+            'enabled'     => $enabled,
             'error_level' => $level,
             'ignore_md5s' => $ignoreMd5s,
         ];
 
         return $this->configCache;
+    }
+
+    /**
+     * Whether the operator has explicitly opted in to the error-monitor
+     * mu-plugin FILE write. Defaults false until a sync_error_config command
+     * with enabled=true is received. The in-process set_error_handler /
+     * register_shutdown_function (install()) is unconditional and unaffected.
+     *
+     * @return bool
+     */
+    public function isEnabled(): bool
+    {
+        return $this->loadConfig()['enabled'];
     }
 
     /**
@@ -476,6 +501,10 @@ final class ErrorMonitor
      * Invalid entries are silently dropped (best-effort). The resulting config
      * is written to wp-options as JSON under OPTION_CONFIG.
      *
+     * The `enabled` bool controls whether Plugin::registerHooks() will write the
+     * error-trap mu-plugin file to wp-content/mu-plugins/. It defaults false
+     * (no file write) until the CP explicitly pushes enabled=true.
+     *
      * Best-effort cleanup: when fingerprints are newly added to ignore_md5s the
      * corresponding rows are deleted from the capture table so they disappear
      * from the dashboard immediately (mirrors the intended behaviour — the
@@ -486,11 +515,12 @@ final class ErrorMonitor
      * The static loadConfig() cache is invalidated by clearing it so the new
      * config is picked up for the remainder of this request.
      *
+     * @param bool           $enabled     Whether the operator has opted in to the mu-plugin file write.
      * @param int            $errorLevel  Desired non-fatal capture mask.
      * @param array<mixed>   $ignoreMd5s  Fingerprints to silence.
      * @return void
      */
-    public function applyConfig(int $errorLevel, array $ignoreMd5s): void
+    public function applyConfig(bool $enabled, int $errorLevel, array $ignoreMd5s): void
     {
         // Validate and clamp error_level.
         if (($errorLevel & E_ALL) !== $errorLevel || $errorLevel < 0) {
@@ -507,6 +537,7 @@ final class ErrorMonitor
 
         // Persist.
         $encoded = (string) json_encode([
+            'enabled'     => $enabled,
             'error_level' => $errorLevel,
             'ignore_md5s' => $cleanMd5s,
         ]);

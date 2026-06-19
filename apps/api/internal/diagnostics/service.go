@@ -135,6 +135,7 @@ func (s *Service) GetErrorConfig(ctx context.Context, tenantID, siteID uuid.UUID
 		return ErrorConfig{
 			TenantID:   tenantID,
 			SiteID:     siteID,
+			Enabled:    true,
 			ErrorLevel: agentcmd.DefaultErrorLevel,
 			IgnoreMD5s: []string{},
 		}, nil
@@ -181,6 +182,7 @@ func (s *Service) SaveErrorConfig(ctx context.Context, tenantID, siteID uuid.UUI
 				md5s = []string{}
 			}
 			if _, pushErr := s.errorClient.SyncErrorConfig(ctx, siteID, siteURL, agentcmd.ErrorConfigRequest{
+				Enabled:    saved.Enabled,
 				ErrorLevel: saved.ErrorLevel,
 				IgnoreMD5s: md5s,
 			}); pushErr != nil {

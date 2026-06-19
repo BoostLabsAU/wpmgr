@@ -114,12 +114,16 @@ type PHPError struct {
 // ErrorConfig is the per-site PHP error reporting configuration stored in
 // site_error_config and pushed to the agent via the sync_error_config command.
 //
+// Enabled controls whether the agent installs the early-boot error-trap
+// mu-plugin (pre-plugins_loaded bootstrap-fatal trap). Defaults true so
+// existing sites keep the mu-plugin after the 0.48.4+ agent upgrade.
 // ErrorLevel is the PHP E_* bitmask (e.g. 6143 = E_ALL & ~E_STRICT, the WP
 // default). IgnoreMD5s is the ordered list of md5 fingerprints the agent must
 // suppress without counting or reporting. An empty list clears all suppression.
 type ErrorConfig struct {
 	TenantID   uuid.UUID
 	SiteID     uuid.UUID
+	Enabled    bool
 	ErrorLevel int
 	IgnoreMD5s []string
 	UpdatedAt  time.Time

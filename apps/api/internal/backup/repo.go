@@ -8,12 +8,22 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
+
+// isUniqueViolation reports whether err is a Postgres UNIQUE constraint
+// violation (SQLSTATE 23505). Used to treat a partial-unique-index collision on
+// backup_snapshots(site_id) WHERE status IN ('pending','running') as an
+// already-in-flight signal rather than a hard error.
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
 
 // Repo is the tenant-scoped persistence for backup snapshots/manifests/chunks/
 // schedules, plus the cross-tenant scheduler enumeration. Every tenant-scoped
@@ -74,12 +84,36 @@ type Repo interface {
 	// ListDueSchedules enumerates enabled, due schedules across ALL tenants for
 	// the periodic scheduler (cross-tenant, under app.agent).
 	ListDueSchedules(ctx context.Context, now time.Time, limit int32) ([]Schedule, error)
+	// ClaimAndAdvanceDueSchedules atomically selects enabled, due schedules with
+	// FOR UPDATE SKIP LOCKED, advances each one's next_run_at to the supplied
+	// nextAt values, and returns the fired slots — all in a single agent transaction.
+	// The caller supplies a map from schedule ID to the already-computed next time
+	// (tz/jitter math stays in Go). Only schedules whose advance succeeded are
+	// returned: a row that cannot be locked (already held by another scheduler pass)
+	// is silently skipped, preventing duplicate fires across concurrent CP instances
+	// and RunOnStart re-fires.
+	ClaimAndAdvanceDueSchedules(ctx context.Context, now time.Time, nextAt map[uuid.UUID]time.Time) ([]Schedule, error)
 	// ListTenantsForGC enumerates tenants with completed snapshots across ALL
 	// tenants for the periodic retention GC (cross-tenant, under app.agent).
 	ListTenantsForGC(ctx context.Context) ([]uuid.UUID, error)
 	// AdvanceScheduleRun records an enqueued scheduled backup and advances
 	// next_run_at, tenant-scoped.
 	AdvanceScheduleRun(ctx context.Context, tenantID, scheduleID uuid.UUID, next time.Time) error
+	// CountInFlightSnapshots returns the count of pending/running snapshots for
+	// (tenantID, siteID). Used as a belt-and-suspenders guard before CreateSnapshot
+	// to skip duplicate fires that slip past the partial-unique index. Tenant-scoped.
+	CountInFlightSnapshots(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error)
+	// HealOverdueSchedules advances every enabled schedule whose next_run_at is
+	// already <= now to the next future occurrence, using per-site tz/jitter math.
+	// Implemented as a Go loop over raw schedule rows (not a bulk SQL update) so
+	// nextOccurrence can apply DST-aware per-site timezone math. Cross-tenant —
+	// runs under app.agent. Called once at boot before the scheduler starts.
+	HealOverdueSchedules(ctx context.Context, now time.Time, compute func(sched Schedule, now time.Time) time.Time) (int, error)
+	// ReconcileDuplicateInflightSnapshots marks the older of any duplicate
+	// pending/running snapshots for the same site as failed with the reason
+	// "duplicate_in_flight_healed". Called once at boot before the partial-unique
+	// index migration is applied (or at migration time via Go boot task).
+	ReconcileDuplicateInflightSnapshots(ctx context.Context) (int, error)
 
 	// SetSnapshotLocked sets the locked flag on a snapshot (Track C, m49). When
 	// locked=true the retention GC will never auto-prune the snapshot; the
@@ -826,6 +860,7 @@ DO UPDATE SET
     enabled               = EXCLUDED.enabled,
     retention_days        = EXCLUDED.retention_days,
     monthly_archive_keep  = EXCLUDED.monthly_archive_keep,
+    next_run_at           = EXCLUDED.next_run_at,
     run_hour              = EXCLUDED.run_hour,
     run_minute            = EXCLUDED.run_minute,
     day_of_week           = EXCLUDED.day_of_week,
@@ -2199,4 +2234,192 @@ func (r *pgRepo) ListChainSnapshots(ctx context.Context, tenantID uuid.UUID, cha
 		return rows.Err()
 	})
 	return out, err
+}
+
+// ----------------------------------------------------------------------------
+// Scheduler: atomic claim-and-advance, in-flight guard, heal helpers (issue #68)
+// ----------------------------------------------------------------------------
+
+// ClaimAndAdvanceDueSchedules atomically claims all due schedules with FOR UPDATE
+// SKIP LOCKED, computes their next occurrence via the caller-supplied nextAt map,
+// advances next_run_at in the SAME transaction, and returns the fired slots. All
+// work runs under app.agent so cross-tenant schedule rows are visible.
+//
+// Schedules for which nextAt has no entry are skipped (the caller must compute
+// nextAt for every candidate before calling). A schedule whose lock is contended
+// (held by another CP instance) is silently skipped — SKIP LOCKED ensures it.
+func (r *pgRepo) ClaimAndAdvanceDueSchedules(ctx context.Context, now time.Time, nextAt map[uuid.UUID]time.Time) ([]Schedule, error) {
+	var out []Schedule
+	err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		// 1. Lock all due, enabled rows — skip any already locked by a peer.
+		pgRows, err := tx.Query(ctx,
+			scheduleSelectColumns+` FROM backup_schedules
+			  WHERE enabled = true AND next_run_at <= $1
+			  ORDER BY next_run_at ASC
+			  FOR UPDATE SKIP LOCKED`,
+			now,
+		)
+		if err != nil {
+			return domain.Internal("backup_schedule_claim_failed", "failed to claim due schedules").WithCause(err)
+		}
+		defer pgRows.Close()
+		var candidates []Schedule
+		for pgRows.Next() {
+			s, serr := scanScheduleRow(pgRows)
+			if serr != nil {
+				return domain.Internal("backup_schedule_claim_scan_failed", "failed to scan schedule row").WithCause(serr)
+			}
+			candidates = append(candidates, s)
+		}
+		if err := pgRows.Err(); err != nil {
+			return domain.Internal("backup_schedule_claim_iter_failed", "iterator error claiming schedules").WithCause(err)
+		}
+
+		// 2. For each locked row, advance next_run_at using the pre-computed nextAt.
+		for _, sched := range candidates {
+			next, ok := nextAt[sched.ID]
+			if !ok {
+				// Caller did not supply a nextAt for this schedule: skip without
+				// advancing (it will be re-selected on the next tick).
+				continue
+			}
+			tag, uerr := tx.Exec(ctx,
+				`UPDATE backup_schedules
+				    SET next_run_at = $3, last_run_at = now(), updated_at = now()
+				  WHERE id = $1 AND tenant_id = $2`,
+				sched.ID, sched.TenantID, next,
+			)
+			if uerr != nil {
+				return domain.Internal("backup_schedule_advance_claim_failed", "failed to advance claimed schedule").WithCause(uerr)
+			}
+			if tag.RowsAffected() == 0 {
+				// Row disappeared between SELECT and UPDATE (deleted mid-tx): skip.
+				continue
+			}
+			out = append(out, sched)
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (r *pgRepo) CountInFlightSnapshots(ctx context.Context, tenantID, siteID uuid.UUID) (int64, error) {
+	var count int64
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		return tx.QueryRow(ctx,
+			`SELECT count(*)
+			   FROM backup_snapshots
+			  WHERE tenant_id = $1 AND site_id = $2
+			    AND status IN ('pending', 'running')`,
+			tenantID, siteID,
+		).Scan(&count)
+	})
+	return count, err
+}
+
+// HealOverdueSchedules walks all enabled schedules with next_run_at <= now
+// cross-tenant and advances each to the next future occurrence via the caller's
+// compute function (which encapsulates nextOccurrence + per-site tz + jitter).
+// Returns the number of rows healed.
+func (r *pgRepo) HealOverdueSchedules(ctx context.Context, now time.Time, compute func(sched Schedule, now time.Time) time.Time) (int, error) {
+	// Read all overdue enabled schedules cross-tenant.
+	var overdueRows []Schedule
+	if err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		pgRows, err := tx.Query(ctx,
+			scheduleSelectColumns+` FROM backup_schedules
+			  WHERE enabled = true AND next_run_at <= $1`,
+			now,
+		)
+		if err != nil {
+			return domain.Internal("backup_schedule_heal_list_failed", "failed to list overdue schedules").WithCause(err)
+		}
+		defer pgRows.Close()
+		for pgRows.Next() {
+			s, serr := scanScheduleRow(pgRows)
+			if serr != nil {
+				return domain.Internal("backup_schedule_heal_scan_failed", "failed to scan overdue schedule").WithCause(serr)
+			}
+			overdueRows = append(overdueRows, s)
+		}
+		return pgRows.Err()
+	}); err != nil {
+		return 0, err
+	}
+
+	healed := 0
+	for _, sched := range overdueRows {
+		next := compute(sched, now)
+		if err := r.pool.InTenantTx(ctx, sched.TenantID, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx,
+				`UPDATE backup_schedules
+				    SET next_run_at = $3, updated_at = now()
+				  WHERE id = $1 AND tenant_id = $2 AND enabled = true AND next_run_at <= $4`,
+				sched.ID, sched.TenantID, next, now,
+			)
+			return err
+		}); err != nil {
+			// Log and continue: one site's tz failure must not block the others.
+			continue
+		}
+		healed++
+	}
+	return healed, nil
+}
+
+// ReconcileDuplicateInflightSnapshots marks the OLDER duplicate pending/running
+// snapshots as failed so the partial-unique index can be created cleanly. For
+// each (site_id) with more than one in-flight snapshot, all but the newest are
+// failed with "duplicate_in_flight_healed". Cross-tenant under app.agent for the
+// SELECT; per-tenant for each fail update.
+func (r *pgRepo) ReconcileDuplicateInflightSnapshots(ctx context.Context) (int, error) {
+	type dup struct {
+		id       uuid.UUID
+		tenantID uuid.UUID
+	}
+	var dups []dup
+
+	// Find the older in-flight duplicates across all tenants.
+	if err := r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx, `
+			SELECT id, tenant_id
+			  FROM backup_snapshots
+			 WHERE status IN ('pending', 'running')
+			   AND id NOT IN (
+			       SELECT DISTINCT ON (site_id) id
+			         FROM backup_snapshots
+			        WHERE status IN ('pending', 'running')
+			        ORDER BY site_id, created_at DESC
+			   )`)
+		if err != nil {
+			return domain.Internal("backup_dup_inflight_list_failed", "failed to list duplicate in-flight snapshots").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var d dup
+			if serr := rows.Scan(&d.id, &d.tenantID); serr != nil {
+				return domain.Internal("backup_dup_inflight_scan_failed", "failed to scan duplicate snapshot").WithCause(serr)
+			}
+			dups = append(dups, d)
+		}
+		return rows.Err()
+	}); err != nil {
+		return 0, err
+	}
+
+	failed := 0
+	for _, d := range dups {
+		_ = r.pool.InTenantTx(ctx, d.tenantID, func(tx pgx.Tx) error {
+			_, err := tx.Exec(ctx, `
+				UPDATE backup_snapshots
+				   SET status = 'failed', error = 'duplicate_in_flight_healed',
+				       finished_at = now(), updated_at = now()
+				 WHERE id = $1 AND tenant_id = $2
+				   AND status IN ('pending', 'running')`,
+				d.id, d.tenantID,
+			)
+			return err
+		})
+		failed++
+	}
+	return failed, nil
 }

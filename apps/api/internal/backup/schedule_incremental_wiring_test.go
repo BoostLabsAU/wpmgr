@@ -187,6 +187,18 @@ func (r *wiringRepo) FleetListSnapshots(_ context.Context, _ db.ScopedPrincipal,
 func (r *wiringRepo) FleetBackupHealth(_ context.Context, _ db.ScopedPrincipal, _ uuid.UUID, _ []uuid.UUID) ([]FleetBackupHealthItem, error) {
 	panic("wiringRepo.FleetBackupHealth not implemented")
 }
+func (r *wiringRepo) ClaimAndAdvanceDueSchedules(_ context.Context, _ time.Time, _ map[uuid.UUID]time.Time) ([]Schedule, error) {
+	panic("wiringRepo.ClaimAndAdvanceDueSchedules not implemented")
+}
+func (r *wiringRepo) CountInFlightSnapshots(_ context.Context, _, _ uuid.UUID) (int64, error) {
+	return 0, nil // default: no in-flight snapshots
+}
+func (r *wiringRepo) HealOverdueSchedules(_ context.Context, _ time.Time, _ func(Schedule, time.Time) time.Time) (int, error) {
+	return 0, nil
+}
+func (r *wiringRepo) ReconcileDuplicateInflightSnapshots(_ context.Context) (int, error) {
+	return 0, nil
+}
 
 // ---------------------------------------------------------------------------
 // recordingEnqueuer — records which enqueue method was called.

@@ -82,12 +82,12 @@ final class ErrorMonitorConfigTest extends TestCase
         Functions\when('update_option')->justReturn(true);
 
         // Write a config where error_level includes E_WARNING (8) only.
-        $monitor->applyConfig(E_WARNING, []);
+        $monitor->applyConfig(false, E_WARNING, []);
 
         // Now stub get_option to return the JSON we would have stored.
         // (applyConfig already called update_option; we re-stub get_option
         // to return the encoded value so loadConfig() picks it up fresh.)
-        $encoded = (string) json_encode(['error_level' => E_WARNING, 'ignore_md5s' => []]);
+        $encoded = (string) json_encode(['enabled' => false, 'error_level' => E_WARNING, 'ignore_md5s' => []]);
         Functions\when('get_option')->justReturn($encoded);
 
         // A fresh monitor picks up the stored config.
@@ -164,7 +164,7 @@ final class ErrorMonitorConfigTest extends TestCase
             });
 
         $monitor = $this->makeMonitor();
-        $monitor->applyConfig(E_WARNING | E_NOTICE, [$validMd5, $invalidMd5, $tooShort]);
+        $monitor->applyConfig(false, E_WARNING | E_NOTICE, [$validMd5, $invalidMd5, $tooShort]);
     }
 
     // -------------------------------------------------------------------------
