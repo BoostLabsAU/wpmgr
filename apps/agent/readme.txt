@@ -115,7 +115,7 @@ Encrypted backup archives, restored backup chunks, optimized media files, and tr
 
 **ipify (https://api.ipify.org)**
 
-During diagnostics collection (triggered when you run or schedule a diagnostics check), the plugin makes a plain GET request to https://api.ipify.org to determine the site's public outbound IP address. No site data is included in the request; the response is the IP address, which is used for host-provider inference and cached locally for 8 hours. ipify has no separate terms of service or privacy policy beyond its homepage description at https://www.ipify.org.
+During diagnostics collection (triggered when you run or schedule a diagnostics check), the plugin makes a plain GET request to https://api.ipify.org to determine the site's public outbound IP address. No site data is included in the request; the response is the IP address, which is used for host-provider inference and cached locally for 8 hours. ipify is operated by ipify (https://www.ipify.org); its terms of service and privacy policy are published at Terms https://geo.ipify.org/terms-of-service -- Privacy https://geo.ipify.org/privacy-policy.
 
 **Cloudflare API (https://api.cloudflare.com)**
 

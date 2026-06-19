@@ -279,12 +279,18 @@ func actorType(p domain.Principal) string {
 
 // errorConfigDTO is the JSON shape for both GET and PATCH /errors/config.
 type errorConfigDTO struct {
+	Enabled    bool     `json:"enabled"`
 	ErrorLevel int      `json:"error_level"`
 	IgnoreMD5s []string `json:"ignore_md5s"`
 }
 
 // errorConfigPatchBody is the PATCH /errors/config request body.
+// Enabled is a pointer so that an omitted field can be distinguished from an
+// explicit false — when nil the service preserves the existing stored value
+// (or defaults true for brand-new rows), preventing an accidental disable
+// by operators who haven't yet updated their API clients.
 type errorConfigPatchBody struct {
+	Enabled    *bool    `json:"enabled"`
 	ErrorLevel int      `json:"error_level"`
 	IgnoreMD5s []string `json:"ignore_md5s"`
 }
@@ -306,6 +312,7 @@ func (h *Handler) getErrorConfig(c *gin.Context) {
 		md5s = []string{}
 	}
 	c.JSON(http.StatusOK, errorConfigDTO{
+		Enabled:    cfg.Enabled,
 		ErrorLevel: cfg.ErrorLevel,
 		IgnoreMD5s: md5s,
 	})
@@ -326,8 +333,16 @@ func (h *Handler) patchErrorConfig(c *gin.Context) {
 	if body.IgnoreMD5s == nil {
 		body.IgnoreMD5s = []string{}
 	}
+	// Resolve the enabled flag: when the caller omits the field (nil pointer)
+	// we default to true so that an API client that doesn't know about enabled
+	// cannot accidentally disable the mu-plugin trap. An explicit false disables.
+	enabled := true
+	if body.Enabled != nil {
+		enabled = *body.Enabled
+	}
 
 	cfg := ErrorConfig{
+		Enabled:    enabled,
 		ErrorLevel: body.ErrorLevel,
 		IgnoreMD5s: body.IgnoreMD5s,
 	}
@@ -350,6 +365,7 @@ func (h *Handler) patchErrorConfig(c *gin.Context) {
 			md5s = []string{}
 		}
 		c.JSON(http.StatusOK, errorConfigDTO{
+			Enabled:    saved.Enabled,
 			ErrorLevel: saved.ErrorLevel,
 			IgnoreMD5s: md5s,
 		})
@@ -364,6 +380,7 @@ func (h *Handler) patchErrorConfig(c *gin.Context) {
 		TargetType: "site",
 		TargetID:   siteID.String(),
 		Metadata: map[string]any{
+			"enabled":      saved.Enabled,
 			"error_level":  saved.ErrorLevel,
 			"ignore_count": len(saved.IgnoreMD5s),
 		},
@@ -374,6 +391,7 @@ func (h *Handler) patchErrorConfig(c *gin.Context) {
 		md5s = []string{}
 	}
 	c.JSON(http.StatusOK, errorConfigDTO{
+		Enabled:    saved.Enabled,
 		ErrorLevel: saved.ErrorLevel,
 		IgnoreMD5s: md5s,
 	})

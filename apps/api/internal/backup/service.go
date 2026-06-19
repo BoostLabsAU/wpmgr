@@ -165,6 +165,11 @@ func (s *Service) SetRestoreRunStore(rs RestoreRunStore) { s.restoreRuns = rs }
 // rows are silently skipped (graceful degradation).
 func (s *Service) SetScheduleRunStore(ss ScheduleRunStore) { s.scheduleRuns = ss }
 
+// logger returns the default structured logger for package-level service events.
+// The service does not carry an injected logger to keep NewService simple; it
+// uses the default slog logger which is configured at boot via slog.SetDefault.
+func (s *Service) logger() *slog.Logger { return slog.Default() }
+
 // publish is a nil-safe helper around hub.Publish.
 func (s *Service) publish(ev BackupEvent) {
 	if s.hub == nil {
@@ -225,6 +230,18 @@ func (s *Service) CreateBackup(ctx context.Context, tenantID, siteID, createdBy 
 		return Snapshot{}, domain.Validation("age_recipient_missing", "the site has no age recipient set; configure backup encryption (PUT the backup schedule with a recipient or set it on the site) before backing up")
 	}
 
+	// In-flight guard: reject a manual backup if one is already pending/running.
+	// This mirrors the scheduled path's belt check and is backed by the partial
+	// unique index (backup_snapshots_one_inflight_per_site) as the suspenders.
+	inFlight, ifErr := s.repo.CountInFlightSnapshots(ctx, tenantID, siteID)
+	if ifErr != nil {
+		return Snapshot{}, fmt.Errorf("in-flight guard check failed: %w", ifErr)
+	}
+	if inFlight > 0 {
+		return Snapshot{}, domain.Validation("backup_already_in_flight",
+			"a backup is already pending or running for this site; wait for it to complete before starting another")
+	}
+
 	// ADR-048 P5: run-now honours the same per-schedule incremental toggle as the
 	// scheduled path, so an operator can enable the toggle and then drive the
 	// base→increment→restore QA flow via run-now. A site with no schedule row (or
@@ -249,6 +266,10 @@ func (s *Service) CreateBackup(ctx context.Context, tenantID, siteID, createdBy 
 			Generation:       res.Generation,
 		})
 		if err != nil {
+			if isUniqueViolation(err) {
+				return Snapshot{}, domain.Validation("backup_already_in_flight",
+					"a backup is already pending or running for this site")
+			}
 			return Snapshot{}, err
 		}
 		if err := s.enqueuer.EnqueueBackupWithChain(ctx, snap); err != nil {
@@ -265,6 +286,10 @@ func (s *Service) CreateBackup(ctx context.Context, tenantID, siteID, createdBy 
 		AgeRecipient: si.AgeRecipient,
 	})
 	if err != nil {
+		if isUniqueViolation(err) {
+			return Snapshot{}, domain.Validation("backup_already_in_flight",
+				"a backup is already pending or running for this site")
+		}
 		return Snapshot{}, err
 	}
 	if err := s.enqueuer.EnqueueBackup(ctx, tenantID, snap.ID); err != nil {
@@ -2150,14 +2175,20 @@ func (s *Service) PutSchedule(ctx context.Context, in PutScheduleInput) (Schedul
 			dow, dom, fh,
 			jitter, loc)
 	} else {
-		// Existing row: recompute only when any timing field changed.
+		// Existing row: recompute when timing changed, when a disabled schedule is
+		// re-enabled (enableTransition), or when next_run_at is already in the past
+		// (overdue) — any of these cases means the stored slot is stale and the next
+		// future occurrence must be computed fresh (skip-missed policy: advance to
+		// the next slot, do NOT immediately run a backup).
 		timingChanged := existing.Cadence != cadence ||
 			existing.RunHour != in.RunHour ||
 			existing.RunMinute != in.RunMinute ||
 			!optInt32Equal(existing.DayOfWeek, in.DayOfWeek) ||
 			!optInt32Equal(existing.DayOfMonth, in.DayOfMonth) ||
 			!optInt32Equal(existing.FrequencyHours, in.FrequencyHours)
-		if timingChanged {
+		enableTransition := !existing.Enabled && in.Enabled
+		overdue := !existing.NextRunAt.After(s.clock.Now())
+		if timingChanged || enableTransition || (in.Enabled && overdue) {
 			jitter := SiteJitter(in.SiteID)
 			dow := optInt32ToInt(in.DayOfWeek)
 			dom := optInt32ToInt(in.DayOfMonth)
@@ -2167,7 +2198,8 @@ func (s *Service) PutSchedule(ctx context.Context, in PutScheduleInput) (Schedul
 				dow, dom, fh,
 				jitter, loc)
 		} else {
-			// Preserve the current next_run_at.
+			// A non-timing edit on an already-enabled, still-future schedule:
+			// preserve the current next_run_at so we do not push the run forward.
 			nextRunAt = existing.NextRunAt
 		}
 	}
@@ -2200,6 +2232,8 @@ func (s *Service) PutSchedule(ctx context.Context, in PutScheduleInput) (Schedul
 }
 
 // DueSchedules returns enabled, due schedules across all tenants (scheduler).
+// Kept for backward compatibility; new callers should use ClaimDueSchedules for
+// the atomic claim-and-advance path.
 func (s *Service) DueSchedules(ctx context.Context, limit int32) ([]Schedule, error) {
 	if limit <= 0 {
 		limit = 100
@@ -2207,44 +2241,125 @@ func (s *Service) DueSchedules(ctx context.Context, limit int32) ([]Schedule, er
 	return s.repo.ListDueSchedules(ctx, s.clock.Now(), limit)
 }
 
+// ClaimDueSchedules atomically selects due schedules, pre-computes their next
+// occurrence (tz-aware, jittered), advances next_run_at in the SAME DB
+// transaction (FOR UPDATE SKIP LOCKED), and returns the claimed slots. Schedules
+// locked by a concurrent CP pass are silently skipped — a schedule is claimed at
+// most once per tick regardless of how many CP instances are running.
+func (s *Service) ClaimDueSchedules(ctx context.Context) ([]Schedule, error) {
+	now := s.clock.Now()
+	// First enumerate candidates without locking so we can do the tz lookup
+	// (network call to sites service) outside the DB transaction.
+	candidates, err := s.repo.ListDueSchedules(ctx, now, 200)
+	if err != nil {
+		return nil, err
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Pre-compute nextAt for each candidate using the site's tz.
+	nextAt := make(map[uuid.UUID]time.Time, len(candidates))
+	for _, sched := range candidates {
+		si, serr := s.sites.GetBackupSiteInfo(ctx, sched.TenantID, sched.SiteID)
+		if serr != nil {
+			// Site lookup failed: leave this schedule out of nextAt so the claim
+			// loop skips it (it stays due and will be retried next tick).
+			continue
+		}
+		loc := resolveLocation(si.WpTimezone, si.WpGmtOffset)
+		jitter := SiteJitter(sched.SiteID)
+		dow := optInt32ToInt(sched.DayOfWeek)
+		dom := optInt32ToInt(sched.DayOfMonth)
+		fh := optInt32ToInt(sched.FrequencyHours)
+		nextAt[sched.ID] = nextOccurrence(now, sched.Cadence,
+			int(sched.RunHour), int(sched.RunMinute),
+			dow, dom, fh,
+			jitter, loc)
+	}
+
+	// Atomic claim: FOR UPDATE SKIP LOCKED + advance in one tx.
+	return s.repo.ClaimAndAdvanceDueSchedules(ctx, now, nextAt)
+}
+
+// HealOverdueSchedulesAndSnapshots is the issue #68 boot-time data-heal task.
+// It runs two one-shot passes:
+//  1. Reconcile duplicate pending/running snapshots (mark older ones failed)
+//     so the partial-unique index added by migration m75 can be created.
+//  2. Advance every enabled schedule whose next_run_at is already past to its
+//     next future occurrence (per-site tz/jitter math via nextOccurrence).
+//
+// Called in a goroutine at boot, after River starts and the enqueuer is wired.
+// Errors are logged but never fatal — the scheduler still works without the heal
+// (the FOR UPDATE SKIP LOCKED and in-flight guard handle ongoing fires).
+func (s *Service) HealOverdueSchedulesAndSnapshots(ctx context.Context, logger interface {
+	Info(msg string, args ...any)
+	Warn(msg string, args ...any)
+}) {
+	// Step 1: reconcile duplicate in-flight snapshots.
+	failed, err := s.repo.ReconcileDuplicateInflightSnapshots(ctx)
+	if err != nil {
+		logger.Warn("backup issue#68 heal: reconcile duplicate in-flight snapshots failed", "error", err.Error())
+	} else if failed > 0 {
+		logger.Info("backup issue#68 heal: duplicate in-flight snapshots reconciled", "count", failed)
+	}
+
+	// Step 2: heal overdue enabled schedules.
+	now := s.clock.Now()
+	compute := func(sched Schedule, now time.Time) time.Time {
+		// Resolve tz from sites service; fall back to UTC on error.
+		si, serr := s.sites.GetBackupSiteInfo(ctx, sched.TenantID, sched.SiteID)
+		loc := time.UTC
+		if serr == nil {
+			loc = resolveLocation(si.WpTimezone, si.WpGmtOffset)
+		}
+		jitter := SiteJitter(sched.SiteID)
+		dow := optInt32ToInt(sched.DayOfWeek)
+		dom := optInt32ToInt(sched.DayOfMonth)
+		fh := optInt32ToInt(sched.FrequencyHours)
+		return nextOccurrence(now, sched.Cadence,
+			int(sched.RunHour), int(sched.RunMinute),
+			dow, dom, fh,
+			jitter, loc)
+	}
+	healed, herr := s.repo.HealOverdueSchedules(ctx, now, compute)
+	if herr != nil {
+		logger.Warn("backup issue#68 heal: advance overdue schedules failed", "error", herr.Error())
+	} else if healed > 0 {
+		logger.Info("backup issue#68 heal: overdue schedules advanced to next future slot", "count", healed)
+	}
+}
+
 // EnqueueScheduledBackup records a pending snapshot for a due schedule, enqueues
-// the backup job, advances the schedule's next_run_at, and (when the schedule
-// run store is wired) materializes the M17 schedule run row. Used by the
-// scheduler periodic job. It resolves the site's recipient at enqueue time.
+// the backup job, and (when the schedule run store is wired) materializes the M17
+// schedule run row. Used by the scheduler periodic job (ScheduleWorker.Work).
+//
+// IMPORTANT: next_run_at is NOT advanced here. The caller (ClaimDueSchedules /
+// ClaimAndAdvanceDueSchedules) already advanced it atomically via FOR UPDATE SKIP
+// LOCKED before calling this function. Any caller that bypasses ClaimDueSchedules
+// is responsible for advancing before calling EnqueueScheduledBackup.
 //
 // Transaction flow (M17):
-//  1. AgentUpsertScheduleRun(scheduled_for=sched.NextRunAt) → 'queued'
-//  2. CreateSnapshot (tenant-scoped)
-//  3. SetScheduleRunSnapshot (link run → snapshot)
-//  4. EnqueueBackup (River)
-//  5. AdvanceScheduleRun (next_run_at = nextOccurrence)
-//  6. Pre-insert next 'scheduled' run row
+//  1. In-flight guard: if a pending/running snapshot already exists → skip (no-op).
+//  2. AgentUpsertScheduleRun(scheduled_for=sched.NextRunAt) → 'queued'
+//  3. CreateSnapshot (tenant-scoped) — unique_violation treated as in-flight → skip.
+//  4. SetScheduleRunSnapshot (link run → snapshot)
+//  5. EnqueueBackup (River)
 //
-// Un-enrollable / no-recipient site → run marked 'skipped' (visible in history)
-// and schedule still advances (no busy-loop).
+// Un-enrollable / no-recipient site → run marked 'skipped' (visible in history).
 func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) error {
 	si, err := s.sites.GetBackupSiteInfo(ctx, sched.TenantID, sched.SiteID)
 	if err != nil {
 		return err
 	}
-	// Resolve the site's timezone for next-occurrence computation.
-	loc := resolveLocation(si.WpTimezone, si.WpGmtOffset)
-	jitter := SiteJitter(sched.SiteID)
-	dow := optInt32ToInt(sched.DayOfWeek)
-	dom := optInt32ToInt(sched.DayOfMonth)
-	fh := optInt32ToInt(sched.FrequencyHours)
-	nextAt := nextOccurrence(s.clock.Now(), sched.Cadence,
-		int(sched.RunHour), int(sched.RunMinute),
-		dow, dom, fh,
-		jitter, loc)
 
-	// Un-enrollable / no-recipient path: mark run skipped and advance.
+	// Un-enrollable / no-recipient path: record skip in history; schedule advance
+	// already happened in ClaimAndAdvanceDueSchedules.
 	if !si.Enrolled || si.AgeRecipient == "" {
 		reason := "site not enrolled"
 		if si.Enrolled && si.AgeRecipient == "" {
 			reason = "no age recipient configured"
 		}
-		skipReason := reason
 		if s.scheduleRuns != nil {
 			triggeredBy := "schedule"
 			_, _ = s.scheduleRuns.AgentUpsertScheduleRun(ctx, UpsertScheduleRunInput{
@@ -2256,43 +2371,32 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 				Kind:         sched.Kind,
 				TriggeredBy:  &triggeredBy,
 			})
-			// Pre-insert next scheduled row.
-			_, _ = s.scheduleRuns.AgentUpsertScheduleRun(ctx, UpsertScheduleRunInput{
-				TenantID:     sched.TenantID,
-				SiteID:       sched.SiteID,
-				ScheduleID:   sched.ID,
-				ScheduledFor: nextAt,
-				Status:       ScheduleRunStatusScheduled,
-				Kind:         sched.Kind,
-				TriggeredBy:  &triggeredBy,
-			})
 		}
-		_ = s.repo.AdvanceScheduleRun(ctx, sched.TenantID, sched.ID, nextAt)
-		return fmt.Errorf("scheduled backup skipped: %s", skipReason)
+		return fmt.Errorf("scheduled backup skipped: %s", reason)
 	}
 
-	// Happy path. Advance next_run_at and pre-insert the next scheduled row
-	// FIRST so a crash mid-fire can never re-fire this same slot — worst case is
-	// one missed backup, never a duplicate storm. The firing row uses the slot
-	// we are firing (firingSlot) while the pre-insert uses nextAt; the
-	// UNIQUE(schedule_id, scheduled_for) keeps the two rows distinct.
+	// In-flight guard (belt): skip if a pending/running snapshot already exists.
+	// The partial-unique index is the suspenders; this is the belt.
+	inFlight, ifErr := s.repo.CountInFlightSnapshots(ctx, sched.TenantID, sched.SiteID)
+	if ifErr != nil {
+		// Log and skip — a broken guard must not block other schedules.
+		s.logger().Warn("backup_scheduler in-flight guard failed, skipping schedule",
+			"schedule_id", sched.ID.String(),
+			"site_id", sched.SiteID.String(),
+			"error", ifErr.Error())
+		return fmt.Errorf("in-flight guard failed: %w", ifErr)
+	}
+	if inFlight > 0 {
+		s.logger().Info("backup_scheduler skipping due schedule: snapshot already in flight",
+			"schedule_id", sched.ID.String(),
+			"site_id", sched.SiteID.String(),
+			"in_flight_count", inFlight)
+		return nil
+	}
+
+	// Materialize the run row for the slot we are firing.
 	triggeredBy := "schedule"
 	firingSlot := sched.NextRunAt
-	_ = s.repo.AdvanceScheduleRun(ctx, sched.TenantID, sched.ID, nextAt)
-	if s.scheduleRuns != nil {
-		_, _ = s.scheduleRuns.AgentUpsertScheduleRun(ctx, UpsertScheduleRunInput{
-			TenantID:     sched.TenantID,
-			SiteID:       sched.SiteID,
-			ScheduleID:   sched.ID,
-			ScheduledFor: nextAt,
-			Status:       ScheduleRunStatusScheduled,
-			Kind:         sched.Kind,
-			TriggeredBy:  &triggeredBy,
-		})
-	}
-
-	// Materialize the run row for the slot we are firing. An upsert error here
-	// is fatal: never create a snapshot with no linked run row to reconcile.
 	var runID uuid.UUID
 	if s.scheduleRuns != nil {
 		run, rerr := s.scheduleRuns.AgentUpsertScheduleRun(ctx, UpsertScheduleRunInput{
@@ -2343,6 +2447,15 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 		})
 	}
 	if err != nil {
+		// A unique-constraint violation on (site_id) WHERE status IN ('pending','running')
+		// means a concurrent pass raced past the in-flight guard and won. Treat as
+		// a skip (already in flight), not an error.
+		if isUniqueViolation(err) {
+			s.logger().Info("backup_scheduler CreateSnapshot unique-violation: already in flight",
+				"schedule_id", sched.ID.String(),
+				"site_id", sched.SiteID.String())
+			return nil
+		}
 		return err
 	}
 
@@ -2352,10 +2465,7 @@ func (s *Service) EnqueueScheduledBackup(ctx context.Context, sched Schedule) er
 	}
 
 	// Enqueue the backup job. If this fails the snapshot exists but no worker
-	// will ever run it — mark the (now snapshot-linked) run failed so history
-	// does not stick on "queued". EnqueueBackupWithChain carries the snapshot's
-	// chain fields onto the job args; for a full-base snapshot they are all
-	// zero/nil so the worker behaves identically to EnqueueBackup.
+	// will ever run it — mark the run failed so history does not stick on "queued".
 	var enqueueErr error
 	if sched.IncrementalEnabled {
 		enqueueErr = s.enqueuer.EnqueueBackupWithChain(ctx, snap)

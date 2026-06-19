@@ -10,6 +10,7 @@ export const SITE = {
   tagline: "Open-source WordPress fleet management you can run, read, and improve.",
   github: "https://github.com/mosamlife/wpmgr",
   dashboard: "https://manage.wpmgr.app",
+  signup: "https://manage.wpmgr.app/register",
   metaTitle: "WPMgr: Open-Source, Self-Hosted WordPress Fleet Management",
   metaDescription:
     "Open-source, self-hostable WordPress fleet manager. Backups and restore, safe updates, Media Optimizer (AVIF and WebP), full-page caching, Database Cleaner, uptime, and security scanning, with a signed MIT-licensed agent you can audit and contribute to.",
@@ -46,8 +47,8 @@ export const HERO = {
     { icon: "FileSearch", title: "Auditable agent", desc: "Read every line before you run it" },
   ],
   ctas: [
-    { label: "Star on GitHub", href: SITE.github, variant: "primary" as const, icon: "Github" },
-    { label: "See the live dashboard", href: SITE.dashboard, variant: "secondary" as const, icon: "ArrowRight" },
+    { label: "Get started for free", href: SITE.signup, variant: "primary" as const, icon: "ArrowRight" },
+    { label: "Star on GitHub", href: SITE.github, variant: "secondary" as const, icon: "Github" },
   ],
 };
 
@@ -776,8 +777,8 @@ export const FINAL_CTA = {
     "Bring up the full stack with a few commands, enroll your first site with a one-time code, and run your whole fleet from a dashboard that lives on infrastructure you control. Or fork it and build what you need.",
   body: "Free, open source, no per-site fee. Read every line before you run it.",
   ctas: [
-    { label: "Star on GitHub", href: SITE.github, variant: "primary" as const, icon: "Github" },
-    { label: "See the live dashboard", href: SITE.dashboard, variant: "secondary" as const, icon: "ArrowRight" },
+    { label: "Get started for free", href: SITE.signup, variant: "primary" as const, icon: "ArrowRight" },
+    { label: "Star on GitHub", href: SITE.github, variant: "secondary" as const, icon: "Github" },
   ],
 };
 

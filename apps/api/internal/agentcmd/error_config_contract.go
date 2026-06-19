@@ -20,6 +20,11 @@ const DefaultErrorLevel = 6143
 
 // ErrorConfigRequest is the POST body for the `sync_error_config` command.
 //
+//	enabled       Whether the agent should install the early-boot error-trap
+//	              mu-plugin (the pre-plugins_loaded bootstrap-fatal trap). When
+//	              false the agent skips writing the mu-plugin; the in-process
+//	              collector still runs. Defaults true on the CP so existing sites
+//	              keep the mu-plugin installed after the agent upgrade to 0.48.4+.
 //	error_level   PHP E_* bitmask to apply (>0, fits int32). Agent writes this
 //	              to the WP error-reporting level so the agent's collector only
 //	              captures errors at/above the configured mask.
@@ -29,6 +34,7 @@ const DefaultErrorLevel = 6143
 //	              canonical ignore-set; the agent replaces its local list
 //	              atomically on each sync.
 type ErrorConfigRequest struct {
+	Enabled    bool     `json:"enabled"`
 	ErrorLevel int      `json:"error_level"`
 	IgnoreMD5s []string `json:"ignore_md5s"`
 }
