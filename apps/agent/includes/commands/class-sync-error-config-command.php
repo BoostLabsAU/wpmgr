@@ -8,6 +8,7 @@
  *   Authorization: Bearer <Ed25519 JWT with cmd="sync_error_config", aud=<siteId>>
  *   Content-Type: application/json
  *   Body: {
+ *     "enabled":    <bool>,        // opt-in to the mu-plugin file write (default false when absent)
  *     "error_level": <int>,       // E_* bitmask — which non-fatal codes to capture
  *     "ignore_md5s": ["<32hex>"]  // fingerprints to drop entirely
  *   }
@@ -22,7 +23,7 @@
  * This command validates only its own payload shape.
  *
  * The written wp-option (OPTION_CONFIG = 'wpmgr_error_config') holds JSON:
- *   { "error_level": <int>, "ignore_md5s": ["<32hex>", ...] }
+ *   { "enabled": <bool>, "error_level": <int>, "ignore_md5s": ["<32hex>", ...] }
  *
  * @package WPMgr\Agent\Commands
  */
@@ -64,10 +65,11 @@ final class SyncErrorConfigCommand implements CommandInterface
      * {@inheritDoc}
      *
      * Accepts:
+     *   - enabled     (optional, bool): opt-in to the mu-plugin file write. Default false when absent.
      *   - error_level (required, int): E_* bitmask for non-fatal capture.
      *   - ignore_md5s (optional, string[]): fingerprints to silence globally.
      *
-     * Both fields are re-validated inside ErrorMonitor::applyConfig(); invalid
+     * All fields are re-validated inside ErrorMonitor::applyConfig(); invalid
      * values are clamped to safe defaults rather than returning an error, to
      * avoid leaving the agent in a non-functional state on a malformed push.
      *
@@ -81,6 +83,12 @@ final class SyncErrorConfigCommand implements CommandInterface
      */
     public function execute(array $claims, array $params): array
     {
+        // enabled is optional; default false when absent (no mu-plugin file write).
+        $enabled = false;
+        if (array_key_exists('enabled', $params) && is_bool($params['enabled'])) {
+            $enabled = $params['enabled'];
+        }
+
         // error_level is required and must be an integer.
         if (!array_key_exists('error_level', $params)) {
             return ['ok' => false, 'detail' => 'missing required field: error_level'];
@@ -101,7 +109,7 @@ final class SyncErrorConfigCommand implements CommandInterface
         }
 
         try {
-            $this->errorMonitor->applyConfig($rawLevel, $rawMd5s);
+            $this->errorMonitor->applyConfig($enabled, $rawLevel, $rawMd5s);
         } catch (\Throwable $e) {
             // Never let the config sync fatal the request.
             return ['ok' => false, 'detail' => 'failed to apply config'];

@@ -313,13 +313,13 @@ func (r *Repo) GetErrorConfig(ctx context.Context, tenantID, siteID uuid.UUID) (
 	var found bool
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
-			`SELECT tenant_id, site_id, error_level, ignore_md5s, updated_at
+			`SELECT tenant_id, site_id, enabled, error_level, ignore_md5s, updated_at
 			 FROM site_error_config
 			 WHERE tenant_id = $1 AND site_id = $2`,
 			tenantID, siteID,
 		)
 		var ignoreMD5s []string
-		if err := row.Scan(&out.TenantID, &out.SiteID, &out.ErrorLevel, &ignoreMD5s, &out.UpdatedAt); err != nil {
+		if err := row.Scan(&out.TenantID, &out.SiteID, &out.Enabled, &out.ErrorLevel, &ignoreMD5s, &out.UpdatedAt); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return nil
 			}
@@ -346,17 +346,18 @@ func (r *Repo) UpsertErrorConfig(ctx context.Context, cfg ErrorConfig) (ErrorCon
 	err := r.pool.InTenantTx(ctx, cfg.TenantID, func(tx pgx.Tx) error {
 		row := tx.QueryRow(ctx,
 			`INSERT INTO site_error_config
-				(tenant_id, site_id, error_level, ignore_md5s, updated_at)
-			 VALUES ($1, $2, $3, $4, now())
+				(tenant_id, site_id, enabled, error_level, ignore_md5s, updated_at)
+			 VALUES ($1, $2, $3, $4, $5, now())
 			 ON CONFLICT (site_id) DO UPDATE
-			   SET error_level  = EXCLUDED.error_level,
+			   SET enabled      = EXCLUDED.enabled,
+			       error_level  = EXCLUDED.error_level,
 			       ignore_md5s  = EXCLUDED.ignore_md5s,
 			       updated_at   = now()
-			 RETURNING tenant_id, site_id, error_level, ignore_md5s, updated_at`,
-			cfg.TenantID, cfg.SiteID, cfg.ErrorLevel, ignoreMD5s,
+			 RETURNING tenant_id, site_id, enabled, error_level, ignore_md5s, updated_at`,
+			cfg.TenantID, cfg.SiteID, cfg.Enabled, cfg.ErrorLevel, ignoreMD5s,
 		)
 		var md5s []string
-		if err := row.Scan(&out.TenantID, &out.SiteID, &out.ErrorLevel, &md5s, &out.UpdatedAt); err != nil {
+		if err := row.Scan(&out.TenantID, &out.SiteID, &out.Enabled, &out.ErrorLevel, &md5s, &out.UpdatedAt); err != nil {
 			return domain.Internal("error_config_upsert_failed", "failed to upsert error config").WithCause(err)
 		}
 		if md5s == nil {

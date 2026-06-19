@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — WPMgr</title>
+  <meta name="description" content="Privacy Policy for the WPMgr agent plugin and hosted service at manage.wpmgr.app — what data is collected and how it is used.">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background: #f9fafb;
+      color: #111827;
+      line-height: 1.7;
+      font-size: 16px;
+    }
+
+    .wrapper {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 3.5rem 1.5rem;
+    }
+
+    /* Header */
+    .site-header {
+      margin-bottom: 2.5rem;
+    }
+    .site-header a {
+      text-decoration: none;
+      font-size: 1.125rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #12B5BE;
+    }
+    .site-header a:hover {
+      opacity: 0.8;
+    }
+
+    /* Typography */
+    h1 {
+      font-size: 1.875rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #111827;
+      margin-bottom: 0.25rem;
+    }
+
+    .meta {
+      font-size: 0.875rem;
+      color: #6b7280;
+      margin-bottom: 2rem;
+    }
+
+    .intro {
+      color: #4b5563;
+      margin-bottom: 1.5rem;
+      line-height: 1.75;
+    }
+
+    h2 {
+      font-size: 1.125rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+      color: #12B5BE;
+      margin-bottom: 0.75rem;
+    }
+
+    section {
+      margin-bottom: 2rem;
+    }
+
+    p {
+      color: #4b5563;
+      line-height: 1.75;
+    }
+
+    strong {
+      color: #111827;
+      font-weight: 600;
+    }
+
+    ul {
+      list-style: disc;
+      padding-left: 1.25rem;
+      color: #4b5563;
+    }
+
+    ul li {
+      margin-bottom: 0.75rem;
+      line-height: 1.75;
+    }
+
+    a {
+      color: #12B5BE;
+      text-underline-offset: 3px;
+    }
+    a:hover {
+      opacity: 0.8;
+    }
+
+    .agent-note {
+      margin-top: 1rem;
+      color: #4b5563;
+      line-height: 1.75;
+    }
+
+    /* Footer */
+    .site-footer {
+      margin-top: 3.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #e5e7eb;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem;
+      font-size: 0.875rem;
+      color: #6b7280;
+    }
+    .site-footer a {
+      color: #6b7280;
+      text-decoration: none;
+    }
+    .site-footer a:hover {
+      color: #111827;
+    }
+    .site-footer .sep {
+      color: #d1d5db;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+
+    <header class="site-header">
+      <a href="https://wpmgr.app">WPMgr</a>
+    </header>
+
+    <article>
+      <h1>Privacy Policy</h1>
+      <p class="meta">Last updated: 8 June 2026</p>
+
+      <p class="intro">
+        WPMgr is open-source, self-hostable software for managing a fleet of WordPress sites —
+        backups, updates, performance, and security. This Privacy Policy explains what data the
+        WPMgr agent plugin transmits, and what the optional hosted service at
+        <strong>manage.wpmgr.app</strong> collects when you choose to use it.
+      </p>
+
+      <p class="intro">
+        The full source code is public at
+        <a href="https://github.com/mosamlife/wpmgr" target="_blank" rel="noreferrer noopener">https://github.com/mosamlife/wpmgr</a>
+        (the agent plugin is MIT-licensed; the control plane is AGPL-3.0). You can self-host the
+        entire stack and keep 100% of your data on your own infrastructure.
+      </p>
+
+      <section>
+        <h2>Private and self-hosted by default</h2>
+        <p>
+          The WPMgr agent plugin has <strong>no default endpoint</strong> and sends
+          <strong>no data anywhere</strong> until you
+          connect it to a control plane that you choose and configure. The plugin is inert on
+          activation. If you point it at a control plane you self-host, your data never reaches us
+          — you operate the receiving service and your own policies apply.
+        </p>
+      </section>
+
+      <section>
+        <h2>What the agent sends, and only to your control plane</h2>
+        <p class="intro">
+          Once you connect a site, the agent communicates <strong>only</strong> with the control-plane
+          URL you configured, and only for the management actions you (or your schedules) initiate:
+        </p>
+        <ul>
+          <li>
+            <strong>Site and environment metadata</strong>
+            — site URL, WordPress / PHP / server versions, active theme and plugins, and Site Health
+            diagnostics. Used to show your site's status.
+          </li>
+          <li>
+            <strong>Update inventory</strong> — the list of available core, plugin, and theme updates.
+          </li>
+          <li>
+            <strong>Backup archives (encrypted)</strong>
+            — when you run or schedule a backup, the agent creates an archive of your database
+            and/or files, encrypts it, and uploads it to the storage destination your control plane
+            configures. Archive contents may include your site's content and personal data; they are
+            encrypted before they leave your server.
+          </li>
+          <li>
+            <strong>Rendered HTML</strong> — for
+            used-CSS optimization, the agent submits rendered HTML of selected pages so unused CSS
+            can be computed.
+          </li>
+          <li>
+            <strong>Diagnostics and activity logs</strong>
+            — error logs, performance/cache statistics, and a record of management actions, so they
+            can be surfaced in the dashboard.
+          </li>
+        </ul>
+        <p class="agent-note">
+          Every agent request is verified with an Ed25519 signature tied to the key established
+          when you enroll the site. The agent does not execute arbitrary remote code; it accepts
+          only a fixed, named allow-list of commands.
+        </p>
+      </section>
+
+      <section>
+        <h2>The hosted service (manage.wpmgr.app)</h2>
+        <p class="intro">
+          If you use the hosted WPMgr service rather than self-hosting, we also process:
+        </p>
+        <ul>
+          <li>
+            <strong>Account information</strong> — your
+            name and email address, used to operate your account and send transactional email
+            (verification, password reset, alerts).
+          </li>
+          <li>
+            The site data described above, on your behalf, to provide the dashboard, backups, and
+            management features you use.
+          </li>
+          <li>
+            <strong>Encrypted backup archives</strong>,
+            stored in cloud object storage.
+          </li>
+          <li>
+            <strong>Operational logs</strong> needed to run and secure the service.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>What we do not do</h2>
+        <p>
+          We do <strong>not</strong> sell your data, and
+          we do <strong>not</strong> share it with third
+          parties for advertising. The only sub-processors involved in the hosted service are our
+          cloud infrastructure provider (Google Cloud Platform — hosting and encrypted storage) and
+          a transactional email provider. Self-hosted deployments involve no sub-processors at all.
+        </p>
+      </section>
+
+      <section>
+        <h2>Security</h2>
+        <ul>
+          <li>Agent-to-control-plane requests are Ed25519-signed and replay-protected.</li>
+          <li>Backups are encrypted before they leave your server.</li>
+          <li>All network traffic uses TLS.</li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Your data, your control</h2>
+        <ul>
+          <li>
+            <strong>Self-host</strong> to keep all data on infrastructure you control.
+          </li>
+          <li>
+            <strong>Disconnect</strong> the agent (or
+            deactivate the plugin) at any time to stop all data transmission immediately.
+          </li>
+          <li>
+            On the hosted service you can request access to, export of, or deletion of your account
+            data by contacting us.
+          </li>
+        </ul>
+      </section>
+
+      <section>
+        <h2>Contact</h2>
+        <p>
+          Questions about this policy or your data:
+          <a href="mailto:mosam@mosamgor.com">mosam@mosamgor.com</a>.
+        </p>
+      </section>
+
+      <section>
+        <h2>Changes</h2>
+        <p>
+          We may update this policy as the software evolves. Material changes will be reflected here
+          with a new "Last updated" date.
+        </p>
+      </section>
+    </article>
+
+    <footer class="site-footer">
+      <a href="https://manage.wpmgr.app">manage.wpmgr.app</a>
+      <span class="sep" aria-hidden="true">|</span>
+      <a href="/terms">Terms of Service</a>
+    </footer>
+
+  </div>
+</body>
+</html>
