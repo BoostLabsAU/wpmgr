@@ -6,6 +6,10 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+### Fixed
+
+- Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+
 ## [0.51.1] - 2026-06-16
 
 ### Changed

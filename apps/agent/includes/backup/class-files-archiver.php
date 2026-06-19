@@ -79,19 +79,15 @@ final class FilesArchiver
     public const DEFAULT_MAX_PART_ENTRIES = 55_000;
 
     /**
-     * Default exclude list (matched against `/`-separated segments of the
-     * path relative to the source dir). These are the WP-content subtrees
-     * we never want in a snapshot: our own scratch dirs, transient caches,
-     * and the core-update staging dirs.
+     * Default segment exclude list (matched against `/`-separated segments of
+     * the path relative to the source dir). These are WPMgr scratch names and
+     * secret/state filenames that must be skipped wherever they appear.
      *
      * @var list<string>
      */
     public const DEFAULT_EXCLUDES = [
         'wpmgr-snapshots',
         'wpmgr-agent',
-        'cache',
-        'upgrade',
-        'upgrade-temp-backup',
         // Object-cache credentials file: contains the plaintext Redis password;
         // must never be packed into a backup archive.
         'wpmgr-object-cache-config.php',
@@ -99,6 +95,20 @@ final class FilesArchiver
         // no secrets). Excluded so a restored backup does not replay a stale
         // cool-down window that could suppress Redis on a healthy site.
         '.wpmgr-oc-state.json',
+    ];
+
+    /**
+     * Default path exclude list (matched as anchored path prefixes relative to
+     * the source dir). These cover wp-content runtime cache and update staging
+     * roots without excluding same-named directories inside plugins or themes.
+     *
+     * @var list<string>
+     */
+    public const DEFAULT_PATH_EXCLUDES = [
+        'cache',
+        'uploads/cache',
+        'upgrade',
+        'upgrade-temp-backup',
     ];
 
     /**
@@ -117,7 +127,8 @@ final class FilesArchiver
      * Note on the `wpmgr-agent` self-exclude: the DEFAULT_EXCLUDES segment
      * filter ALSO drops anything containing a `wpmgr-agent` segment, so the
      * plugin's own tree never makes it into the plugins bucket. This is
-     * defense in depth — the segment filter is checked first.
+     * defense in depth because excludes are checked before component
+     * classification.
      *
      * Track 5 ordering rationale: `plugin`/`theme`/`upload` first, exact
      * prefix match. Operator intent is "restore my plugins" — they want a
@@ -184,12 +195,21 @@ final class FilesArchiver
     private string $sourceDir;
 
     /**
-     * Merged exclude list (defaults + caller-provided). Matched against
-     * `/`-separated segments of the path RELATIVE to $sourceDir.
+     * Merged segment exclude list (segment defaults + caller-provided).
+     * Matched against `/`-separated segments of the path relative to
+     * $sourceDir.
      *
      * @var list<string>
      */
     private array $excludes;
+
+    /**
+     * Normalized default path excludes matched as anchored path prefixes
+     * relative to $sourceDir.
+     *
+     * @var list<string>
+     */
+    private array $pathExcludes;
 
     /** Effective per-part size cap (bytes). */
     private int $maxPartBytes;
@@ -270,6 +290,19 @@ final class FilesArchiver
             throw new \RuntimeException('FilesArchiver: sourceDir is not a readable directory: ' . esc_html($sourceDir));
         }
         $this->sourceDir = rtrim($real, DIRECTORY_SEPARATOR);
+
+        // Normalize default runtime/staging roots as anchored path prefixes.
+        // Caller-provided exclude_paths intentionally stay segment-based below.
+        $pathExcludes = [];
+        foreach (self::DEFAULT_PATH_EXCLUDES as $entry) {
+            $entry = str_replace('\\', '/', (string) $entry);
+            $entry = trim($entry, "/ \t\n\r\0\x0B");
+            if ($entry === '') {
+                continue;
+            }
+            $pathExcludes[$entry] = true;
+        }
+        $this->pathExcludes = array_values(array_keys($pathExcludes));
 
         // Merge defaults + caller excludes, dedupe, drop empties. Segment
         // names only — slashes in entries would never match an exploded
@@ -945,18 +978,26 @@ final class FilesArchiver
     }
 
     /**
-     * Test whether a relative path should be excluded. Matches by exact
-     * segment name; `cache` excludes `cache/`, `foo/cache/bar`, etc., but
-     * not `cachefile.txt`. Also applies A4 extension exclusion (#187).
+     * Test whether a relative path should be excluded. Default runtime and
+     * update-staging roots are matched as anchored path prefixes; WPMgr
+     * scratch names, secret/state filenames, and caller excludes are matched
+     * by exact segment name. Also applies A4 extension exclusion (#187).
      *
      * @param string $relativePath Path relative to $sourceDir, `/`-separated.
      * @return bool
      */
     private function isExcluded(string $relativePath): bool
     {
+        $p = ltrim($relativePath, '/');
+        foreach ($this->pathExcludes as $root) {
+            if ($p === $root || strncmp($p, $root . '/', strlen($root) + 1) === 0) {
+                return true;
+            }
+        }
+
         $segments = explode('/', $relativePath);
 
-        // Segment-name exclusion (paths + defaults).
+        // Segment-name exclusion (WPMgr defaults + caller excludes).
         if ($this->excludes !== []) {
             foreach ($segments as $segment) {
                 if ($segment === '') {
