@@ -596,11 +596,17 @@ final class Plugin
         // report must never interfere with the heartbeat itself.
         add_action(Scheduler::HOOK_HEARTBEAT, [$this, 'shipPerfReport'], 35);
 
-        // ADR-037 Sprint 2 — install the error monitor + heal the mu-plugin
-        // copy on every boot. install() is idempotent; the mu-installer
-        // short-circuits via a sha1_file content match.
+        // ADR-037 Sprint 2 — install the error monitor (in-process handler
+        // registration) unconditionally. The mu-plugin FILE write is gated on
+        // the operator's explicit opt-in (enabled=true in the stored config) so
+        // a fresh plugin activation writes zero executable files without consent.
+        // On opt-out or when the flag has never been set, remove a stale copy.
         $this->errorMonitor->install();
-        $this->muInstaller->install();
+        if ($this->errorMonitor->isEnabled()) {
+            $this->muInstaller->install();
+        } elseif ($this->muInstaller->isInstalled()) {
+            $this->muInstaller->uninstall();
+        }
 
         // P4a — page-cache drop-in self-heal on version mismatch. When the
         // installed advanced-cache.php carries an older WPMGR_PAGE_CACHE_DROPIN_VERSION
@@ -618,8 +624,12 @@ final class Plugin
         // Only arm the early IP-deny WAF mu-plugin when protection is actually
         // enabled. An inert (unconfigured) site installs no security mu-plugin,
         // so a fresh plugin update cannot affect the request path at all.
+        // When protection is disabled (opt-out), remove a previously-written WAF
+        // file so no executable mu-plugin lingers after an operator disables it.
         if ($this->loginProtection->isEnabled()) {
             $this->muInstaller->installWaf();
+        } elseif ($this->muInstaller->isWafInstalled()) {
+            $this->muInstaller->uninstallWaf();
         }
 
         // Login Whitelabel — bind login_head/login_headerurl/login_message hooks
@@ -717,11 +727,10 @@ final class Plugin
 
         $this->setupKeystore();
 
-        // ADR-037 Sprint 2 — install the error-trap mu-plugin loader. Best-
-        // effort: a host where wp-content/mu-plugins/ is not writable will
-        // surface this through the diagnostics endpoint rather than fatal
-        // the activation.
-        $this->muInstaller->install();
+        // ADR-037 Sprint 2 — the error-trap mu-plugin FILE write is gated on the
+        // operator's explicit opt-in (enabled=true in sync_error_config), so a
+        // fresh activation deliberately writes ZERO mu-plugin files. The boot path
+        // (registerHooks) handles the conditional install/uninstall on every load.
 
         // Record first-activation time and schedule reporting + safety events.
         $now = time();
@@ -886,6 +895,17 @@ final class Plugin
             wp_clear_scheduled_hook(\WPMgr\Agent\Cache\CacheRefreshCron::HOOK);
             // Task #171 — clear the preload-queue watchdog cron.
             wp_clear_scheduled_hook(PreloadQueue::WATCHDOG_HOOK);
+        }
+
+        // Best-effort removal of both mu-plugins on deactivation so no executable
+        // PHP file installed by this plugin lingers in wp-content/mu-plugins/
+        // after the plugin is deactivated. Both calls are idempotent and
+        // best-effort; a failure must never block deactivation.
+        try {
+            $this->muInstaller->uninstallWaf();
+            $this->muInstaller->uninstall();
+        } catch (\Throwable $e) {
+            // Swallow — deactivation must always complete.
         }
     }
 

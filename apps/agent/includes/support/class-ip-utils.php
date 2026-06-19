@@ -54,7 +54,16 @@ final class IpUtils
             $server = $_SERVER;
         }
 
-        $raw = isset($server[$headerName]) ? (string) $server[$headerName] : '';
+        // Sanitize the raw header value before any further processing. The
+        // downstream FILTER_VALIDATE_IP gates are the authoritative IP checks;
+        // this sanitization removes control characters and excess whitespace so
+        // injection artefacts never reach inet_pton or the login-event store.
+        // function_exists guards are not needed here: sanitize_text_field and
+        // wp_unslash are always defined by the time this class is called (it runs
+        // inside a loaded WordPress request, never before wp-settings.php).
+        $raw = isset($server[$headerName])
+            ? sanitize_text_field(wp_unslash((string) $server[$headerName]))
+            : '';
         if ($raw === '') {
             return '';
         }
