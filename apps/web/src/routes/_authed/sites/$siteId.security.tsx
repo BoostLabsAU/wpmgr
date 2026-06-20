@@ -124,7 +124,7 @@ function SecurityTab() {
         </div>
       </section>
 
-      {/* ── Section 5: Integrity scan (S3) ── */}
+      {/* ── Section 5: File integrity (Phase 2) ── */}
       <section
         aria-labelledby="integrity-scan-heading"
         className="space-y-4 px-4 pb-8 pt-6 sm:px-6"
@@ -133,10 +133,10 @@ function SecurityTab() {
           id="integrity-scan-heading"
           className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
         >
-          Integrity scan
+          File integrity
         </h2>
 
-        <ScanPanel siteId={siteId} />
+        <ScanPanel siteId={siteId} canWrite={canWrite} />
       </section>
     </div>
   );

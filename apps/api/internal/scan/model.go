@@ -40,13 +40,57 @@ const (
 	FindingCoreModified        = "core_modified"
 	FindingCoreMissing         = "core_missing"
 	FindingCoreUnknownInjected = "core_unknown_injected"
+
+	// Phase 2: full file-integrity finding types.
+	FindingFileAdded      = "file_added"       // in this run, not in baseline, not managed, no wp.org checksum
+	FindingFileChanged    = "file_changed"      // in baseline, hash differs, not known-good, not managed
+	FindingFileRemoved    = "file_removed"      // in baseline, absent this run
+	FindingPluginModified = "plugin_modified"   // wp.org-hosted plugin/theme file differs from official checksum
+	FindingPluginUnknown  = "plugin_unknown"    // file inside a wp.org plugin/theme dir not in its manifest
 )
 
 // Severity values.
 const (
 	SeverityHigh   = "high"
 	SeverityMedium = "medium"
+	SeverityLow    = "low"
 )
+
+// BaselineRow is one row from site_file_baseline (the durable last-good hash
+// per site per path). Populated by PromoteBaseline after a successful run and
+// read by GetBaseline before a diff.
+type BaselineRow struct {
+	SiteID     uuid.UUID
+	TenantID   uuid.UUID
+	Path       string
+	MD5        string
+	Size       int64
+	Mtime      int64
+	IsLink     bool
+	Source     string
+	UpdatedRun uuid.UUID
+}
+
+// ManagedFileRow is one row from site_managed_files.
+// MD5="" means "WPMgr-managed; suppress all findings for this path."
+// A non-empty MD5 means "expected exactly this hash; any other hash = tampering."
+type ManagedFileRow struct {
+	SiteID    uuid.UUID
+	TenantID  uuid.UUID
+	Path      string
+	MD5       string
+	ManagedBy string
+}
+
+// PluginChecksumRow is one row from wporg_plugin_checksums.
+// Multiple rows per (kind, slug, version, path) are allowed (one per md5 variant).
+type PluginChecksumRow struct {
+	Kind    string
+	Slug    string
+	Version string
+	Path    string
+	MD5     string
+}
 
 // Run is one scan job row from scan_runs.
 type Run struct {

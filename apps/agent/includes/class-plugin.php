@@ -69,6 +69,7 @@ use WPMgr\Agent\Commands\ResendEmailCommand;
 use WPMgr\Agent\Commands\SendTestEmailCommand;
 use WPMgr\Agent\Commands\SyncEmailConfigCommand;
 use WPMgr\Agent\Commands\SyncSecurityHardeningCommand;
+use WPMgr\Agent\Commands\RecordManagedFilesCommand;
 use WPMgr\Agent\Security\HardeningModule;
 use WPMgr\Agent\Email\EmailLogger;
 use WPMgr\Agent\Email\EmailLogReporter;
@@ -1320,6 +1321,13 @@ final class Plugin
             // define to wp-config, refreshes the .htaccess security block, and
             // merges IP/range bans into the WAF mu-plugin's deny_cidrs.
             new SyncSecurityHardeningCommand($this->hardeningModule),
+            // Phase 2 file integrity — CP pushes the list of ABSPATH-relative
+            // paths it manages (object-cache.php, advanced-cache.php, .htaccess,
+            // mu-plugin loaders, wp-config region, etc.); agent responds with
+            // md5_file() for each readable, ABSPATH-contained path so the CP
+            // can upsert site_managed_files and suppress false positives from
+            // the file-integrity diff (file_changed/file_added on managed files).
+            new RecordManagedFilesCommand(),
             // Email (Phase 2) — per-site outgoing-mail configuration + test.
             // sync_email_config: receives the full provider config (including the
             //   DECRYPTED secret) from the CP and stores it in the agent keystore.

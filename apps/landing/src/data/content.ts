@@ -344,13 +344,13 @@ export const FEATURES: {
       features: [
         {
           icon: "ShieldCheck",
-          title: "Site hardening and bans",
-          summary: "Per-site hardening controls and an IP ban list, pushed fleet-wide from the dashboard.",
+          title: "Hardening, bans, integrity",
+          summary: "Per-site hardening, an IP ban list, and continuous file-integrity monitoring, all opt-in and default-off.",
           bullets: [
             "Disable file editor, restrict XML-RPC, REST API, and login IDs",
             "Force SSL with HSTS, block PHP in uploads, protect system files",
             "IP and CIDR ban list enforced at early-boot and web-server level",
-            "All controls opt-in and default-off",
+            "File hashes compared to WordPress.org and a per-site baseline",
           ],
         },
         {
@@ -630,6 +630,7 @@ export const SECURITY = {
   items: [
     { icon: "ShieldCheck", title: "WordPress hardening controls", desc: "Push hardening rules from the dashboard to any site: disable the file editor, restrict XML-RPC and the REST API, force SSL with HSTS, block PHP in uploads, and protect system files. All opt-in and default-off." },
     { icon: "ShieldAlert", title: "IP and user-agent ban list", desc: "Block individual IPs, CIDR ranges, and user agents at early-boot and at the web-server level. The operator allow-list is always honoured so a ban can never lock out the operator." },
+    { icon: "FileScan", title: "File integrity monitoring", desc: "Scan the whole WordPress install or just wp-content on demand. File hashes are compared against WordPress.org checksums for core, wp.org-hosted plugins, and themes, and against a learned per-site baseline for everything else. Changed, added, and removed files are reported; a flagged file stays flagged until an operator reviews and accepts it, so the baseline never silently advances past an unreviewed change." },
     { icon: "FileLock2", title: "Client-side encrypted backups", desc: "Optional end-to-end encryption means the control plane stores only ciphertext and never holds a key to decrypt it." },
     { icon: "EyeOff", title: "Redacted diagnostics", desc: "Emails, passwords, secrets, tokens, and salts are stripped before any diagnostics leave a site." },
     { icon: "ScrollText", title: "Tamper-evident audit log", desc: "Every login, role change, and site action is recorded in an audit log you can review." },

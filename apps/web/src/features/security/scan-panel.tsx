@@ -1,6 +1,13 @@
-import { ScanLine, ShieldCheck, ShieldX } from "lucide-react";
+import { useState } from "react";
+import { ChevronDown, ScanLine, ShieldCheck, ShieldX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PageError } from "@/components/feedback";
 import { LiveIndicator } from "@/components/shared/live-indicator";
@@ -14,6 +21,7 @@ import {
   isLiveScan,
   type ScanRun,
   type ScanStatus,
+  type ScanKind,
 } from "./use-scan";
 import { ScanFindingsTable } from "./scan-findings-table";
 
@@ -36,7 +44,13 @@ import { ScanFindingsTable } from "./scan-findings-table";
 // Public entry point
 // ---------------------------------------------------------------------------
 
-export function ScanPanel({ siteId }: { siteId: string }) {
+export function ScanPanel({
+  siteId,
+  canWrite = false,
+}: {
+  siteId: string;
+  canWrite?: boolean;
+}) {
   const runs = useScanRuns(siteId);
 
   if (runs.isPending) {
@@ -59,7 +73,7 @@ export function ScanPanel({ siteId }: { siteId: string }) {
   return (
     <div className="space-y-6">
       {/* ── Header row: description + action ── */}
-      <ScanHeaderRow siteId={siteId} />
+      <ScanHeaderRow siteId={siteId} canWrite={canWrite} />
 
       {/* ── Latest run status ── */}
       {latestRun ? (
@@ -77,21 +91,58 @@ export function ScanPanel({ siteId }: { siteId: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Header row: description + "Run scan" button
+// Scan kind options shown in the dropdown trigger.
+// Labels are neutral, operator-facing, no competitor names.
 // ---------------------------------------------------------------------------
 
-function ScanHeaderRow({ siteId }: { siteId: string }) {
+const SCAN_KIND_OPTIONS: { kind: ScanKind; label: string; description: string }[] = [
+  {
+    kind: "core",
+    label: "Core files",
+    description: "Compare WordPress core files against official checksums.",
+  },
+  {
+    kind: "files",
+    label: "All files (wp-content)",
+    description: "Scan wp-content for added, changed, or removed files.",
+  },
+  {
+    kind: "full",
+    label: "Full install",
+    description: "Scan the entire WordPress install including core and wp-content.",
+  },
+];
+
+// ---------------------------------------------------------------------------
+// Header row: description + "Run scan" button / kind selector
+// ---------------------------------------------------------------------------
+
+function ScanHeaderRow({
+  siteId,
+  canWrite,
+}: {
+  siteId: string;
+  canWrite: boolean;
+}) {
   const runs = useScanRuns(siteId);
   const start = useStartScan(siteId);
+  const [selectedKind, setSelectedKind] = useState<ScanKind>("core");
 
   // Disable while a run is in progress.
   const isInProgress = (runs.data ?? []).some((r) => isLiveScan(r.status));
+  const isBusy = start.isPending || isInProgress;
+
+  const selectedOption = SCAN_KIND_OPTIONS.find((o) => o.kind === selectedKind) ?? {
+    kind: selectedKind,
+    label: "Core files",
+    description: "Compare WordPress core files against official checksums.",
+  };
 
   function handleStartScan() {
-    start.mutate(undefined, {
+    start.mutate(selectedKind, {
       onSuccess: () => {
         toast.success("Scan started.", {
-          description: "Comparing WordPress core files against official checksums.",
+          description: selectedOption.description,
         });
       },
       onError: (err: Error) => {
@@ -104,21 +155,81 @@ function ScanHeaderRow({ siteId }: { siteId: string }) {
     <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
       <div className="space-y-1">
         <p className="text-sm text-[var(--color-foreground)]">
-          Compares your WordPress core files against the official WordPress.org
-          checksums. Detects modified, missing, or unknown injected files.
+          Scans your WordPress install for modified, missing, added, or
+          unexpected files. Core files are verified against official
+          WordPress.org checksums; plugin files are verified against their
+          wp.org manifests where available.
+        </p>
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Full-install and wp-content scans track changes against the last
+          good baseline. The first scan of each kind establishes the baseline;
+          added/changed/removed findings appear from the second scan onward.
         </p>
       </div>
-      <Button
-        type="button"
-        size="sm"
-        className="shrink-0"
-        disabled={start.isPending || isInProgress}
-        aria-busy={start.isPending || isInProgress}
-        onClick={handleStartScan}
-      >
-        <ScanLine aria-hidden="true" className="size-3.5" />
-        {start.isPending ? "Starting..." : "Run scan"}
-      </Button>
+
+      {/* Operators see a split-button: primary "Run scan" + dropdown kind selector. */}
+      {canWrite ? (
+        <div className="flex shrink-0 items-center">
+          <Button
+            type="button"
+            size="sm"
+            className="rounded-r-none border-r-0"
+            disabled={isBusy}
+            aria-busy={isBusy}
+            onClick={handleStartScan}
+          >
+            <ScanLine aria-hidden="true" className="size-3.5" />
+            {start.isPending ? "Starting..." : "Run scan"}
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="rounded-l-none px-2"
+                disabled={isBusy}
+                aria-label="Choose scan scope"
+                aria-haspopup="menu"
+              >
+                <ChevronDown aria-hidden="true" className="size-3.5" />
+                <span className="ml-1 text-xs text-[var(--color-muted-foreground)]">
+                  {selectedOption.label}
+                </span>
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="min-w-[220px]">
+              {SCAN_KIND_OPTIONS.map((opt) => (
+                <DropdownMenuItem
+                  key={opt.kind}
+                  onSelect={() => setSelectedKind(opt.kind)}
+                  aria-current={selectedKind === opt.kind ? "true" : undefined}
+                >
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-sm font-medium">{opt.label}</span>
+                    <span className="text-xs text-[var(--color-muted-foreground)]">
+                      {opt.description}
+                    </span>
+                  </div>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      ) : (
+        /* Viewers see the button read-only (cannot start a scan). */
+        <Button
+          type="button"
+          size="sm"
+          className="shrink-0"
+          disabled
+          aria-disabled="true"
+          title="Operator access required to run a scan"
+        >
+          <ScanLine aria-hidden="true" className="size-3.5" />
+          Run scan
+        </Button>
+      )}
     </div>
   );
 }
@@ -276,7 +387,7 @@ function StatusIndicator({ status }: { status: ScanStatus }) {
 function PreScanEmpty() {
   return (
     <p className="text-sm text-[var(--color-muted-foreground)]">
-      Run a scan to check core file integrity.
+      Run a scan to check file integrity.
     </p>
   );
 }
