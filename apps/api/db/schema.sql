@@ -2952,3 +2952,30 @@ CREATE TABLE IF NOT EXISTS hibp_breach_cache (
 
 CREATE INDEX IF NOT EXISTS hibp_breach_cache_fetched_at_idx
     ON hibp_breach_cache (fetched_at);
+
+-- ---------------------------------------------------------------------------
+-- instance_settings  (m80 — UI-configurable instance-level secrets)
+-- ---------------------------------------------------------------------------
+-- Generic key/value store for INSTANCE-GLOBAL (non-tenant-scoped) settings
+-- that require encrypted-at-rest storage. The first consumer is the Wordfence
+-- Intelligence API key.
+--
+-- No tenant_id column — intentionally instance-global. RLS mirrors
+-- smtp_settings (m30): ENABLE + FORCE + single _agent policy. Real access
+-- control is the HTTP-layer requireSuperadmin middleware. value_enc holds the
+-- age-encrypted ciphertext; NULL means the key is unset for that setting.
+-- updated_at is set in SQL (now()); no trigger.
+CREATE TABLE IF NOT EXISTS instance_settings (
+    key        text        PRIMARY KEY,
+    value_enc  bytea,      -- age-encrypted ciphertext; NULL = unset
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE instance_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE instance_settings FORCE ROW LEVEL SECURITY;
+
+-- Instance-global infra row: readable/writable only under app.agent='on'.
+-- HTTP-layer requireSuperadmin gating is the real access control.
+CREATE POLICY instance_settings_agent ON instance_settings
+    USING  (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

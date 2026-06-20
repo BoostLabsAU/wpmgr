@@ -65,27 +65,56 @@ type FeedHTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// APIKeyResolver resolves the Wordfence Intelligence API key at job-run time.
+// Priority: UI-stored instance setting (encrypted at rest) > WPMGR_WORDFENCE_API_KEY env > "".
+// The concrete implementation lives in the admin package (to avoid an import
+// cycle: vuln→admin is fine; admin→vuln is already fine).
+type APIKeyResolver interface {
+	// ResolveAPIKey returns the effective API key and the source ("ui"|"env"|"none").
+	// Returns ("", "none") when no key is configured; never returns an error (logs internally).
+	ResolveAPIKey(ctx context.Context) (key, source string)
+}
+
+// staticKeyResolver satisfies APIKeyResolver with a fixed key (env-only path,
+// used when no admin.KeyStore is wired — e.g. unit tests or pre-m80 boot).
+type staticKeyResolver struct{ key string }
+
+func (s *staticKeyResolver) ResolveAPIKey(_ context.Context) (string, string) {
+	if s.key == "" {
+		return "", "none"
+	}
+	return s.key, "env"
+}
+
+// NewStaticKeyResolver wraps a plain API key string in an APIKeyResolver.
+// Used in tests and as the fallback path in main before the admin store is wired.
+func NewStaticKeyResolver(key string) APIKeyResolver { return &staticKeyResolver{key: key} }
+
 // FeedWorker handles the hourly Wordfence Intelligence feed refresh.
 type FeedWorker struct {
 	river.WorkerDefaults[FeedRefreshArgs]
-	repo    *Repo
-	pool    *db.Pool
-	svc     *Service
-	apiKey  string // WPMGR_WORDFENCE_API_KEY; empty = no-op
-	client  FeedHTTPDoer
-	logger  *slog.Logger
+	repo     *Repo
+	pool     *db.Pool
+	svc      *Service
+	resolver APIKeyResolver // resolves UI-stored key > env key at runtime
+	client   FeedHTTPDoer
+	logger   *slog.Logger
 }
 
-// NewFeedWorker builds a FeedWorker.  apiKey may be empty; the worker no-ops
-// cleanly in that case so self-hosters without a key do not crash.
-func NewFeedWorker(repo *Repo, pool *db.Pool, svc *Service, apiKey string, client FeedHTTPDoer, logger *slog.Logger) *FeedWorker {
+// NewFeedWorker builds a FeedWorker. resolver must not be nil; use
+// NewStaticKeyResolver("") for the no-key case. The worker no-ops cleanly when
+// resolver returns ("", "none") so self-hosters without a key do not crash.
+func NewFeedWorker(repo *Repo, pool *db.Pool, svc *Service, resolver APIKeyResolver, client FeedHTTPDoer, logger *slog.Logger) *FeedWorker {
+	if resolver == nil {
+		resolver = &staticKeyResolver{}
+	}
 	return &FeedWorker{
-		repo:   repo,
-		pool:   pool,
-		svc:    svc,
-		apiKey: apiKey,
-		client: client,
-		logger: logger,
+		repo:     repo,
+		pool:     pool,
+		svc:      svc,
+		resolver: resolver,
+		client:   client,
+		logger:   logger,
 	}
 }
 
@@ -95,17 +124,20 @@ func (w *FeedWorker) SetService(svc *Service) { w.svc = svc }
 
 // Work performs the feed refresh.
 func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) error {
-	if w.apiKey == "" {
-		// No key configured: mark feed as not-configured without error-spamming
-		// the logs. The UI will show "configure your Wordfence Intelligence key".
-		w.logger.Debug("vuln: WPMGR_WORDFENCE_API_KEY not set; feed refresh skipped")
+	// Resolve the key at run-time so a UI-set key takes effect on the next job
+	// without requiring a restart. Priority: UI key > env key > no-op.
+	apiKey, source := w.resolver.ResolveAPIKey(ctx)
+	if apiKey == "" {
+		w.logger.Debug("vuln: no API key configured; feed refresh skipped",
+			slog.String("source", source))
 		return nil
 	}
+	_ = source // used only for debug logging above
 
 	w.logger.Info("vuln: starting Wordfence Intelligence feed refresh")
 
 	// Fetch the Scanner feed (required).
-	records, defiantNotice, defiantLicense, mitreNotice, err := w.fetchFeed(ctx, wfScannerURL)
+	records, defiantNotice, defiantLicense, mitreNotice, err := w.fetchFeed(ctx, wfScannerURL, apiKey)
 	if err != nil {
 		errMsg := fmt.Sprintf("scanner feed fetch failed: %v", err)
 		_ = w.repo.StampFeedError(ctx, errMsg)
@@ -114,7 +146,7 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 
 	// Optionally fetch the Production feed to enrich CVSS / CVE / copyrights.
 	// Errors here are non-fatal: we proceed with whatever the Scanner feed gave us.
-	prodRecords, prodDefiantNotice, prodDefiantLicense, prodMitreNotice, prodErr := w.fetchFeed(ctx, wfProductionURL)
+	prodRecords, prodDefiantNotice, prodDefiantLicense, prodMitreNotice, prodErr := w.fetchFeed(ctx, wfProductionURL, apiKey)
 	if prodErr != nil {
 		w.logger.Warn("vuln: production feed fetch failed; proceeding with scanner-only data",
 			slog.Any("error", prodErr))
@@ -204,12 +236,12 @@ func (w *FeedWorker) ingestRecords(ctx context.Context, records map[string]FeedR
 // fetchFeed downloads and parses a Wordfence Intelligence V3 feed URL.
 // The V3 feed is a JSON object keyed by vuln UUID: { "<uuid>": { ... }, ... }.
 // Returned values: records map, defiant notice, defiant license, mitre notice, error.
-func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL string) (map[string]FeedRecord, string, string, string, error) {
+func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map[string]FeedRecord, string, string, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 	if err != nil {
 		return nil, "", "", "", err
 	}
-	req.Header.Set("Authorization", "Bearer "+w.apiKey)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", "WPMgr-VulnScanner/1.0")
 
@@ -222,6 +254,11 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL string) (map[string]
 	switch resp.StatusCode {
 	case http.StatusOK:
 		// proceed
+	case http.StatusUnauthorized, http.StatusForbidden:
+		// Bad or missing API key — surface a clean error without including the key
+		// itself in the message (the message is stored in wordfence_vuln_feed_meta
+		// and returned to the superadmin via the status endpoint).
+		return nil, "", "", "", fmt.Errorf("feed auth failed (HTTP %d): check the Wordfence Intelligence API key in the superadmin settings", resp.StatusCode)
 	case http.StatusTooManyRequests:
 		return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
 	default:

@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.57.0] - 2026-06-21
+
+### Added
+
+- **Connect the vulnerability feed from the dashboard.** Instance administrators can now set the Wordfence Intelligence API key from a new "Vulnerability feed" page in the admin area, instead of an environment variable. The page shows the live connection status (connected with the vulnerability count and last sync time, not configured, or an error), lets you save or remove the key, and has a "Sync now" action. The key is encrypted at rest and is never shown again after saving. Self-hosted instances can still set the key by environment variable.
+
 ## [0.56.0] - 2026-06-20
 
 ### Added

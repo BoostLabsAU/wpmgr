@@ -171,6 +171,18 @@ func (r *Repo) GetFeedMeta(ctx context.Context) (FeedMeta, error) {
 	return m, nil
 }
 
+// GetFeedMetaStatus returns the condensed feed meta fields needed by the
+// superadmin status endpoint. This satisfies admin.VulnFeedMetaReader.
+// Returns zero values with nil error when the meta row has never been written
+// (fetched_at IS NULL) — i.e. the feed has not yet run.
+func (r *Repo) GetFeedMetaStatus(ctx context.Context) (ok bool, recordCount int, lastSynced *time.Time, lastError string, err error) {
+	meta, ferr := r.GetFeedMeta(ctx)
+	if ferr != nil {
+		return false, 0, nil, "", ferr
+	}
+	return meta.OK, meta.RecordCount, meta.FetchedAt, meta.LastError, nil
+}
+
 // LookupSoftware returns all vulnerability software rows for the given (kind, slug).
 // Reads without a tenant GUC (global public table).
 // F3: the slug is lower-cased before comparison to match the normalisation

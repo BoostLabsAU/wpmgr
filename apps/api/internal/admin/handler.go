@@ -7,6 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	"github.com/mosamlife/wpmgr/apps/api/internal/audit"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
@@ -14,14 +15,19 @@ import (
 
 // Handler serves the superadmin area under /api/v1/admin.
 type Handler struct {
-	svc  *Service
-	pool *db.Pool
+	svc       *Service
+	pool      *db.Pool
+	auditRec  *audit.Recorder
+	vulnFeedH *vulnFeedAdminHandler // wired via RegisterVulnFeed; nil until wired
 }
 
 // NewHandler builds an admin Handler.
 func NewHandler(svc *Service, pool *db.Pool) *Handler {
 	return &Handler{svc: svc, pool: pool}
 }
+
+// SetAuditRecorder wires the audit recorder into the handler. Called once at boot.
+func (h *Handler) SetAuditRecorder(rec *audit.Recorder) { h.auditRec = rec }
 
 // Register mounts the admin routes on the auth-gated (not tenant-gated)
 // v1Auth group. The requireSuperadmin middleware gates the entire sub-group.
@@ -36,6 +42,14 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/sites/:siteId/tenancy", h.siteTenancy)
 	g.POST("/sites/:siteId/grant-self-membership", h.grantSelfMembership)
 	g.GET("/accounts-tenancy", h.accountsTenancy)
+	// vuln-feed key management (optional; wired via RegisterVulnFeed after boot).
+	if h.vulnFeedH != nil {
+		vfg := g.Group("/vuln-feed")
+		vfg.GET("/status", h.vulnFeedStatus)
+		vfg.PUT("/key", h.vulnFeedSetKey)
+		vfg.DELETE("/key", h.vulnFeedClearKey)
+		vfg.POST("/sync", h.vulnFeedSync)
+	}
 }
 
 // grantSelfMembership re-attaches the calling superadmin as an OWNER of the org
