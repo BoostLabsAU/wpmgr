@@ -89,6 +89,14 @@ final class RecordManagedFilesCommand implements CommandInterface
                 return ['ok' => false, 'files' => [], 'missing' => []];
             }
 
+            // An empty path list has nothing to resolve — return cleanly WITHOUT
+            // touching ABSPATH. (Resolving ABSPATH first made the empty case
+            // depend on ABSPATH being a real on-disk dir, which is order-dependent
+            // under test/CLI and is irrelevant when there are no paths.)
+            if ($params['paths'] === []) {
+                return ['ok' => true, 'files' => [], 'missing' => []];
+            }
+
             // ------------------------------------------------------------------
             // 2. Resolve ABSPATH (empty-base-path guard: bail if unresolvable).
             // ------------------------------------------------------------------
