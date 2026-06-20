@@ -64,12 +64,16 @@ final class EnrollmentFlowTest extends TestCase
     /** @var array<int,array<string,mixed>> */
     private array $userMeta = [];
 
+    /** Tracks whether wp_set_auth_cookie was called during a test. */
+    private bool $authCookieIssued = false;
+
     protected function set_up(): void
     {
         parent::set_up();
         Monkey\setUp();
 
-        $this->userMeta = [];
+        $this->userMeta        = [];
+        $this->authCookieIssued = false;
 
         Functions\when('get_user_meta')->alias(function (int $uid, string $key, bool $single) {
             return $this->userMeta[$uid][$key] ?? '';
@@ -123,7 +127,9 @@ final class EnrollmentFlowTest extends TestCase
         });
         Functions\when('sanitize_file_name')->alias(fn ($s) => preg_replace('/[^a-zA-Z0-9._-]/', '-', (string) $s));
         Functions\when('sanitize_text_field')->alias(fn ($s) => trim(strip_tags((string) $s)));
-        Functions\when('wp_set_auth_cookie')->justReturn(null);
+        Functions\when('wp_set_auth_cookie')->alias(function () {
+            $this->authCookieIssued = true;
+        });
         Functions\when('wp_safe_redirect')->alias(function (string $url) {
             throw new \RuntimeException('marker:redirect:' . $url);
         });
@@ -955,6 +961,395 @@ final class EnrollmentFlowTest extends TestCase
         $svg2 = QrEncoder::toSvg($data, 200);
 
         $this->assertSame($svg1, $svg2, 'E10: QR output must be deterministic for the same input');
+    }
+
+    // -------------------------------------------------------------------------
+    // S1 / S2 / S3 / S4: Auth-bypass regression tests (security review findings)
+    // -------------------------------------------------------------------------
+
+    /**
+     * S1 (DONE-jump — finding 1A): an attacker with a valid HMAC token for a setup
+     * session that is at the INTRO step POSTs wpmgr_setup_step=done.
+     *
+     * BEFORE FIX: the switch read the step from $_POST, hit case DONE, called
+     * completeLogin(), and issued an auth cookie without enrollment.
+     * AFTER FIX: the switch reads the step from the server-side session (INTRO),
+     * advances to CHOOSE, and issues NO auth cookie.
+     */
+    public function test_s1_done_jump_does_not_issue_auth_cookie(): void
+    {
+        $policy = SecurityPolicy::fromArray([
+            'policy' => [
+                'two_factor_enabled'        => true,
+                'two_factor_required_roles' => ['administrator'],
+                'two_factor_methods'        => ['totp', 'email', 'backup'],
+                'two_factor_grace_logins'   => 0,
+            ],
+        ]);
+
+        $userId = 200;
+        $user   = $this->makeUser($userId, ['administrator']);
+        $module = $this->makeModule($policy);
+
+        // Seed a setup session at INTRO step (no enrollment).
+        $createRef = new \ReflectionMethod($module, 'createSession');
+        $session   = $createRef->invoke($module, $userId, '/wp-admin/', false, Site2faModule::SESSION_TYPE_2FA_SETUP);
+        $session['setup_step']      = Site2faModule::SETUP_STEP_INTRO;
+        $session['grace_remaining'] = false;
+
+        $storeRef = new \ReflectionMethod($module, 'storeSession');
+        $storeRef->setAccessible(true);
+        $storeRef->invoke($module, $userId, $session);
+
+        // Attacker POSTs wpmgr_setup_step=done to attempt the done-jump bypass.
+        $_POST['wpmgr_setup_step'] = Site2faModule::SETUP_STEP_DONE;
+
+        // Intercept rendering (login_footer exits) so handleSetupSubmit can return.
+        Functions\when('login_footer')->alias(function () {
+            throw new \RuntimeException('marker:render_done');
+        });
+
+        $handleRef = new \ReflectionMethod($module, 'handleSetupSubmit');
+        $handleRef->setAccessible(true);
+
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException $e) {
+            // Expected — render marker or redirect; both are non-cookie exits.
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+
+        unset($_POST['wpmgr_setup_step']);
+
+        // ASSERT: no auth cookie must have been issued.
+        $this->assertFalse(
+            $this->authCookieIssued,
+            'S1: DONE-jump must NOT issue an auth cookie when session step is INTRO'
+        );
+
+        // ASSERT: user must remain unenrolled.
+        $totp = $this->makeTotp();
+        $this->assertFalse(
+            $totp->isConfiguredFor($user),
+            'S1: user must remain unenrolled after DONE-jump attempt'
+        );
+
+        // ASSERT: the stored session must still exist and must NOT be at DONE.
+        $storedSession = $this->userMeta[$userId][Site2faModule::META_SESSION] ?? null;
+        $this->assertIsArray($storedSession, 'S1: session must still exist after DONE-jump attempt');
+        $this->assertNotSame(
+            Site2faModule::SETUP_STEP_DONE,
+            $storedSession['setup_step'] ?? '',
+            'S1: stored session step must NOT be DONE after DONE-jump attempt'
+        );
+    }
+
+    /**
+     * S2 (skip after grace exhausted — finding 1B): a user whose grace is exhausted
+     * POSTs wpmgr_setup_skip=1.
+     *
+     * BEFORE FIX: the skip handler called completeLogin() unconditionally.
+     * AFTER FIX: the skip handler checks $session['grace_remaining']; since it is
+     * false (or absent), the request is rejected and the setup screen is re-shown
+     * with no auth cookie issued.
+     */
+    public function test_s2_skip_after_grace_exhausted_does_not_issue_auth_cookie(): void
+    {
+        $policy = SecurityPolicy::fromArray([
+            'policy' => [
+                'two_factor_enabled'        => true,
+                'two_factor_required_roles' => ['administrator'],
+                'two_factor_methods'        => ['totp', 'email', 'backup'],
+                'two_factor_grace_logins'   => 0,
+            ],
+        ]);
+
+        $userId = 201;
+        $user   = $this->makeUser($userId, ['administrator']);
+        $module = $this->makeModule($policy);
+
+        // Seed a setup session with grace_remaining = false (mandatory enrollment).
+        $createRef = new \ReflectionMethod($module, 'createSession');
+        $session   = $createRef->invoke($module, $userId, '/wp-admin/', false, Site2faModule::SESSION_TYPE_2FA_SETUP);
+        $session['setup_step']      = Site2faModule::SETUP_STEP_INTRO;
+        $session['grace_remaining'] = false; // grace exhausted
+
+        $storeRef = new \ReflectionMethod($module, 'storeSession');
+        $storeRef->setAccessible(true);
+        $storeRef->invoke($module, $userId, $session);
+
+        // Attacker POSTs wpmgr_setup_skip=1 to attempt the grace-bypass.
+        $_POST['wpmgr_setup_skip'] = '1';
+
+        // Track whether the setup screen is re-rendered.
+        $setupScreenRendered = false;
+        Functions\when('login_footer')->alias(function () use (&$setupScreenRendered) {
+            $setupScreenRendered = true;
+            throw new \RuntimeException('marker:render_setup');
+        });
+
+        $handleRef = new \ReflectionMethod($module, 'handleSetupSubmit');
+        $handleRef->setAccessible(true);
+
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException $e) {
+            // Expected — render marker; NOT a redirect.
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+
+        unset($_POST['wpmgr_setup_skip']);
+
+        // ASSERT: no auth cookie must have been issued.
+        $this->assertFalse(
+            $this->authCookieIssued,
+            'S2: grace-exhausted skip must NOT issue an auth cookie'
+        );
+
+        // ASSERT: the setup screen must have been re-rendered (user stays in setup).
+        $this->assertTrue(
+            $setupScreenRendered,
+            'S2: grace-exhausted skip must re-render the setup screen'
+        );
+    }
+
+    /**
+     * S3 (positive path): a full in-order enrollment completes successfully,
+     * issuing an auth cookie only after a valid TOTP code activates the secret.
+     */
+    public function test_s3_full_inorder_enrollment_issues_auth_cookie(): void
+    {
+        $policy = SecurityPolicy::fromArray([
+            'policy' => [
+                'two_factor_enabled'        => true,
+                'two_factor_required_roles' => ['administrator'],
+                'two_factor_methods'        => ['totp', 'email', 'backup'],
+                'two_factor_grace_logins'   => 0,
+            ],
+        ]);
+
+        $userId = 202;
+        $user   = $this->makeUser($userId, ['administrator']);
+        $module = $this->makeModule($policy);
+
+        $createRef = new \ReflectionMethod($module, 'createSession');
+        $storeRef  = new \ReflectionMethod($module, 'storeSession');
+        $storeRef->setAccessible(true);
+        $handleRef = new \ReflectionMethod($module, 'handleSetupSubmit');
+        $handleRef->setAccessible(true);
+
+        // --- Step INTRO → advance to CHOOSE ---
+        $session = $createRef->invoke($module, $userId, '/wp-admin/', false, Site2faModule::SESSION_TYPE_2FA_SETUP);
+        $session['setup_step']      = Site2faModule::SETUP_STEP_INTRO;
+        $session['grace_remaining'] = false;
+        $storeRef->invoke($module, $userId, $session);
+
+        Functions\when('login_footer')->alias(function () {
+            throw new \RuntimeException('marker:render');
+        });
+
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+        $session = $this->userMeta[$userId][Site2faModule::META_SESSION];
+        $this->assertSame(Site2faModule::SETUP_STEP_CHOOSE, $session['setup_step'], 'S3: INTRO must advance to CHOOSE');
+
+        // --- Step CHOOSE + configure TOTP → advance to TOTP ---
+        $_POST['wpmgr_setup_configure_totp'] = '1';
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+        unset($_POST['wpmgr_setup_configure_totp']);
+        $session = $this->userMeta[$userId][Site2faModule::META_SESSION];
+        $this->assertSame(Site2faModule::SETUP_STEP_TOTP, $session['setup_step'], 'S3: configure_totp must advance to TOTP');
+
+        // --- Step TOTP → advance to CONFIRM ---
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+        $session = $this->userMeta[$userId][Site2faModule::META_SESSION];
+        $this->assertSame(Site2faModule::SETUP_STEP_CONFIRM, $session['setup_step'], 'S3: TOTP must advance to CONFIRM');
+
+        // --- Step CONFIRM with valid code → advance to BACKUP ---
+        $totp      = $this->makeTotp();
+        $secret    = $totp->generateAndStorePending($user);
+        $this->userMeta[$userId][TotpProvider::META_PENDING_SECRET] = base64_encode($secret);
+        $session['totp_pending_secret'] = $secret;
+        $storeRef->invoke($module, $userId, $session);
+
+        $counter   = (int) (time() / 30);
+        $validCode = $this->generateCode($totp, $secret, $counter);
+        $_POST['wpmgr_totp_code'] = $validCode;
+
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+        unset($_POST['wpmgr_totp_code']);
+        $session = $this->userMeta[$userId][Site2faModule::META_SESSION];
+        $this->assertSame(Site2faModule::SETUP_STEP_BACKUP, $session['setup_step'], 'S3: valid code must advance to BACKUP');
+
+        // User is now enrolled (active secret written by activatePendingSecret).
+        $this->assertTrue($totp->isConfiguredFor($user), 'S3: user must be enrolled after valid confirm');
+
+        // --- Step BACKUP → advance to DONE ---
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+        $session = $this->userMeta[$userId][Site2faModule::META_SESSION];
+        $this->assertSame(Site2faModule::SETUP_STEP_DONE, $session['setup_step'], 'S3: BACKUP must advance to DONE');
+
+        // --- Step DONE → completeLogin (auth cookie issued, redirect) ---
+        Functions\when('wp_safe_redirect')->alias(function (string $url) {
+            throw new \RuntimeException('marker:redirect:' . $url);
+        });
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException $e) {
+            // Expected — redirect marker.
+            $this->assertStringContainsString('marker:redirect', $e->getMessage(), 'S3: DONE must redirect');
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+
+        // ASSERT: auth cookie must have been issued after real enrollment.
+        $this->assertTrue(
+            $this->authCookieIssued,
+            'S3: auth cookie must be issued after successful full enrollment'
+        );
+    }
+
+    /**
+     * S4 (out-of-order CONFIRM→DONE without activation): the session is at CONFIRM
+     * (after TOTP step); user POSTs wpmgr_setup_step=done without providing a valid
+     * code. The server-authoritative step is CONFIRM, so the request is handled as
+     * a CONFIRM submission (wrong/missing code), increments counters, and does NOT
+     * issue an auth cookie.
+     */
+    public function test_s4_confirm_step_cannot_jump_to_done_without_activation(): void
+    {
+        $policy = SecurityPolicy::fromArray([
+            'policy' => [
+                'two_factor_enabled'        => true,
+                'two_factor_required_roles' => ['administrator'],
+                'two_factor_methods'        => ['totp', 'email', 'backup'],
+                'two_factor_grace_logins'   => 0,
+            ],
+        ]);
+
+        $userId = 203;
+        $user   = $this->makeUser($userId, ['administrator']);
+        $module = $this->makeModule($policy);
+
+        // Seed session at CONFIRM step.
+        $createRef = new \ReflectionMethod($module, 'createSession');
+        $session   = $createRef->invoke($module, $userId, '/wp-admin/', false, Site2faModule::SESSION_TYPE_2FA_SETUP);
+        $session['setup_step']          = Site2faModule::SETUP_STEP_CONFIRM;
+        $session['grace_remaining']     = false;
+        $session['totp_pending_secret'] = 'FAKEPENDINGSECRET';
+
+        $storeRef = new \ReflectionMethod($module, 'storeSession');
+        $storeRef->setAccessible(true);
+        $storeRef->invoke($module, $userId, $session);
+
+        // Generate a real pending secret so activatePendingSecret has something to check.
+        $totp   = $this->makeTotp();
+        $secret = $totp->generateAndStorePending($user);
+        $this->userMeta[$userId][TotpProvider::META_PENDING_SECRET] = base64_encode($secret);
+
+        // Attacker POSTs wpmgr_setup_step=done WITH no valid code (or missing code).
+        $_POST['wpmgr_setup_step'] = Site2faModule::SETUP_STEP_DONE;
+        // Deliberately omit wpmgr_totp_code (simulates attacker skipping code entry).
+
+        Functions\when('login_footer')->alias(function () {
+            throw new \RuntimeException('marker:render_confirm');
+        });
+
+        $handleRef = new \ReflectionMethod($module, 'handleSetupSubmit');
+        $handleRef->setAccessible(true);
+
+        $obLevel = ob_get_level();
+        ob_start();
+        try {
+            $handleRef->invoke($module, $userId, $session, 0, $user);
+        } catch (\RuntimeException) {
+            // Expected — re-render confirm with error.
+        } finally {
+            while (ob_get_level() > $obLevel) {
+                ob_end_clean();
+            }
+        }
+
+        unset($_POST['wpmgr_setup_step']);
+
+        // ASSERT: no auth cookie must have been issued.
+        $this->assertFalse(
+            $this->authCookieIssued,
+            'S4: posting step=done from CONFIRM without a valid code must NOT issue an auth cookie'
+        );
+
+        // ASSERT: user must still be unenrolled.
+        $this->assertFalse(
+            $totp->isConfiguredFor($user),
+            'S4: user must remain unenrolled after CONFIRM→DONE jump attempt'
+        );
+
+        // ASSERT: the stored session must NOT be at DONE.
+        $storedSession = $this->userMeta[$userId][Site2faModule::META_SESSION] ?? null;
+        $this->assertIsArray($storedSession, 'S4: session must still exist');
+        $this->assertNotSame(
+            Site2faModule::SETUP_STEP_DONE,
+            $storedSession['setup_step'] ?? '',
+            'S4: stored step must NOT be DONE after jump attempt'
+        );
     }
 
     // -------------------------------------------------------------------------

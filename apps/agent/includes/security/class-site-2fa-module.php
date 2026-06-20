@@ -1802,7 +1802,29 @@ final class Site2faModule
     /**
      * Handle a setup flow form submission.
      *
-     * Routes between steps based on session['setup_step'] and the submitted action.
+     * Routes between steps based on session['setup_step'] (server-authoritative),
+     * NEVER on a client-supplied step value. The POST body is used only to signal
+     * "advance from the current step"; the actual current step is always read from
+     * the server-side session record.
+     *
+     * SECURITY — two bypasses closed here (see security review findings 1A / 1B):
+     *
+     * 1A (DONE-jump): previously the step was read from $_POST['wpmgr_setup_step'],
+     *    allowing an attacker with a valid HMAC token to POST step=done and receive
+     *    an auth cookie without completing enrollment. Fixed: step is now authoritative
+     *    from $session['setup_step']; the POST field is ignored for routing.
+     *
+     * 1B (grace bypass): the skip handler previously called completeLogin() without
+     *    re-checking grace_remaining, allowing a grace-exhausted user to POST
+     *    wpmgr_setup_skip=1 and bypass mandatory enrollment. Fixed: skip is now
+     *    gated on !empty($session['grace_remaining']); otherwise re-renders the
+     *    mandatory setup screen.
+     *
+     * Additionally, completeLogin() is now only reachable from the DONE step if
+     * the user is actually enrolled (hasNonEmailMethodConfigured() === true). A
+     * grace-skip arriving at the DONE-step code path is impossible because the
+     * DONE case asserts enrollment before issuing the cookie.
+     *
      * Attempt caps (per-session + cross-request) apply to the activation step (step 4).
      *
      * @param int                 $userId
@@ -1813,13 +1835,24 @@ final class Site2faModule
      */
     private function handleSetupSubmit(int $userId, array $session, int $currentAttempts, \WP_User $user): void
     {
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- setup interstitial uses HMAC session signing, not WP nonces (no WP session exists yet; see section 3.2)
-        $step = isset($_POST['wpmgr_setup_step']) ? sanitize_key(wp_unslash($_POST['wpmgr_setup_step'])) : self::SETUP_STEP_INTRO; // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+        // SECURITY: always read the current step from the server-side session, never
+        // from $_POST. The POST field is rendered as a UI hint only; it must not
+        // influence the step machine (finding 1A).
+        $step = (string) ($session['setup_step'] ?? self::SETUP_STEP_INTRO);
 
-        // Skip button: only available during grace. Completes login without setup.
-        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+        // Skip button: only allowed when grace_remaining is set in the SERVER session.
+        // SECURITY: re-check grace_remaining server-side here (finding 1B) — the Skip
+        // button is only rendered while grace remains, but a client could POST
+        // wpmgr_setup_skip=1 regardless of UI state. If grace is exhausted, ignore the
+        // skip request and re-render the mandatory setup screen.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- setup interstitial uses HMAC session signing; no WP session exists to mint a nonce against (section 3.2)
         if (isset($_POST['wpmgr_setup_skip'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
-            $this->completeLogin($userId, $session);
+            if (!empty($session['grace_remaining'])) {
+                $this->completeLogin($userId, $session);
+                return;
+            }
+            // Grace exhausted: ignore skip, fall through to re-render the current step.
+            $this->renderSetupScreen($user, $session);
             return;
         }
 
@@ -1950,7 +1983,18 @@ final class Site2faModule
                 return;
 
             case self::SETUP_STEP_DONE:
-                // Complete the login.
+                // SECURITY: assert enrollment before issuing the auth cookie.
+                // Even though the step is now server-authoritative (finding 1A fix),
+                // this defense-in-depth check ensures completeLogin() is never reached
+                // unless a non-email method was actually activated. If somehow the
+                // session reached DONE without enrollment, re-render the intro step
+                // rather than issuing a cookie.
+                if (!$this->hasNonEmailMethodConfigured($user)) {
+                    $session['setup_step'] = self::SETUP_STEP_INTRO;
+                    $this->storeSession($userId, $session);
+                    $this->renderSetupScreen($user, $session);
+                    return;
+                }
                 $this->completeLogin($userId, $session);
                 return;
 
