@@ -137,7 +137,7 @@ function HardeningLoaded({
   const disabled = !canWrite || update.isPending;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {/* ── File & content ────────────────────────────────────────────── */}
       <SubSection id="hardening-file-content" title="File and content">
         <ToggleRow
@@ -176,10 +176,9 @@ function HardeningLoaded({
 
       {/* ── XML-RPC ───────────────────────────────────────────────────── */}
       <SubSection id="hardening-xmlrpc" title="XML-RPC">
-        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
-          XML-RPC is a legacy remote-publishing interface. Keeping it fully
-          active exposes the site to amplification and brute-force attacks. Use
-          Limited mode if Jetpack or a mobile app requires it.
+        <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
+          Legacy remote-publishing interface. Use Limited if Jetpack or a mobile
+          app requires it; otherwise disable.
         </p>
         <SegmentedControl<XmlrpcMode>
           id="xmlrpc-mode"
@@ -203,10 +202,9 @@ function HardeningLoaded({
 
       {/* ── REST API ──────────────────────────────────────────────────── */}
       <SubSection id="hardening-rest-api" title="REST API">
-        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
-          The WordPress REST API is required by the block editor and many
-          plugins. Restricting it adds a layer of obscurity for unauthenticated
-          user enumeration endpoints.
+        <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
+          Required by the block editor and most plugins. Restricting it blocks
+          unauthenticated user-enumeration endpoints.
         </p>
         <SegmentedControl<RestApiAccess>
           id="rest-api-access"
@@ -229,9 +227,9 @@ function HardeningLoaded({
 
       {/* ── Login ─────────────────────────────────────────────────────── */}
       <SubSection id="hardening-login" title="Login">
-        <div className="space-y-6">
+        <div className="space-y-4">
           <div>
-            <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
+            <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
               Control which identifiers are accepted on the login form to reduce
               username enumeration risk.
             </p>
@@ -301,7 +299,7 @@ function HardeningLoaded({
 
       {/* ── Save ──────────────────────────────────────────────────────── */}
       {canWrite ? (
-        <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-6">
+        <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-4">
           <Button
             type="button"
             onClick={handleSave}
@@ -338,7 +336,7 @@ function SubSection({
     <section aria-labelledby={id}>
       <h3
         id={id}
-        className="mb-4 text-sm font-medium text-[var(--color-foreground)]"
+        className="mb-2 text-sm font-medium text-[var(--color-foreground)]"
       >
         {title}
       </h3>
@@ -368,7 +366,7 @@ function ToggleRow({
 }) {
   const helpId = `${id}-help`;
   return (
-    <div className="flex items-start justify-between gap-4 py-3 first:pt-0">
+    <div className="flex items-start justify-between gap-4 py-2 first:pt-0">
       <div className="min-w-0 flex-1">
         <label
           htmlFor={id}
@@ -464,7 +462,7 @@ function HardeningSkeleton() {
       role="status"
       aria-busy="true"
       aria-label="Loading hardening settings"
-      className="space-y-8"
+      className="space-y-5"
     >
       <span className="sr-only">Loading hardening settings</span>
       {/* Sub-section skeletons */}

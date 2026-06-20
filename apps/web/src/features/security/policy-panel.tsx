@@ -241,7 +241,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps)
   const disabled = !canWrite || update.isPending;
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {/* ── Section 1: Two-factor authentication ─────────────────────── */}
       {show2FA ? <SubSection id="policy-2fa" title="Two-factor authentication">
         {/* Master toggle */}
@@ -273,7 +273,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps)
         ) : null}
 
         {policy.two_factor_enabled ? (
-          <div className="space-y-6 pt-2">
+          <div className="space-y-4 pt-1">
             {/* Allowed methods */}
             <CheckboxGroup
               id="2fa-methods"
@@ -342,7 +342,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps)
       {/* ── Section 2: Password policy ───────────────────────────────── */}
       {showPassword ? <SubSection id="policy-password" title="Password policy">
         {/* Min strength */}
-        <div className="py-3 first:pt-0">
+        <div className="py-2 first:pt-0">
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               <label
@@ -443,7 +443,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps)
               toggleStringInList("password_expiry_roles", role)
             }
             disabled={disabled}
-            className="py-3"
+            className="py-2"
           />
         ) : null}
       </SubSection> : null}
@@ -591,7 +591,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps)
 
       {/* ── Save / viewer notice ─────────────────────────────────────── */}
       {canWrite ? (
-        <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-6">
+        <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-4">
           <Button
             type="button"
             onClick={handleSave}
@@ -628,7 +628,7 @@ function SubSection({
     <section aria-labelledby={id}>
       <h3
         id={id}
-        className="mb-4 text-sm font-medium text-[var(--color-foreground)]"
+        className="mb-2 text-sm font-medium text-[var(--color-foreground)]"
       >
         {title}
       </h3>
@@ -658,7 +658,7 @@ function ToggleRow({
 }) {
   const helpId = `${id}-help`;
   return (
-    <div className="flex items-start justify-between gap-4 py-3 first:pt-0">
+    <div className="flex items-start justify-between gap-4 py-2 first:pt-0">
       <div className="min-w-0 flex-1">
         <label
           htmlFor={id}
@@ -780,7 +780,7 @@ function NumberField({
 }) {
   const helpId = `${id}-help`;
   return (
-    <div className="flex items-start justify-between gap-4 py-3 first:pt-0">
+    <div className="flex items-start justify-between gap-4 py-2 first:pt-0">
       <div className="min-w-0 flex-1">
         <label
           htmlFor={id}
@@ -838,7 +838,7 @@ function PolicySkeleton() {
       role="status"
       aria-busy="true"
       aria-label="Loading authentication policy"
-      className="space-y-8"
+      className="space-y-5"
     >
       <span className="sr-only">Loading authentication policy</span>
       {/* Three sub-section skeletons */}
