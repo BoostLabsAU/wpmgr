@@ -425,7 +425,7 @@ final class IntegrationsPurgeTest extends TestCase
         $this->assertFalse($args2['reject_unsafe_urls']);
     }
 
-    public function test_cloudpanel_rejects_public_varnish_endpoint(): void
+    public function test_cloudpanel_noops_for_public_varnish_endpoint(): void
     {
         $this->writeCloudPanelSettings([
             'enabled'        => true,
@@ -433,10 +433,14 @@ final class IntegrationsPurgeTest extends TestCase
             'cacheTagPrefix' => 'testtag',
         ]);
 
-        $this->expectException(\InvalidArgumentException::class);
-        $this->expectExceptionMessage('loopback or private-range');
+        $_SERVER['HTTP_HOST'] = 'shop.example';
+        $this->writeCloudPanelPageSpeedFile('shop.example', 'keep.txt', 'keep');
 
-        (new CloudPanel())->onPurgeEverything();
+        new CloudPanel();
+        $this->dispatch('wpmgr_purge_everything:before');
+
+        $this->assertSame([], $this->http, 'no HTTP calls when CloudPanel endpoint is public');
+        $this->assertFileExists($this->cloudpanelPageSpeedHostPath('shop.example') . '/keep.txt');
     }
 
     public function test_cloudpanel_url_purge_preserves_path_query_and_skips_offsite_hosts(): void

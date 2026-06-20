@@ -206,7 +206,6 @@ final class CloudPanel extends Integration
      *
      * @param string $server Raw settings server value.
      * @return string Endpoint without trailing slash, or empty string when invalid.
-     * @throws \InvalidArgumentException When the endpoint host is public or external.
      */
     private function normalizeEndpoint(string $server): string
     {
@@ -242,13 +241,7 @@ final class CloudPanel extends Integration
         }
 
         if (!$this->isPrivateAddress($host)) {
-            throw new \InvalidArgumentException(
-                'CloudPanel Varnish endpoint must be a loopback or private-range address '
-                . '(127.0.0.1, ::1, 10.x, 172.16-31.x, 192.168.x). Received: '
-                // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- Exception text is not direct browser output.
-                . $host
-                . '.'
-            );
+            return '';
         }
 
         return rtrim($scheme . '://' . $host . ($port !== null ? ':' . $port : ''), '/');
@@ -270,6 +263,7 @@ final class CloudPanel extends Integration
             $host = substr($host, 1, -1);
         }
 
+        // Only exact loopback literals are accepted; other 127.0.0.0/8 forms stay rejected.
         if ($host === '127.0.0.1' || $host === '::1') {
             return true;
         }
