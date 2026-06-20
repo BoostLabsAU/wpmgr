@@ -58,6 +58,20 @@ func (s *fakePolicyService) saveSiteSecurityPolicy(_ context.Context, tenantID, 
 				"unknown 2FA method: "+m)
 		}
 	}
+	// Mirror the deliverability-floor guard from the real service.
+	if len(pol.TwoFactorRequiredRoles) > 0 && len(pol.TwoFactorMethods) > 0 {
+		hasNonEmail := false
+		for _, m := range pol.TwoFactorMethods {
+			if m == "totp" || m == "backup" {
+				hasNonEmail = true
+				break
+			}
+		}
+		if !hasNonEmail {
+			return SiteSecurityPolicy{}, domain.Validation("2fa_email_only_required",
+				"when two_factor_required_roles is set, at least one non-email method (totp or backup) must be included")
+		}
+	}
 	if pol.PasswordMinZxcvbnScore < 0 || pol.PasswordMinZxcvbnScore > 4 {
 		return SiteSecurityPolicy{}, domain.Validation("invalid_zxcvbn_score",
 			"password_min_zxcvbn_score must be between 0 and 4")
@@ -456,6 +470,16 @@ func TestPolicyValidationErrors(t *testing.T) {
 			name:     "hide_backend_slug invalid",
 			pol:      SiteSecurityPolicy{HideBackendEnabled: true, HideBackendSlug: "NO UPPERCASE"},
 			wantCode: "invalid_hide_backend_slug",
+		},
+		{
+			// Deliverability floor: a required-2FA role with email-only methods
+			// must be rejected so users cannot be hard-locked out by mail failure.
+			name: "required roles with email-only methods",
+			pol: SiteSecurityPolicy{
+				TwoFactorRequiredRoles: []string{"administrator"},
+				TwoFactorMethods:       []string{"email"},
+			},
+			wantCode: "2fa_email_only_required",
 		},
 	}
 
@@ -1061,5 +1085,207 @@ func TestPolicyDTOFieldNames(t *testing.T) {
 	// updated_at is omitempty — present only after a save.
 	if _, ok := m["updated_at"]; ok {
 		t.Error("updated_at should be omitted for zero-value UpdatedAt")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: deliverability-floor guard (email-only with required roles)
+// ---------------------------------------------------------------------------
+
+// TestDeliverabilityFloorRejectsEmailOnly verifies that a policy that requires
+// 2FA for a role AND restricts methods to email-only is rejected. This prevents
+// a configuration where mail delivery failure hard-locks the required user out.
+func TestDeliverabilityFloorRejectsEmailOnly(t *testing.T) {
+	svc := newFakePolicyService()
+	tenantID := uuid.New()
+	siteID := uuid.New()
+	ctx := context.Background()
+
+	_, err := svc.saveSiteSecurityPolicy(ctx, tenantID, siteID, SiteSecurityPolicy{
+		TwoFactorEnabled:       true,
+		TwoFactorRequiredRoles: []string{"administrator"},
+		TwoFactorMethods:       []string{"email"},
+	}, "user", "u1")
+	if err == nil {
+		t.Fatal("want error for email-only methods with required roles, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok {
+		t.Fatalf("want domain error, got %T: %v", err, err)
+	}
+	if de.Code != "2fa_email_only_required" {
+		t.Errorf("want code %q, got %q", "2fa_email_only_required", de.Code)
+	}
+	if domain.HTTPStatus(err) != http.StatusUnprocessableEntity {
+		t.Errorf("want 422, got %d", domain.HTTPStatus(err))
+	}
+}
+
+// TestDeliverabilityFloorAllowsEmailWithTotp verifies that email + totp together
+// is accepted (totp provides a recoverable method beyond email).
+func TestDeliverabilityFloorAllowsEmailWithTotp(t *testing.T) {
+	svc := newFakePolicyService()
+	ctx := context.Background()
+
+	_, err := svc.saveSiteSecurityPolicy(ctx, uuid.New(), uuid.New(), SiteSecurityPolicy{
+		TwoFactorEnabled:       true,
+		TwoFactorRequiredRoles: []string{"administrator"},
+		TwoFactorMethods:       []string{"email", "totp"},
+	}, "user", "u1")
+	if err != nil {
+		t.Fatalf("email+totp with required roles should be accepted, got: %v", err)
+	}
+}
+
+// TestDeliverabilityFloorAllowsEmailWithBackup verifies that email + backup is
+// accepted (backup codes provide a recoverable non-email method).
+func TestDeliverabilityFloorAllowsEmailWithBackup(t *testing.T) {
+	svc := newFakePolicyService()
+	ctx := context.Background()
+
+	_, err := svc.saveSiteSecurityPolicy(ctx, uuid.New(), uuid.New(), SiteSecurityPolicy{
+		TwoFactorEnabled:       true,
+		TwoFactorRequiredRoles: []string{"editor"},
+		TwoFactorMethods:       []string{"email", "backup"},
+	}, "user", "u1")
+	if err != nil {
+		t.Fatalf("email+backup with required roles should be accepted, got: %v", err)
+	}
+}
+
+// TestDeliverabilityFloorNoRolesNoFloor verifies that when no roles are required
+// (TwoFactorRequiredRoles empty), an email-only methods list is accepted — the
+// floor only applies when enforcement is required.
+func TestDeliverabilityFloorNoRolesNoFloor(t *testing.T) {
+	svc := newFakePolicyService()
+	ctx := context.Background()
+
+	_, err := svc.saveSiteSecurityPolicy(ctx, uuid.New(), uuid.New(), SiteSecurityPolicy{
+		TwoFactorEnabled:       true,
+		TwoFactorRequiredRoles: []string{}, // nobody required
+		TwoFactorMethods:       []string{"email"},
+	}, "user", "u1")
+	if err != nil {
+		t.Fatalf("email-only with no required roles should be accepted, got: %v", err)
+	}
+}
+
+// TestDeliverabilityFloorEmptyMethodsNoFloor verifies that an empty methods list
+// (meaning "all methods are allowed") with required roles is accepted — the floor
+// only triggers when the allowed set is explicitly restricted to email only.
+func TestDeliverabilityFloorEmptyMethodsNoFloor(t *testing.T) {
+	svc := newFakePolicyService()
+	ctx := context.Background()
+
+	_, err := svc.saveSiteSecurityPolicy(ctx, uuid.New(), uuid.New(), SiteSecurityPolicy{
+		TwoFactorEnabled:       true,
+		TwoFactorRequiredRoles: []string{"administrator"},
+		TwoFactorMethods:       []string{}, // empty = all methods allowed
+	}, "user", "u1")
+	if err != nil {
+		t.Fatalf("empty methods (all-allowed) with required roles should be accepted, got: %v", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Tests: policy push is invoked on save (via handler + fakePolicyService)
+// ---------------------------------------------------------------------------
+
+// fakePushPolicyClient records sync_security_policy calls so the handler test
+// can assert the push fires when a valid policy is saved through the HTTP layer.
+type fakePushPolicyClient struct {
+	calls []agentcmd.SecurityPolicyRequest
+}
+
+func (f *fakePushPolicyClient) SyncSecurityPolicy(_ context.Context, _ uuid.UUID, _ string, req agentcmd.SecurityPolicyRequest) (agentcmd.SecurityPolicyResult, error) {
+	f.calls = append(f.calls, req)
+	return agentcmd.SecurityPolicyResult{OK: true, Detail: "applied"}, nil
+}
+
+// fakePolicyServiceWithPush extends fakePolicyService to also call a push
+// client on every save, mirroring what the real Service.SaveSiteSecurityPolicy
+// does after upsert.
+type fakePolicyServiceWithPush struct {
+	*fakePolicyService
+	pushClient *fakePushPolicyClient
+}
+
+func (s *fakePolicyServiceWithPush) saveSiteSecurityPolicy(ctx context.Context, tenantID, siteID uuid.UUID, pol SiteSecurityPolicy, actorType, actorID string) (SiteSecurityPolicy, error) {
+	saved, err := s.fakePolicyService.saveSiteSecurityPolicy(ctx, tenantID, siteID, pol, actorType, actorID)
+	if err != nil {
+		return SiteSecurityPolicy{}, err
+	}
+	// Simulate the push that the real service fires.
+	if s.pushClient != nil {
+		req := agentcmd.SecurityPolicyRequest{
+			Policy: agentcmd.SecurityPolicy{
+				TwoFactorEnabled:       saved.TwoFactorEnabled,
+				TwoFactorMethods:       coalesceSlice(saved.TwoFactorMethods),
+				TwoFactorRequiredRoles: coalesceSlice(saved.TwoFactorRequiredRoles),
+			},
+			Groups: []agentcmd.SecurityPolicyGroup{},
+		}
+		_, _ = s.pushClient.SyncSecurityPolicy(ctx, siteID, "https://example.com", req)
+	}
+	return saved, nil
+}
+
+// TestPolicyPushFiredOnSave verifies that a PUT /security/policy call triggers
+// the push client. The push is simulated via fakePolicyServiceWithPush so no
+// DB or SSRF client is required.
+func TestPolicyPushFiredOnSave(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tenantID := uuid.New()
+	siteID := uuid.New()
+
+	pushClient := &fakePushPolicyClient{}
+	fSvc := &fakePolicyServiceWithPush{
+		fakePolicyService: newFakePolicyService(),
+		pushClient:        pushClient,
+	}
+
+	engine := gin.New()
+	engine.Use(principalMiddleware(tenantID))
+	engine.PUT("/sites/:siteId/security/policy", func(c *gin.Context) {
+		p, _ := domain.PrincipalFromContext(c.Request.Context())
+		sid, _ := uuid.Parse(c.Param("siteId"))
+		var body policyDTO
+		if err := bindJSON(c, &body); err != nil {
+			httpx.Error(c, err)
+			return
+		}
+		pol := fromPolicyDTO(body, p.TenantID, sid)
+		saved, saveErr := fSvc.saveSiteSecurityPolicy(c.Request.Context(), p.TenantID, sid, pol, "user", "u1")
+		if saveErr != nil {
+			httpx.Error(c, saveErr)
+			return
+		}
+		c.JSON(http.StatusOK, toPolicyDTO(saved))
+	})
+
+	body := `{
+		"two_factor_enabled": true,
+		"two_factor_methods": ["totp","backup"],
+		"two_factor_required_roles": ["administrator"]
+	}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut,
+		"/sites/"+siteID.String()+"/security/policy",
+		strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	engine.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
+	}
+	if len(pushClient.calls) != 1 {
+		t.Fatalf("want 1 push call after save, got %d", len(pushClient.calls))
+	}
+	pushed := pushClient.calls[0]
+	if !pushed.Policy.TwoFactorEnabled {
+		t.Error("pushed policy.two_factor_enabled should be true")
+	}
+	if len(pushed.Policy.TwoFactorRequiredRoles) != 1 || pushed.Policy.TwoFactorRequiredRoles[0] != "administrator" {
+		t.Errorf("pushed two_factor_required_roles: want [administrator], got %v", pushed.Policy.TwoFactorRequiredRoles)
 	}
 }

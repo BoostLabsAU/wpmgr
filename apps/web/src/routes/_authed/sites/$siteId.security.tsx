@@ -6,8 +6,9 @@ import { LoginEventsTable } from "@/features/security/login-events-table";
 import { ScanPanel } from "@/features/security/scan-panel";
 import { HardeningPanel } from "@/features/security/hardening-panel";
 import { BanListPanel } from "@/features/security/ban-list-panel";
+import { PolicyPanel } from "@/features/security/policy-panel";
 
-// `/sites/$siteId/security` — five sections:
+// `/sites/$siteId/security` — six sections:
 //
 //   1. Hardening (Phase 1) — 10 server-hardening toggles grouped into
 //      sub-sections (file/content, XML-RPC, REST API, login, transport).
@@ -24,8 +25,13 @@ import { BanListPanel } from "@/features/security/ban-list-panel";
 //        - swap the empty state for an ErrorsTable-style table pattern
 //        - use VulnSeverityChip for severity cells
 //
-//   5. Integrity scan (S3) — core file integrity scan using WordPress.org
+//   5. Integrity scan (Phase 2) — core file integrity scan using WordPress.org
 //      checksums. Powered by hand-rolled Gin endpoints (not in ogen client).
+//
+//   6. Authentication policy (Phase 3, ADR-059) — site-user 2FA, password
+//      policy, and hide-login-page config. Flat DTO from hand-rolled Gin:
+//      GET/PUT /api/v1/sites/{siteId}/security/policy.
+//      Groups: GET/PUT/DELETE /api/v1/sites/{siteId}/security/policy/groups/:role.
 //
 // Write access gates (PermSecurityManage = operator+):
 //   `canWrite` is derived from `canOperate(me)` which maps to owner/admin/operator.
@@ -137,6 +143,27 @@ function SecurityTab() {
         </h2>
 
         <ScanPanel siteId={siteId} canWrite={canWrite} />
+      </section>
+
+      {/* ── Section 6: Authentication policy (Phase 3, ADR-059) ── */}
+      <section
+        aria-labelledby="auth-policy-heading"
+        className="space-y-6 px-4 pb-8 pt-6 sm:px-6"
+      >
+        <div>
+          <h2
+            id="auth-policy-heading"
+            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          >
+            Authentication policy
+          </h2>
+          <p className="mt-1 text-xs text-[var(--color-muted-foreground)]">
+            Configure two-factor authentication, password requirements, and
+            login-page visibility for WordPress users on this site.
+          </p>
+        </div>
+
+        <PolicyPanel siteId={siteId} canWrite={canWrite} />
       </section>
     </div>
   );

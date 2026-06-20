@@ -1582,6 +1582,24 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	} else {
 		logger.Warn("security hardening agent client not wired: CP->agent commander unavailable (signing key empty?)")
 	}
+	// ADR-059 Phase 3 — wire the policy push client (sync_security_policy) using
+	// the same EdDSA-signed agentcmd.Client pattern as SetHardeningClient above.
+	// *agentcmd.Client satisfies AgentPolicyClient via its SyncSecurityPolicy method.
+	if policyCmd, ok := commander.(security.AgentPolicyClient); ok {
+		securitySvc.SetPolicyClient(policyCmd, secSiteAdapter)
+		logger.Info("security policy agent client wired")
+	} else {
+		logger.Warn("security policy agent client not wired: CP->agent commander unavailable (signing key empty?)")
+	}
+	// ADR-059 Phase 3 — wire the SSRF-safe HIBP doer. Reuse the same ssrfClient
+	// used by the scan checksums, uptime prober, and all other outbound CP calls.
+	// No new outbound client is created; the shared ssrfClient already enforces
+	// SSRF guards (ADR-009) and the configured timeout + retry policy.
+	securitySvc.SetHIBPDoer(ssrfClient)
+	logger.Info("HIBP doer wired (ssrfClient)")
+	// ADR-059 Phase 3 — HIBP agent-authenticated handler. The route is registered
+	// in the agentGroup in server.go (GET /agent/v1/security/hibp/range/:prefix).
+	hibpAgentH := agent.NewHIBPHandler(securitySvc)
 
 	// M14 — Login Whitelabel. The loginbrand service stores per-site login brand
 	// config (logo URL, logo link, message) and pushes it to the agent via the
@@ -1796,6 +1814,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		ReportH: reportH,
 		// m66 — read-only client portal.
 		PortalH:     portalH,
+		// ADR-059 Phase 3 — HIBP breach-password range proxy (agent-authenticated).
+		HIBPAgentH: hibpAgentH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})

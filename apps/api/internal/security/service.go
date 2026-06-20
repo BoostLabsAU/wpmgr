@@ -834,6 +834,33 @@ func (s *Service) SaveSiteSecurityPolicy(ctx context.Context, tenantID, siteID u
 		}
 	}
 
+	// --- 2FA deliverability floor ---
+	// When at least one role is REQUIRED to use 2FA, the allowed method set must
+	// include at least one recoverable non-email method (totp or backup codes) OR
+	// "backup" explicitly. This prevents a configuration where the only allowed
+	// method is "email": if the site's outgoing mail fails, a required-2FA user
+	// cannot pass the challenge and is hard-locked out of their account.
+	//
+	// Simplified rule: if two_factor_required_roles is non-empty AND
+	// two_factor_methods is non-empty AND the set contains "email" but neither
+	// "totp" nor "backup", reject. An empty two_factor_methods list is permissive
+	// (any method is allowed) so the floor does not apply there.
+	if len(pol.TwoFactorRequiredRoles) > 0 && len(pol.TwoFactorMethods) > 0 {
+		hasNonEmail := false
+		for _, m := range pol.TwoFactorMethods {
+			if m == "totp" || m == "backup" {
+				hasNonEmail = true
+				break
+			}
+		}
+		if !hasNonEmail {
+			return SiteSecurityPolicy{}, domain.Validation("2fa_email_only_required",
+				"when two_factor_required_roles is set and two_factor_methods is restricted, "+
+					"at least one non-email method (totp or backup) must be included so "+
+					"required users are not hard-locked out if email delivery fails")
+		}
+	}
+
 	// --- password validation ---
 	if pol.PasswordMinZxcvbnScore < 0 || pol.PasswordMinZxcvbnScore > 4 {
 		return SiteSecurityPolicy{}, domain.Validation("invalid_zxcvbn_score",
