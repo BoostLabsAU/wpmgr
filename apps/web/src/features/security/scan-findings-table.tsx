@@ -55,29 +55,70 @@ function sortedFindings(findings: ScanFinding[]): ScanFinding[] {
 
 // ---------------------------------------------------------------------------
 // Finding type chip
+//
+// TYPE_LABEL and TYPE_CLASSES are keyed on ScanFindingType (all known values).
+// Any finding_type string arriving from the API that is NOT in the union is
+// rendered by FindingTypeChip's fallback path — no crash.
+//
+// String values are confirmed against apps/api/internal/scan/model.go
+// FindingFile* / FindingPlugin* constants.
 // ---------------------------------------------------------------------------
 
 const TYPE_LABEL: Record<ScanFindingType, string> = {
-  core_modified: "Modified",
-  core_missing: "Missing",
+  // Phase 1 — core checksums
+  core_modified: "Core modified",
+  core_missing: "Core missing",
   core_unknown_injected: "Unknown file",
+  // Phase 2 — full file-integrity
+  file_added: "File added",
+  file_changed: "File changed",
+  file_removed: "File removed",
+  plugin_modified: "Plugin file modified",
+  plugin_unknown: "Unrecognized plugin file",
 };
 
+// Semantic-token classes only — no raw hex.
 const TYPE_CLASSES: Record<ScanFindingType, string> = {
+  // high severity — destructive tone
   core_modified:
-    "bg-[var(--color-warning-subtle,_oklch(0.97_0.05_85))] text-[var(--color-warning-subtle-fg,_oklch(0.45_0.15_85))]",
+    "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
   core_missing:
     "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
   core_unknown_injected:
     "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
+  file_changed:
+    "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
+  plugin_modified:
+    "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
+  plugin_unknown:
+    "bg-[var(--color-destructive-subtle,_oklch(0.97_0.04_25))] text-[var(--color-destructive-subtle-fg,_oklch(0.45_0.2_25))]",
+  // medium severity — warning tone
+  file_added:
+    "bg-[var(--color-warning-subtle,_oklch(0.97_0.05_85))] text-[var(--color-warning-subtle-fg,_oklch(0.45_0.15_85))]",
+  // low severity — muted tone
+  file_removed: "bg-[var(--color-muted)] text-[var(--color-muted-foreground)]",
 };
 
-function FindingTypeChip({ type }: { type: ScanFindingType }) {
+// Fallback chip for any finding_type the client does not yet recognise.
+// Renders a neutral badge instead of crashing.
+const FALLBACK_CHIP_CLASSES =
+  "bg-[var(--color-muted)] text-[var(--color-muted-foreground)]";
+
+function FindingTypeChip({ type }: { type: string }) {
+  const label =
+    type in TYPE_LABEL
+      ? TYPE_LABEL[type as ScanFindingType]
+      : type.replace(/_/g, " "); // e.g. "some_future_type" → "some future type"
+  const classes =
+    type in TYPE_CLASSES
+      ? TYPE_CLASSES[type as ScanFindingType]
+      : FALLBACK_CHIP_CLASSES;
+
   return (
     <span
-      className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${TYPE_CLASSES[type]}`}
+      className={`inline-flex items-center rounded px-2 py-0.5 text-xs font-medium ${classes}`}
     >
-      {TYPE_LABEL[type]}
+      {label}
     </span>
   );
 }
@@ -258,9 +299,14 @@ function FindingRow({
   onIgnore,
   onViewFile,
 }: FindingRowProps) {
+  // "View file" is available for finding types where the content is meaningful
+  // to an operator. file_removed has no current content to fetch.
   const canViewFile =
     finding.finding_type === "core_unknown_injected" ||
-    finding.finding_type === "core_modified";
+    finding.finding_type === "core_modified" ||
+    finding.finding_type === "file_changed" ||
+    finding.finding_type === "file_added" ||
+    finding.finding_type === "plugin_modified";
 
   return (
     <TableRow
@@ -363,7 +409,7 @@ function NoFindingsEmpty() {
         No integrity issues found
       </p>
       <p className="max-w-xs text-xs text-[var(--color-muted-foreground)]">
-        All WordPress core files match the official WordPress.org checksums.
+        No modified, missing, or unexpected files were detected in this scan.
       </p>
     </div>
   );
