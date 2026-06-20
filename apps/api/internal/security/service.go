@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +26,20 @@ import (
 // so tests can substitute a fake without spinning up the SSRF transport.
 type AgentHardeningClient interface {
 	SyncSecurityHardening(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.HardeningRequest) (agentcmd.HardeningResult, error)
+}
+
+// AgentPolicyClient is the subset of agentcmd.Client the policy service needs
+// to push the site-user auth policy snapshot to the agent. *agentcmd.Client
+// satisfies it via its SyncSecurityPolicy method. Declared as an interface so
+// tests can substitute a fake without spinning up the SSRF transport.
+type AgentPolicyClient interface {
+	SyncSecurityPolicy(ctx context.Context, siteID uuid.UUID, siteURL string, req agentcmd.SecurityPolicyRequest) (agentcmd.SecurityPolicyResult, error)
+}
+
+// HIBPDoer is the subset of httpclient.Client the HIBP service needs.
+// *httpclient.Client satisfies it. Declared as an interface for test injection.
+type HIBPDoer interface {
+	Do(req *http.Request) (*http.Response, error)
 }
 
 // AgentSecurityClient is the subset of agentcmd.Client the service needs to
@@ -89,8 +106,10 @@ type Service struct {
 	repo               *Repo
 	agentClient        AgentSecurityClient
 	hardeningClient    AgentHardeningClient
+	policyClient       AgentPolicyClient
 	siteLookup         SiteLookup
 	managedFileRec     ManagedFileRecorder
+	hibpDoer           HIBPDoer
 }
 
 // NewService builds a Service.
@@ -124,6 +143,23 @@ func (s *Service) SetHardeningClient(client AgentHardeningClient, sites SiteLook
 // services are constructed.
 func (s *Service) SetManagedFileRecorder(rec ManagedFileRecorder) {
 	s.managedFileRec = rec
+}
+
+// SetPolicyClient wires the agentcmd client for pushing the site-user auth
+// policy snapshot (ADR-059 Phase 3). The SiteLookup is shared with the other
+// Set* methods; supply the same adapter. If SiteLookup is already set by a
+// prior Set* call it is not overwritten.
+func (s *Service) SetPolicyClient(client AgentPolicyClient, sites SiteLookup) {
+	s.policyClient = client
+	if s.siteLookup == nil {
+		s.siteLookup = sites
+	}
+}
+
+// SetHIBPDoer wires the SSRF-safe HTTP client used by the HIBP proxy. If not
+// set, the proxy always returns an empty (fail-open) response.
+func (s *Service) SetHIBPDoer(doer HIBPDoer) {
+	s.hibpDoer = doer
 }
 
 // validModes are the three allowed protection modes.
@@ -756,4 +792,268 @@ func coalesceSlice(s []string) []string {
 		return []string{}
 	}
 	return s
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — site-user 2FA + password policy (ADR-059)
+// ---------------------------------------------------------------------------
+
+// hideBackendSlugRe validates the hide-backend slug format.
+var hideBackendSlugRe = regexp.MustCompile(`^[a-z0-9-]{4,64}$`)
+
+// GetSiteSecurityPolicy returns the stored policy, or the safe default when
+// no row exists yet (everything OFF).
+func (s *Service) GetSiteSecurityPolicy(ctx context.Context, tenantID, siteID uuid.UUID) (SiteSecurityPolicy, error) {
+	p, found, err := s.repo.GetSiteSecurityPolicy(ctx, tenantID, siteID)
+	if err != nil {
+		return SiteSecurityPolicy{}, err
+	}
+	if !found {
+		return DefaultSiteSecurityPolicy(tenantID, siteID), nil
+	}
+	return p, nil
+}
+
+// SaveSiteSecurityPolicy validates the incoming policy, upserts it, and pushes
+// the full snapshot to the agent. Returns the stored policy.
+// actorType and actorID are written to the row for audit tracing.
+func (s *Service) SaveSiteSecurityPolicy(ctx context.Context, tenantID, siteID uuid.UUID, pol SiteSecurityPolicy, actorType, actorID string) (SiteSecurityPolicy, error) {
+	// --- 2FA validation ---
+	if pol.TwoFactorGraceLogins < 0 || pol.TwoFactorGraceLogins > 100 {
+		return SiteSecurityPolicy{}, domain.Validation("invalid_grace_logins",
+			"two_factor_grace_logins must be between 0 and 100")
+	}
+	if pol.TwoFactorRememberDeviceDays < 0 || pol.TwoFactorRememberDeviceDays > 365 {
+		return SiteSecurityPolicy{}, domain.Validation("invalid_remember_device_days",
+			"two_factor_remember_device_days must be between 0 and 365")
+	}
+	for _, m := range pol.TwoFactorMethods {
+		if m != "totp" && m != "email" && m != "backup" {
+			return SiteSecurityPolicy{}, domain.Validation("invalid_2fa_method",
+				fmt.Sprintf("two_factor_methods: unknown method %q; must be totp, email, or backup", m))
+		}
+	}
+
+	// --- password validation ---
+	if pol.PasswordMinZxcvbnScore < 0 || pol.PasswordMinZxcvbnScore > 4 {
+		return SiteSecurityPolicy{}, domain.Validation("invalid_zxcvbn_score",
+			"password_min_zxcvbn_score must be between 0 and 4")
+	}
+	if pol.PasswordReuseBlockCount < 0 || pol.PasswordReuseBlockCount > 50 {
+		return SiteSecurityPolicy{}, domain.Validation("invalid_reuse_block_count",
+			"password_reuse_block_count must be between 0 and 50")
+	}
+	if pol.PasswordMaxAgeDays < 0 || pol.PasswordMaxAgeDays > 3650 {
+		return SiteSecurityPolicy{}, domain.Validation("invalid_max_age_days",
+			"password_max_age_days must be between 0 and 3650")
+	}
+
+	// --- hide-backend validation ---
+	if pol.HideBackendEnabled && pol.HideBackendSlug != "" {
+		if !hideBackendSlugRe.MatchString(pol.HideBackendSlug) {
+			return SiteSecurityPolicy{}, domain.Validation("invalid_hide_backend_slug",
+				"hide_backend_slug must match ^[a-z0-9-]{4,64}$")
+		}
+	}
+
+	pol.TenantID = tenantID
+	pol.SiteID = siteID
+	pol.ActorType = actorType
+	pol.ActorID = actorID
+
+	saved, err := s.repo.UpsertSiteSecurityPolicy(ctx, pol)
+	if err != nil {
+		return SiteSecurityPolicy{}, err
+	}
+
+	// Push policy + current groups to agent (best-effort).
+	pushErr := s.pushPolicy(ctx, tenantID, siteID, saved)
+	if pushErr != nil {
+		return saved, fmt.Errorf("policy stored but agent push failed: %w", pushErr)
+	}
+
+	return saved, nil
+}
+
+// pushPolicy builds the full snapshot and sends it to the agent via
+// sync_security_policy. Best-effort: callers surface push errors as warnings.
+func (s *Service) pushPolicy(ctx context.Context, tenantID, siteID uuid.UUID, pol SiteSecurityPolicy) error {
+	if s.policyClient == nil || s.siteLookup == nil {
+		return nil
+	}
+	siteURL, err := s.siteLookup.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return nil // site URL unavailable — skip push silently
+	}
+	groups, err := s.repo.ListPolicyGroups(ctx, tenantID, siteID)
+	if err != nil {
+		return fmt.Errorf("load groups for push: %w", err)
+	}
+
+	groupEntries := make([]agentcmd.SecurityPolicyGroup, 0, len(groups))
+	for _, g := range groups {
+		entry := agentcmd.SecurityPolicyGroup{
+			Role:             g.Role,
+			Require2FA:       g.Require2FA,
+			AllowedMethods:   g.AllowedMethods,
+			MinZxcvbnScore:   g.MinZxcvbnScore,
+			BlockCompromised: g.BlockCompromised,
+			MaxAgeDays:       g.MaxAgeDays,
+		}
+		groupEntries = append(groupEntries, entry)
+	}
+
+	req := agentcmd.SecurityPolicyRequest{
+		Policy: agentcmd.SecurityPolicy{
+			TwoFactorEnabled:            pol.TwoFactorEnabled,
+			TwoFactorMethods:            coalesceSlice(pol.TwoFactorMethods),
+			TwoFactorRequiredRoles:      coalesceSlice(pol.TwoFactorRequiredRoles),
+			TwoFactorGraceLogins:        pol.TwoFactorGraceLogins,
+			TwoFactorRememberDeviceDays: pol.TwoFactorRememberDeviceDays,
+			BlockXMLRPCFor2FAUsers:      pol.BlockXMLRPCFor2FAUsers,
+			PasswordMinZxcvbnScore:      pol.PasswordMinZxcvbnScore,
+			PasswordMinZxcvbnRoles:      coalesceSlice(pol.PasswordMinZxcvbnRoles),
+			PasswordBlockCompromised:    pol.PasswordBlockCompromised,
+			PasswordReuseBlockCount:     pol.PasswordReuseBlockCount,
+			PasswordMaxAgeDays:          pol.PasswordMaxAgeDays,
+			PasswordExpiryRoles:         coalesceSlice(pol.PasswordExpiryRoles),
+			HideBackendEnabled:          pol.HideBackendEnabled,
+			HideBackendSlug:             pol.HideBackendSlug,
+			HideBackendRedirect:         pol.HideBackendRedirect,
+		},
+		Groups: groupEntries,
+	}
+	if _, pushErr := s.policyClient.SyncSecurityPolicy(ctx, siteID, siteURL, req); pushErr != nil {
+		return pushErr
+	}
+	return nil
+}
+
+// GetPolicyGroups returns all group overrides for a site.
+func (s *Service) GetPolicyGroups(ctx context.Context, tenantID, siteID uuid.UUID) ([]PolicyGroup, error) {
+	return s.repo.ListPolicyGroups(ctx, tenantID, siteID)
+}
+
+// UpsertPolicyGroup validates and upserts one per-role group override, then
+// re-pushes the full policy snapshot to the agent.
+func (s *Service) UpsertPolicyGroup(ctx context.Context, tenantID, siteID uuid.UUID, g PolicyGroup) (PolicyGroup, error) {
+	if strings.TrimSpace(g.Role) == "" {
+		return PolicyGroup{}, domain.Validation("invalid_role", "role is required")
+	}
+	if g.MinZxcvbnScore != nil && (*g.MinZxcvbnScore < 0 || *g.MinZxcvbnScore > 4) {
+		return PolicyGroup{}, domain.Validation("invalid_zxcvbn_score",
+			"min_zxcvbn_score must be between 0 and 4")
+	}
+	if g.MaxAgeDays != nil && (*g.MaxAgeDays < 0 || *g.MaxAgeDays > 3650) {
+		return PolicyGroup{}, domain.Validation("invalid_max_age_days",
+			"max_age_days must be between 0 and 3650")
+	}
+	g.TenantID = tenantID
+	g.SiteID = siteID
+
+	saved, err := s.repo.UpsertPolicyGroup(ctx, g)
+	if err != nil {
+		return PolicyGroup{}, err
+	}
+
+	// Re-push the full policy snapshot (best-effort).
+	if pol, polErr := s.GetSiteSecurityPolicy(ctx, tenantID, siteID); polErr == nil {
+		_ = s.pushPolicy(ctx, tenantID, siteID, pol)
+	}
+	return saved, nil
+}
+
+// DeletePolicyGroup removes a per-role group override and re-pushes the
+// policy snapshot to the agent.
+func (s *Service) DeletePolicyGroup(ctx context.Context, tenantID, siteID uuid.UUID, role string) error {
+	if err := s.repo.DeletePolicyGroup(ctx, tenantID, siteID, role); err != nil {
+		return err
+	}
+	if pol, polErr := s.GetSiteSecurityPolicy(ctx, tenantID, siteID); polErr == nil {
+		_ = s.pushPolicy(ctx, tenantID, siteID, pol)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// HIBP breach-password proxy (ADR-059 §5)
+// ---------------------------------------------------------------------------
+
+const (
+	// hibpBaseURL is the HIBP Pwned Passwords range API endpoint.
+	hibpBaseURL = "https://api.pwnedpasswords.com/range/"
+
+	// hibpCacheTTL is how long a cached prefix response is considered fresh.
+	hibpCacheTTL = 30 * 24 * time.Hour
+
+	// hibpMaxBody bounds the HIBP response we will read into memory.
+	// A range response with padding is typically ~50–100 KiB.
+	hibpMaxBody = 512 * 1024 // 512 KiB
+)
+
+// hibpPrefixRe validates that a HIBP prefix is exactly 5 uppercase hex characters.
+var hibpPrefixRe = regexp.MustCompile(`^[A-F0-9]{5}$`)
+
+// GetHIBPRange returns the HIBP Pwned Passwords range body for the given 5-char
+// SHA-1 prefix. On cache hit it returns the cached body. On miss it fetches
+// from HIBP, stores the result, and returns it. FAIL-OPEN: if HIBP is
+// unreachable or returns an error, GetHIBPRange returns ("", nil) — the caller
+// treats an empty body as "not found in breach corpus" and lets the password
+// through. Only the 5-char prefix is ever sent to HIBP; the agent matches the
+// suffix locally.
+func (s *Service) GetHIBPRange(ctx context.Context, prefix string) (string, error) {
+	prefix = strings.ToUpper(strings.TrimSpace(prefix))
+	if !hibpPrefixRe.MatchString(prefix) {
+		return "", domain.Validation("invalid_hibp_prefix",
+			"HIBP prefix must be exactly 5 uppercase hex characters")
+	}
+
+	// Cache read.
+	if cached, found, err := s.repo.GetHIBPCache(ctx, prefix, hibpCacheTTL); err == nil && found {
+		return cached, nil
+	}
+
+	// Cache miss (or cache read error) — fetch live from HIBP.
+	body, fetchErr := s.fetchHIBPRange(ctx, prefix)
+	if fetchErr != nil {
+		// Fail-open: HIBP unavailability must not block a password set / login.
+		// Return empty body so the agent treats this prefix as not breached.
+		return "", nil
+	}
+
+	// Store in cache (best-effort — a write failure is non-fatal; we already
+	// have the body to return).
+	_ = s.repo.UpsertHIBPCache(ctx, prefix, body)
+	return body, nil
+}
+
+// fetchHIBPRange fetches the range body from the live HIBP API. It sends only
+// the 5-char prefix and the Add-Padding: true header (k-anonymity privacy).
+func (s *Service) fetchHIBPRange(ctx context.Context, prefix string) (string, error) {
+	if s.hibpDoer == nil {
+		return "", fmt.Errorf("hibp doer not wired")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, hibpBaseURL+prefix, nil)
+	if err != nil {
+		return "", fmt.Errorf("build HIBP request: %w", err)
+	}
+	// Add-Padding: true makes HIBP return decoy zero-count lines to prevent
+	// traffic analysis of which prefixes are being queried.
+	req.Header.Set("Add-Padding", "true")
+
+	resp, err := s.hibpDoer.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("HIBP fetch: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HIBP returned HTTP %d", resp.StatusCode)
+	}
+
+	rawBody, err := io.ReadAll(io.LimitReader(resp.Body, hibpMaxBody))
+	if err != nil {
+		return "", fmt.Errorf("HIBP read body: %w", err)
+	}
+	return string(rawBody), nil
 }

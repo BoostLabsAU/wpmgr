@@ -176,6 +176,11 @@ type Deps struct {
 	// EmailAgentSuppressionH serves the Phase-4a agent suppression-fetch
 	// endpoint at GET /agent/v1/email/suppression. nil ⇒ route not mounted.
 	EmailAgentSuppressionH *email.AgentSuppressionHandler
+	// HIBPAgentH serves the Phase-3 HIBP breach-password range proxy at
+	// GET /agent/v1/security/hibp/range/:prefix (ADR-059). Agents send only the
+	// 5-char SHA-1 prefix; the CP returns the cached SUFFIX:COUNT body.
+	// nil ⇒ route not mounted (safe default; the agent degrades to fail-open).
+	HIBPAgentH *agent.HIBPHandler
 	// ClientH serves the m63 agency-client management routes under
 	// /api/v1/clients. nil ⇒ routes not mounted.
 	ClientH *clientpkg.Handler
@@ -331,6 +336,11 @@ func New(deps Deps) *Server {
 		// GET /agent/v1/email/suppression?since=<cursor>
 		if deps.EmailAgentSuppressionH != nil {
 			deps.EmailAgentSuppressionH.Register(agentGroup)
+		}
+		// ADR-059 Phase 3 — HIBP breach-password range proxy.
+		// GET /agent/v1/security/hibp/range/:prefix
+		if deps.HIBPAgentH != nil {
+			deps.HIBPAgentH.Register(agentGroup)
 		}
 	}
 

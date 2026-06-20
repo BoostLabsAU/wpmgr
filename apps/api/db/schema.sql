@@ -2844,3 +2844,111 @@ ALTER TABLE trusted_devices FORCE ROW LEVEL SECURITY;
 CREATE POLICY trusted_devices_agent ON trusted_devices
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m78 — Security Suite Phase 3: per-site user 2FA + password policy
+-- ---------------------------------------------------------------------------
+
+-- site_security_policy: one row per site; the CP source of truth for the
+-- site-user 2FA + password + hide-backend policy knobs. All knobs default OFF.
+CREATE TABLE IF NOT EXISTS site_security_policy (
+    site_id                         uuid PRIMARY KEY,
+    tenant_id                       uuid NOT NULL,
+    two_factor_enabled              boolean NOT NULL DEFAULT false,
+    two_factor_methods              text[] NOT NULL DEFAULT '{totp,email,backup}',
+    two_factor_required_roles       text[] NOT NULL DEFAULT '{}',
+    two_factor_grace_logins         int NOT NULL DEFAULT 3
+        CONSTRAINT site_security_policy_grace_logins_chk
+        CHECK (two_factor_grace_logins >= 0 AND two_factor_grace_logins <= 100),
+    two_factor_remember_device_days int NOT NULL DEFAULT 30
+        CONSTRAINT site_security_policy_remember_device_days_chk
+        CHECK (two_factor_remember_device_days >= 0 AND two_factor_remember_device_days <= 365),
+    block_xmlrpc_for_2fa_users      boolean NOT NULL DEFAULT true,
+    password_min_zxcvbn_score       int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_zxcvbn_score_chk
+        CHECK (password_min_zxcvbn_score >= 0 AND password_min_zxcvbn_score <= 4),
+    password_min_zxcvbn_roles       text[] NOT NULL DEFAULT '{}',
+    password_block_compromised      boolean NOT NULL DEFAULT false,
+    password_reuse_block_count      int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_reuse_block_count_chk
+        CHECK (password_reuse_block_count >= 0 AND password_reuse_block_count <= 50),
+    password_max_age_days           int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_max_age_days_chk
+        CHECK (password_max_age_days >= 0 AND password_max_age_days <= 3650),
+    password_expiry_roles           text[] NOT NULL DEFAULT '{}',
+    hide_backend_enabled            boolean NOT NULL DEFAULT false,
+    hide_backend_slug               text NOT NULL DEFAULT '',
+    hide_backend_redirect           text NOT NULL DEFAULT '',
+    updated_at                      timestamptz NOT NULL DEFAULT now(),
+    actor_type                      text,
+    actor_id                        text,
+    CONSTRAINT site_security_policy_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT site_security_policy_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS site_security_policy_tenant_idx
+    ON site_security_policy (tenant_id);
+
+ALTER TABLE site_security_policy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_security_policy FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_security_policy_tenant_isolation ON site_security_policy
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_security_policy_agent ON site_security_policy
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_security_policy_groups: per-role policy overrides.
+-- One row per (site_id, role); nullable override columns.
+CREATE TABLE IF NOT EXISTS site_security_policy_groups (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         uuid NOT NULL,
+    site_id           uuid NOT NULL,
+    role              text NOT NULL,
+    require_2fa       boolean,
+    allowed_methods   text[],
+    min_zxcvbn_score  int
+        CONSTRAINT site_security_policy_groups_zxcvbn_score_chk
+        CHECK (min_zxcvbn_score IS NULL OR (min_zxcvbn_score >= 0 AND min_zxcvbn_score <= 4)),
+    block_compromised boolean,
+    max_age_days      int
+        CONSTRAINT site_security_policy_groups_max_age_days_chk
+        CHECK (max_age_days IS NULL OR (max_age_days >= 0 AND max_age_days <= 3650)),
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_security_policy_groups_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT site_security_policy_groups_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_security_policy_groups_site_role_idx
+    ON site_security_policy_groups (site_id, role);
+
+CREATE INDEX IF NOT EXISTS site_security_policy_groups_tenant_site_idx
+    ON site_security_policy_groups (tenant_id, site_id);
+
+ALTER TABLE site_security_policy_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_security_policy_groups FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_security_policy_groups_tenant_isolation ON site_security_policy_groups
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_security_policy_groups_agent ON site_security_policy_groups
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- hibp_breach_cache: global CP-side cache for the HIBP Pwned Passwords range API.
+-- Public breach data; no tenant association; no RLS.
+CREATE TABLE IF NOT EXISTS hibp_breach_cache (
+    prefix     char(5) PRIMARY KEY,
+    body       text NOT NULL,
+    fetched_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS hibp_breach_cache_fetched_at_idx
+    ON hibp_breach_cache (fetched_at);
