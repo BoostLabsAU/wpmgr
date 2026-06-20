@@ -6,6 +6,20 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-06-20
+
+### Added
+
+- **Two-factor enrollment flow for WordPress site users.** After an operator requires 2FA for a user role, the affected user now sees a guided setup screen on their next login: scan a QR code with any authenticator app, enter a confirmation code to activate it, then save a set of one-time backup codes before continuing. Users can also start enrollment proactively from their WordPress profile at any time. Previously the policy could require 2FA but there was no way for site users to actually complete enrollment.
+
+### Changed
+
+- **Redesigned per-site Security tab.** The Security tab is now a card-based layout. A status overview strip at the top shows active protection at a glance. Settings are grouped into collapsible cards: Login and Two-Factor, Password policy, Hardening, File integrity, Bans and login protection, and Hide login. Each card has a plain-language description of what it does and a color-coded status indicator. Replaces the previous flat list of toggles and eliminates the large empty area that appeared when few settings were active.
+
+### Fixed
+
+- Consistent success and error toasts across all security actions on the per-site Security tab.
+
 ## [0.54.0] - 2026-06-20
 
 ### Added
