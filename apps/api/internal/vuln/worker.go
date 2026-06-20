@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -353,7 +354,16 @@ func parseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, st
 		}
 	}
 
-	refs := rec.References
+	// F2: drop cve_link if it is not a safe http(s) URL.
+	cveLink := rec.CVELink
+	if cveLink != "" && !isSafeURL(cveLink) {
+		cveLink = ""
+	}
+
+	// F2: filter the references array so only http(s) URLs reach the DB.
+	// The feed can supply either an array of strings or an array of objects
+	// with a "url" key. Both shapes are normalised here.
+	refs := filterReferences(rec.References)
 	if len(refs) == 0 {
 		refs = []byte("[]")
 	}
@@ -393,7 +403,7 @@ func parseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, st
 		VulnID:        vulnID,
 		Title:         rec.Title,
 		CVE:           rec.CVE,
-		CVELink:       rec.CVELink,
+		CVELink:       cveLink,
 		CVSSScore:     cvssScore,
 		CVSSRating:    cvssRating,
 		CWE:           cwe,
@@ -404,6 +414,57 @@ func parseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, st
 		Raw:           raw,
 		Software:      software,
 	}, defiantNotice, defiantLicense, mitreNotice, nil
+}
+
+// isSafeURL reports whether a URL has an http:// or https:// scheme.
+// F2: used to drop feed-supplied javascript:/data:/etc. references before
+// they reach the database, so a malicious feed entry cannot inject a
+// non-HTTP URL that would later be rendered as a clickable link in the UI.
+func isSafeURL(u string) bool {
+	lower := strings.ToLower(strings.TrimSpace(u))
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
+}
+
+// filterReferences removes any entry from a Wordfence references JSON array
+// whose URL is not an http(s) URL. The feed supports two shapes:
+//
+//   - array of strings: ["https://example.com", ...]
+//   - array of objects: [{"url":"https://example.com"}, ...]
+//
+// Returns a JSON array of safe URLs in string form, or nil when the input is
+// empty/unparseable (callers default to "[]").
+func filterReferences(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil
+	}
+	// Try array-of-strings first.
+	var strs []string
+	if json.Unmarshal(raw, &strs) == nil {
+		safe := strs[:0]
+		for _, u := range strs {
+			if isSafeURL(u) {
+				safe = append(safe, u)
+			}
+		}
+		b, _ := json.Marshal(safe)
+		return b
+	}
+	// Try array-of-objects with a "url" field.
+	var objs []struct {
+		URL string `json:"url"`
+	}
+	if json.Unmarshal(raw, &objs) == nil {
+		safe := make([]string, 0, len(objs))
+		for _, o := range objs {
+			if isSafeURL(o.URL) {
+				safe = append(safe, o.URL)
+			}
+		}
+		b, _ := json.Marshal(safe)
+		return b
+	}
+	// Unparseable: return nil so the caller substitutes "[]".
+	return nil
 }
 
 // normalisePatchedVersions converts either a JSON string array or a JSON

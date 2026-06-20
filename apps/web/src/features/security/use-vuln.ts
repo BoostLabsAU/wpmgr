@@ -345,3 +345,23 @@ export function countHighRisk(findings: VulnFinding[]): number {
     (f) => f.status === "open" && isHighRisk(f.severity),
   ).length;
 }
+
+/**
+ * Validates a feed-supplied URL before it is placed in an <a href>.
+ *
+ * Feed records come from an external source (Wordfence Intelligence) and are
+ * attacker-influenceable. A malicious feed record could carry a `javascript:`
+ * or `data:` URL that executes script in the operator session on click.
+ *
+ * Only `http://` and `https://` schemes are allowed. Every other scheme
+ * (including `javascript:`, `data:`, `vbscript:`, bare paths, etc.) returns
+ * `undefined`, which callers must treat as "render plain text instead of an
+ * anchor".
+ *
+ * Returns the original string when it is safe, or `undefined` when it is not.
+ */
+export function safeExternalHref(u?: string | null): string | undefined {
+  if (!u) return undefined;
+  if (u.startsWith("https://") || u.startsWith("http://")) return u;
+  return undefined;
+}

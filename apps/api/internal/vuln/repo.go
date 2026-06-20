@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,7 +69,13 @@ func (r *Repo) UpsertFeedRecord(ctx context.Context, tx pgx.Tx, rec FeedRecord) 
 	}
 
 	// Re-insert software rows.
+	// F3: normalise slug to lower-case on ingest so the feed canonical slug
+	// ("Akismet") and an agent inventory slug ("akismet") always match. The
+	// original mixed-case slug is NOT stored because the conflict key
+	// (vuln_id, kind, slug) must be stable, and slug is matched in
+	// LookupSoftware using the same lower-cased value from the agent inventory.
 	for _, sw := range rec.Software {
+		slug := normSlug(sw.Slug)
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO wordfence_vuln_software
 				(vuln_id, kind, slug, affected_versions, patched, patched_versions)
@@ -77,10 +84,10 @@ func (r *Repo) UpsertFeedRecord(ctx context.Context, tx pgx.Tx, rec FeedRecord) 
 				affected_versions = EXCLUDED.affected_versions,
 				patched           = EXCLUDED.patched,
 				patched_versions  = EXCLUDED.patched_versions`,
-			rec.VulnID, sw.Kind, sw.Slug, sw.AffectedVersions, sw.Patched, sw.PatchedVersions,
+			rec.VulnID, sw.Kind, slug, sw.AffectedVersions, sw.Patched, sw.PatchedVersions,
 		); err != nil {
 			return fmt.Errorf("upsert software row vuln=%s kind=%s slug=%s: %w",
-				rec.VulnID, sw.Kind, sw.Slug, err)
+				rec.VulnID, sw.Kind, slug, err)
 		}
 	}
 	return nil
@@ -166,13 +173,17 @@ func (r *Repo) GetFeedMeta(ctx context.Context) (FeedMeta, error) {
 
 // LookupSoftware returns all vulnerability software rows for the given (kind, slug).
 // Reads without a tenant GUC (global public table).
+// F3: the slug is lower-cased before comparison to match the normalisation
+// applied on ingest (see UpsertFeedRecord). This prevents false negatives when
+// the agent inventory slug differs in case from the Wordfence canonical slug.
 func (r *Repo) LookupSoftware(ctx context.Context, kind, slug string) ([]VulnSoftwareRow, error) {
+	querySlug := normSlug(slug)
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.vuln_id, s.kind, s.slug, s.affected_versions, s.patched, s.patched_versions,
 		       f.title, f.cve, f.cve_link, f.cvss_score, f.cvss_rating, f.references
 		FROM wordfence_vuln_software s
 		JOIN wordfence_vuln_feed f USING (vuln_id)
-		WHERE s.kind = $1 AND s.slug = $2`, kind, slug)
+		WHERE s.kind = $1 AND s.slug = $2`, kind, querySlug)
 	if err != nil {
 		return nil, fmt.Errorf("lookup software %s/%s: %w", kind, slug, err)
 	}
@@ -551,6 +562,12 @@ type FleetFindingRow struct {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// normSlug lower-cases a software slug so that Wordfence canonical slugs
+// (e.g. "Akismet") match agent inventory slugs (e.g. "akismet") consistently.
+// Applied on both the ingest path (UpsertFeedRecord) and the lookup path
+// (LookupSoftware) so the stored key and the query key are always identical.
+func normSlug(slug string) string { return strings.ToLower(slug) }
 
 func nilString(s string) *string {
 	if s == "" {

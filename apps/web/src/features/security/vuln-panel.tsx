@@ -22,6 +22,7 @@ import {
   useDismissVuln,
   useRestoreVuln,
   useRemediateVuln,
+  safeExternalHref,
   type VulnFinding,
 } from "./use-vuln";
 import { useUpdateRun, useRunEventStream } from "@/features/updates/use-updates";
@@ -132,6 +133,12 @@ function VulnFindingRow({ finding, siteId, mitreNotice, canWrite }: FindingRowPr
   const isDismissed = finding.status === "dismissed";
   const hasFix = Boolean(finding.fixed_version);
 
+  // Validate feed-supplied URLs before they touch an href attribute.
+  // safeExternalHref returns undefined for any non-http(s) scheme (javascript:,
+  // data:, etc.), causing the anchor branch to be skipped entirely.
+  const safeCveHref = safeExternalHref(finding.cve_link);
+  const safeRefHref = safeExternalHref(finding.references[0]);
+
   return (
     <TableRow
       className={isDismissed ? "opacity-60" : undefined}
@@ -180,9 +187,10 @@ function VulnFindingRow({ finding, siteId, mitreNotice, canWrite }: FindingRowPr
       <TableCell>
         {finding.cve ? (
           <div className="space-y-0.5">
-            {finding.cve_link ? (
+            {/* safeCveHref is undefined when the feed-supplied URL is not http(s). */}
+            {safeCveHref ? (
               <a
-                href={finding.cve_link}
+                href={safeCveHref}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-1 text-xs font-mono text-[var(--color-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"
@@ -213,10 +221,11 @@ function VulnFindingRow({ finding, siteId, mitreNotice, canWrite }: FindingRowPr
         )}
       </TableCell>
       <TableCell>
-        {/* Wordfence Intelligence reference link-back (Gate 0) */}
-        {finding.references.length > 0 ? (
+        {/* Wordfence Intelligence reference link-back (Gate 0).
+            safeRefHref is undefined when the feed-supplied URL is not http(s). */}
+        {safeRefHref ? (
           <a
-            href={finding.references[0]}
+            href={safeRefHref}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-xs text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]"

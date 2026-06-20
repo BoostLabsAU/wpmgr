@@ -42,7 +42,16 @@ func NewHandler(svc *Service, enq RescanEnqueuer, rec *audit.Recorder) *Handler 
 // Register mounts the routes on the authenticated /api/v1 group.
 func (h *Handler) Register(r *gin.RouterGroup) {
 	// Fleet rollup (tenant-scoped, not per-site).
-	r.GET("/vulnerabilities", authz.RequirePermission(authz.PermSiteRead), h.fleetSummary)
+	// RequireOrgScope blocks site-scoped collaborators (fleet aggregation is
+	// tenant-level; site-scoped principals use the per-site
+	// /sites/:siteId/vulnerabilities endpoint instead, which RequireSiteAccess
+	// already scopes to their allowed sites). This matches the perf fleet
+	// convention (/perf/db/fleet-health, /perf/rum/fleet).
+	r.GET("/vulnerabilities",
+		authz.RequireOrgScope(),
+		authz.RequirePermission(authz.PermSiteRead),
+		h.fleetSummary,
+	)
 
 	// Per-site routes, gated by RequireSiteAccess.
 	g := r.Group("/sites/:siteId/vulnerabilities", authz.RequireSiteAccess("siteId"))

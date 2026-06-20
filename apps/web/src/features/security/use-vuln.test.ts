@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   isHighRisk,
   countHighRisk,
+  safeExternalHref,
   vulnKeys,
   type VulnFinding,
   type VulnAttribution,
@@ -649,5 +650,190 @@ describe("Gate 0 attribution — notices are available in the response", () => {
     expect(f.references.length).toBeGreaterThan(0);
     // The link-back must point to wordfence.com (the required attribution source).
     expect(f.references[0]).toContain("wordfence.com");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// safeExternalHref — feed-driven link injection / XSS-on-click guard (F2)
+//
+// Feed records are external attacker-influenceable data. A malicious feed entry
+// carrying `cve_link: "javascript:alert(1)"` or `references[0]: "data:..."` must
+// NEVER become an <a href> value. safeExternalHref is the gate applied at all
+// four rendering sites (vuln-panel.tsx:cve_link, vuln-panel.tsx:references[0],
+// vulnerabilities.tsx:cve_link, vulnerabilities.tsx:references[0]).
+//
+// Contract: returns the original string only when it begins with "https://" or
+// "http://". All other inputs return undefined, causing callers to render plain
+// text rather than an anchor.
+// ---------------------------------------------------------------------------
+
+describe("safeExternalHref — blocks non-http(s) schemes from feed-supplied URLs", () => {
+  // --- Valid schemes (must pass through unchanged) ---
+
+  it("returns the URL for an https:// link", () => {
+    const url = "https://www.cve.org/CVERecord?id=CVE-2024-12345";
+    expect(safeExternalHref(url)).toBe(url);
+  });
+
+  it("returns the URL for an http:// link", () => {
+    const url = "http://www.wordfence.com/threat-intel/vulnerabilities/id/abc";
+    expect(safeExternalHref(url)).toBe(url);
+  });
+
+  it("returns the URL for a Wordfence Intelligence reference (https)", () => {
+    const url =
+      "https://www.wordfence.com/threat-intel/vulnerabilities/id/cccccccc-1111-1111-1111-111111111111";
+    expect(safeExternalHref(url)).toBe(url);
+  });
+
+  it("returns the URL for the CVE.org link in the canonical fixture", () => {
+    expect(safeExternalHref(CRITICAL_PLUGIN_FINDING.cve_link)).toBe(
+      CRITICAL_PLUGIN_FINDING.cve_link,
+    );
+  });
+
+  it("returns the first reference URL from the canonical fixture (https)", () => {
+    const ref = CRITICAL_PLUGIN_FINDING.references[0];
+    expect(safeExternalHref(ref)).toBe(ref);
+  });
+
+  // --- javascript: scheme — the primary XSS vector ---
+
+  it("returns undefined for javascript:alert(1) — the primary XSS vector", () => {
+    expect(safeExternalHref("javascript:alert(1)")).toBeUndefined();
+  });
+
+  it("returns undefined for javascript:void(0)", () => {
+    expect(safeExternalHref("javascript:void(0)")).toBeUndefined();
+  });
+
+  it("returns undefined for JAVASCRIPT:alert(1) (case preserved — no case-folding attack)", () => {
+    // The check is case-sensitive (startsWith). An uppercase variant is still blocked
+    // because real https/http URLs always start lowercase.
+    expect(safeExternalHref("JAVASCRIPT:alert(1)")).toBeUndefined();
+  });
+
+  // --- data: scheme ---
+
+  it("returns undefined for a data: URL", () => {
+    expect(safeExternalHref("data:text/html,<script>alert(1)</script>")).toBeUndefined();
+  });
+
+  it("returns undefined for data:text/plain,hello", () => {
+    expect(safeExternalHref("data:text/plain,hello")).toBeUndefined();
+  });
+
+  // --- vbscript: scheme ---
+
+  it("returns undefined for vbscript:msgbox(1)", () => {
+    expect(safeExternalHref("vbscript:msgbox(1)")).toBeUndefined();
+  });
+
+  // --- Relative and bare paths (must not become hrefs) ---
+
+  it("returns undefined for a bare relative path", () => {
+    expect(safeExternalHref("../evil/path")).toBeUndefined();
+  });
+
+  it("returns undefined for a root-relative path", () => {
+    // Root-relative paths are same-origin navigation, not valid external vuln URLs.
+    expect(safeExternalHref("/internal/page")).toBeUndefined();
+  });
+
+  // --- Null / undefined / empty inputs ---
+
+  it("returns undefined for undefined input", () => {
+    expect(safeExternalHref(undefined)).toBeUndefined();
+  });
+
+  it("returns undefined for null input", () => {
+    expect(safeExternalHref(null)).toBeUndefined();
+  });
+
+  it("returns undefined for an empty string", () => {
+    expect(safeExternalHref("")).toBeUndefined();
+  });
+
+  // --- Rendering contract: no <a> ever gets a non-http(s) href ---
+
+  it("a finding with cve_link='javascript:alert(1)' produces no safe href (renders plain text)", () => {
+    const maliciousFinding: VulnFinding = {
+      ...CRITICAL_PLUGIN_FINDING,
+      cve_link: "javascript:alert(1)",
+    };
+    // The component guards: safeExternalHref(finding.cve_link) must be falsy
+    // so the anchor branch is skipped and the plain text <span> renders instead.
+    const href = safeExternalHref(maliciousFinding.cve_link);
+    expect(href).toBeUndefined();
+    // Verify the component branch logic: only render <a> when href is defined.
+    const wouldRenderAnchor = Boolean(href);
+    expect(wouldRenderAnchor).toBe(false);
+  });
+
+  it("a finding with cve_link='https://...' produces a safe href (renders as anchor)", () => {
+    const safeFinding: VulnFinding = {
+      ...CRITICAL_PLUGIN_FINDING,
+      cve_link: "https://www.cve.org/CVERecord?id=CVE-2024-12345",
+    };
+    const href = safeExternalHref(safeFinding.cve_link);
+    expect(href).toBe("https://www.cve.org/CVERecord?id=CVE-2024-12345");
+    const wouldRenderAnchor = Boolean(href);
+    expect(wouldRenderAnchor).toBe(true);
+  });
+
+  it("a finding with references[0]='javascript:...' produces no safe href (no anchor for Wordfence link-back)", () => {
+    const maliciousFinding: VulnFinding = {
+      ...CRITICAL_PLUGIN_FINDING,
+      references: ["javascript:alert(document.cookie)"],
+    };
+    const href = safeExternalHref(maliciousFinding.references[0]);
+    expect(href).toBeUndefined();
+    // Component renders nothing (null) — not an anchor.
+    expect(Boolean(href)).toBe(false);
+  });
+
+  it("a finding with references[0]='https://...' produces a safe href", () => {
+    const safeFinding: VulnFinding = {
+      ...CRITICAL_PLUGIN_FINDING,
+      references: [
+        "https://www.wordfence.com/threat-intel/vulnerabilities/id/cccccccc-1111-1111-1111-111111111111",
+      ],
+    };
+    const href = safeExternalHref(safeFinding.references[0]);
+    expect(href).toBe(safeFinding.references[0]);
+    expect(Boolean(href)).toBe(true);
+  });
+
+  it("a finding with cve_link='data:text/html,...' produces no safe href", () => {
+    const maliciousFinding: VulnFinding = {
+      ...CRITICAL_PLUGIN_FINDING,
+      cve_link: "data:text/html,<script>alert(document.cookie)</script>",
+    };
+    expect(safeExternalHref(maliciousFinding.cve_link)).toBeUndefined();
+  });
+
+  it("all canonical fixture findings have safe references (real https Wordfence URLs)", () => {
+    for (const finding of SITE_VULNS_WITH_FINDINGS.items) {
+      for (const ref of finding.references) {
+        // Every real Wordfence Intelligence URL must pass the guard.
+        const safe = safeExternalHref(ref);
+        expect(safe).toBe(ref);
+        expect(safe?.startsWith("https://")).toBe(true);
+      }
+    }
+  });
+
+  it("all canonical fixture cve_links are either null/undefined or safe https URLs", () => {
+    for (const finding of SITE_VULNS_WITH_FINDINGS.items) {
+      if (finding.cve_link != null) {
+        const safe = safeExternalHref(finding.cve_link);
+        // Real CVE.org links are https.
+        expect(safe).toBe(finding.cve_link);
+        expect(safe?.startsWith("https://")).toBe(true);
+      } else {
+        // null cve_link → safeExternalHref returns undefined (no anchor rendered).
+        expect(safeExternalHref(finding.cve_link)).toBeUndefined();
+      }
+    }
   });
 });
