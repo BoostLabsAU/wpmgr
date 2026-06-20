@@ -1168,8 +1168,22 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// constructed before River so they can be handed to the riverDeps struct.
 	// The rescan enqueuer (which needs a started riverClient) is wired after
 	// startRiver returns using vuln.Service.SetEnqueuer (see below).
+	//
+	// m80 — The API key is now UI-configurable via the superadmin area
+	// (instance_settings table, encrypted at rest). VulnFeedKeyService satisfies
+	// vuln.APIKeyResolver and is passed as the resolver to NewFeedWorker so the
+	// worker resolves the key at job-run time (UI key > env key > no-op).
+	// The feed refresh enqueuer is wired into the key service after River starts.
 	vulnRepo := vuln.NewRepo(pool)
-	vulnFeedWorker := vuln.NewFeedWorker(vulnRepo, pool, nil /*svc: wired below*/, os.Getenv("WPMGR_WORDFENCE_API_KEY"), ssrfClient, logger)
+	adminInstSettingsRepo := admin.NewInstanceSettingsRepo(pool)
+	vulnFeedKeySvc := admin.NewVulnFeedKeyService(
+		adminInstSettingsRepo,
+		siteDestAgeID, // same cryptbox identity used for SMTP + site destinations
+		os.Getenv("WPMGR_WORDFENCE_API_KEY"),
+		nil, // enqueuer wired below after River starts
+		logger,
+	)
+	vulnFeedWorker := vuln.NewFeedWorker(vulnRepo, pool, nil /*svc: wired below*/, vulnFeedKeySvc, ssrfClient, logger)
 	vulnRescanWorker := vuln.NewRescanSiteWorker(nil /*svc: wired below*/, logger)
 
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
@@ -1287,10 +1301,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// (via riverDeps above); here we complete their service pointer so they can call
 	// through to RescanSite/RescanAll after a feed refresh or on demand.
 	vulnRescanEnq := vuln.NewRiverRescanEnqueuer(riverClient)
+	vulnFeedRefreshEnq := vuln.NewRiverFeedRefreshEnqueuer(riverClient)
 	vulnSiteAdapterImpl := newVulnSiteAdapter(siteSvc)
 	vulnSvc := vuln.NewService(vulnRepo, pool, vulnSiteAdapterImpl, updateSvc, vulnRescanEnq, logger)
 	vulnFeedWorker.SetService(vulnSvc)
 	vulnRescanWorker.SetService(vulnSvc)
+	// m80 — wire the feed-refresh enqueuer into the key service so the admin
+	// PUT /admin/vuln-feed/key endpoint can trigger an immediate sync.
+	vulnFeedKeySvc.SetEnqueuer(vulnFeedRefreshEnq)
 	vulnH := vuln.NewHandler(vulnSvc, vulnRescanEnq, auditRec)
 
 	// M23 Media Optimizer: wire the EncodeArgs enqueuer now that River has
@@ -1696,6 +1714,11 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	adminRepo := admin.NewRepo(pool)
 	adminSvc := admin.NewService(adminRepo, authSvc)
 	adminH := admin.NewHandler(adminSvc, pool)
+	adminH.SetAuditRecorder(auditRec)
+	// m80 — wire the vuln-feed key management into the admin handler.
+	// vulnFeedKeySvc already has its feed-refresh enqueuer set (wired in the
+	// vuln River block above), so this call sees a fully-wired service.
+	adminH.SetVulnFeed(vulnRepo, vulnFeedKeySvc)
 
 	// ADR-042 — CP-driven agent self-update manifest handler. Needs object
 	// storage (to read agent-releases/latest.json + presign the package) AND the
