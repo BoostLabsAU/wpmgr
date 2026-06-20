@@ -78,7 +78,13 @@ agent-vendor: ## Build a clean prod-only vendor/ for the agent (no-dev, stripped
 	# container doesn't ship ext-mysqli/zip/zlib; those checks happen on the
 	# actual WP host at runtime, where the extensions are present).
 	cd apps/agent && rm -rf vendor composer.lock
-	docker run --rm -v "$(PWD)/apps/agent:/app" -w /app composer:2 install --no-dev --optimize-autoloader --classmap-authoritative --ignore-platform-reqs
+	# Run composer as the HOST user (not the container's root) so every extracted
+	# vendor file is owned by the invoking user. Otherwise, on a Linux CI runner,
+	# the bind-mounted files are created root-owned and the host-side strip step
+	# below fails with "Permission denied" on read-only package files (e.g. a
+	# dependency's README.md / phpstan.neon). COMPOSER_HOME points at a writable
+	# cache dir since the mapped UID has no entry in the container's /etc/passwd.
+	docker run --rm --user "$$(id -u):$$(id -g)" -e COMPOSER_HOME=/tmp/composer -v "$(PWD)/apps/agent:/app" -w /app composer:2 install --no-dev --optimize-autoloader --classmap-authoritative --ignore-platform-reqs
 	# Strip non-runtime files from the runtime vendors. Be conservative: only
 	# drop directories named exactly tests/Tests/doc/docs/examples/.git, plus
 	# CHANGELOG/UPGRADING/README .md files. Never touch *.php.
