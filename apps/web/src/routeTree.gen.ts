@@ -31,7 +31,6 @@ import { Route as AuthedMigrationsRouteImport } from './routes/_authed/migration
 import { Route as AuthedDestinationsRouteImport } from './routes/_authed/destinations'
 import { Route as AuthedAuditRouteImport } from './routes/_authed/audit'
 import { Route as AuthedAlertsRouteImport } from './routes/_authed/alerts'
-import { Route as AuthedAdminRouteImport } from './routes/_authed/admin'
 import { Route as AuthedSettingsRouteRouteImport } from './routes/_authed/settings/route'
 import { Route as AuthedAdminRouteRouteImport } from './routes/_authed/admin/route'
 import { Route as AuthedUpdatesIndexRouteImport } from './routes/_authed/updates/index'
@@ -182,11 +181,6 @@ const AuthedAlertsRoute = AuthedAlertsRouteImport.update({
   path: '/alerts',
   getParentRoute: () => AuthedRoute,
 } as any)
-const AuthedAdminRoute = AuthedAdminRouteImport.update({
-  id: '/admin',
-  path: '/admin',
-  getParentRoute: () => AuthedRoute,
-} as any)
 const AuthedSettingsRouteRoute = AuthedSettingsRouteRouteImport.update({
   id: '/settings',
   path: '/settings',
@@ -230,7 +224,7 @@ const AuthedBackupsIndexRoute = AuthedBackupsIndexRouteImport.update({
 const AuthedAdminIndexRoute = AuthedAdminIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => AuthedAdminRoute,
+  getParentRoute: () => AuthedAdminRouteRoute,
 } as any)
 const PortalSitesSiteIdRoute = PortalSitesSiteIdRouteImport.update({
   id: '/sites/$siteId',
@@ -301,7 +295,7 @@ const AuthedBackupsSnapshotIdRoute = AuthedBackupsSnapshotIdRouteImport.update({
 const AuthedAdminVulnFeedRoute = AuthedAdminVulnFeedRouteImport.update({
   id: '/vuln-feed',
   path: '/vuln-feed',
-  getParentRoute: () => AuthedAdminRoute,
+  getParentRoute: () => AuthedAdminRouteRoute,
 } as any)
 const AuthedSitesSiteIdIndexRoute = AuthedSitesSiteIdIndexRouteImport.update({
   id: '/',
@@ -411,7 +405,7 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
-  '/admin': typeof AuthedAdminRouteWithChildren
+  '/admin': typeof AuthedAdminRouteRouteWithChildren
   '/settings': typeof AuthedSettingsRouteRouteWithChildren
   '/alerts': typeof AuthedAlertsRoute
   '/audit': typeof AuthedAuditRoute
@@ -473,7 +467,6 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
-  '/admin': typeof AuthedAdminIndexRoute
   '/alerts': typeof AuthedAlertsRoute
   '/audit': typeof AuthedAuditRoute
   '/destinations': typeof AuthedDestinationsRoute
@@ -496,6 +489,7 @@ export interface FileRoutesByTo {
   '/settings/smtp': typeof AuthedSettingsSmtpRoute
   '/updates/$runId': typeof AuthedUpdatesRunIdRoute
   '/portal/sites/$siteId': typeof PortalSitesSiteIdRoute
+  '/admin': typeof AuthedAdminIndexRoute
   '/backups': typeof AuthedBackupsIndexRoute
   '/clients': typeof AuthedClientsIndexRoute
   '/email': typeof AuthedEmailIndexRoute
@@ -534,7 +528,7 @@ export interface FileRoutesById {
   '/reset-password': typeof ResetPasswordRoute
   '/terms': typeof TermsRoute
   '/verify-email': typeof VerifyEmailRoute
-  '/_authed/admin': typeof AuthedAdminRouteWithChildren
+  '/_authed/admin': typeof AuthedAdminRouteRouteWithChildren
   '/_authed/settings': typeof AuthedSettingsRouteRouteWithChildren
   '/_authed/alerts': typeof AuthedAlertsRoute
   '/_authed/audit': typeof AuthedAuditRoute
@@ -661,7 +655,6 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/terms'
     | '/verify-email'
-    | '/admin'
     | '/alerts'
     | '/audit'
     | '/destinations'
@@ -684,6 +677,7 @@ export interface FileRouteTypes {
     | '/settings/smtp'
     | '/updates/$runId'
     | '/portal/sites/$siteId'
+    | '/admin'
     | '/backups'
     | '/clients'
     | '/email'
@@ -944,13 +938,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedAlertsRouteImport
       parentRoute: typeof AuthedRoute
     }
-    '/_authed/admin': {
-      id: '/_authed/admin'
-      path: '/admin'
-      fullPath: '/admin'
-      preLoaderRoute: typeof AuthedAdminRouteImport
-      parentRoute: typeof AuthedRoute
-    }
     '/_authed/settings': {
       id: '/_authed/settings'
       path: '/settings'
@@ -1012,7 +999,7 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/admin/'
       preLoaderRoute: typeof AuthedAdminIndexRouteImport
-      parentRoute: typeof AuthedAdminRoute
+      parentRoute: typeof AuthedAdminRouteRoute
     }
     '/portal/sites/$siteId': {
       id: '/portal/sites/$siteId'
@@ -1110,7 +1097,7 @@ declare module '@tanstack/react-router' {
       path: '/vuln-feed'
       fullPath: '/admin/vuln-feed'
       preLoaderRoute: typeof AuthedAdminVulnFeedRouteImport
-      parentRoute: typeof AuthedAdminRoute
+      parentRoute: typeof AuthedAdminRouteRoute
     }
     '/_authed/sites/$siteId/': {
       id: '/_authed/sites/$siteId/'
@@ -1250,6 +1237,19 @@ const PortalRouteRouteWithChildren = PortalRouteRoute._addFileChildren(
   PortalRouteRouteChildren,
 )
 
+interface AuthedAdminRouteRouteChildren {
+  AuthedAdminVulnFeedRoute: typeof AuthedAdminVulnFeedRoute
+  AuthedAdminIndexRoute: typeof AuthedAdminIndexRoute
+}
+
+const AuthedAdminRouteRouteChildren: AuthedAdminRouteRouteChildren = {
+  AuthedAdminVulnFeedRoute: AuthedAdminVulnFeedRoute,
+  AuthedAdminIndexRoute: AuthedAdminIndexRoute,
+}
+
+const AuthedAdminRouteRouteWithChildren =
+  AuthedAdminRouteRoute._addFileChildren(AuthedAdminRouteRouteChildren)
+
 interface AuthedSettingsRouteRouteChildren {
   AuthedSettingsAccountRoute: typeof AuthedSettingsAccountRoute
   AuthedSettingsApiKeysRoute: typeof AuthedSettingsApiKeysRoute
@@ -1272,20 +1272,6 @@ const AuthedSettingsRouteRouteChildren: AuthedSettingsRouteRouteChildren = {
 
 const AuthedSettingsRouteRouteWithChildren =
   AuthedSettingsRouteRoute._addFileChildren(AuthedSettingsRouteRouteChildren)
-
-interface AuthedAdminRouteChildren {
-  AuthedAdminVulnFeedRoute: typeof AuthedAdminVulnFeedRoute
-  AuthedAdminIndexRoute: typeof AuthedAdminIndexRoute
-}
-
-const AuthedAdminRouteChildren: AuthedAdminRouteChildren = {
-  AuthedAdminVulnFeedRoute: AuthedAdminVulnFeedRoute,
-  AuthedAdminIndexRoute: AuthedAdminIndexRoute,
-}
-
-const AuthedAdminRouteWithChildren = AuthedAdminRoute._addFileChildren(
-  AuthedAdminRouteChildren,
-)
 
 interface AuthedClientsClientIdRouteChildren {
   AuthedClientsClientIdMembersRoute: typeof AuthedClientsClientIdMembersRoute
@@ -1342,9 +1328,8 @@ const AuthedSitesSiteIdRouteWithChildren =
   AuthedSitesSiteIdRoute._addFileChildren(AuthedSitesSiteIdRouteChildren)
 
 interface AuthedRouteChildren {
-  AuthedAdminRouteRoute: typeof AuthedAdminRouteRoute
+  AuthedAdminRouteRoute: typeof AuthedAdminRouteRouteWithChildren
   AuthedSettingsRouteRoute: typeof AuthedSettingsRouteRouteWithChildren
-  AuthedAdminRoute: typeof AuthedAdminRouteWithChildren
   AuthedAlertsRoute: typeof AuthedAlertsRoute
   AuthedAuditRoute: typeof AuthedAuditRoute
   AuthedDestinationsRoute: typeof AuthedDestinationsRoute
@@ -1367,9 +1352,8 @@ interface AuthedRouteChildren {
 }
 
 const AuthedRouteChildren: AuthedRouteChildren = {
-  AuthedAdminRouteRoute: AuthedAdminRouteRoute,
+  AuthedAdminRouteRoute: AuthedAdminRouteRouteWithChildren,
   AuthedSettingsRouteRoute: AuthedSettingsRouteRouteWithChildren,
-  AuthedAdminRoute: AuthedAdminRouteWithChildren,
   AuthedAlertsRoute: AuthedAlertsRoute,
   AuthedAuditRoute: AuthedAuditRoute,
   AuthedDestinationsRoute: AuthedDestinationsRoute,
