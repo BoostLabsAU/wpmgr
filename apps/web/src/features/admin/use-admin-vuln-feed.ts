@@ -10,7 +10,8 @@ import { toError } from "@/features/auth/use-auth";
 // in the generated OpenAPI SDK. They follow the same pattern as use-admin.ts.
 //
 // SECURITY NOTE: The plaintext API key is NEVER returned by any endpoint —
-// the API only stores a hash and exposes status/metadata. The key input is
+// the API stores the age-encrypted key (it must decrypt it to call the feed)
+// and exposes status/metadata only, never the key. The key input is
 // write-only from the UI perspective; after saving, the input is cleared and
 // the UI displays only the status (configured/source/last_synced etc.).
 
@@ -21,7 +22,7 @@ import { toError } from "@/features/auth/use-auth";
 /**
  * Source of the active API key.
  * - "ui"  — an operator saved a key via PUT /key
- * - "env" — the instance was started with WPMGR_VULN_FEED_KEY set
+ * - "env" — the instance was started with WPMGR_WORDFENCE_API_KEY set
  * - "none" — no key is configured from any source
  */
 export type VulnFeedKeySource = "ui" | "env" | "none";
