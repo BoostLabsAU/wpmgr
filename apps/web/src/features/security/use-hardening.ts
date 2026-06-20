@@ -95,16 +95,6 @@ async function apiGet<T>(url: string): Promise<T> {
   return result.data as T;
 }
 
-async function apiPut<T>(url: string, body?: unknown): Promise<T> {
-  const result = await client.put({
-    url,
-    body,
-    headers: { "Content-Type": "application/json" },
-  });
-  if (result.error !== undefined) throw toError(result.error);
-  return result.data as T;
-}
-
 async function apiPost<T>(url: string, body?: unknown): Promise<T> {
   const result = await client.post({
     url,
@@ -126,11 +116,14 @@ async function apiDelete(url: string): Promise<void> {
 
 export function useHardeningConfig(
   siteId: string,
-): UseQueryResult<HardeningResponse, Error> {
+): UseQueryResult<HardeningConfig, Error> {
+  // The control plane returns the config FLAT (the toggle fields at the top
+  // level), not wrapped in { config }. The optional "not writable" caveat is
+  // returned only on PUT, via the X-Agent-Push-Warning response header.
   return useQuery({
     queryKey: hardeningKeys.config(siteId),
     queryFn: async () =>
-      apiGet<HardeningResponse>(
+      apiGet<HardeningConfig>(
         `/api/v1/sites/${encodeURIComponent(siteId)}/security/hardening`,
       ),
     staleTime: 30_000,
@@ -146,15 +139,24 @@ export function useUpdateHardeningConfig(
 ): UseMutationResult<HardeningResponse, Error, HardeningConfig> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (config: HardeningConfig) =>
-      apiPut<HardeningResponse>(
-        `/api/v1/sites/${encodeURIComponent(siteId)}/security/hardening`,
-        config,
-      ),
+    // The PUT returns the flat config in the body; the optional caveat ("wp-config
+    // not writable", "server config requires operator action") arrives in the
+    // X-Agent-Push-Warning header, so read it off the raw response.
+    mutationFn: async (config: HardeningConfig): Promise<HardeningResponse> => {
+      const result = await client.put({
+        url: `/api/v1/sites/${encodeURIComponent(siteId)}/security/hardening`,
+        body: config,
+        headers: { "Content-Type": "application/json" },
+      });
+      if (result.error !== undefined) throw toError(result.error);
+      const detail =
+        result.response?.headers?.get("X-Agent-Push-Warning") ?? undefined;
+      return { config: result.data as HardeningConfig, detail: detail || undefined };
+    },
     onSuccess: (updated) => {
-      queryClient.setQueryData<HardeningResponse>(
+      queryClient.setQueryData<HardeningConfig>(
         hardeningKeys.config(siteId),
-        updated,
+        updated.config,
       );
     },
   });
