@@ -1561,6 +1561,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// `sync_security_config` command, ingests login events, and exposes an
 	// unblock-IP action. The agent client is wired when the commander supports
 	// the security command verbs (every real-mode build does).
+	//
+	// ADR-057 Phase 1: the same service also owns the hardening config + ban
+	// list. The hardening client is wired separately so each interface can be
+	// satisfied independently (the disabledCommander satisfies both or neither).
 	securityRepo := security.NewRepo(pool)
 	securitySvc := security.NewService(securityRepo)
 	securityH := security.NewHandler(securitySvc, auditRec)
@@ -1571,6 +1575,12 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		logger.Info("security agent client wired")
 	} else {
 		logger.Warn("security agent client not wired: CP->agent commander unavailable (signing key empty?)")
+	}
+	if hardeningCmd, ok := commander.(security.AgentHardeningClient); ok {
+		securitySvc.SetHardeningClient(hardeningCmd, secSiteAdapter)
+		logger.Info("security hardening agent client wired")
+	} else {
+		logger.Warn("security hardening agent client not wired: CP->agent commander unavailable (signing key empty?)")
 	}
 
 	// M14 — Login Whitelabel. The loginbrand service stores per-site login brand
@@ -2566,6 +2576,10 @@ func (disabledCommander) SyncErrorConfig(_ context.Context, _ uuid.UUID, _ strin
 
 func (disabledCommander) SyncSecurityConfig(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.SecurityConfigRequest) (agentcmd.SecurityConfigResult, error) {
 	return agentcmd.SecurityConfigResult{}, fmt.Errorf("CP->agent commands are disabled: no signing key configured")
+}
+
+func (disabledCommander) SyncSecurityHardening(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.HardeningRequest) (agentcmd.HardeningResult, error) {
+	return agentcmd.HardeningResult{}, fmt.Errorf("CP->agent commands are disabled: no signing key configured")
 }
 
 func (disabledCommander) UnblockIP(_ context.Context, _ uuid.UUID, _ string, _ agentcmd.UnblockIPRequest) (agentcmd.UnblockIPResult, error) {
