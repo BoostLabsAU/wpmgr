@@ -20,10 +20,15 @@ import (
 // Handler serves the operator-facing security routes under
 // /api/v1/sites/{siteId}/security/...
 //
-//	GET  /security/login-protection          — get config
+//	GET  /security/login-protection          — get login-protection config
 //	PUT  /security/login-protection          — save config + push to agent
 //	POST /security/unblock-ip               — unblock an IP address
 //	GET  /security/login-events             — list login events
+//	GET  /security/hardening                — get hardening config (ADR-057)
+//	PUT  /security/hardening                — save hardening config + push
+//	GET  /security/bans                     — list ban entries
+//	POST /security/bans                     — create ban entry
+//	DELETE /security/bans/:banId            — delete ban entry
 type Handler struct {
 	svc   *Service
 	audit *audit.Recorder
@@ -39,12 +44,21 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// RequireSiteAccess("siteId") is applied on the group so every sub-route
 	// inherits it. This enforces the site allowlist for site-scoped principals
 	// (belt-and-braces in front of the RLS policy on site_security_config /
-	// agent_login_events).
+	// agent_login_events / site_security_hardening_config / site_security_bans).
 	g := r.Group("/sites/:siteId/security", authz.RequireSiteAccess("siteId"))
+
+	// Login-protection (S2).
 	g.GET("/login-protection", authz.RequirePermission(authz.PermSiteRead), h.getConfig)
 	g.PUT("/login-protection", authz.RequirePermission(authz.PermSiteWrite), h.putConfig)
 	g.POST("/unblock-ip", authz.RequirePermission(authz.PermSiteWrite), h.unblockIP)
 	g.GET("/login-events", authz.RequirePermission(authz.PermSiteRead), h.listLoginEvents)
+
+	// Hardening config + ban list (ADR-057 Phase 1).
+	g.GET("/hardening", authz.RequirePermission(authz.PermSiteRead), h.getHardeningConfig)
+	g.PUT("/hardening", authz.RequirePermission(authz.PermSecurityManage), h.putHardeningConfig)
+	g.GET("/bans", authz.RequirePermission(authz.PermSiteRead), h.listBans)
+	g.POST("/bans", authz.RequirePermission(authz.PermSecurityManage), h.createBan)
+	g.DELETE("/bans/:banId", authz.RequirePermission(authz.PermSecurityManage), h.deleteBan)
 }
 
 // ---------------------------------------------------------------------------
@@ -339,4 +353,252 @@ func (h *Handler) listLoginEvents(c *gin.Context) {
 		items = append(items, dto)
 	}
 	c.JSON(http.StatusOK, loginEventListDTO{Items: items})
+}
+
+// ---------------------------------------------------------------------------
+// ADR-057 Phase 1 — hardening config DTOs + handlers
+// ---------------------------------------------------------------------------
+
+// hardeningConfigDTO is the JSON shape for GET/PUT /security/hardening.
+type hardeningConfigDTO struct {
+	DisableFileEditor        bool   `json:"disable_file_editor"`
+	XMLRPCMode               string `json:"xmlrpc_mode"`
+	RestrictRESTAPI          string `json:"restrict_rest_api"`
+	RestrictLoginIdentifier  string `json:"restrict_login_identifier"`
+	ForceUniqueNickname      bool   `json:"force_unique_nickname"`
+	DisableAuthorArchiveEnum bool   `json:"disable_author_archive_enum"`
+	ForceSSL                 bool   `json:"force_ssl"`
+	DisableDirectoryBrowsing bool   `json:"disable_directory_browsing"`
+	DisablePHPInUploads      bool   `json:"disable_php_in_uploads"`
+	ProtectSystemFiles       bool   `json:"protect_system_files"`
+	UpdatedAt                string `json:"updated_at,omitempty"`
+}
+
+func toHardeningDTO(cfg HardeningConfig) hardeningConfigDTO {
+	dto := hardeningConfigDTO{
+		DisableFileEditor:        cfg.DisableFileEditor,
+		XMLRPCMode:               string(cfg.XMLRPCMode),
+		RestrictRESTAPI:          string(cfg.RestrictRESTAPI),
+		RestrictLoginIdentifier:  string(cfg.RestrictLoginIdentifier),
+		ForceUniqueNickname:      cfg.ForceUniqueNickname,
+		DisableAuthorArchiveEnum: cfg.DisableAuthorArchiveEnum,
+		ForceSSL:                 cfg.ForceSSL,
+		DisableDirectoryBrowsing: cfg.DisableDirectoryBrowsing,
+		DisablePHPInUploads:      cfg.DisablePHPInUploads,
+		ProtectSystemFiles:       cfg.ProtectSystemFiles,
+	}
+	if !cfg.UpdatedAt.IsZero() {
+		dto.UpdatedAt = cfg.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return dto
+}
+
+func fromHardeningDTO(dto hardeningConfigDTO, tenantID, siteID uuid.UUID) HardeningConfig {
+	return HardeningConfig{
+		TenantID:                tenantID,
+		SiteID:                  siteID,
+		DisableFileEditor:       dto.DisableFileEditor,
+		XMLRPCMode:              XMLRPCMode(dto.XMLRPCMode),
+		RestrictRESTAPI:         RESTAPIMode(dto.RestrictRESTAPI),
+		RestrictLoginIdentifier: LoginIdentifierMode(dto.RestrictLoginIdentifier),
+		ForceUniqueNickname:     dto.ForceUniqueNickname,
+		DisableAuthorArchiveEnum: dto.DisableAuthorArchiveEnum,
+		ForceSSL:                dto.ForceSSL,
+		DisableDirectoryBrowsing: dto.DisableDirectoryBrowsing,
+		DisablePHPInUploads:     dto.DisablePHPInUploads,
+		ProtectSystemFiles:      dto.ProtectSystemFiles,
+	}
+}
+
+func (h *Handler) getHardeningConfig(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	cfg, err := h.svc.GetHardeningConfig(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toHardeningDTO(cfg))
+}
+
+func (h *Handler) putHardeningConfig(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	var body hardeningConfigDTO
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	cfg := fromHardeningDTO(body, p.TenantID, siteID)
+
+	saved, saveErr := h.svc.SaveHardeningConfig(
+		c.Request.Context(), p.TenantID, siteID, cfg,
+		actorType(p), p.ActorID(),
+	)
+	if saveErr != nil {
+		if _, ok := domain.AsDomain(saveErr); ok {
+			httpx.Error(c, saveErr)
+			return
+		}
+		// Non-domain = agent push failed after successful store. Return 200 with
+		// stored config; surface the push warning in a header.
+		c.Header("X-Agent-Push-Warning", saveErr.Error())
+		c.JSON(http.StatusOK, toHardeningDTO(saved))
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_hardening.update",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata: map[string]any{
+			"disable_file_editor":  saved.DisableFileEditor,
+			"xmlrpc_mode":          string(saved.XMLRPCMode),
+			"restrict_rest_api":    string(saved.RestrictRESTAPI),
+			"force_ssl":            saved.ForceSSL,
+		},
+	})
+
+	c.JSON(http.StatusOK, toHardeningDTO(saved))
+}
+
+// ---------------------------------------------------------------------------
+// ADR-057 Phase 1 — ban list DTOs + handlers
+// ---------------------------------------------------------------------------
+
+// banDTO is the JSON shape for one ban entry (list + create response).
+type banDTO struct {
+	ID        string `json:"id"`
+	Type      string `json:"type"`
+	Value     string `json:"value"`
+	Comment   string `json:"comment"`
+	ActorType string `json:"actor_type"`
+	ActorID   string `json:"actor_id"`
+	CreatedAt string `json:"created_at"`
+}
+
+// createBanBody is the POST /security/bans request body.
+type createBanBody struct {
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	Comment string `json:"comment"`
+}
+
+type banListDTO struct {
+	Items []banDTO `json:"items"`
+}
+
+func toBanDTO(b Ban) banDTO {
+	return banDTO{
+		ID:        b.ID.String(),
+		Type:      string(b.Type),
+		Value:     b.Value,
+		Comment:   b.Comment,
+		ActorType: b.ActorType,
+		ActorID:   b.ActorID,
+		CreatedAt: b.CreatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+func (h *Handler) listBans(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	bans, err := h.svc.ListBans(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	items := make([]banDTO, 0, len(bans))
+	for _, b := range bans {
+		items = append(items, toBanDTO(b))
+	}
+	c.JSON(http.StatusOK, banListDTO{Items: items})
+}
+
+func (h *Handler) createBan(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	var body createBanBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	ban := Ban{
+		TenantID:  p.TenantID,
+		SiteID:    siteID,
+		Type:      BanType(strings.TrimSpace(body.Type)),
+		Value:     strings.TrimSpace(body.Value),
+		Comment:   body.Comment,
+		ActorType: actorType(p),
+		ActorID:   p.ActorID(),
+	}
+
+	saved, err := h.svc.CreateBan(c.Request.Context(), p.TenantID, siteID, ban)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_ban.create",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata:   map[string]any{"ban_id": saved.ID.String(), "type": string(saved.Type), "value": saved.Value},
+	})
+
+	c.JSON(http.StatusCreated, toBanDTO(saved))
+}
+
+func (h *Handler) deleteBan(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	banID, err := uuid.Parse(c.Param("banId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_ban_id", "banId is not a valid UUID"))
+		return
+	}
+
+	if err := h.svc.DeleteBan(c.Request.Context(), p.TenantID, siteID, banID); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_ban.delete",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata:   map[string]any{"ban_id": banID.String()},
+	})
+
+	c.Status(http.StatusNoContent)
 }
