@@ -69,8 +69,16 @@ use WPMgr\Agent\Commands\ResendEmailCommand;
 use WPMgr\Agent\Commands\SendTestEmailCommand;
 use WPMgr\Agent\Commands\SyncEmailConfigCommand;
 use WPMgr\Agent\Commands\SyncSecurityHardeningCommand;
+use WPMgr\Agent\Commands\SyncSecurityPolicyCommand;
 use WPMgr\Agent\Commands\RecordManagedFilesCommand;
+use WPMgr\Agent\Security\BackupCodesProvider;
+use WPMgr\Agent\Security\EmailCodeProvider;
 use WPMgr\Agent\Security\HardeningModule;
+use WPMgr\Agent\Security\HideBackendModule;
+use WPMgr\Agent\Security\PasswordPolicyModule;
+use WPMgr\Agent\Security\SecurityPolicy;
+use WPMgr\Agent\Security\Site2faModule;
+use WPMgr\Agent\Security\TotpProvider;
 use WPMgr\Agent\Email\EmailLogger;
 use WPMgr\Agent\Email\EmailLogReporter;
 use WPMgr\Agent\Email\Handlers\MailgunHandler;
@@ -260,6 +268,28 @@ final class Plugin
     private HardeningModule $hardeningModule;
 
     /**
+     * Security Suite Phase 3 — site-user 2FA interstitial module. Loads the
+     * stored policy and registers the wp_login / login_init hooks that
+     * intercept primary-auth completions and require a second factor for
+     * configured roles. Default-OFF until a sync_security_policy push enables it.
+     */
+    private Site2faModule $site2faModule;
+
+    /**
+     * Security Suite Phase 3 — password policy module. Enforces strength,
+     * HIBP breach check, reuse block, and expiry requirements on password
+     * set/change/reset hooks. Default-OFF until a policy push activates it.
+     */
+    private PasswordPolicyModule $passwordPolicyModule;
+
+    /**
+     * Security Suite Phase 3 — hide-backend module. Intercepts at setup_theme
+     * to block the canonical wp-login/wp-admin for logged-out visitors and
+     * serve the secret slug instead. Default-OFF.
+     */
+    private HideBackendModule $hideBackendModule;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -304,6 +334,24 @@ final class Plugin
         // Security hardening module. Constructed BEFORE commands() so
         // SyncSecurityHardeningCommand can hold a reference.
         $this->hardeningModule = new HardeningModule();
+
+        // Security Suite Phase 3 — site-user auth policy modules. All three are
+        // constructed BEFORE commands() so SyncSecurityPolicyCommand has no wiring
+        // dependency (it writes the wp-option; modules read it at install() time).
+        // Each module loads the stored policy from wp-options; a missing option
+        // returns defaults (all-OFF) so fresh installs enforce nothing.
+        $ageIdentityForTotp       = new AgeIdentity($this->keystore);
+        $policyForModules         = SecurityPolicy::load();
+        $this->site2faModule      = new Site2faModule(
+            $policyForModules,
+            [
+                new TotpProvider($ageIdentityForTotp),
+                new EmailCodeProvider(),
+                new BackupCodesProvider(),
+            ]
+        );
+        $this->passwordPolicyModule = new PasswordPolicyModule($policyForModules, $this->settings, $this->signer);
+        $this->hideBackendModule    = new HideBackendModule($policyForModules);
 
         // ADR-042 Phase 2 — self-update checker. Shares the Signer, Settings,
         // Keystore, and a fresh ReplayCache (the autologin replay table — the
@@ -656,6 +704,16 @@ final class Plugin
         // Only registers hooks for toggles that are actually on; an unconfigured
         // site pays just a single get_option() read. Idempotent (static guard).
         $this->hardeningModule->install();
+
+        // Security Suite Phase 3 — site-user 2FA interstitial + password policy
+        // + hide-backend. All three are inert when the stored policy is absent or
+        // has the master switch off. Idempotent (static guard inside each install()).
+        // LOCKOUT-PROOF: if define('WPMGR_DISABLE_SITE_2FA', true) is in wp-config,
+        // neither 2FA nor password policy enforcement fires. The autologin path
+        // bypasses the 2FA interstitial by construction (it never fires wp_login).
+        $this->site2faModule->install();
+        $this->passwordPolicyModule->install();
+        $this->hideBackendModule->install();
 
         // ADR-042 Phase 2 — bind the CP self-update hooks. Self-gates on
         // isEnrolled() inside UpdateChecker::install(); idempotent (static guard).
@@ -1321,6 +1379,11 @@ final class Plugin
             // define to wp-config, refreshes the .htaccess security block, and
             // merges IP/range bans into the WAF mu-plugin's deny_cidrs.
             new SyncSecurityHardeningCommand($this->hardeningModule),
+            // Security Suite Phase 3 — site-user auth policy sync. The CP pushes
+            // the full policy snapshot (2FA config + groups + force-list); the
+            // agent persists it atomically and returns an enrollment summary so
+            // the dashboard can show per-role 2FA coverage. Default-OFF.
+            new SyncSecurityPolicyCommand(),
             // Phase 2 file integrity — CP pushes the list of ABSPATH-relative
             // paths it manages (object-cache.php, advanced-cache.php, .htaccess,
             // mu-plugin loaders, wp-config region, etc.); agent responds with

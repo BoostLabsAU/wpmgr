@@ -345,12 +345,12 @@ export const FEATURES: {
         {
           icon: "ShieldCheck",
           title: "Hardening, bans, integrity",
-          summary: "Per-site hardening, an IP ban list, and continuous file-integrity monitoring, all opt-in and default-off.",
+          summary: "Per-site hardening, ban list, file-integrity monitoring, user 2FA, and password policy, all opt-in and default-off.",
           bullets: [
             "Disable file editor, restrict XML-RPC, REST API, and login IDs",
-            "Force SSL with HSTS, block PHP in uploads, protect system files",
-            "IP and CIDR ban list enforced at early-boot and web-server level",
-            "File hashes compared to WordPress.org and a per-site baseline",
+            "IP and CIDR ban list, file hashes vs WordPress.org and baseline",
+            "Site-user 2FA: authenticator app, email code, backup codes",
+            "Password policy: strength, breach check, reuse, expiry",
           ],
         },
         {
@@ -634,6 +634,8 @@ export const SECURITY = {
     { icon: "FileLock2", title: "Client-side encrypted backups", desc: "Optional end-to-end encryption means the control plane stores only ciphertext and never holds a key to decrypt it." },
     { icon: "EyeOff", title: "Redacted diagnostics", desc: "Emails, passwords, secrets, tokens, and salts are stripped before any diagnostics leave a site." },
     { icon: "ScrollText", title: "Tamper-evident audit log", desc: "Every login, role change, and site action is recorded in an audit log you can review." },
+    { icon: "ShieldUser", title: "Two-factor auth for site users", desc: "Require TOTP, email codes, or backup codes for chosen WordPress user roles, enforced at the login screen. Grace logins, remember-device window, and wp-config recovery constants mean operators are never locked out." },
+    { icon: "KeySquare", title: "Password policy for site users", desc: "Set a minimum strength, block known-compromised passwords via a privacy-preserving prefix query (the plaintext never leaves the site), block reuse, and optionally expire passwords with a forced-change screen. Hide the login page behind a secret address to cut automated login attempts." },
   ],
 };
 

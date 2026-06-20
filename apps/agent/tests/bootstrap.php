@@ -105,6 +105,17 @@ if (!class_exists('WP_Error')) {
             }
         }
 
+        /**
+         * @param string              $code    Error code.
+         * @param string              $message Human message.
+         * @param array<string,mixed> $data    Error data (status, etc).
+         */
+        public function add(string $code, string $message, array $data = []): void
+        {
+            $this->errors[$code]     = $message;
+            $this->error_data[$code] = $data;
+        }
+
         public function get_error_code(): string
         {
             $codes = array_keys($this->errors);
@@ -215,6 +226,12 @@ if (!class_exists('WP_User')) {
         public int $ID = 0;
 
         public string $user_login = '';
+
+        public string $user_email = '';
+
+        public string $user_pass = '';
+
+        public string $display_name = '';
 
         /** @var array<int,string> */
         public array $roles = [];
