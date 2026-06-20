@@ -14,3 +14,11 @@ func FilterReferences(raw json.RawMessage) json.RawMessage { return filterRefere
 // This mirrors the normalisation applied on both the ingest path
 // (UpsertFeedRecord) and the lookup path (LookupSoftware).
 func NormSlug(slug string) string { return normSlug(slug) }
+
+// ParseFeedRecord exposes parseFeedRecord for parser unit tests.
+func ParseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, string, string, error) {
+	return parseFeedRecord(vulnID, raw)
+}
+
+// ErrNoUsableSoftware exposes errNoUsableSoftware so tests can assert the skip sentinel.
+var ErrNoUsableSoftware = errNoUsableSoftware

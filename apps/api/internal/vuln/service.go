@@ -347,15 +347,41 @@ func (s *Service) GetFleetSummary(ctx context.Context, tenantID uuid.UUID, limit
 // JSON parsing helpers
 // ---------------------------------------------------------------------------
 
+// parseAffectedVersions decodes the affected_versions JSON stored in the DB.
+//
+// The real Wordfence v3 feed sends an OBJECT keyed by range-string:
+//
+//	{"* - 2.0.0": {"from_version":"*","from_inclusive":true,"to_version":"2.0.0","to_inclusive":false}}
+//
+// For forward-tolerance, a JSON array of the same range objects is also
+// accepted (the shape used by older feed revisions and the existing service
+// tests). A null/empty value returns a nil slice (not vulnerable).
 func parseAffectedVersions(raw []byte) ([]wpversion.AffectedVersionRange, error) {
-	if len(raw) == 0 {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == "{}" || string(raw) == "[]" {
 		return nil, nil
 	}
-	var ranges []wpversion.AffectedVersionRange
-	if err := json.Unmarshal(raw, &ranges); err != nil {
-		return nil, err
+	// Try array first (forward-compat + existing test fixtures).
+	if len(raw) > 0 && raw[0] == '[' {
+		var ranges []wpversion.AffectedVersionRange
+		if err := json.Unmarshal(raw, &ranges); err != nil {
+			return nil, err
+		}
+		return ranges, nil
 	}
-	return ranges, nil
+	// Object shape: the keys are human-readable range labels (not meaningful for
+	// matching); decode the values into a slice.
+	if len(raw) > 0 && raw[0] == '{' {
+		var obj map[string]wpversion.AffectedVersionRange
+		if err := json.Unmarshal(raw, &obj); err != nil {
+			return nil, err
+		}
+		ranges := make([]wpversion.AffectedVersionRange, 0, len(obj))
+		for _, r := range obj {
+			ranges = append(ranges, r)
+		}
+		return ranges, nil
+	}
+	return nil, nil
 }
 
 func parsePatchedVersions(raw []byte) ([]string, error) {

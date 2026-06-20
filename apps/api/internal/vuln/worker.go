@@ -3,6 +3,7 @@ package vuln
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -144,6 +145,10 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 		return fmt.Errorf("vuln feed refresh: %w", err) // River will retry
 	}
 
+	// Brief spacing between the two fetches reduces the chance of hitting the
+	// production endpoint's rate limit immediately after the scanner fetch.
+	time.Sleep(2 * time.Second)
+
 	// Optionally fetch the Production feed to enrich CVSS / CVE / copyrights.
 	// Errors here are non-fatal: we proceed with whatever the Scanner feed gave us.
 	prodRecords, prodDefiantNotice, prodDefiantLicense, prodMitreNotice, prodErr := w.fetchFeed(ctx, wfProductionURL, apiKey)
@@ -260,7 +265,37 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 		// and returned to the superadmin via the status endpoint).
 		return nil, "", "", "", fmt.Errorf("feed auth failed (HTTP %d): check the Wordfence Intelligence API key in the superadmin settings", resp.StatusCode)
 	case http.StatusTooManyRequests:
-		return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+		// Honor Retry-After if present; one retry then fall back.
+		retryAfter := resp.Header.Get("Retry-After")
+		delay := 10 * time.Second
+		if retryAfter != "" {
+			if d, parseErr := time.ParseDuration(retryAfter + "s"); parseErr == nil && d > 0 && d <= 30*time.Second {
+				delay = d
+			}
+		}
+		w.logger.Debug("vuln: rate limited; retrying after delay",
+			slog.String("url", feedURL), slog.Duration("delay", delay))
+		time.Sleep(delay)
+
+		// Single retry.
+		req2, rerr := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
+		if rerr != nil {
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+		}
+		req2.Header.Set("Authorization", "Bearer "+apiKey)
+		req2.Header.Set("Accept", "application/json")
+		req2.Header.Set("User-Agent", "WPMgr-VulnScanner/1.0")
+		resp2, rerr := w.client.Do(req2)
+		if rerr != nil || resp2.StatusCode != http.StatusOK {
+			if resp2 != nil {
+				_ = resp2.Body.Close()
+			}
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+		}
+		// Swap to the retry response for decoding below.
+		_ = resp.Body.Close()
+		resp = resp2
+		defer func() { _ = resp.Body.Close() }()
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 		return nil, "", "", "", fmt.Errorf("unexpected status %d from %s: %s", resp.StatusCode, feedURL, body)
@@ -297,7 +332,17 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 
 		rec, notice, license, mitre, err := parseFeedRecord(vulnID, rawMsg)
 		if err != nil {
-			w.logger.Warn("vuln: skipping unparseable record", slog.String("vuln_id", vulnID), slog.Any("error", err))
+			if errors.Is(err, errNoUsableSoftware) {
+				// A record with no usable software cannot match any site inventory.
+				// Skip at Debug level — this is expected for certain informational entries.
+				w.logger.Debug("vuln: skipping record with no usable software",
+					slog.String("vuln_id", vulnID))
+			} else {
+				// Defensive catch-all: parseFeedRecord is designed to never return other
+				// errors, but guard here anyway.
+				w.logger.Warn("vuln: skipping unparseable record",
+					slog.String("vuln_id", vulnID), slog.Any("error", err))
+			}
 			continue
 		}
 
@@ -318,109 +363,263 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 	return records, defiantNotice, defiantLicense, mitreNotice, nil
 }
 
+// ---------------------------------------------------------------------------
+// Feed record JSON types
+// ---------------------------------------------------------------------------
+
+// errNoUsableSoftware is returned by parseFeedRecord when a record carries no
+// software entry with a non-empty allow-listed type and non-empty slug. This is
+// the ONE legitimate whole-record skip. The caller treats it as Debug-level.
+var errNoUsableSoftware = errors.New("no usable software entry")
+
+// wfTimeLayouts are tried in order. The space-separated layout is the real v3
+// feed format; date-only and RFC3339 are tolerated as forward-compatible fallbacks.
+var wfTimeLayouts = []string{
+	"2006-01-02 15:04:05", // real Wordfence v3 format (UTC, space-separated, no T)
+	"2006-01-02",          // date-only fallback
+	time.RFC3339,          // RFC3339 fallback (forward-tolerant)
+}
+
+// wfTime is a Wordfence-feed timestamp. The v3 feed emits UTC datetimes as
+// "YYYY-MM-DD HH:MM:SS" (no T, no zone); it never uses RFC3339. UnmarshalJSON
+// is intentionally lenient: a null, empty, or unrecognised value yields a nil
+// time and never an error, so one bad timestamp field can never drop a record.
+type wfTime struct{ t *time.Time }
+
+func (w *wfTime) UnmarshalJSON(b []byte) error {
+	w.t = nil
+	s := strings.TrimSpace(string(b))
+	if s == "" || s == "null" || s == `""` {
+		return nil // not disclosed → nil, no error
+	}
+	var raw string
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return nil // not a JSON string → ignore the field, keep the record
+	}
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	for _, layout := range wfTimeLayouts {
+		if parsed, err := time.Parse(layout, raw); err == nil {
+			// Pin to UTC: the space-separated and date-only layouts carry no zone;
+			// the feed declares all timestamps UTC.
+			u := parsed.UTC()
+			w.t = &u
+			return nil
+		}
+	}
+	return nil // unrecognised format → nil time, record still ingests
+}
+
+// Time returns the parsed *time.Time (nil when absent or unparseable).
+func (w wfTime) Time() *time.Time { return w.t }
+
 // wfRecord is the JSON shape of one Wordfence V3 vulnerability record.
-// Only the fields we need are decoded; the rest are preserved in rawMsg.
+// Fields that can carry "odd" shapes are typed as json.RawMessage and decoded
+// by extractors so a single malformed field can never fail the whole record.
 type wfRecord struct {
 	ID            string          `json:"id"`
 	Title         string          `json:"title"`
 	Informational bool            `json:"informational"`
-	Published     *time.Time      `json:"published"`
-	Updated       *time.Time      `json:"updated"`
-	CVE           string          `json:"cve"`        // Scanner may omit; Production includes
-	CVELink       string          `json:"cve_link"`   // ibid
-	CVSSScore     *float64        `json:"cvss"`       // some feeds nest this; handled below
-	CVSSRating    string          `json:"cvss_rating"` // ibid
-	CVSS          *wfCVSS         `json:"cvss_obj"`   // nested block (alias key)
+	Published     wfTime          `json:"published"`
+	Updated       wfTime          `json:"updated"`
+	CVE           json.RawMessage `json:"cve"`      // string or array in some shapes
+	CVELink       string          `json:"cve_link"` // may be absent on Scanner feed
+	CVSS          json.RawMessage `json:"cvss"`     // object {vector,score,rating} or null
 	CWE           json.RawMessage `json:"cwe"`
 	References    json.RawMessage `json:"references"`
-	Software      []wfSoftware    `json:"software"`
-	Copyrights    *wfCopyrights   `json:"copyrights"`
+	Software      json.RawMessage `json:"software"`   // decoded best-effort
+	Copyrights    json.RawMessage `json:"copyrights"` // decoded best-effort
 }
 
+// wfCVSS is the object shape inside the "cvss" key of the Production feed.
 type wfCVSS struct {
 	Score  *float64 `json:"score"`
 	Rating string   `json:"rating"`
 }
 
-type wfCopyrights struct {
-	Defiant *wfCopyrightEntry `json:"defiant"`
-	MITRE   *wfCopyrightEntry `json:"mitre"`
-}
-
+// wfCopyrightEntry holds one party's attribution data.
 type wfCopyrightEntry struct {
 	Notice  string `json:"notice"`
 	License string `json:"license"`
 }
 
+// wfCopyrightsObj is the typed structure for the copyrights block.
+type wfCopyrightsObj struct {
+	Defiant *wfCopyrightEntry `json:"defiant"`
+	MITRE   *wfCopyrightEntry `json:"mitre"`
+}
+
+// wfSoftware is one entry in the software[] array.
 type wfSoftware struct {
-	Type             string          `json:"type"`  // core|plugin|theme
+	Type             string          `json:"type"`    // core|plugin|theme
 	Name             string          `json:"name"`
 	Slug             string          `json:"slug"`
 	AffectedVersions json.RawMessage `json:"affected_versions"`
 	Patched          bool            `json:"patched"`
 	PatchedVersions  json.RawMessage `json:"patched_versions"` // array OR map
+	Informational    *bool           `json:"informational"`    // scanner carries this at software level
 }
 
+// wfSoftwareTypeAllowList is the set of valid software type values.
+var wfSoftwareTypeAllowList = map[string]bool{
+	"core":   true,
+	"plugin": true,
+	"theme":  true,
+}
+
+// ---------------------------------------------------------------------------
+// Field extractors
+// ---------------------------------------------------------------------------
+
+// extractCVE returns a CVE string from a raw JSON value that may be a plain
+// string, an array of strings, or null. Returns "" on any odd shape.
+func extractCVE(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	// Try plain string first.
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	// Try array; return first element.
+	var arr []string
+	if json.Unmarshal(raw, &arr) == nil && len(arr) > 0 {
+		return arr[0]
+	}
+	return ""
+}
+
+// extractCVSS decodes a raw "cvss" JSON value into a score and rating.
+// The real v3 feed sends an object {vector, score, rating}; for forward
+// tolerance, a bare number is also accepted as a score-only value.
+// Returns (nil, "") on null/absent/unparseable input.
+func extractCVSS(raw json.RawMessage) (score *float64, rating string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return nil, ""
+	}
+	// Try object {score, rating} first (real v3 format).
+	var obj wfCVSS
+	if json.Unmarshal(raw, &obj) == nil && obj.Score != nil {
+		return obj.Score, obj.Rating
+	}
+	// Forward-tolerance: bare number.
+	var f float64
+	if json.Unmarshal(raw, &f) == nil {
+		return &f, ""
+	}
+	return nil, ""
+}
+
+// extractCopyrights decodes the raw copyrights block, returning (defiantNotice,
+// defiantLicense, mitreNotice). Returns ("","","") on any odd shape so a
+// malformed copyrights block cannot drop the record.
+func extractCopyrights(raw json.RawMessage) (defiantNotice, defiantLicense, mitreNotice string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "", ""
+	}
+	var cp wfCopyrightsObj
+	if err := json.Unmarshal(raw, &cp); err != nil {
+		return "", "", ""
+	}
+	if cp.Defiant != nil {
+		defiantNotice = cp.Defiant.Notice
+		defiantLicense = cp.Defiant.License
+	}
+	if cp.MITRE != nil {
+		mitreNotice = cp.MITRE.Notice
+	}
+	return defiantNotice, defiantLicense, mitreNotice
+}
+
+// ---------------------------------------------------------------------------
+// Core parser
+// ---------------------------------------------------------------------------
+
+// parseFeedRecord decodes one raw Wordfence V3 vulnerability record.
+//
+// Design: the ONLY non-nil error returned is errNoUsableSoftware (when the
+// record has no software entry with a non-empty allow-listed type and non-empty
+// slug). Every other field is decoded best-effort: a null/malformed/unexpected
+// value defaults to zero/nil and the record still ingests. This means a single
+// bad timestamp, cvss object, or copyrights block can never silence the record.
 func parseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, string, string, error) {
 	var rec wfRecord
+	// The struct uses only safe field types (wfTime, json.RawMessage, string,
+	// bool) so this unmarshal cannot fail due to field-level type mismatches.
 	if err := json.Unmarshal(raw, &rec); err != nil {
-		return FeedRecord{}, "", "", "", err
+		// Structural failure (not a JSON object at all). Very unlikely on a well-formed
+		// feed but guard anyway; return errNoUsableSoftware so the caller skips quietly.
+		return FeedRecord{}, "", "", "", errNoUsableSoftware
 	}
 
-	// Normalise CVSS fields — the feed shape varies between Scanner and
-	// Production endpoints.
-	cvssScore := rec.CVSSScore
-	cvssRating := rec.CVSSRating
-	if rec.CVSS != nil {
-		if rec.CVSS.Score != nil {
-			cvssScore = rec.CVSS.Score
-		}
-		if rec.CVSS.Rating != "" {
-			cvssRating = rec.CVSS.Rating
-		}
-	}
+	// --- cvss: real key is "cvss", shape is {vector,score,rating} or null ---
+	cvssScore, cvssRating := extractCVSS(rec.CVSS)
 
-	var defiantNotice, defiantLicense, mitreNotice string
-	if rec.Copyrights != nil {
-		if rec.Copyrights.Defiant != nil {
-			defiantNotice = rec.Copyrights.Defiant.Notice
-			defiantLicense = rec.Copyrights.Defiant.License
-		}
-		if rec.Copyrights.MITRE != nil {
-			mitreNotice = rec.Copyrights.MITRE.Notice
-		}
-	}
+	// --- cve: string or array (decode best-effort) ---
+	cve := extractCVE(rec.CVE)
 
-	// F2: drop cve_link if it is not a safe http(s) URL.
+	// --- cve_link: keep only safe http(s) URLs ---
 	cveLink := rec.CVELink
 	if cveLink != "" && !isSafeURL(cveLink) {
 		cveLink = ""
 	}
 
-	// F2: filter the references array so only http(s) URLs reach the DB.
-	// The feed can supply either an array of strings or an array of objects
-	// with a "url" key. Both shapes are normalised here.
+	// --- references: filter to safe URLs ---
 	refs := filterReferences(rec.References)
 	if len(refs) == 0 {
 		refs = []byte("[]")
 	}
+
+	// --- cwe: keep raw, nil-safe ---
 	cwe := rec.CWE
 	if len(cwe) == 0 {
 		cwe = nil
 	}
 
+	// --- copyrights: best-effort decode ---
+	defiantNotice, defiantLicense, mitreNotice := extractCopyrights(rec.Copyrights)
+
+	// --- informational: record-level OR-ed with any software-level true ---
+	informational := rec.Informational
+
+	// --- software: decode best-effort; odd shape → nil slice → skip record ---
+	var rawSoftware []wfSoftware
+	if len(rec.Software) > 0 && string(rec.Software) != "null" {
+		// Ignore the error: an odd shape (not an array) leaves rawSoftware nil,
+		// which will trigger the errNoUsableSoftware skip below.
+		_ = json.Unmarshal(rec.Software, &rawSoftware)
+	}
+
 	var software []SoftwareRow
-	for _, sw := range rec.Software {
+	for _, sw := range rawSoftware {
+		// OR-up software-level informational into the record-level flag.
+		if sw.Informational != nil && *sw.Informational {
+			informational = true
+		}
+
 		kind := sw.Type
-		if kind == "" {
+		if kind == "" || !wfSoftwareTypeAllowList[kind] {
+			// Unknown or empty type: skip this software ROW, not the record.
 			continue
 		}
-		avRaw := sw.AffectedVersions
-		if len(avRaw) == 0 {
-			avRaw = []byte("[]")
+		slug := normSlug(sw.Slug)
+		if slug == "" {
+			// A software row with no slug can never match any inventory item.
+			continue
 		}
+
+		avRaw := sw.AffectedVersions
+		if len(avRaw) == 0 || string(avRaw) == "null" {
+			// Default to empty object (matching the real v3 object shape) rather
+			// than "[]" (an array), so the matcher's object-parser sees the right type.
+			avRaw = []byte("{}")
+		}
+
 		pvRaw := sw.PatchedVersions
-		if len(pvRaw) == 0 {
+		if len(pvRaw) == 0 || string(pvRaw) == "null" {
 			pvRaw = []byte("[]")
 		}
 		// PatchedVersions may be an array ["1.2","1.3"] or a map {"1.2":true} —
@@ -429,25 +628,31 @@ func parseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, st
 
 		software = append(software, SoftwareRow{
 			Kind:             kind,
-			Slug:             sw.Slug,
+			Slug:             slug,
 			AffectedVersions: avRaw,
 			Patched:          sw.Patched,
 			PatchedVersions:  pvRaw,
 		})
 	}
 
+	// Essential-field rule: a record is ingestable iff it has at least one usable
+	// software entry (non-empty allow-listed type + non-empty slug).
+	if len(software) == 0 {
+		return FeedRecord{}, "", "", "", errNoUsableSoftware
+	}
+
 	return FeedRecord{
 		VulnID:        vulnID,
 		Title:         rec.Title,
-		CVE:           rec.CVE,
+		CVE:           cve,
 		CVELink:       cveLink,
 		CVSSScore:     cvssScore,
 		CVSSRating:    cvssRating,
 		CWE:           cwe,
-		Informational: rec.Informational,
+		Informational: informational,
 		References:    refs,
-		Published:     rec.Published,
-		Updated:       rec.Updated,
+		Published:     rec.Published.Time(),
+		Updated:       rec.Updated.Time(),
 		Raw:           raw,
 		Software:      software,
 	}, defiantNotice, defiantLicense, mitreNotice, nil
