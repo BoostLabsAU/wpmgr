@@ -122,6 +122,13 @@ const (
 	// PermClientManage creates, updates, deletes, and assigns agency clients (m63).
 	// Operator+ — same tier as PermSiteWrite; includes the assignment flow.
 	PermClientManage Permission = "client:manage"
+
+	// PermSecurityManage reads and writes the per-site security hardening
+	// config and ban list (ADR-057, Security Suite Phase 1). Operator+ —
+	// same tier as PermSiteCacheManage and PermEmailManage; site-scoped so
+	// a collaborator with access to a site can manage that site's security
+	// hardening. Viewers get read access via PermSiteRead on the GET routes.
+	PermSecurityManage Permission = "site.security.manage"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -163,6 +170,9 @@ var minRoleFor = map[Permission]Role{
 	// Agency Clients (m63). Read: viewer+; manage: operator+; org-scoped only.
 	PermClientRead:   RoleViewer,
 	PermClientManage: RoleOperator,
+	// Security Suite (ADR-057). Hardening config + ban list: operator+;
+	// site-write-class, mirrors PermSiteCacheManage and PermEmailManage.
+	PermSecurityManage: RoleOperator,
 }
 
 // Allows reports whether role r is permitted to perform p.
