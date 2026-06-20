@@ -28,11 +28,26 @@ import { toError } from "@/features/auth/use-auth";
 // ---------------------------------------------------------------------------
 
 export type ScanStatus = "queued" | "scanning" | "diffing" | "done" | "failed";
+
+// Phase 1 finding types (core checksums).
+// Phase 2 adds file-integrity finding types (file_added, file_changed,
+// file_removed, plugin_modified, plugin_unknown). String values MUST match
+// the Go constants in apps/api/internal/scan/model.go exactly.
 export type ScanFindingType =
   | "core_modified"
   | "core_missing"
-  | "core_unknown_injected";
+  | "core_unknown_injected"
+  // Phase 2: full file-integrity finding types.
+  | "file_added"       // file in this run, not in baseline, no wp.org checksum
+  | "file_changed"     // file in baseline, hash differs, not known-good
+  | "file_removed"     // file in baseline, absent this run
+  | "plugin_modified"  // wp.org-hosted plugin/theme file differs from official checksum
+  | "plugin_unknown";  // file inside a wp.org plugin/theme dir not in its manifest
+
 export type ScanFindingSeverity = "high" | "medium" | "low";
+
+// Scan kind values — must match Go model.go constants.
+export type ScanKind = "core" | "files" | "full";
 
 export interface ScanRun {
   id: string;
@@ -159,17 +174,22 @@ export function useScanRun(
 
 // ---------------------------------------------------------------------------
 // useStartScan — POST /api/v1/sites/{siteId}/scans
+//
+// The `kind` variable is passed at call time (mutate(kind)) so the same hook
+// instance can start different kinds without re-mounting.
+// Accepted kind values: "core" (default), "files" (wp-content walk),
+// "full" (whole install walk).
 // ---------------------------------------------------------------------------
 
 export function useStartScan(
   siteId: string,
-): UseMutationResult<ScanRun, Error, void> {
+): UseMutationResult<ScanRun, Error, ScanKind> {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async () =>
+    mutationFn: async (kind: ScanKind) =>
       apiPost<ScanRun>(
         `/api/v1/sites/${encodeURIComponent(siteId)}/scans`,
-        { kind: "core" },
+        { kind },
       ),
     onSuccess: (newRun) => {
       // Optimistically prepend the new run to the list so the UI is responsive.

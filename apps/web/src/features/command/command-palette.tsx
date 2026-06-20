@@ -13,12 +13,15 @@ import {
   Search,
   Settings as SettingsIcon,
 } from "lucide-react";
-import { type ReactNode, useMemo } from "react";
+import { type ReactNode, useCallback, useMemo } from "react";
 
 import { useCommandPalette } from "@/features/command/use-command-palette";
 import { useRecentSites } from "@/features/command/use-recent-sites";
 import { useLogout } from "@/features/auth/use-auth";
 import { useSitesSelection } from "@/features/sites/use-sites-selection";
+import { useSites } from "@/features/sites/use-sites";
+import { useBulkBackup } from "@/features/backups/use-bulk-backup";
+import { toast } from "@/components/toast";
 import { cn } from "@/lib/utils";
 
 // Sprint 3 surface 4.4 — Command palette.
@@ -62,6 +65,11 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const selection = useSitesSelection();
   const selectedCount = selection.count;
   const logout = useLogout();
+  const bulkBackup = useBulkBackup();
+  // The sites query is already loaded by the app shell; this hits the TanStack
+  // Query cache (no extra network call) and gives us the enrolled site IDs for
+  // "Run backup on all sites".
+  const { data: allSites } = useSites();
 
   // Wrap navigate-and-close in one callback per command so onSelect stays
   // declarative below.
@@ -90,13 +98,61 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   // The Sprint 2 wizard ("Update X selected sites") is driven from the Sites
   // page route. The palette can't open it directly without lifting wizard
   // state; for now, the verb routes the operator there and the toolbar
-  // pre-selection drives the wizard. Same logic for the "Run on all" group —
-  // we navigate, the destination surface confirms.
+  // pre-selection drives the wizard.
   function runOnSelected(): void {
     onClose();
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     void navigate({ to: "/sites" as any });
   }
+
+  /** Enqueue backups for the currently selected sites, then navigate to /backups. */
+  const runBackupOnSelected = useCallback(async () => {
+    onClose();
+    const ids = Array.from(selection.selected);
+    if (ids.length === 0) return;
+    const { enqueued, skipped, failed } = await bulkBackup(ids);
+    const parts: string[] = [];
+    if (enqueued.length > 0) parts.push(`${enqueued.length} queued`);
+    if (skipped.length > 0) parts.push(`${skipped.length} already running`);
+    if (failed.length > 0) parts.push(`${failed.length} failed`);
+    if (failed.length > 0 && enqueued.length === 0 && skipped.length === 0) {
+      toast.error(`Backup failed for all ${failed.length} sites`, {
+        description: "Check site connections and try again.",
+      });
+    } else {
+      toast.success(`Backup started for ${enqueued.length + skipped.length} of ${ids.length} sites`, {
+        description: parts.join(", "),
+      });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void navigate({ to: "/backups" as any });
+  }, [onClose, selection, bulkBackup, navigate]);
+
+  /** Enqueue backups for ALL enrolled active sites, then navigate to /backups. */
+  const runBackupOnAll = useCallback(async () => {
+    onClose();
+    const ids = (allSites ?? []).map((s) => s.id);
+    if (ids.length === 0) {
+      toast.info("No enrolled sites found");
+      return;
+    }
+    const { enqueued, skipped, failed } = await bulkBackup(ids);
+    const parts: string[] = [];
+    if (enqueued.length > 0) parts.push(`${enqueued.length} queued`);
+    if (skipped.length > 0) parts.push(`${skipped.length} already running`);
+    if (failed.length > 0) parts.push(`${failed.length} failed`);
+    if (failed.length > 0 && enqueued.length === 0 && skipped.length === 0) {
+      toast.error(`Backup failed for all ${failed.length} sites`, {
+        description: "Check site connections and try again.",
+      });
+    } else {
+      toast.success(`Backup started for ${enqueued.length + skipped.length} of ${ids.length} sites`, {
+        description: parts.join(", "),
+      });
+    }
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void navigate({ to: "/backups" as any });
+  }, [onClose, allSites, bulkBackup, navigate]);
 
   return (
     <Command.Dialog
@@ -207,7 +263,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
                 Update plugins on {selectedCount} sites
               </PaletteItem>
               <PaletteItem
-                onSelect={runOnSelected}
+                onSelect={() => { void runBackupOnSelected(); }}
                 icon={<Database className="size-4" aria-hidden="true" />}
               >
                 Run backup on {selectedCount} sites
@@ -218,7 +274,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
           {/* ── Run on all ─────────────────────────────────────────────── */}
           <PaletteGroup heading="Run on all">
             <PaletteItem
-              onSelect={go("/backups")}
+              onSelect={() => { void runBackupOnAll(); }}
               icon={<Database className="size-4" aria-hidden="true" />}
             >
               Run backup on all sites

@@ -68,6 +68,9 @@ use WPMgr\Agent\Commands\PingCommand;
 use WPMgr\Agent\Commands\ResendEmailCommand;
 use WPMgr\Agent\Commands\SendTestEmailCommand;
 use WPMgr\Agent\Commands\SyncEmailConfigCommand;
+use WPMgr\Agent\Commands\SyncSecurityHardeningCommand;
+use WPMgr\Agent\Commands\RecordManagedFilesCommand;
+use WPMgr\Agent\Security\HardeningModule;
 use WPMgr\Agent\Email\EmailLogger;
 use WPMgr\Agent\Email\EmailLogReporter;
 use WPMgr\Agent\Email\Handlers\MailgunHandler;
@@ -250,6 +253,13 @@ final class Plugin
     private HeartbeatCatchup $heartbeatCatchup;
 
     /**
+     * Security hardening module. Receives the config from
+     * SyncSecurityHardeningCommand, persists it, and registers the WordPress
+     * hooks that enforce each enabled toggle on every subsequent request.
+     */
+    private HardeningModule $hardeningModule;
+
+    /**
      * Private constructor wires the object graph.
      */
     private function __construct()
@@ -290,6 +300,10 @@ final class Plugin
         // Login Whitelabel — cosmetic branding pushed from the CP. No external
         // dependencies; constructed here so sync_login_brand can hold a reference.
         $this->loginBrand = new LoginBrand();
+
+        // Security hardening module. Constructed BEFORE commands() so
+        // SyncSecurityHardeningCommand can hold a reference.
+        $this->hardeningModule = new HardeningModule();
 
         // ADR-042 Phase 2 — self-update checker. Shares the Signer, Settings,
         // Keystore, and a fresh ReplayCache (the autologin replay table — the
@@ -636,6 +650,12 @@ final class Plugin
         // only when at least one brand field is non-empty (self-gating). The
         // call is idempotent (static guard inside LoginBrand::install).
         $this->loginBrand->install();
+
+        // Security hardening — bind WP hooks for each enabled toggle (xmlrpc,
+        // REST restrict, login-identifier, author enum, force-ssl, ban filters).
+        // Only registers hooks for toggles that are actually on; an unconfigured
+        // site pays just a single get_option() read. Idempotent (static guard).
+        $this->hardeningModule->install();
 
         // ADR-042 Phase 2 — bind the CP self-update hooks. Self-gates on
         // isEnrolled() inside UpdateChecker::install(); idempotent (static guard).
@@ -1296,6 +1316,18 @@ final class Plugin
             new CachePreloadQueueRetryFailedCommand($this->cacheManager),
             new CachePreloadQueueClearCommand($this->cacheManager),
             new CachePreloadQueueTestRestCommand($this->cacheManager),
+            // Security hardening sync. The CP pushes the full config + ban list;
+            // the agent persists it atomically, applies the DISALLOW_FILE_EDIT
+            // define to wp-config, refreshes the .htaccess security block, and
+            // merges IP/range bans into the WAF mu-plugin's deny_cidrs.
+            new SyncSecurityHardeningCommand($this->hardeningModule),
+            // Phase 2 file integrity — CP pushes the list of ABSPATH-relative
+            // paths it manages (object-cache.php, advanced-cache.php, .htaccess,
+            // mu-plugin loaders, wp-config region, etc.); agent responds with
+            // md5_file() for each readable, ABSPATH-contained path so the CP
+            // can upsert site_managed_files and suppress false positives from
+            // the file-integrity diff (file_changed/file_added on managed files).
+            new RecordManagedFilesCommand(),
             // Email (Phase 2) — per-site outgoing-mail configuration + test.
             // sync_email_config: receives the full provider config (including the
             //   DECRYPTED secret) from the CP and stores it in the agent keystore.

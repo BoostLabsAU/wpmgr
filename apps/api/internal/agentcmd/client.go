@@ -173,6 +173,22 @@ func (c *Client) UnblockIP(ctx context.Context, siteID uuid.UUID, siteURL string
 	return out, nil
 }
 
+// SyncSecurityHardening sends the signed `sync_security_hardening` command to
+// the site's agent, pushing the full per-site hardening config snapshot and the
+// current ban list (ADR-057 Phase 1). siteID is the target site's stable
+// enrollment UUID, bound into the JWT's aud claim. An ok=false response (HTTP
+// 200) is treated as an error with the agent's detail message.
+func (c *Client) SyncSecurityHardening(ctx context.Context, siteID uuid.UUID, siteURL string, req HardeningRequest) (HardeningResult, error) {
+	var out HardeningResult
+	if err := c.post(ctx, siteID, siteURL, "sync_security_hardening", req, &out); err != nil {
+		return HardeningResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("sync_security_hardening rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
 // SyncLoginBrand sends the signed `sync_login_brand` command to the site's
 // agent, pushing the per-site login brand config (logo URL, logo link,
 // message). siteID is the target site's stable enrollment UUID, bound into the

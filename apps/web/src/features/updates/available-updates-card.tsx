@@ -11,6 +11,8 @@ import { VersionArrow } from "@/components/shared/version-arrow";
 import { PageError } from "@/components/feedback/page-error";
 import { UpdateChip } from "@/components/status/update-chip";
 import { useCreateUpdateRun } from "@/features/updates/use-updates";
+import { createBackup } from "@wpmgr/api";
+import { toError } from "@/features/auth/use-auth";
 import {
   useAvailableUpdates,
   useRefreshSiteUpdates,
@@ -566,13 +568,42 @@ function BulkFooter({
 
     if (!includeCore && items.length === 0) return;
 
-    const body = buildBulkBody(siteId, items, includeCore);
-    if (takeBackup && includeCore) {
-      // The "backup first" hint is not yet in the wire schema. Log it so the
-      // intent is visible in the browser console; Track B will lift this into
-      // the schema and we can promote it from a hint to a body field.
-      console.info("[updates] backup-first requested for core update");
+    // "Take backup first" — gate on takeBackup ALONE (not && includeCore) so
+    // plugin-only updates with the box checked still enqueue a backup.
+    if (takeBackup) {
+      try {
+        const { error, response } = await createBackup({
+          path: { siteId },
+          body: { kind: "full" },
+        });
+        if (response?.status === 422) {
+          // backup_already_in_flight — a backup is already in progress.
+          // Treat this as satisfying "take backup first" and proceed.
+          toast.info("A backup is already in progress", {
+            description: "The existing backup satisfies the pre-update backup requirement. Continuing with updates.",
+          });
+        } else if (error) {
+          // Real enqueue failure — abort the update and surface a retry.
+          throw toError(error);
+        } else {
+          toast.success("Backup queued", {
+            description: "The backup will run before the update completes.",
+          });
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Backup failed";
+        toast.error("Could not queue backup", {
+          description: message,
+          action: {
+            label: "Try again",
+            onClick: () => void submit(includeAll),
+          },
+        });
+        return;
+      }
     }
+
+    const body = buildBulkBody(siteId, items, includeCore);
     try {
       await create.mutateAsync(body);
       const count = items.length + (includeCore ? 1 : 0);

@@ -344,12 +344,13 @@ export const FEATURES: {
       features: [
         {
           icon: "ShieldCheck",
-          title: "Security",
-          summary: "Integrity scanning, brute-force protection, and an IP firewall.",
+          title: "Hardening, bans, integrity",
+          summary: "Per-site hardening, an IP ban list, and continuous file-integrity monitoring, all opt-in and default-off.",
           bullets: [
-            "Core files checked against official checksums",
-            "Escalating login blocks, admins never locked out",
-            "IP rules with a safety rail for your own IP",
+            "Disable file editor, restrict XML-RPC, REST API, and login IDs",
+            "Force SSL with HSTS, block PHP in uploads, protect system files",
+            "IP and CIDR ban list enforced at early-boot and web-server level",
+            "File hashes compared to WordPress.org and a per-site baseline",
           ],
         },
         {
@@ -621,15 +622,15 @@ export const SECURITY = {
   eyebrow: "Security and privacy",
   heading: "Built so a mistake can never lock you out of your own sites",
   subhead:
-    "Integrity scanning, brute-force protection, and an IP firewall across the fleet, with sensitive controls fenced off and a tamper-evident record of every action.",
+    "Per-site hardening, an IP ban list, and privacy-first data handling across the fleet, with sensitive controls fenced off and a tamper-evident record of every action.",
   bodyLines: [
     "Your data lives on the infrastructure you run WPMgr on, not ours. Backups can be client-side encrypted so the control plane only ever stores ciphertext and never holds a decryption key.",
     "Image bytes move directly between your site and your storage, and the agent redacts emails, passwords, secrets, tokens, and salts before any diagnostics ever leave a site.",
   ],
   items: [
-    { icon: "FileScan", title: "Core file-integrity scanning", desc: "Compares WordPress core files against the official checksums and flags anything modified, missing, or injected." },
-    { icon: "LockKeyhole", title: "Brute-force protection", desc: "Blocks repeated failed logins in escalating steps across the fleet, without locking out legitimate admins." },
-    { icon: "ShieldAlert", title: "IP firewall with a safety rail", desc: "Allow or deny visitors by IP range, with a guard that keeps your own IP from ever being blocked." },
+    { icon: "ShieldCheck", title: "WordPress hardening controls", desc: "Push hardening rules from the dashboard to any site: disable the file editor, restrict XML-RPC and the REST API, force SSL with HSTS, block PHP in uploads, and protect system files. All opt-in and default-off." },
+    { icon: "ShieldAlert", title: "IP and user-agent ban list", desc: "Block individual IPs, CIDR ranges, and user agents at early-boot and at the web-server level. The operator allow-list is always honoured so a ban can never lock out the operator." },
+    { icon: "FileScan", title: "File integrity monitoring", desc: "Scan the whole WordPress install or just wp-content on demand. File hashes are compared against WordPress.org checksums for core, wp.org-hosted plugins, and themes, and against a learned per-site baseline for everything else. Changed, added, and removed files are reported; a flagged file stays flagged until an operator reviews and accepts it, so the baseline never silently advances past an unreviewed change." },
     { icon: "FileLock2", title: "Client-side encrypted backups", desc: "Optional end-to-end encryption means the control plane stores only ciphertext and never holds a key to decrypt it." },
     { icon: "EyeOff", title: "Redacted diagnostics", desc: "Emails, passwords, secrets, tokens, and salts are stripped before any diagnostics leave a site." },
     { icon: "ScrollText", title: "Tamper-evident audit log", desc: "Every login, role change, and site action is recorded in an audit log you can review." },

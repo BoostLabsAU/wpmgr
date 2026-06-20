@@ -10,6 +10,26 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
 
+## [0.53.0] - 2026-06-20
+
+### Added
+
+- **File integrity monitoring.** Operators can run a file-integrity scan over the whole WordPress install or just wp-content, in addition to the existing core-file check. Scan scope is selectable per run: Core files, wp-content, or Full install. The control plane compares scanned file hashes against WordPress.org checksums for WordPress core and for wp.org-hosted plugins and themes, and against a learned per-site baseline for everything else. The scan reports changed, added, and removed files, and flags modified or unrecognized files in plugins and themes. A flagged file stays flagged on every subsequent scan until an operator reviews and explicitly accepts it; the baseline never silently advances past an unreviewed change. Uses free WordPress.org checksum data only, no external paid service. Results surface in the per-site Security tab alongside existing scan findings.
+
+## [0.52.0] - 2026-06-20
+
+### Added
+
+- **Per-site WordPress hardening controls.** A new Security tab on every site lets operators push hardening settings directly from the control plane to the agent. Controls cover: disable the built-in file editor; XML-RPC (on, limited to pingbacks only, or fully off); REST API restriction; login identifier restriction (username, email, or both); force unique nicknames; block author-archive user enumeration; force SSL with HSTS; disable directory browsing; block PHP execution in uploads; and protect system files (wp-config.php, .htaccess, readme files). All controls are off by default and opt-in. The control plane and the operator's own session can never be locked out by a hardening rule.
+- **Per-site ban list.** A durable, operator-managed list of blocked IP addresses, CIDR ranges, and user agents, stored on the control plane and enforced in the agent at early-boot and at the web-server config level. Broad blocks covering all addresses and private/loopback ranges are rejected. The operator's own allow-list IPs always bypass the ban, so a misconfigured ban can never lock the operator out. The ban list is also default-off and opt-in.
+- **Site Security tab.** A dedicated Security area on each site in the dashboard surfaces hardening controls and the ban list in one place, gated to operators.
+
+## [0.51.5] - 2026-06-20
+
+### Fixed
+
+- **Bulk and update-triggered backups now actually run.** The Sites "Run backup" bulk action, the command bar's "Run backup on selected sites" and "Run backup on all sites", and the Updates tab's "Take backup first" option previously showed feedback but never enqueued a backup. They now enqueue a real backup for each selected site (the same job a single-site backup creates), report accurate per-site results (including sites skipped because a backup is already running), and the toast's "View activity" link now goes to the right place. "Take backup first" waits for the backup to be queued before starting the update. The Sites "Open in wp-admin" bulk action now opens all selected sites instead of only the first. (#76)
+
 ## [0.51.4] - 2026-06-19
 
 ### Fixed
