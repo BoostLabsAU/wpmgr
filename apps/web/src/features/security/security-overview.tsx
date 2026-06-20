@@ -1,4 +1,4 @@
-import { Lock, ShieldCheck, Ban, FileSearch } from "lucide-react";
+import { Lock, ShieldCheck, Ban, FileSearch, ShieldAlert } from "lucide-react";
 
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
@@ -7,6 +7,7 @@ import type { HardeningConfig } from "./use-hardening";
 import type { SiteLoginProtectionConfig } from "@wpmgr/api";
 import type { ScanRun } from "./use-scan";
 import type { SiteSecurityPolicy } from "./use-policy";
+import type { SiteVulnsResponse } from "./use-vuln";
 
 // SecurityOverview — four status tiles at the top of the Security tab.
 //
@@ -64,6 +65,8 @@ export interface SecurityOverviewProps {
   loginProtectionConfig: SiteLoginProtectionConfig | undefined;
   latestScanRun: ScanRun | null | undefined;
   policy: SiteSecurityPolicy | undefined;
+  /** Vulnerability data — used for the 5th tile. */
+  vulnData?: SiteVulnsResponse | undefined;
   isLoading: boolean;
   onTileClick: (cardId: string) => void;
 }
@@ -144,6 +147,7 @@ export function SecurityOverview({
   loginProtectionConfig,
   latestScanRun,
   policy,
+  vulnData,
   isLoading,
   onTileClick,
 }: SecurityOverviewProps) {
@@ -152,9 +156,9 @@ export function SecurityOverview({
       <div
         role="status"
         aria-label="Loading security overview"
-        className="grid grid-cols-2 gap-3 md:grid-cols-4"
+        className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5"
       >
-        {Array.from({ length: 4 }).map((_, i) => (
+        {Array.from({ length: 5 }).map((_, i) => (
           <Skeleton key={i} className="h-24 w-full rounded-xl" />
         ))}
       </div>
@@ -220,8 +224,39 @@ export function SecurityOverview({
       : "Optional for all"
     : "Not configured";
 
+  // ── Vulnerabilities tile ──
+  let vulnMetric = "Not scanned";
+  let vulnStateLabel = "Feed not configured";
+  let vulnColor: TileColor = "muted";
+  if (vulnData) {
+    if (!vulnData.feed_ok) {
+      vulnMetric = "No feed";
+      vulnStateLabel = "Setup required";
+      vulnColor = "muted";
+    } else {
+      const openCount = (vulnData.items ?? []).filter(
+        (f) => f.status === "open",
+      ).length;
+      const criticalCount = (vulnData.items ?? []).filter(
+        (f) => f.status === "open" && (f.severity === "critical" || f.severity === "high"),
+      ).length;
+      if (openCount === 0) {
+        vulnMetric = "Clean";
+        vulnStateLabel = "No vulnerabilities";
+        vulnColor = "green";
+      } else {
+        vulnMetric = `${openCount}`;
+        vulnStateLabel =
+          criticalCount > 0
+            ? `${criticalCount} critical/high`
+            : `${openCount} open`;
+        vulnColor = criticalCount > 0 ? "red" : "amber";
+      }
+    }
+  }
+
   return (
-    <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+    <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-5">
       <OverviewTile
         icon={<Lock className="size-5" />}
         metric={`${hardeningOn} / ${hardeningTotal}`}
@@ -253,6 +288,14 @@ export function SecurityOverview({
         color={tfaColor}
         onClick={() => onTileClick("card-login-2fa")}
         ariaLabel={`2FA: ${tfaMetric}. Go to login and two-factor settings.`}
+      />
+      <OverviewTile
+        icon={<ShieldAlert className="size-5" />}
+        metric={vulnMetric}
+        stateLabel={vulnStateLabel}
+        color={vulnColor}
+        onClick={() => onTileClick("card-vulnerabilities")}
+        ariaLabel={`Vulnerabilities: ${vulnMetric}. Go to vulnerability scanner.`}
       />
     </div>
   );
