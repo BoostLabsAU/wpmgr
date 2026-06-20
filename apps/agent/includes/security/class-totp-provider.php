@@ -33,6 +33,15 @@ final class TotpProvider implements SiteTwoFactorProvider
     /** User-meta key for the encrypted TOTP secret (age ciphertext, base64). */
     public const META_SECRET = 'wpmgr_2fa_totp_secret';
 
+    /**
+     * User-meta key for the PENDING (not-yet-confirmed) TOTP secret during enrollment.
+     *
+     * The pending secret is stored encrypted at rest exactly like the active secret.
+     * It is ONLY promoted to META_SECRET once the user proves a valid code (the
+     * activation step). An abandoned enrollment never writes META_SECRET.
+     */
+    public const META_PENDING_SECRET = 'wpmgr_2fa_totp_secret_pending';
+
     /** User-meta key for the last accepted counter step (replay burn). */
     public const META_LAST_USED = 'wpmgr_2fa_totp_last_used';
 
@@ -138,8 +147,94 @@ final class TotpProvider implements SiteTwoFactorProvider
     // -------------------------------------------------------------------------
 
     /**
-     * Generate a new TOTP secret, encrypt it, and store it in user-meta.
-     * Returns the raw base32 secret (shown once to the user for QR display).
+     * Generate a new TOTP secret, encrypt it, and store it as PENDING (not active).
+     *
+     * The returned secret is shown to the user to scan into their authenticator app.
+     * The secret is stored in META_PENDING_SECRET (NOT META_SECRET). It is only
+     * promoted to the active META_SECRET when the user validates a correct code via
+     * activatePendingSecret(). An abandoned setup never activates the secret.
+     *
+     * The pending secret is age-encrypted at rest, identical to the active secret.
+     *
+     * @param \WP_User $user
+     * @return string Raw base32 secret (display/QR use only; NOT stored in plaintext).
+     */
+    public function generateAndStorePending(\WP_User $user): string
+    {
+        // 20 bytes = 160-bit secret.
+        $rawBytes = random_bytes(20);
+        $secret   = self::base32Encode($rawBytes);
+
+        $this->storeSecretToMeta($user, $secret, self::META_PENDING_SECRET);
+        return $secret;
+    }
+
+    /**
+     * Validate a TOTP code against the PENDING secret and, on success, promote it
+     * to the active secret (META_SECRET). Clears the pending meta on either outcome
+     * to prevent re-use of the pending value.
+     *
+     * Returns true when the code is valid and activation succeeded.
+     * Returns false when the code is invalid; the pending secret remains available
+     * for a retry (caller may re-present the same QR) — the pending meta is NOT
+     * cleared on failure so the user can re-try without re-generating the QR.
+     *
+     * Attempt limiting is enforced at the interstitial session layer (not here).
+     *
+     * @param \WP_User $user
+     * @param string   $code  6-digit code submitted by the user.
+     * @return bool
+     */
+    public function activatePendingSecret(\WP_User $user, string $code): bool
+    {
+        $secret = $this->loadSecretFromMeta($user, self::META_PENDING_SECRET);
+        if ($secret === '') {
+            return false;
+        }
+
+        $code = preg_replace('/\D/', '', $code);
+        if (!is_string($code) || strlen($code) !== self::DIGITS) {
+            return false;
+        }
+
+        $now  = (int) (time() / self::PERIOD);
+
+        for ($offset = -self::WINDOW; $offset <= self::WINDOW; $offset++) {
+            $counter = $now + $offset;
+            if (hash_equals($this->generateCode($secret, $counter), $code)) {
+                // Code valid: promote pending → active.
+                $this->storeSecretToMeta($user, $secret, self::META_SECRET);
+                // Clear pending (it is now active).
+                if (function_exists('delete_user_meta')) {
+                    delete_user_meta((int) $user->ID, self::META_PENDING_SECRET);
+                }
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Clear the pending secret (called when a setup flow is abandoned or re-started).
+     *
+     * @param \WP_User $user
+     * @return void
+     */
+    public function clearPendingSecret(\WP_User $user): void
+    {
+        if (function_exists('delete_user_meta')) {
+            delete_user_meta((int) $user->ID, self::META_PENDING_SECRET);
+        }
+    }
+
+    /**
+     * Generate a new TOTP secret, encrypt it, and store it in user-meta AS ACTIVE.
+     *
+     * @deprecated  Use generateAndStorePending() + activatePendingSecret() for the
+     *              enrollment flow so the secret is only activated after proof-of-code.
+     *              This method writes directly to the active meta and is retained
+     *              for backward-compat (e.g. operator CLI reset flows).
      *
      * @param \WP_User $user
      * @return string Raw base32 secret (display/QR use only).
@@ -150,7 +245,7 @@ final class TotpProvider implements SiteTwoFactorProvider
         $rawBytes = random_bytes(20);
         $secret   = self::base32Encode($rawBytes);
 
-        $this->storeSecret($user, $secret);
+        $this->storeSecretToMeta($user, $secret, self::META_SECRET);
         return $secret;
     }
 
@@ -191,7 +286,7 @@ final class TotpProvider implements SiteTwoFactorProvider
     // -------------------------------------------------------------------------
 
     /**
-     * Load and decrypt the stored TOTP secret. Returns '' on any failure
+     * Load and decrypt the active TOTP secret. Returns '' on any failure
      * (the "configured-but-unusable" state described in §4 of the design doc).
      *
      * @param \WP_User $user
@@ -199,10 +294,23 @@ final class TotpProvider implements SiteTwoFactorProvider
      */
     private function loadSecret(\WP_User $user): string
     {
+        return $this->loadSecretFromMeta($user, self::META_SECRET);
+    }
+
+    /**
+     * Load and decrypt a TOTP secret from a specific meta key.
+     * Returns '' on any failure.
+     *
+     * @param \WP_User $user
+     * @param string   $metaKey  META_SECRET or META_PENDING_SECRET.
+     * @return string Raw base32 secret or ''.
+     */
+    private function loadSecretFromMeta(\WP_User $user, string $metaKey): string
+    {
         if (!function_exists('get_user_meta')) {
             return '';
         }
-        $enc = (string) get_user_meta((int) $user->ID, self::META_SECRET, true);
+        $enc = (string) get_user_meta((int) $user->ID, $metaKey, true);
         if ($enc === '') {
             return '';
         }
@@ -218,7 +326,28 @@ final class TotpProvider implements SiteTwoFactorProvider
     }
 
     /**
-     * Encrypt and store a TOTP secret in user-meta.
+     * Encrypt and store a TOTP secret in a specific user-meta key.
+     *
+     * @param \WP_User $user
+     * @param string   $secret  Raw base32 secret.
+     * @param string   $metaKey META_SECRET or META_PENDING_SECRET.
+     * @return void
+     */
+    private function storeSecretToMeta(\WP_User $user, string $secret, string $metaKey): void
+    {
+        if (!function_exists('update_user_meta')) {
+            return;
+        }
+        try {
+            $ciphertext = $this->ageIdentity->encryptChunk($secret);
+            update_user_meta((int) $user->ID, $metaKey, base64_encode($ciphertext));
+        } catch (\Throwable $e) {
+            // Storage failure is non-fatal; the enrollment flow will surface this.
+        }
+    }
+
+    /**
+     * Encrypt and store a TOTP secret in user-meta (active slot).
      *
      * @param \WP_User $user
      * @param string   $secret Raw base32 secret.
@@ -226,15 +355,7 @@ final class TotpProvider implements SiteTwoFactorProvider
      */
     private function storeSecret(\WP_User $user, string $secret): void
     {
-        if (!function_exists('update_user_meta')) {
-            return;
-        }
-        try {
-            $ciphertext = $this->ageIdentity->encryptChunk($secret);
-            update_user_meta((int) $user->ID, self::META_SECRET, base64_encode($ciphertext));
-        } catch (\Throwable $e) {
-            // Storage failure is non-fatal; the enrollment flow will surface this.
-        }
+        $this->storeSecretToMeta($user, $secret, self::META_SECRET);
     }
 
     /**

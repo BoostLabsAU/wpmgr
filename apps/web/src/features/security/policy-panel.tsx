@@ -53,15 +53,25 @@ const TFA_METHODS = [
 type TfaMethod = (typeof TFA_METHODS)[number]["value"];
 
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Section — which sub-form the card wants to render.
+// "all" keeps the original three-section layout for backward compatibility.
+// ---------------------------------------------------------------------------
+
+export type PolicySection = "two_factor" | "password" | "hide_backend" | "all";
+
 // PolicyPanel — loading / error shell
 // ---------------------------------------------------------------------------
 
 export function PolicyPanel({
   siteId,
   canWrite,
+  section = "all",
 }: {
   siteId: string;
   canWrite: boolean;
+  /** Which sub-section to render. Defaults to "all" for the legacy three-in-one layout. */
+  section?: PolicySection;
 }) {
   const { data, isPending, isError, error, refetch } =
     useSiteSecurityPolicy(siteId);
@@ -109,6 +119,7 @@ export function PolicyPanel({
       siteId={siteId}
       initialPolicy={data}
       canWrite={canWrite}
+      section={section}
     />
   );
 }
@@ -121,9 +132,10 @@ interface LoadedProps {
   siteId: string;
   initialPolicy: SiteSecurityPolicy;
   canWrite: boolean;
+  section: PolicySection;
 }
 
-function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
+function PolicyLoaded({ siteId, initialPolicy, canWrite, section }: LoadedProps) {
   const update = useUpdateSiteSecurityPolicy(siteId);
 
   const [policy, setPolicy] = useState<SiteSecurityPolicy>({ ...initialPolicy });
@@ -185,9 +197,22 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
     setRedirectError(validateHideBackendRedirect(value));
   }
 
+  // Derive which sub-sections to render from the section prop.
+  // Defined before handleSave so showHideBackend is in scope.
+  const show2FA = section === "two_factor" || section === "all";
+  const showPassword = section === "password" || section === "all";
+  const showHideBackend = section === "hide_backend" || section === "all";
+
+  const SAVE_LABEL: Record<PolicySection, string> = {
+    two_factor: "Save 2FA settings",
+    password: "Save password policy",
+    hide_backend: "Save hide login settings",
+    all: "Save authentication policy",
+  };
+
   function handleSave() {
-    // Client-side validation before firing PUT.
-    if (policy.hide_backend_enabled) {
+    // Client-side validation: only check slug when hide_backend is being shown.
+    if (policy.hide_backend_enabled && showHideBackend) {
       const slugErr = validateHideBackendSlug(policy.hide_backend_slug);
       const redirectErr = validateHideBackendRedirect(policy.hide_backend_redirect);
       setSlugError(slugErr);
@@ -218,7 +243,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
   return (
     <div className="space-y-8">
       {/* ── Section 1: Two-factor authentication ─────────────────────── */}
-      <SubSection id="policy-2fa" title="Two-factor authentication">
+      {show2FA ? <SubSection id="policy-2fa" title="Two-factor authentication">
         {/* Master toggle */}
         <ToggleRow
           id="2fa-enabled"
@@ -312,10 +337,10 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
             />
           </div>
         ) : null}
-      </SubSection>
+      </SubSection> : null}
 
       {/* ── Section 2: Password policy ───────────────────────────────── */}
-      <SubSection id="policy-password" title="Password policy">
+      {showPassword ? <SubSection id="policy-password" title="Password policy">
         {/* Min strength */}
         <div className="py-3 first:pt-0">
           <div className="flex items-start justify-between gap-4">
@@ -421,10 +446,10 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
             className="py-3"
           />
         ) : null}
-      </SubSection>
+      </SubSection> : null}
 
       {/* ── Section 3: Hide login page ───────────────────────────────── */}
-      <SubSection id="policy-hide-backend" title="Hide login page">
+      {showHideBackend ? <SubSection id="policy-hide-backend" title="Hide login page">
         <ToggleRow
           id="hide-backend-enabled"
           label="Enable secret login slug"
@@ -548,7 +573,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
             </div>
           </div>
         ) : null}
-      </SubSection>
+      </SubSection> : null}
 
       {/* ── Agent-push caveat from last save ────────────────────────── */}
       {saveDetail ? (
@@ -573,7 +598,7 @@ function PolicyLoaded({ siteId, initialPolicy, canWrite }: LoadedProps) {
             disabled={update.isPending}
             aria-busy={update.isPending}
           >
-            {update.isPending ? "Saving..." : "Save authentication policy"}
+            {update.isPending ? "Saving..." : SAVE_LABEL[section]}
           </Button>
         </div>
       ) : (
@@ -603,7 +628,7 @@ function SubSection({
     <section aria-labelledby={id}>
       <h3
         id={id}
-        className="mb-4 text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]"
+        className="mb-4 text-sm font-medium text-[var(--color-foreground)]"
       >
         {title}
       </h3>

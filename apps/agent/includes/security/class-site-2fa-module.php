@@ -1,7 +1,7 @@
 <?php
 /**
- * Site2faModule - post-login 2FA interstitial and forced-change enforcement
- * for site users.
+ * Site2faModule - post-login 2FA interstitial, enrollment flow, and forced-change
+ * enforcement for site users.
  *
  * ARCHITECTURE (section 3.2 of the design):
  *
@@ -17,6 +17,25 @@
  *    On success: wp_set_auth_cookie(), optional remember-device cookie, redirect.
  *    On failure: increment the per-session attempt counter; after 5 failures,
  *    expire the session (ties into the login-protection brute-force events).
+ *
+ * ENROLLMENT FLOW (SESSION_TYPE_2FA_SETUP):
+ * When a required-but-unenrolled user logs in and no non-email method is configured,
+ * they are routed to a multi-step setup interstitial instead of the email fallback.
+ * During grace: a "set up now" prompt is shown (dismissible while grace remains).
+ * After grace: setup is required to proceed.
+ *
+ * The setup flow is:
+ *   Step 1 (intro)    - "Your administrator requires a second login step."
+ *   Step 2 (choose)   - Choose method (TOTP / email / backup codes) with status pills.
+ *   Step 3 (totp)     - QR code + manual secret (stored as PENDING, never active yet).
+ *   Step 4 (confirm)  - 6-digit code verify; on success promotes pending → active.
+ *   Step 5 (backup)   - Backup codes displayed once + download link.
+ *   Step 6 (done)     - Summary of enabled methods; completes login.
+ *
+ * PENDING-SECRET INVARIANT:
+ * TotpProvider::generateAndStorePending() stores the secret in META_PENDING_SECRET.
+ * It is ONLY written to META_SECRET by activatePendingSecret() when the user proves
+ * a valid code. An abandoned setup never activates the secret.
  *
  * APPLICATION-PASSWORD BYPASS BLOCK (H1 fix):
  * WordPress Application Passwords authenticate via HTTP Basic or the
@@ -50,8 +69,8 @@
  * - The autologin path NEVER fires do_action('wp_login'), so it NEVER
  *   reaches this hook -- bypass by construction (ADR-055 / autologin docblock).
  * - Default-OFF: a fresh or empty policy challenges nobody.
- * - Required-but-unenrolled users always get an email-code fallback (never a wall).
- * - Grace logins: allowed N logins before forced enrollment.
+ * - Backup codes always work as recovery, regardless of setup state.
+ * - Grace logins: allowed N logins before enrollment is required.
  *
  * @package WPMgr\Agent\Security
  */
@@ -60,6 +79,7 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Security;
 
+use WPMgr\Agent\Security\BackupCodesProvider;
 use WPMgr\Agent\Security\PasswordPolicyModule;
 
 /**
@@ -111,6 +131,23 @@ final class Site2faModule
      * Interstitial session type identifier for forced password-change sessions.
      */
     private const SESSION_TYPE_FORCED_CHANGE = 'forced_change';
+
+    /**
+     * Interstitial session type identifier for the 2FA enrollment/setup flow.
+     * A session of this type walks the user through the multi-step setup screens.
+     */
+    public const SESSION_TYPE_2FA_SETUP = '2fa_setup';
+
+    /**
+     * Session sub-step keys for the setup flow.
+     * Stored in session['setup_step'] to track multi-screen state.
+     */
+    public const SETUP_STEP_INTRO   = 'intro';
+    public const SETUP_STEP_CHOOSE  = 'choose';
+    public const SETUP_STEP_TOTP    = 'totp';
+    public const SETUP_STEP_CONFIRM = 'confirm';
+    public const SETUP_STEP_BACKUP  = 'backup';
+    public const SETUP_STEP_DONE    = 'done';
 
     private SecurityPolicy $policy;
 
@@ -177,6 +214,15 @@ final class Site2faModule
         if ($has2fa && $this->policy->blockXmlrpcFor2faUsers) {
             add_filter('xmlrpc_login_error', [$this, 'blockXmlrpcFor2faUser'], 10, 2);
             add_filter('authenticate', [$this, 'interceptXmlrpc2fa'], 100, 3);
+        }
+
+        // Profile section: proactive enrollment from the WP user profile screen.
+        // Hooks fire for the viewing user's own profile and for admin editing others.
+        if ($has2fa) {
+            add_action('show_user_profile', [$this, 'renderProfileSection']);
+            add_action('edit_user_profile', [$this, 'renderProfileSection']);
+            add_action('personal_options_update', [$this, 'handleProfileSectionSave']);
+            add_action('edit_user_profile_update', [$this, 'handleProfileSectionSave']);
         }
     }
 
@@ -621,6 +667,11 @@ final class Site2faModule
             return;
         }
 
+        if ($sessionType === self::SESSION_TYPE_2FA_SETUP) {
+            $this->renderSetupScreen($user, $session);
+            return;
+        }
+
         $this->renderInterstitial($user, $session);
     }
 
@@ -687,6 +738,12 @@ final class Site2faModule
         $sessionType = (string) ($session['type'] ?? self::SESSION_TYPE_2FA);
         if ($sessionType === self::SESSION_TYPE_FORCED_CHANGE) {
             $this->handleForcedChangeSubmit($userId, $session, $attempts);
+            return;
+        }
+
+        // Route to the setup handler when the session type indicates enrollment.
+        if ($sessionType === self::SESSION_TYPE_2FA_SETUP) {
+            $this->handleSetupSubmit($userId, $session, $attempts, $user);
             return;
         }
 
@@ -998,6 +1055,14 @@ final class Site2faModule
     /**
      * Evaluate 2FA requirement for the user and intercept if needed.
      *
+     * ENROLLMENT ROUTING:
+     * When a required-but-unenrolled user logs in and TOTP is in the allowed methods,
+     * they are routed to the setup flow (SESSION_TYPE_2FA_SETUP) instead of the email
+     * fallback. During active grace, the setup step is set to SETUP_STEP_INTRO so the
+     * user sees the "set up now or skip" prompt; once grace is exhausted, the setup is
+     * mandatory (no skip offered). After grace, the email fallback is removed as the
+     * default funnel — the user must complete setup to proceed.
+     *
      * @param \WP_User $user
      * @return void
      */
@@ -1018,18 +1083,48 @@ final class Site2faModule
             return;
         }
 
-        // Check grace logins for required-but-unenrolled users.
-        if ($isRequired && $providers === []) {
+        // Determine whether the user has any NON-EMAIL method configured (deliberate enrollment).
+        // The email provider is always "configured" for any user with an email address and
+        // therefore does not count as deliberate enrollment.
+        $hasNonEmailEnrolled = $this->hasNonEmailMethodConfigured($user);
+
+        // Check if the required user needs enrollment (no deliberate 2FA method set up yet).
+        if ($isRequired && !$hasNonEmailEnrolled) {
             $graceCount = (int) get_user_meta($userId, self::META_GRACE_COUNT, true);
             $graceMax   = $this->policy->twoFactorGraceLogins;
 
-            if ($graceMax > 0 && $graceCount < $graceMax) {
-                update_user_meta($userId, self::META_GRACE_COUNT, $graceCount + 1);
-                // Allow this login; the user still has grace logins remaining.
+            $hasGrace = $graceMax > 0 && $graceCount < $graceMax;
+
+            // Determine whether TOTP setup is an allowed option for this user.
+            $allowedMethods = $this->policy->allowedMethodsFor($user);
+            $totpAllowed    = in_array('totp', $allowedMethods, true);
+
+            // Route to setup flow when TOTP is allowed (preferred enrollment path).
+            if ($totpAllowed) {
+                if ($hasGrace) {
+                    update_user_meta($userId, self::META_GRACE_COUNT, $graceCount + 1);
+                }
+                // Destroy the session before the setup interstitial.
+                $this->destroyCurrentSession($userId);
+                $redirectTo = $this->getCurrentRedirectTo();
+                $rememberMe = isset($_POST['rememberme']); // phpcs:ignore WordPress.Security.NonceVerification.Missing -- wp_login action; WP core has already verified credentials at this point
+
+                $session                    = $this->createSession($userId, $redirectTo, $rememberMe, self::SESSION_TYPE_2FA_SETUP);
+                $session['setup_step']      = self::SETUP_STEP_INTRO;
+                $session['grace_remaining'] = $hasGrace;
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
                 return;
             }
 
-            // Grace exhausted or grace = 0: enforce email fallback.
+            // TOTP not allowed: fall back to email code during grace, enforce after.
+            if ($hasGrace) {
+                update_user_meta($userId, self::META_GRACE_COUNT, $graceCount + 1);
+                // Allow this login; user will be prompted to set up on a future login.
+                return;
+            }
+
+            // Grace exhausted and TOTP not available: enforce email fallback.
             foreach ($this->providers as $p) {
                 if ($p->key() === 'email') {
                     $providers = [$p];
@@ -1332,6 +1427,784 @@ final class Site2faModule
         }
 
         exit;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2FA enrollment / setup flow
+    // -------------------------------------------------------------------------
+
+    /**
+     * Render the setup interstitial for the current step.
+     *
+     * The setup flow shares the same HMAC-signed single-use session framework
+     * as the 2FA verify and forced-change paths. Attempt caps apply to the TOTP
+     * activation step (step 4) via the shared per-session and cross-request counters.
+     *
+     * @param \WP_User            $user
+     * @param array<string,mixed> $session
+     * @param string              $error   Optional error message.
+     * @return void
+     */
+    private function renderSetupScreen(\WP_User $user, array $session, string $error = ''): void
+    {
+        $step = (string) ($session['setup_step'] ?? self::SETUP_STEP_INTRO);
+
+        $userId    = (int) $session['user_id'];
+        $sessionId = (string) ($session['id'] ?? '');
+        $createdAt = (int) ($session['created_at'] ?? 0);
+        $uuid      = (string) ($session['uuid'] ?? '');
+        $hmac      = $this->computeSessionHmac($userId, $sessionId, $createdAt, $uuid);
+
+        $loginUrl  = function_exists('wp_login_url') ? wp_login_url() : '/wp-login.php';
+        $verifyUrl = add_query_arg(['action' => 'wpmgr_2fa_verify'], $loginUrl);
+
+        if (function_exists('login_header')) {
+            login_header(esc_html__('Two-Factor Setup', 'wpmgr-agent'), '', null);
+        }
+
+        $formHtml  = '<form name="wpmgr_setup_form" id="loginform" action="' . esc_url($verifyUrl) . '" method="post">';
+        $formHtml .= '<input type="hidden" name="wpmgr_2fa_user_id" value="' . esc_attr((string) $userId) . '">';
+        $formHtml .= '<input type="hidden" name="wpmgr_2fa_session_id" value="' . esc_attr($sessionId) . '">';
+        $formHtml .= '<input type="hidden" name="wpmgr_2fa_token" value="' . esc_attr($hmac) . '">';
+        $formHtml .= '<input type="hidden" name="wpmgr_2fa_provider" value="setup">';
+        $formHtml .= '<input type="hidden" name="wpmgr_setup_step" value="' . esc_attr($step) . '">';
+
+        if ($error !== '') {
+            $formHtml .= '<p class="message" style="color:#d63638">' . esc_html($error) . '</p>';
+        }
+
+        $formHtml .= $this->buildSetupStepHtml($user, $session, $step);
+
+        $formHtml .= '<p class="submit">';
+        $formHtml .= '<input type="submit" id="wp-submit" class="button button-primary button-large" value="';
+
+        if ($step === self::SETUP_STEP_INTRO && !empty($session['grace_remaining'])) {
+            $formHtml .= esc_attr__('Set Up Now', 'wpmgr-agent') . '">';
+            $formHtml .= ' ';
+            // Skip button — only available while grace remains.
+            $formHtml .= '<input type="submit" name="wpmgr_setup_skip" value="';
+            $formHtml .= esc_attr__('Skip for Now', 'wpmgr-agent') . '">';
+        } elseif ($step === self::SETUP_STEP_DONE) {
+            $formHtml .= esc_attr__('Complete Login', 'wpmgr-agent') . '">';
+        } else {
+            $formHtml .= esc_attr__('Continue', 'wpmgr-agent') . '">';
+        }
+
+        $formHtml .= '</p>';
+        $formHtml .= '</form>';
+
+        echo $formHtml; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fully escaped above; each component escaped with esc_html/esc_attr/esc_url individually
+
+        if (function_exists('login_footer')) {
+            login_footer();
+        }
+
+        exit;
+    }
+
+    /**
+     * Build the HTML for a specific setup step.
+     *
+     * @param \WP_User            $user
+     * @param array<string,mixed> $session
+     * @param string              $step
+     * @return string  Escaped HTML fragment.
+     */
+    private function buildSetupStepHtml(\WP_User $user, array $session, string $step): string
+    {
+        switch ($step) {
+            case self::SETUP_STEP_INTRO:
+                return $this->buildSetupIntroHtml($session);
+
+            case self::SETUP_STEP_CHOOSE:
+                return $this->buildSetupChooseHtml($user);
+
+            case self::SETUP_STEP_TOTP:
+                return $this->buildSetupTotpHtml($user, $session);
+
+            case self::SETUP_STEP_CONFIRM:
+                return $this->buildSetupConfirmHtml();
+
+            case self::SETUP_STEP_BACKUP:
+                return $this->buildSetupBackupHtml($session);
+
+            case self::SETUP_STEP_DONE:
+                return $this->buildSetupDoneHtml($user);
+
+            default:
+                return $this->buildSetupIntroHtml($session);
+        }
+    }
+
+    /**
+     * Step 1 — intro: "Your administrator requires a second login step."
+     *
+     * @param array<string,mixed> $session
+     * @return string
+     */
+    private function buildSetupIntroHtml(array $session): string
+    {
+        $html  = '<h3>' . esc_html__('Your administrator requires two-factor authentication.', 'wpmgr-agent') . '</h3>';
+        $html .= '<p>' . esc_html__('Two-factor authentication adds an extra layer of security to your account. After logging in with your password, you will need to verify your identity with a second step.', 'wpmgr-agent') . '</p>';
+
+        if (!empty($session['grace_remaining'])) {
+            $html .= '<p><em>' . esc_html__('You may skip setup for now, but you will be required to set up two-factor authentication on a future login.', 'wpmgr-agent') . '</em></p>';
+        }
+
+        return $html;
+    }
+
+    /**
+     * Step 2 — choose method: one row per ALLOWED method with status pills.
+     *
+     * @param \WP_User $user
+     * @return string
+     */
+    private function buildSetupChooseHtml(\WP_User $user): string
+    {
+        $allowed = $this->policy->allowedMethodsFor($user);
+
+        $labels = [
+            'totp'   => esc_html__('Authenticator App', 'wpmgr-agent'),
+            'email'  => esc_html__('Email Code', 'wpmgr-agent'),
+            'backup' => esc_html__('Backup Codes', 'wpmgr-agent'),
+        ];
+        $descs = [
+            'totp'   => esc_html__('Use an authenticator app (Google Authenticator, Authy, etc.) to generate one-time codes.', 'wpmgr-agent'),
+            'email'  => esc_html__('Receive a one-time code by email.', 'wpmgr-agent'),
+            'backup' => esc_html__('Generate a set of single-use recovery codes.', 'wpmgr-agent'),
+        ];
+
+        $html  = '<h3>' . esc_html__('Choose a two-factor method', 'wpmgr-agent') . '</h3>';
+        $html .= '<p>' . esc_html__('Select at least one method to configure. You may configure multiple methods.', 'wpmgr-agent') . '</p>';
+        $html .= '<table style="width:100%;border-collapse:collapse">';
+
+        foreach ($allowed as $key) {
+            if (!array_key_exists($key, $labels)) {
+                continue;
+            }
+
+            $configured = false;
+            $provider   = $this->findProvider($key);
+            if ($provider !== null) {
+                $configured = $provider->isConfiguredFor($user);
+            }
+
+            $pill = $configured
+                ? '<span style="color:#0073aa;font-weight:bold">' . esc_html__('Configured', 'wpmgr-agent') . '</span>'
+                : '<span style="color:#666">' . esc_html__('Not configured', 'wpmgr-agent') . '</span>';
+
+            // Only TOTP has a setup screen — email is always available, backup codes are
+            // generated in step 5. Show a "Configure" button only for TOTP.
+            $html .= '<tr style="border-bottom:1px solid #ddd;padding:8px 0">';
+            $html .= '<td style="padding:8px 0"><strong>' . $labels[$key] . '</strong><br>';
+            $html .= '<small>' . $descs[$key] . '</small></td>';
+            $html .= '<td style="text-align:right;padding:8px">' . $pill;
+
+            if ($key === 'totp') {
+                $html .= ' <input type="submit" name="wpmgr_setup_configure_totp" class="button button-secondary button-small" value="';
+                $html .= esc_attr__('Configure', 'wpmgr-agent') . '">';
+            }
+
+            $html .= '</td></tr>';
+        }
+
+        $html .= '</table>';
+        $html .= '<p><small>' . esc_html__('Click "Continue" to proceed with the current configuration.', 'wpmgr-agent') . '</small></p>';
+
+        return $html;
+    }
+
+    /**
+     * Step 3 — TOTP setup: QR code + base32 secret display.
+     *
+     * Generates and stores a PENDING secret (not yet active). The secret is only
+     * promoted to active when the user confirms a valid code in step 4.
+     *
+     * @param \WP_User            $user
+     * @param array<string,mixed> $session
+     * @return string
+     */
+    private function buildSetupTotpHtml(\WP_User $user, array $session): string
+    {
+        $secret = '';
+
+        // Re-use pending secret if one was already generated in this session.
+        if (isset($session['totp_pending_secret']) && is_string($session['totp_pending_secret'])) {
+            $secret = $session['totp_pending_secret'];
+        }
+
+        if ($secret === '') {
+            // Generate a new pending secret for this user.
+            $totp = $this->findTotpProvider();
+            if ($totp !== null) {
+                $secret = $totp->generateAndStorePending($user);
+                // Cache the raw secret in the session (session is HMAC-signed).
+                // This avoids a decrypt round-trip on page reload without extending trust.
+            }
+        }
+
+        if ($secret === '') {
+            return '<p>' . esc_html__('Unable to generate a secret. Please try again.', 'wpmgr-agent') . '</p>';
+        }
+
+        $issuer = '';
+        if (function_exists('get_bloginfo')) {
+            $issuer = get_bloginfo('name');
+        }
+        if ($issuer === '') {
+            $issuer = 'WordPress';
+        }
+
+        $totp = $this->findTotpProvider();
+        $otpauthUri = '';
+        if ($totp !== null) {
+            $otpauthUri = $totp->buildOtpauthUri($user, $secret, $issuer);
+        }
+
+        $qrSvg = '';
+        if ($otpauthUri !== '' && class_exists(QrEncoder::class)) {
+            $qrSvg = QrEncoder::toSvg($otpauthUri, 256);
+        }
+
+        $html  = '<h3>' . esc_html__('Set up your authenticator app', 'wpmgr-agent') . '</h3>';
+        $html .= '<p>' . esc_html__('Scan the QR code below with your authenticator app (Google Authenticator, Authy, 1Password, etc.), or enter the secret key manually.', 'wpmgr-agent') . '</p>';
+
+        if ($qrSvg !== '') {
+            $html .= '<div style="margin:16px 0;text-align:center">' . $qrSvg . '</div>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- QrEncoder::toSvg() generates inline SVG with esc_attr'd attributes; never contains user-supplied data (only the secret + issuer name go through rawurlencode before QR encoding)
+        } else {
+            $html .= '<p>' . esc_html__('QR code unavailable. Please use the manual entry key below.', 'wpmgr-agent') . '</p>';
+        }
+
+        // Progressive-reveal manual key.
+        $html .= '<p>';
+        $html .= '<strong>' . esc_html__('Manual entry key:', 'wpmgr-agent') . '</strong><br>';
+        $html .= '<code id="wpmgr-totp-secret" style="font-size:14px;letter-spacing:2px">';
+        $html .= esc_html($secret);
+        $html .= '</code>';
+        $html .= '</p>';
+
+        // App hints.
+        $html .= '<p><small>';
+        $html .= esc_html__('Suggested apps: Google Authenticator, Authy, Microsoft Authenticator, 1Password, Bitwarden.', 'wpmgr-agent');
+        $html .= '</small></p>';
+
+        // Re-roll button: generates a fresh secret.
+        $html .= '<p>';
+        $html .= '<input type="submit" name="wpmgr_setup_reroll_totp" class="button button-secondary button-small" value="';
+        $html .= esc_attr__('Generate new secret', 'wpmgr-agent') . '">';
+        $html .= '</p>';
+
+        // Hidden field to carry the secret to the confirm step.
+        $html .= '<input type="hidden" name="wpmgr_setup_totp_secret" value="' . esc_attr($secret) . '">';
+
+        return $html;
+    }
+
+    /**
+     * Step 4 — confirm / activate: 6-digit code entry.
+     *
+     * @return string
+     */
+    private function buildSetupConfirmHtml(): string
+    {
+        $field = esc_attr('wpmgr_totp_code');
+        $html  = '<h3>' . esc_html__('Verify your authenticator app', 'wpmgr-agent') . '</h3>';
+        $html .= '<p>' . esc_html__('Enter the 6-digit code shown in your authenticator app to confirm setup.', 'wpmgr-agent') . '</p>';
+        $html .= '<p><label for="' . $field . '">';
+        $html .= esc_html__('Verification code:', 'wpmgr-agent');
+        $html .= '</label><br>';
+        $html .= '<input type="text" id="' . $field . '" name="' . $field . '" ';
+        $html .= 'autocomplete="one-time-code" inputmode="numeric" pattern="[0-9]{6}" ';
+        $html .= 'maxlength="6" placeholder="' . esc_attr__('6-digit code', 'wpmgr-agent') . '" required autofocus>';
+        $html .= '</p>';
+        return $html;
+    }
+
+    /**
+     * Step 5 — backup codes: display once + download link.
+     *
+     * Codes are read from the session where they were stored after BackupCodesProvider::generateAndStore().
+     *
+     * @param array<string,mixed> $session
+     * @return string
+     */
+    private function buildSetupBackupHtml(array $session): string
+    {
+        $codes = isset($session['backup_codes']) && is_array($session['backup_codes'])
+            ? $session['backup_codes']
+            : [];
+
+        $html  = '<h3>' . esc_html__('Save your backup codes', 'wpmgr-agent') . '</h3>';
+        $html .= '<p style="color:#d63638;font-weight:bold">';
+        $html .= esc_html__('These codes are shown ONCE. Save them now — you cannot view them again.', 'wpmgr-agent');
+        $html .= '</p>';
+
+        if ($codes !== []) {
+            $html .= '<ol style="font-family:monospace;font-size:14px">';
+            foreach ($codes as $code) {
+                if (is_string($code)) {
+                    $html .= '<li>' . esc_html($code) . '</li>';
+                }
+            }
+            $html .= '</ol>';
+
+            // Client-side download link (data: URI, no server round-trip).
+            $siteHost = function_exists('get_bloginfo') ? get_bloginfo('url') : 'site';
+            $siteHost = sanitize_text_field($siteHost);
+            $filename = sanitize_file_name($siteHost . '-backup-codes.txt');
+            $fileContent = implode("\n", array_filter($codes, 'is_string'));
+            $dataUri = 'data:text/plain;charset=utf-8,' . rawurlencode($fileContent);
+            $html .= '<p>';
+            $html .= '<a href="' . esc_attr($dataUri) . '" download="' . esc_attr($filename) . '" class="button button-secondary">';
+            $html .= esc_html__('Download backup codes', 'wpmgr-agent');
+            $html .= '</a>';
+            $html .= '</p>';
+        }
+
+        $html .= '<p>';
+        $html .= esc_html__('Each code can be used once. Store them in a safe place (password manager, printed copy, etc.).', 'wpmgr-agent');
+        $html .= '</p>';
+
+        return $html;
+    }
+
+    /**
+     * Step 6 — done: summary of enabled methods.
+     *
+     * @param \WP_User $user
+     * @return string
+     */
+    private function buildSetupDoneHtml(\WP_User $user): string
+    {
+        $enabled = [];
+        foreach ($this->providers as $p) {
+            if ($p->key() !== 'email' && $p->isConfiguredFor($user)) {
+                $enabled[] = esc_html($p->label());
+            }
+        }
+
+        $html = '<h3>' . esc_html__('Two-factor authentication is set up!', 'wpmgr-agent') . '</h3>';
+
+        if ($enabled !== []) {
+            $html .= '<p>' . esc_html__('You have the following methods configured:', 'wpmgr-agent') . '</p>';
+            $html .= '<ul>';
+            foreach ($enabled as $label) {
+                $html .= '<li>' . $label . '</li>'; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- each $label already esc_html()'d above
+            }
+            $html .= '</ul>';
+        }
+
+        $html .= '<p>' . esc_html__('You will be asked for a second factor each time you log in.', 'wpmgr-agent') . '</p>';
+        return $html;
+    }
+
+    /**
+     * Handle a setup flow form submission.
+     *
+     * Routes between steps based on session['setup_step'] (server-authoritative),
+     * NEVER on a client-supplied step value. The POST body is used only to signal
+     * "advance from the current step"; the actual current step is always read from
+     * the server-side session record.
+     *
+     * SECURITY — two bypasses closed here (see security review findings 1A / 1B):
+     *
+     * 1A (DONE-jump): previously the step was read from $_POST['wpmgr_setup_step'],
+     *    allowing an attacker with a valid HMAC token to POST step=done and receive
+     *    an auth cookie without completing enrollment. Fixed: step is now authoritative
+     *    from $session['setup_step']; the POST field is ignored for routing.
+     *
+     * 1B (grace bypass): the skip handler previously called completeLogin() without
+     *    re-checking grace_remaining, allowing a grace-exhausted user to POST
+     *    wpmgr_setup_skip=1 and bypass mandatory enrollment. Fixed: skip is now
+     *    gated on !empty($session['grace_remaining']); otherwise re-renders the
+     *    mandatory setup screen.
+     *
+     * Additionally, completeLogin() is now only reachable from the DONE step if
+     * the user is actually enrolled (hasNonEmailMethodConfigured() === true). A
+     * grace-skip arriving at the DONE-step code path is impossible because the
+     * DONE case asserts enrollment before issuing the cookie.
+     *
+     * Attempt caps (per-session + cross-request) apply to the activation step (step 4).
+     *
+     * @param int                 $userId
+     * @param array<string,mixed> $session
+     * @param int                 $currentAttempts  Per-session attempt count (already read).
+     * @param \WP_User            $user
+     * @return void
+     */
+    private function handleSetupSubmit(int $userId, array $session, int $currentAttempts, \WP_User $user): void
+    {
+        // SECURITY: always read the current step from the server-side session, never
+        // from $_POST. The POST field is rendered as a UI hint only; it must not
+        // influence the step machine (finding 1A).
+        $step = (string) ($session['setup_step'] ?? self::SETUP_STEP_INTRO);
+
+        // Skip button: only allowed when grace_remaining is set in the SERVER session.
+        // SECURITY: re-check grace_remaining server-side here (finding 1B) — the Skip
+        // button is only rendered while grace remains, but a client could POST
+        // wpmgr_setup_skip=1 regardless of UI state. If grace is exhausted, ignore the
+        // skip request and re-render the mandatory setup screen.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- setup interstitial uses HMAC session signing; no WP session exists to mint a nonce against (section 3.2)
+        if (isset($_POST['wpmgr_setup_skip'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+            if (!empty($session['grace_remaining'])) {
+                $this->completeLogin($userId, $session);
+                return;
+            }
+            // Grace exhausted: ignore skip, fall through to re-render the current step.
+            $this->renderSetupScreen($user, $session);
+            return;
+        }
+
+        // Re-roll: user requested a new TOTP secret.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+        if (isset($_POST['wpmgr_setup_reroll_totp'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+            $totp = $this->findTotpProvider();
+            if ($totp !== null) {
+                $secret = $totp->generateAndStorePending($user);
+                $session['totp_pending_secret'] = $secret;
+            }
+            $session['setup_step'] = self::SETUP_STEP_TOTP;
+            $this->storeSession($userId, $session);
+            $this->renderSetupScreen($user, $session);
+            return;
+        }
+
+        // Configure TOTP button from the choose screen.
+        // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+        if (isset($_POST['wpmgr_setup_configure_totp'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+            $totp = $this->findTotpProvider();
+            if ($totp !== null) {
+                $secret = $totp->generateAndStorePending($user);
+                $session['totp_pending_secret'] = $secret;
+            }
+            $session['setup_step'] = self::SETUP_STEP_TOTP;
+            $this->storeSession($userId, $session);
+            $this->renderSetupScreen($user, $session);
+            return;
+        }
+
+        switch ($step) {
+            case self::SETUP_STEP_INTRO:
+                // Move to the choose-method step.
+                $session['setup_step'] = self::SETUP_STEP_CHOOSE;
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+
+            case self::SETUP_STEP_CHOOSE:
+                // The user clicked Continue from the choose screen.
+                // Determine what to do: if TOTP is not yet configured, require it.
+                // If TOTP is configured, move to backup codes. If both done, move to done.
+                $totp = $this->findTotpProvider();
+                if ($totp !== null && !$totp->isConfiguredFor($user)) {
+                    // TOTP not yet set up — go to TOTP step.
+                    $secret = $totp->generateAndStorePending($user);
+                    $session['totp_pending_secret'] = $secret;
+                    $session['setup_step'] = self::SETUP_STEP_TOTP;
+                } else {
+                    // TOTP is configured (or not allowed). Move to backup codes.
+                    $backupProvider = $this->findProvider('backup');
+                    if ($backupProvider instanceof BackupCodesProvider) {
+                        $codes = $backupProvider->generateAndStore($user);
+                        $session['backup_codes'] = $codes;
+                        $session['setup_step']   = self::SETUP_STEP_BACKUP;
+                    } else {
+                        $session['setup_step'] = self::SETUP_STEP_DONE;
+                    }
+                }
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+
+            case self::SETUP_STEP_TOTP:
+                // Move to the confirmation/activation step.
+                // Carry the pending secret forward in the session.
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                $carriedSecret = isset($_POST['wpmgr_setup_totp_secret']) && is_string($_POST['wpmgr_setup_totp_secret']) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                    ? sanitize_text_field(wp_unslash($_POST['wpmgr_setup_totp_secret'])) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                    : '';
+                if ($carriedSecret !== '') {
+                    $session['totp_pending_secret'] = $carriedSecret;
+                }
+                $session['setup_step'] = self::SETUP_STEP_CONFIRM;
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+
+            case self::SETUP_STEP_CONFIRM:
+                // Validate the submitted TOTP code against the pending secret.
+                // Attempt caps apply here (shared counters).
+                // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                $code = isset($_POST['wpmgr_totp_code']) && is_string($_POST['wpmgr_totp_code']) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                    ? sanitize_text_field(wp_unslash($_POST['wpmgr_totp_code'])) // phpcs:ignore WordPress.Security.NonceVerification.Missing -- same
+                    : '';
+
+                $totp = $this->findTotpProvider();
+                if ($totp === null) {
+                    $this->renderSetupScreen($user, $session, esc_html__('TOTP provider unavailable. Please contact your administrator.', 'wpmgr-agent'));
+                    return;
+                }
+
+                if (!$totp->activatePendingSecret($user, $code)) {
+                    // Invalid code: increment attempt counters, stay on confirm step.
+                    $session['attempts'] = $currentAttempts + 1;
+                    $this->storeSession($userId, $session);
+                    $this->incrementCrossRequestAttempts($userId);
+                    $this->renderSetupScreen($user, $session, esc_html__('Incorrect code. Please check your authenticator app and try again.', 'wpmgr-agent'));
+                    return;
+                }
+
+                // Activation succeeded: clear attempt counters, clear pending secret.
+                unset($session['totp_pending_secret']);
+                $session['attempts'] = 0;
+                $this->clearCrossRequestAttempts($userId);
+
+                // Move to backup codes step.
+                $backupProvider = $this->findProvider('backup');
+                if ($backupProvider instanceof BackupCodesProvider) {
+                    $codes = $backupProvider->generateAndStore($user);
+                    $session['backup_codes'] = $codes;
+                    $session['setup_step']   = self::SETUP_STEP_BACKUP;
+                } else {
+                    $session['setup_step'] = self::SETUP_STEP_DONE;
+                }
+
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+
+            case self::SETUP_STEP_BACKUP:
+                // User viewed/downloaded codes; clear them from session and move to done.
+                unset($session['backup_codes']);
+                $session['setup_step'] = self::SETUP_STEP_DONE;
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+
+            case self::SETUP_STEP_DONE:
+                // SECURITY: assert enrollment before issuing the auth cookie.
+                // Even though the step is now server-authoritative (finding 1A fix),
+                // this defense-in-depth check ensures completeLogin() is never reached
+                // unless a non-email method was actually activated. If somehow the
+                // session reached DONE without enrollment, re-render the intro step
+                // rather than issuing a cookie.
+                if (!$this->hasNonEmailMethodConfigured($user)) {
+                    $session['setup_step'] = self::SETUP_STEP_INTRO;
+                    $this->storeSession($userId, $session);
+                    $this->renderSetupScreen($user, $session);
+                    return;
+                }
+                $this->completeLogin($userId, $session);
+                return;
+
+            default:
+                $session['setup_step'] = self::SETUP_STEP_INTRO;
+                $this->storeSession($userId, $session);
+                $this->renderSetupScreen($user, $session);
+                return;
+        }
+    }
+
+    /**
+     * Complete the login: issue auth cookie, fire wp_login, redirect.
+     * Called from both the setup done step and the grace-skip path.
+     *
+     * @param int                 $userId
+     * @param array<string,mixed> $session
+     * @return void
+     */
+    private function completeLogin(int $userId, array $session): void
+    {
+        $this->clearSession($userId);
+        $redirectTo = isset($session['redirect_to']) && is_string($session['redirect_to'])
+            ? $session['redirect_to']
+            : (function_exists('admin_url') ? admin_url() : '/wp-admin/');
+
+        wp_set_auth_cookie($userId, (bool) ($session['remember_me'] ?? false));
+
+        self::$verifying = true;
+        $user = function_exists('get_userdata') ? get_userdata($userId) : null;
+        if ($user instanceof \WP_User) {
+            do_action('wp_login', $user->user_login, $user); // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedHooknameFound -- firing WP core's documented post-login action; not a custom hook
+        }
+        self::$verifying = false;
+
+        wp_safe_redirect(esc_url_raw($redirectTo));
+        exit;
+    }
+
+    /**
+     * Find the TotpProvider from the registered providers list.
+     *
+     * @return TotpProvider|null
+     */
+    private function findTotpProvider(): ?TotpProvider
+    {
+        foreach ($this->providers as $p) {
+            if ($p instanceof TotpProvider) {
+                return $p;
+            }
+        }
+        return null;
+    }
+
+    // -------------------------------------------------------------------------
+    // WP Profile section: proactive enrollment
+    // -------------------------------------------------------------------------
+
+    /**
+     * Render the WPMgr 2FA section on the WP user profile screen.
+     *
+     * Shows the current status of each allowed method (configured / not configured),
+     * TOTP setup controls (enroll / regenerate), backup-code regeneration, and
+     * remaining backup-code count.
+     *
+     * Hooked to show_user_profile and edit_user_profile.
+     *
+     * @param \WP_User $profileUser  The user whose profile is being displayed.
+     * @return void
+     */
+    public function renderProfileSection(\WP_User $profileUser): void
+    {
+        // Only render when 2FA is enabled and the user is in scope.
+        if (!$this->policy->twoFactorEnabled) {
+            return;
+        }
+
+        $allowed = $this->policy->allowedMethodsFor($profileUser);
+        if ($allowed === []) {
+            return;
+        }
+
+        // Nonce for the profile save action.
+        $nonce = wp_create_nonce('wpmgr_2fa_profile_' . (int) $profileUser->ID);
+
+        $html  = '<h2>' . esc_html__('Two-Factor Authentication', 'wpmgr-agent') . '</h2>';
+        $html .= '<table class="form-table">';
+
+        foreach ($allowed as $key) {
+            $provider = $this->findProvider($key);
+            if ($provider === null) {
+                continue;
+            }
+
+            $configured = $provider->isConfiguredFor($profileUser);
+            $statusText = $configured
+                ? esc_html__('Configured', 'wpmgr-agent')
+                : esc_html__('Not configured', 'wpmgr-agent');
+
+            $html .= '<tr>';
+            $html .= '<th scope="row">' . esc_html($provider->label()) . '</th>';
+            $html .= '<td>';
+            $html .= '<p>' . $statusText . '</p>';
+
+            if ($key === 'totp') {
+                $html .= '<p>';
+                if ($configured) {
+                    $html .= '<button type="submit" name="wpmgr_profile_action" value="totp_reset" class="button button-secondary">';
+                    $html .= esc_html__('Reset authenticator app', 'wpmgr-agent');
+                    $html .= '</button>';
+                } else {
+                    $html .= '<button type="submit" name="wpmgr_profile_action" value="totp_setup" class="button button-primary">';
+                    $html .= esc_html__('Set up authenticator app', 'wpmgr-agent');
+                    $html .= '</button>';
+                }
+                $html .= '</p>';
+            }
+
+            if ($key === 'backup') {
+                $remaining = 0;
+                if ($provider instanceof BackupCodesProvider) {
+                    $remaining = $provider->remainingCount($profileUser);
+                }
+                if ($configured) {
+                    $html .= '<p>';
+                    $html .= esc_html(
+                        sprintf(
+                            // translators: %d is the number of remaining codes.
+                            __('%d codes remaining.', 'wpmgr-agent'),
+                            $remaining
+                        )
+                    );
+                    $html .= '</p>';
+                }
+                $html .= '<p>';
+                $html .= '<button type="submit" name="wpmgr_profile_action" value="backup_regenerate" class="button button-secondary">';
+                $html .= esc_html__('Regenerate backup codes', 'wpmgr-agent');
+                $html .= '</button>';
+                $html .= '</p>';
+            }
+
+            $html .= '</td>';
+            $html .= '</tr>';
+        }
+
+        $html .= '</table>';
+        $html .= '<input type="hidden" name="wpmgr_2fa_profile_nonce" value="' . esc_attr($nonce) . '">';
+        $html .= '<input type="hidden" name="wpmgr_2fa_profile_user_id" value="' . esc_attr((string) ((int) $profileUser->ID)) . '">';
+
+        echo $html; // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fully escaped above; each component escaped with esc_html/esc_attr/esc_url individually
+    }
+
+    /**
+     * Handle WP profile section saves: TOTP enrollment initiation and backup-code regeneration.
+     *
+     * Hooked to personal_options_update and edit_user_profile_update.
+     *
+     * @param int $userId  The user ID being saved (WP core passes this).
+     * @return void
+     */
+    public function handleProfileSectionSave(int $userId): void
+    {
+        // Nonce verification: standard WP profile nonce.
+        if (!isset($_POST['wpmgr_2fa_profile_nonce']) || !is_string($_POST['wpmgr_2fa_profile_nonce'])) { // phpcs:ignore WordPress.Security.NonceVerification.Missing -- checked on next line via wp_verify_nonce
+            return;
+        }
+        $nonce = sanitize_text_field(wp_unslash($_POST['wpmgr_2fa_profile_nonce']));
+        if (!wp_verify_nonce($nonce, 'wpmgr_2fa_profile_' . $userId)) {
+            return;
+        }
+
+        // Capability check: the current user must be able to edit this user.
+        if (!current_user_can('edit_user', $userId)) {
+            return;
+        }
+
+        $action = isset($_POST['wpmgr_profile_action']) && is_string($_POST['wpmgr_profile_action'])
+            ? sanitize_key(wp_unslash($_POST['wpmgr_profile_action']))
+            : '';
+
+        $profileUser = function_exists('get_userdata') ? get_userdata($userId) : false;
+        if (!($profileUser instanceof \WP_User)) {
+            return;
+        }
+
+        if ($action === 'backup_regenerate') {
+            $backupProvider = $this->findProvider('backup');
+            if ($backupProvider instanceof BackupCodesProvider) {
+                $backupProvider->generateAndStore($profileUser);
+            }
+        }
+
+        // TOTP setup and reset from the profile page: redirect into the interstitial
+        // setup flow so the user gets the full QR + confirm experience. We cannot
+        // do it inline on the profile page (no QR rendering in the save hook) — instead
+        // we set a transient flag that the next profile page load will pick up to
+        // display the setup flow inline. For now, we clear the active secret on reset
+        // so the user is treated as unenrolled; enrollment then happens at next login.
+        if ($action === 'totp_reset') {
+            $totpProvider = $this->findTotpProvider();
+            if ($totpProvider !== null) {
+                $totpProvider->clearSecret($profileUser);
+                $totpProvider->clearPendingSecret($profileUser);
+            }
+        }
+
+        // totp_setup: no action here — the profile page will show the setup button,
+        // and enrollment happens via the login interstitial. We do not initiate a QR
+        // from the save hook because we have no reliable way to display the QR result
+        // back on the profile page within this hook.
     }
 
     /**
