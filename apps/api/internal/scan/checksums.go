@@ -6,9 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 )
+
+// pluginSlugRe is the allowlist for agent-supplied plugin/theme slugs before
+// they are interpolated into the wp.org fetch URL. Accepts the form used by
+// all wp.org-hosted slugs: starts with an alphanumeric, then any combination
+// of alphanumerics, dots, underscores, and hyphens.
+// This is a defence-in-depth guard; the ssrfClient already prevents host
+// injection, but we reject clearly-malformed slugs early.
+var pluginSlugRe = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*$`)
+
+// pluginVersionRe is the allowlist for agent-supplied plugin/theme version
+// strings. Accepts semver and WordPress-style version strings.
+var pluginVersionRe = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // checksumsFetchURL is the WordPress.org checksums API endpoint.
 // JSON shape: {"checksums":{"<locale>":{"<path>":"<md5>"}}}
@@ -257,6 +270,16 @@ type pluginChecksumAPIResponse struct {
 // fetchPluginFromWPOrg fetches plugin checksums from downloads.wordpress.org
 // and decodes the multi-variant md5 shape into path → []md5.
 func (p *ChecksumProvider) fetchPluginFromWPOrg(ctx context.Context, slug, version string) (map[string][]string, error) {
+	// Defensive allowlist: reject malformed agent-supplied slug/version before
+	// interpolating them into the URL. The ssrfClient guards against host
+	// injection, but a clearly-invalid slug indicates bad data and should not
+	// reach the network at all.
+	if !pluginSlugRe.MatchString(slug) {
+		return nil, nil // treat as no checksums available (same as 404)
+	}
+	if !pluginVersionRe.MatchString(version) {
+		return nil, nil
+	}
 	rawURL := fmt.Sprintf(pluginChecksumsFetchURL, slug, version)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {

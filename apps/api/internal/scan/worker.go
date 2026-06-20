@@ -364,8 +364,21 @@ func (w *ScanRunWorker) finishFiles(ctx context.Context, run Run, si ScanSiteInf
 		counts[f.FindingType]++
 	}
 
-	// --- 4. Promote baseline (always — even on cold start) ---
-	if promErr := w.repo.PromoteBaseline(ctx, run.TenantID, run.SiteID, run.ID); promErr != nil {
+	// --- 4. Promote baseline (path-selective — never advance past an unreviewed change) ---
+	//
+	// Build the set of paths that have an active (non-ignored) finding from this
+	// run. The baseline must NOT advance for those paths; the next scan will
+	// re-compare against the prior known-good hash and re-flag them until an
+	// operator explicitly accepts the change via IgnoreFinding.
+	activeFindingPaths := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		switch f.FindingType {
+		case FindingFileChanged, FindingPluginModified, FindingPluginUnknown,
+			FindingFileAdded, FindingFileRemoved:
+			activeFindingPaths[f.Path] = true
+		}
+	}
+	if promErr := w.repo.PromoteBaselineSelective(ctx, run.TenantID, run.SiteID, run.ID, coldStart, activeFindingPaths); promErr != nil {
 		// Non-fatal: the diff already ran; just log and continue.
 		w.logger.Warn("baseline promotion failed",
 			slog.String("run_id", run.ID.String()), slog.Any("error", promErr))

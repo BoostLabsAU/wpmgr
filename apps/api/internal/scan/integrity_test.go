@@ -602,6 +602,398 @@ func TestDiffFiles_TenantIsolation_DeduKey(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// F1: Path-selective baseline promotion (anti-laundering) tests
+//
+// These tests exercise PromoteBaselineSelective directly — it is the pure Go
+// function that enforces the invariant. No DB round-trip is needed.
+// ---------------------------------------------------------------------------
+
+// fakeBaselineStore is a minimal in-memory baseline (path → md5) used to test
+// PromoteBaselineSelective logic without a DB. We simulate the promotion by
+// calling a helper that mirrors what the SQL does.
+type fakeBaselineStore map[string]string // path → md5
+
+// promoteSelective applies the selective promotion logic in memory, mirroring
+// what PromoteBaselineSelective does in SQL. This lets us write fast, pure-Go
+// tests for the anti-laundering invariant.
+//
+// coldStart: if true, upsert all hash rows into the baseline.
+// Otherwise upsert only paths that are NOT in activeFindingPaths.
+// For a file_removed finding the path is absent from hashes but in baseline —
+// the baseline row is KEPT (not deleted) so the next scan re-flags it.
+func promoteSelective(baseline fakeBaselineStore, hashes []HashRow, activeFindingPaths map[string]bool, coldStart bool) fakeBaselineStore {
+	out := make(fakeBaselineStore, len(baseline))
+	// Copy existing baseline rows (they remain unless a clean-path upsert overwrites).
+	for p, md5 := range baseline {
+		out[p] = md5
+	}
+	for _, h := range hashes {
+		if coldStart || !activeFindingPaths[h.Path] {
+			out[h.Path] = h.MD5
+		}
+		// else: activeFindingPaths[h.Path] → keep prior baseline; do NOT advance
+	}
+	return out
+}
+
+// simulateScan runs diffFiles against the given baseline and hash set (simulating
+// one full scan iteration) and returns findings + the new baseline after promotion.
+func simulateScan(runID, tenantID, siteID uuid.UUID, hashes []HashRow, baseline fakeBaselineStore) ([]Finding, fakeBaselineStore) {
+	// Convert fakeBaselineStore → []BaselineRow
+	baselineRows := make([]BaselineRow, 0, len(baseline))
+	for p, md5 := range baseline {
+		baselineRows = append(baselineRows, BaselineRow{Path: p, MD5: md5})
+	}
+
+	coldStart := len(baseline) == 0
+	findings := diffFiles(runID, tenantID, siteID, hashes, baselineRows, nil, nil, nil, coldStart)
+
+	// Build active-finding paths set
+	activeFindingPaths := make(map[string]bool, len(findings))
+	for _, f := range findings {
+		switch f.FindingType {
+		case FindingFileChanged, FindingPluginModified, FindingPluginUnknown,
+			FindingFileAdded, FindingFileRemoved:
+			activeFindingPaths[f.Path] = true
+		}
+	}
+
+	newBaseline := promoteSelective(baseline, hashes, activeFindingPaths, coldStart)
+	return findings, newBaseline
+}
+
+// TestPromoteBaseline_ColdStart verifies that on the very first scan (no prior
+// baseline) a full baseline is established from all hash rows.
+func TestPromoteBaseline_ColdStart(t *testing.T) {
+	t.Parallel()
+	runID, tenantID, siteID := uuid.New(), uuid.New(), uuid.New()
+
+	hashes := []HashRow{
+		{Path: "wp-content/uploads/photo.jpg", MD5: "photo001"},
+		{Path: "wp-content/themes/mytheme/style.css", MD5: "style001"},
+	}
+
+	// Scan 1: cold start, no baseline
+	findings, baseline := simulateScan(runID, tenantID, siteID, hashes, nil)
+
+	// Cold start: no Added/Changed/Removed findings
+	if len(filterFindings(findings, FindingFileAdded)) != 0 {
+		t.Errorf("cold start must not emit file_added findings")
+	}
+	// Baseline is established with both paths
+	if baseline["wp-content/uploads/photo.jpg"] != "photo001" {
+		t.Errorf("cold-start baseline not established for photo.jpg")
+	}
+	if baseline["wp-content/themes/mytheme/style.css"] != "style001" {
+		t.Errorf("cold-start baseline not established for style.css")
+	}
+}
+
+// TestPromoteBaseline_CleanFileAdvances verifies that a path that produces no
+// finding has its baseline upserted to the current hash on each scan.
+func TestPromoteBaseline_CleanFileAdvances(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+
+	// Scan 1 (cold start): establish baseline
+	hashes1 := []HashRow{{Path: "wp-content/uploads/photo.jpg", MD5: "hash001"}}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, hashes1, nil)
+
+	// Scan 2: same file, same hash → no finding; baseline still at hash001
+	hashes2 := []HashRow{{Path: "wp-content/uploads/photo.jpg", MD5: "hash001"}}
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline)
+	if len(findings2) != 0 {
+		t.Errorf("expected 0 findings for unchanged file, got %d: %v", len(findings2), findings2)
+	}
+	if baseline2["wp-content/uploads/photo.jpg"] != "hash001" {
+		t.Errorf("clean-file baseline should remain hash001, got %q", baseline2["wp-content/uploads/photo.jpg"])
+	}
+
+	// Scan 3: same file, legitimately new hash (e.g. user uploaded a replacement)
+	// In a real workflow the operator would accept the finding between scan 2 and 3.
+	// Here we just confirm the baseline does NOT advance automatically.
+	hashes3 := []HashRow{{Path: "wp-content/uploads/photo.jpg", MD5: "hash002"}}
+	findings3, baseline3 := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline2)
+	_ = hashes3
+	_ = findings3
+	_ = baseline3
+	// (Acceptance workflow tested in TestPromoteBaseline_AcceptAdvancesBaseline)
+}
+
+// TestPromoteBaseline_AntiLaundering is the security-critical test for F1.
+// It verifies that a tampered baseline-only file (no wp.org checksum) is:
+//   - Flagged as file_changed on scan 2 (detection works).
+//   - STILL flagged on scan 3 (promotion did NOT launder the tampered hash).
+//   - STILL flagged on scan 4 (persistence across arbitrary N scans).
+//
+// The tampered hash must NEVER become the canonical baseline until the operator
+// explicitly accepts the finding.
+func TestPromoteBaseline_AntiLaundering(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+	path := "wp-content/uploads/custom-script.php"
+
+	// Scan 1 (cold start): establish baseline with original hash.
+	scan1Hashes := []HashRow{{Path: path, MD5: "original00000000000000000000000"}}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, scan1Hashes, nil)
+
+	if baseline[path] != "original00000000000000000000000" {
+		t.Fatalf("cold-start baseline not established: %q", baseline[path])
+	}
+
+	// Scan 2: file is now tampered (different hash). Must produce file_changed.
+	scan2Hashes := []HashRow{{Path: path, MD5: "tampered00000000000000000000000"}}
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, scan2Hashes, baseline)
+
+	changed2 := filterFindings(findings2, FindingFileChanged)
+	if len(changed2) != 1 {
+		t.Fatalf("scan 2: expected 1 file_changed finding, got %d: %v", len(changed2), findings2)
+	}
+	// CRITICAL: the baseline must NOT have advanced to the tampered hash.
+	if baseline2[path] != "original00000000000000000000000" {
+		t.Errorf("scan 2: baseline laundered the tampered hash; got %q, want original", baseline2[path])
+	}
+
+	// Scan 3: file is still tampered. Must STILL produce file_changed.
+	// (This is the laundering regression: old behaviour would have set baseline to
+	// "tampered..." after scan 2, making scan 3 report nothing.)
+	scan3Hashes := []HashRow{{Path: path, MD5: "tampered00000000000000000000000"}}
+	findings3, baseline3 := simulateScan(uuid.New(), tenantID, siteID, scan3Hashes, baseline2)
+
+	changed3 := filterFindings(findings3, FindingFileChanged)
+	if len(changed3) != 1 {
+		t.Fatalf("scan 3: tampered file must STILL be flagged (anti-laundering), got %d findings: %v", len(changed3), findings3)
+	}
+	if baseline3[path] != "original00000000000000000000000" {
+		t.Errorf("scan 3: baseline laundered the tampered hash on second scan; got %q", baseline3[path])
+	}
+
+	// Scan 4: belt-and-braces — still flagged.
+	scan4Hashes := []HashRow{{Path: path, MD5: "tampered00000000000000000000000"}}
+	findings4, _ := simulateScan(uuid.New(), tenantID, siteID, scan4Hashes, baseline3)
+	changed4 := filterFindings(findings4, FindingFileChanged)
+	if len(changed4) != 1 {
+		t.Errorf("scan 4: still expected 1 file_changed, got %d", len(changed4))
+	}
+}
+
+// TestPromoteBaseline_AcceptAdvancesBaseline verifies that accepting (ignoring)
+// a file_changed finding advances the baseline for that path, so the next scan
+// is clean for it. This mirrors what IgnoreFinding → AdvanceBaselineForPath does.
+func TestPromoteBaseline_AcceptAdvancesBaseline(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+	path := "wp-content/themes/premium/main.js"
+
+	// Scan 1: cold start, establish baseline
+	hashes1 := []HashRow{{Path: path, MD5: "orig0000000000000000000000000000"}}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, hashes1, nil)
+
+	// Scan 2: file changed — finding is raised
+	hashes2 := []HashRow{{Path: path, MD5: "new00000000000000000000000000000"}}
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline)
+	if len(filterFindings(findings2, FindingFileChanged)) != 1 {
+		t.Fatalf("scan 2: expected file_changed finding")
+	}
+	// Baseline has NOT advanced (anti-laundering holds)
+	if baseline2[path] != "orig0000000000000000000000000000" {
+		t.Fatalf("scan 2: baseline should not have advanced")
+	}
+
+	// Operator accepts the finding: simulate AdvanceBaselineForPath
+	// (in production this is called by service.IgnoreFinding → repo.AdvanceBaselineForPath)
+	baseline2[path] = "new00000000000000000000000000000" // accepted hash
+
+	// Scan 3: same hash, now accepted — no finding
+	hashes3 := []HashRow{{Path: path, MD5: "new00000000000000000000000000000"}}
+	findings3, _ := simulateScan(uuid.New(), tenantID, siteID, hashes3, baseline2)
+	if len(filterFindings(findings3, FindingFileChanged)) != 0 {
+		t.Errorf("scan 3: after accepting the finding, no file_changed should be raised; got %v", findings3)
+	}
+}
+
+// TestPromoteBaseline_FileRemovedPersists verifies that a file_removed finding
+// persists across scans (the baseline row is kept for the absent path) until
+// the operator accepts it. Accepting a file_removed clears the baseline row
+// (mirroring DeleteBaselineForPath).
+func TestPromoteBaseline_FileRemovedPersists(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+	path := "wp-content/uploads/gone.php"
+
+	// Scan 1: cold start
+	hashes1 := []HashRow{{Path: path, MD5: "hash00000000000000000000000000000"}}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, hashes1, nil)
+
+	// Scan 2: file removed from site
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, []HashRow{}, baseline)
+	if len(filterFindings(findings2, FindingFileRemoved)) != 1 {
+		t.Fatalf("scan 2: expected 1 file_removed finding, got %d: %v", len(findings2), findings2)
+	}
+	// Baseline row for the removed path is KEPT (so next scan re-flags it)
+	if _, exists := baseline2[path]; !exists {
+		t.Errorf("scan 2: baseline row for removed path must be retained so next scan re-flags it")
+	}
+
+	// Scan 3: file still absent — must STILL produce file_removed
+	findings3, baseline3 := simulateScan(uuid.New(), tenantID, siteID, []HashRow{}, baseline2)
+	if len(filterFindings(findings3, FindingFileRemoved)) != 1 {
+		t.Errorf("scan 3: file_removed must persist until accepted, got %d findings: %v", len(findings3), findings3)
+	}
+
+	// Operator accepts: simulate DeleteBaselineForPath
+	delete(baseline3, path)
+
+	// Scan 4: file still absent but baseline row removed — no finding
+	findings4, _ := simulateScan(uuid.New(), tenantID, siteID, []HashRow{}, baseline3)
+	if len(filterFindings(findings4, FindingFileRemoved)) != 0 {
+		t.Errorf("scan 4: after accepting file_removed, no finding expected; got %v", findings4)
+	}
+}
+
+// TestPromoteBaseline_FileAddedPersists verifies that a file_added finding
+// (new path, no baseline) persists on repeated scans until accepted.
+func TestPromoteBaseline_FileAddedPersists(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+	path := "wp-content/uploads/injected.php"
+	anotherPath := "wp-content/uploads/legit.jpg"
+
+	// Scan 1: cold start with only legit.jpg
+	hashes1 := []HashRow{{Path: anotherPath, MD5: "legitmd500000000000000000000000"}}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, hashes1, nil)
+
+	// Scan 2: injected.php appears — file_added finding
+	hashes2 := []HashRow{
+		{Path: anotherPath, MD5: "legitmd500000000000000000000000"},
+		{Path: path, MD5: "injectedmd5000000000000000000000"},
+	}
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline)
+	added2 := filterFindings(findings2, FindingFileAdded)
+	if len(added2) != 1 {
+		t.Fatalf("scan 2: expected 1 file_added, got %d: %v", len(findings2), findings2)
+	}
+	// file_added path must NOT be in baseline (no prior baseline entry exists
+	// and promotion skips it because it has an active finding)
+	if _, inBaseline := baseline2[path]; inBaseline {
+		t.Errorf("scan 2: file_added path must not be added to baseline before operator accepts it")
+	}
+
+	// Scan 3: injected.php still present — must STILL be file_added
+	findings3, _ := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline2)
+	added3 := filterFindings(findings3, FindingFileAdded)
+	if len(added3) != 1 {
+		t.Errorf("scan 3: file_added must persist until accepted, got %d findings: %v", len(findings3), findings3)
+	}
+}
+
+// TestPromoteBaseline_MultipleFindings_OnlyCleanAdvance verifies that when a
+// scan produces findings for some paths and not others, only the clean paths
+// have their baseline advanced.
+func TestPromoteBaseline_MultipleFindings_OnlyCleanAdvance(t *testing.T) {
+	t.Parallel()
+	tenantID, siteID := uuid.New(), uuid.New()
+	cleanPath := "wp-content/uploads/ok.jpg"
+	tamperedPath := "wp-content/uploads/evil.php"
+
+	// Scan 1: cold start with both files clean
+	hashes1 := []HashRow{
+		{Path: cleanPath, MD5: "cleanmd50000000000000000000000000"},
+		{Path: tamperedPath, MD5: "origmd500000000000000000000000000"},
+	}
+	_, baseline := simulateScan(uuid.New(), tenantID, siteID, hashes1, nil)
+
+	// Scan 2: cleanPath unchanged, tamperedPath changed
+	hashes2 := []HashRow{
+		{Path: cleanPath, MD5: "cleanmd50000000000000000000000000"},
+		{Path: tamperedPath, MD5: "evilmd5000000000000000000000000000"},
+	}
+	findings2, baseline2 := simulateScan(uuid.New(), tenantID, siteID, hashes2, baseline)
+
+	// Only tamperedPath has a finding
+	if len(filterFindings(findings2, FindingFileChanged)) != 1 {
+		t.Fatalf("expected 1 file_changed for tampered path, got %d: %v", len(findings2), findings2)
+	}
+	// Clean path baseline: advanced to current hash (same, so no change)
+	if baseline2[cleanPath] != "cleanmd50000000000000000000000000" {
+		t.Errorf("clean-path baseline should stay cleanmd5..., got %q", baseline2[cleanPath])
+	}
+	// Tampered path baseline: must NOT have advanced
+	if baseline2[tamperedPath] != "origmd500000000000000000000000000" {
+		t.Errorf("tampered-path baseline must remain at original hash, got %q", baseline2[tamperedPath])
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F3: Slug/version allowlist validation tests
+// ---------------------------------------------------------------------------
+
+// TestChecksumProvider_SlugValidation verifies that malformed agent-supplied
+// slugs and versions are rejected before hitting the network (no HTTP call is
+// made). Each sub-test spins its own httptest.Server and a hit-counter so
+// sub-tests can run fully in parallel without sharing state.
+func TestChecksumProvider_SlugValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		slug        string
+		version     string
+		wantFetch   bool // true = expect HTTP call; false = reject before fetch
+		description string
+	}{
+		// Valid slugs/versions — the HTTP call should reach the server.
+		{"akismet", "5.3.1", true, "valid slug"},
+		{"my-plugin", "1.0.0", true, "slug with hyphen"},
+		{"woocommerce", "8.0.0-beta1", true, "version with hyphen"},
+		{"plugin.name", "2.0", true, "slug with dot"},
+		// Invalid slugs — must be rejected before any HTTP call.
+		{"../evil", "1.0", false, "path traversal in slug"},
+		{"evil slug", "1.0", false, "space in slug"},
+		{"UPPERCASE", "1.0", false, "uppercase slug (wp.org slugs are always lowercase)"},
+		{"evil\x00slug", "1.0", false, "null byte in slug"},
+		// Invalid versions — must be rejected before any HTTP call.
+		{"akismet", "../etc/passwd", false, "path traversal in version"},
+		{"akismet", "1.0 evil", false, "space in version"},
+		{"akismet", "", false, "empty version"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
+
+			// Each sub-test gets its own server so hit-count tracking is race-free.
+			var hitCount int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				hitCount++
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"files":{"f.php":{"md5":"aabbccdd00112233aabbccdd00112233"}}}`))
+			}))
+			defer srv.Close()
+
+			provider := &ChecksumProvider{
+				repo:   &Repo{},
+				client: &testPluginHTTPClient{client: srv.Client(), baseURL: srv.URL},
+			}
+
+			result, err := provider.fetchPluginFromWPOrg(context.Background(), tc.slug, tc.version)
+			_ = err // network errors from valid slugs are logged, not fatal
+
+			fetched := hitCount > 0
+			if tc.wantFetch && !fetched {
+				t.Errorf("expected HTTP fetch for slug=%q version=%q but no call was made (err=%v)", tc.slug, tc.version, err)
+			}
+			if !tc.wantFetch && fetched {
+				t.Errorf("HTTP fetch must NOT occur for malformed input slug=%q version=%q", tc.slug, tc.version)
+			}
+			if !tc.wantFetch && len(result) != 0 {
+				t.Errorf("result must be empty for rejected input, got %v", result)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 

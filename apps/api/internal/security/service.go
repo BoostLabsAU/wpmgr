@@ -40,12 +40,57 @@ type SiteLookup interface {
 	GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, error)
 }
 
+// ManagedFileRecorder persists the set of CP-managed files for a site so the
+// file-integrity scanner can suppress false-positive findings for paths that
+// WPMgr itself writes (.htaccess blocks, object-cache.php, advanced-cache.php,
+// mu-plugin loaders, etc.).
+//
+// MD5="" means "WPMgr-managed, hash unknown — suppress all findings for this
+// path." The scanner treats MD5="" as a churn-tolerant suppress: the path is
+// always considered clean regardless of its actual hash.
+//
+// Only the CP populates site_managed_files (via this interface). The agent has
+// NO direct write path to site_managed_files — the agent only reports hashes;
+// the CP decides which paths are managed. This is by design: the agent is
+// untrusted for this table.
+type ManagedFileRecorder interface {
+	UpsertManagedFiles(ctx context.Context, tenantID uuid.UUID, rows []ManagedFileRow) error
+}
+
+// ManagedFileRow is a path the CP manages (mirrors scan.ManagedFileRow to avoid
+// a cross-package import; the security package wires a scan.Repo adapter in main).
+type ManagedFileRow struct {
+	SiteID    uuid.UUID
+	TenantID  uuid.UUID
+	Path      string
+	MD5       string // "" = suppress (hash unknown / churn-tolerant)
+	ManagedBy string
+}
+
+// hardeningManagedPaths is the set of site-relative paths that the hardening
+// push may write on the site's filesystem. These paths are registered as
+// CP-managed (MD5="", suppress mode) so the file-integrity scanner does not
+// flag them as unknown files or false-positive changes.
+//
+// .htaccess: hardening writes server-config blocks (DisableDirectoryBrowsing,
+//
+//	DisablePHPInUploads, ProtectSystemFiles).
+//
+// wp-config.php: hardening may add DISALLOW_FILE_EDIT / FORCE_SSL_ADMIN
+//
+//	defines (managed region inside the file).
+var hardeningManagedPaths = []string{
+	".htaccess",
+	"wp-config.php",
+}
+
 // Service orchestrates the security domain: repo + optional agentcmd clients.
 type Service struct {
 	repo               *Repo
 	agentClient        AgentSecurityClient
 	hardeningClient    AgentHardeningClient
 	siteLookup         SiteLookup
+	managedFileRec     ManagedFileRecorder
 }
 
 // NewService builds a Service.
@@ -70,6 +115,15 @@ func (s *Service) SetHardeningClient(client AgentHardeningClient, sites SiteLook
 	if s.siteLookup == nil {
 		s.siteLookup = sites
 	}
+}
+
+// SetManagedFileRecorder wires the scan.Repo adapter so SaveHardeningConfig can
+// register the hardening-managed paths in site_managed_files. Optional: if not
+// set, the managed-file registry is not updated (safe to omit; no scanner impact
+// until the scanner is enabled for the site). Called once from main after all
+// services are constructed.
+func (s *Service) SetManagedFileRecorder(rec ManagedFileRecorder) {
+	s.managedFileRec = rec
 }
 
 // validModes are the three allowed protection modes.
@@ -284,6 +338,31 @@ func (s *Service) SaveHardeningConfig(ctx context.Context, tenantID, siteID uuid
 	if pushErr != nil {
 		return saved, fmt.Errorf("config stored but agent push failed: %w", pushErr)
 	}
+
+	// Register the hardening-managed paths in the file-integrity managed-file
+	// registry so the scanner does not produce false-positive findings for files
+	// that WPMgr's hardening writes. MD5="" means "suppress all findings for
+	// this path" (hash is churn-tolerant / unknown at push time).
+	// Best-effort: failure here does not fail the save; the scanner will flag
+	// these paths at most once until the registry is populated.
+	//
+	// Remaining write paths not covered here (object-cache.php, advanced-cache.php
+	// written by the perf suite) are a follow-up: the perf Service.EnableCache /
+	// SyncPerfConfig paths should call a similar recorder after successful push.
+	if s.managedFileRec != nil {
+		rows := make([]ManagedFileRow, 0, len(hardeningManagedPaths))
+		for _, p := range hardeningManagedPaths {
+			rows = append(rows, ManagedFileRow{
+				SiteID:    siteID,
+				TenantID:  tenantID,
+				Path:      p,
+				MD5:       "", // suppress mode: hash unknown, treat as churn-tolerant
+				ManagedBy: "hardening",
+			})
+		}
+		_ = s.managedFileRec.UpsertManagedFiles(ctx, tenantID, rows)
+	}
+
 	return saved, nil
 }
 

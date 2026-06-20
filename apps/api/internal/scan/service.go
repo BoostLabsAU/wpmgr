@@ -104,6 +104,13 @@ func (s *Service) ListFindingsForRun(ctx context.Context, tenantID, siteID, runI
 
 // IgnoreFinding sets the ignored flag on a finding and records an audit event.
 // ignoredBy is the actor's ID (email or API key ID) for the audit trail.
+//
+// When ignored=true and the finding is baseline-relative (file_changed,
+// file_added, file_removed, plugin_modified, plugin_unknown), the path's
+// baseline is advanced to the accepted hash so subsequent scans no longer
+// re-flag an intentional or reviewed change. This is the ONLY path by which
+// an active-finding path advances past an unreviewed change; the normal
+// promotion run (PromoteBaselineSelective) intentionally skips such paths.
 func (s *Service) IgnoreFinding(ctx context.Context, tenantID, findingID uuid.UUID, ignored bool, ignoredBy string, p domain.Principal) (Finding, error) {
 	// This route has no :siteId for RequireSiteAccess to guard, so resolve the
 	// finding's site and gate on the caller's site access BEFORE mutating —
@@ -118,6 +125,47 @@ func (s *Service) IgnoreFinding(ctx context.Context, tenantID, findingID uuid.UU
 	f, err := s.repo.SetFindingIgnored(ctx, tenantID, findingID, ignored, ignoredBy)
 	if err != nil {
 		return Finding{}, err
+	}
+
+	// Advance the baseline for the accepted path so the next scan is clean.
+	// Only fire when the operator is accepting the change (ignored=true) and the
+	// finding type involves the baseline table. file_removed is accepted by
+	// deleting the baseline row for that path (the file is gone; the baseline
+	// should no longer expect it). For all other baseline-relative finding types
+	// we upsert the current (accepted) hash as the new known-good.
+	if ignored {
+		switch f.FindingType {
+		case FindingFileChanged, FindingFileAdded, FindingPluginModified, FindingPluginUnknown:
+			// Accepted hash is the actual (current) hash from the finding.
+			if advErr := s.repo.AdvanceBaselineForPath(ctx, tenantID, f.SiteID, f.Path, f.ActualMD5, f.LastSeenRun); advErr != nil {
+				// Non-fatal: the finding is already ignored; log but don't fail.
+				if s.audit != nil {
+					_, _ = s.audit.Record(ctx, audit.Event{
+						TenantID:   tenantID,
+						ActorType:  audit.ActorSystem,
+						Action:     "scan_finding.baseline_advance_failed",
+						TargetType: "scan_finding",
+						TargetID:   findingID.String(),
+						Metadata:   map[string]any{"error": advErr.Error(), "path": f.Path},
+					})
+				}
+			}
+		case FindingFileRemoved:
+			// File is gone and the operator accepts that. Remove the baseline row
+			// so the next scan no longer expects the file.
+			if delErr := s.repo.DeleteBaselineForPath(ctx, tenantID, f.SiteID, f.Path); delErr != nil {
+				if s.audit != nil {
+					_, _ = s.audit.Record(ctx, audit.Event{
+						TenantID:   tenantID,
+						ActorType:  audit.ActorSystem,
+						Action:     "scan_finding.baseline_advance_failed",
+						TargetType: "scan_finding",
+						TargetID:   findingID.String(),
+						Metadata:   map[string]any{"error": delErr.Error(), "path": f.Path},
+					})
+				}
+			}
+		}
 	}
 
 	if s.audit != nil {

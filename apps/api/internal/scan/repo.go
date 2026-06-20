@@ -723,31 +723,135 @@ func (r *Repo) GetBaseline(ctx context.Context, tenantID, siteID uuid.UUID) ([]B
 	return out, err
 }
 
-// PromoteBaseline replaces the entire baseline for a site with the hashes from
-// the given run. Runs in a single tenant-scoped transaction:
-//  1. DELETE all existing baseline rows for the site.
-//  2. INSERT from scan_run_hashes for this run.
+// PromoteBaselineSelective advances the baseline for a site after a full/files
+// scan run, but NEVER auto-advances past an unreviewed change.
 //
-// This is the "promote" step called after a successful full/files run.
-func (r *Repo) PromoteBaseline(ctx context.Context, tenantID, siteID, runID uuid.UUID) error {
+// Design rule: the baseline must never be promoted past a live (non-ignored)
+// finding. An unreviewed tampered file must remain flagged on every subsequent
+// scan until the operator explicitly accepts it.
+//
+// coldStart is true when no baseline rows existed before this run (i.e. this is
+// the very first scan). In that case we establish the full baseline from the
+// run's hashes (all paths, no findings to skip). On subsequent runs only paths
+// that produced NO active finding in this run advance; paths with a live
+// finding keep their prior baseline row (or stay absent for file_added paths).
+//
+// activeFindingPaths is the set of paths that have an active (non-ignored)
+// finding from this run. Those paths are excluded from promotion so the next
+// scan re-flags them.
+func (r *Repo) PromoteBaselineSelective(ctx context.Context, tenantID, siteID, runID uuid.UUID, coldStart bool, activeFindingPaths map[string]bool) error {
 	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
-		// Delete existing baseline.
-		if _, err := tx.Exec(ctx,
-			`DELETE FROM site_file_baseline WHERE tenant_id = $1 AND site_id = $2`,
-			tenantID, siteID,
-		); err != nil {
-			return domain.Internal("baseline_promote_failed", "failed to delete old baseline").WithCause(err)
+		if coldStart {
+			// Cold start: no prior baseline exists. Establish the full baseline
+			// from this run's hashes. No finding paths to exclude (cold-start
+			// findings are core/plugin checksum findings that do not involve the
+			// baseline table; those paths are still safe to baseline).
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO site_file_baseline
+					(site_id, tenant_id, path, md5, size, mtime, is_link, source, updated_run, updated_at)
+				 SELECT $2, $1, path, md5, size, mtime, is_link, 'baseline', $3, now()
+				 FROM scan_run_hashes
+				 WHERE tenant_id = $1 AND run_id = $3
+				 ON CONFLICT (site_id, path) DO UPDATE
+				   SET md5 = EXCLUDED.md5, size = EXCLUDED.size, mtime = EXCLUDED.mtime,
+				       is_link = EXCLUDED.is_link, source = EXCLUDED.source,
+				       updated_run = EXCLUDED.updated_run, updated_at = now()`,
+				tenantID, siteID, runID,
+			); err != nil {
+				return domain.Internal("baseline_promote_failed", "failed to establish cold-start baseline").WithCause(err)
+			}
+			return nil
 		}
-		// Insert from this run's staged hashes.
+
+		// Subsequent run: upsert ONLY clean paths (no active finding).
+		// Paths with an active finding keep their prior baseline row so the
+		// next scan re-compares against the last known-good hash.
+		//
+		// Implementation: load the run's hashes and upsert them one by one,
+		// skipping any path present in activeFindingPaths. A batch approach is
+		// used for efficiency; the exclusion list is small in the common case.
+		//
+		// We deliberately do NOT DELETE any baseline rows on a normal run:
+		//   - A removed file keeps its baseline row so file_removed re-surfaces
+		//     until the operator accepts it.
+		//   - A clean file gets its baseline row upserted to the current hash.
+		rows, err := tx.Query(ctx,
+			`SELECT path, md5, size, mtime, is_link
+			 FROM scan_run_hashes
+			 WHERE tenant_id = $1 AND run_id = $2`,
+			tenantID, runID,
+		)
+		if err != nil {
+			return domain.Internal("baseline_promote_failed", "failed to load run hashes for selective promotion").WithCause(err)
+		}
+		defer rows.Close()
+
+		for rows.Next() {
+			var path, md5 string
+			var size, mtime int64
+			var isLink bool
+			if err := rows.Scan(&path, &md5, &size, &mtime, &isLink); err != nil {
+				return domain.Internal("baseline_promote_failed", "failed to read hash row during promotion").WithCause(err)
+			}
+			if activeFindingPaths[path] {
+				// This path has a live unreviewed finding — do NOT advance its baseline.
+				// The prior baseline row (if any) is preserved so the next scan
+				// re-flags the change. A file_added path with no prior baseline row
+				// also stays absent so the next scan re-flags it as file_added.
+				continue
+			}
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO site_file_baseline
+					(site_id, tenant_id, path, md5, size, mtime, is_link, source, updated_run, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, $6, $7, 'baseline', $8, now())
+				 ON CONFLICT (site_id, path) DO UPDATE
+				   SET md5 = EXCLUDED.md5, size = EXCLUDED.size, mtime = EXCLUDED.mtime,
+				       is_link = EXCLUDED.is_link, source = EXCLUDED.source,
+				       updated_run = EXCLUDED.updated_run, updated_at = now()`,
+				siteID, tenantID, path, md5, size, mtime, isLink, runID,
+			); err != nil {
+				return domain.Internal("baseline_promote_failed", "failed to upsert baseline row").WithCause(err)
+			}
+		}
+		return rows.Err()
+	})
+}
+
+// AdvanceBaselineForPath updates (or inserts) the baseline row for a single
+// path to the given MD5 hash. Called when an operator accepts / ignores a
+// finding: the tampered hash becomes the new known-good for that path so
+// subsequent scans do not re-flag an intentional or reviewed change.
+//
+// This is the ONLY mechanism by which an active-finding path advances its
+// baseline — the normal promotion run intentionally skips it.
+func (r *Repo) AdvanceBaselineForPath(ctx context.Context, tenantID, siteID uuid.UUID, path, md5 string, runID uuid.UUID) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO site_file_baseline
 				(site_id, tenant_id, path, md5, size, mtime, is_link, source, updated_run, updated_at)
-			 SELECT $2, $1, path, md5, size, mtime, is_link, 'baseline', $3, now()
-			 FROM scan_run_hashes
-			 WHERE tenant_id = $1 AND run_id = $3`,
-			tenantID, siteID, runID,
+			 VALUES ($1, $2, $3, $4, 0, 0, false, 'accepted', $5, now())
+			 ON CONFLICT (site_id, path) DO UPDATE
+			   SET md5 = EXCLUDED.md5, source = EXCLUDED.source,
+			       updated_run = EXCLUDED.updated_run, updated_at = now()`,
+			siteID, tenantID, path, md5, runID,
 		); err != nil {
-			return domain.Internal("baseline_promote_failed", "failed to insert new baseline").WithCause(err)
+			return domain.Internal("baseline_advance_failed", "failed to advance baseline for path").WithCause(err)
+		}
+		return nil
+	})
+}
+
+// DeleteBaselineForPath removes a single baseline row for the given path. Used
+// when an operator accepts a file_removed finding: the file is gone, so the
+// baseline should no longer expect it, preventing perpetual re-flagging.
+func (r *Repo) DeleteBaselineForPath(ctx context.Context, tenantID, siteID uuid.UUID, path string) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM site_file_baseline
+			 WHERE tenant_id = $1 AND site_id = $2 AND path = $3`,
+			tenantID, siteID, path,
+		); err != nil {
+			return domain.Internal("baseline_delete_path_failed", "failed to delete baseline row for path").WithCause(err)
 		}
 		return nil
 	})
