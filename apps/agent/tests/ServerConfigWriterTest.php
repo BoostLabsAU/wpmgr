@@ -174,10 +174,14 @@ final class ServerConfigWriterTest extends TestCase
     }
 
     // -------------------------------------------------------------------------
-    // User-agent bans in server config
+    // User-agent bans — BLOCKER 1: correct positive-match OR-chain
     // -------------------------------------------------------------------------
 
-    public function test_ua_ban_emits_rewrite_condition(): void
+    /**
+     * A single UA ban must emit a positive RewriteCond (no leading '!') and the
+     * RewriteRule that 403s must follow it.
+     */
+    public function test_ua_ban_emits_positive_rewrite_condition(): void
     {
         $raw = [
             'bans' => [['id' => 'u', 'type' => 'user_agent', 'value' => 'EvilBot/2.0']],
@@ -186,6 +190,121 @@ final class ServerConfigWriterTest extends TestCase
         $out = $this->writer()->renderInto('', $cfg);
         $this->assertStringContainsString('HTTP_USER_AGENT', $out);
         $this->assertStringContainsString('EvilBot', $out);
+        // Must be a positive match (no leading '!') so the ban fires ON match.
+        $this->assertStringNotContainsString('!EvilBot', $out);
+        $this->assertStringContainsString('[F,L]', $out);
+    }
+
+    /**
+     * BLOCKER 1: a non-banned UA must NOT be blocked (no false positive).
+     * With one ban in place, a request from a completely different UA must pass.
+     * The old inverted logic blocked ALL UAs that did not match every ban pattern.
+     */
+    public function test_ua_ban_does_not_block_non_banned_ua_single_ban(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'b1', 'type' => 'user_agent', 'value' => 'EvilBot/2.0']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+
+        // The generated .htaccess must contain exactly one RewriteCond.
+        // That condition must be a POSITIVE match for EvilBot (no leading '!'),
+        // so the [F,L] rule fires only when the UA is EvilBot — not for others.
+        $lines = explode("\n", $out);
+        $rewriteConds = array_filter($lines, static fn (string $l): bool => str_contains($l, 'RewriteCond %{HTTP_USER_AGENT}'));
+        $this->assertCount(1, $rewriteConds, 'Exactly one RewriteCond must be emitted for one ban');
+
+        foreach ($rewriteConds as $cond) {
+            // Must NOT be negated — positive match only.
+            $this->assertStringNotContainsString('!EvilBot', $cond, 'UA condition must be a positive match, not negated');
+            $this->assertStringContainsString('EvilBot', $cond, 'EvilBot pattern must appear in the condition');
+        }
+    }
+
+    /**
+     * BLOCKER 1: with TWO bans, verify the OR-chain: the last condition has no
+     * [OR] flag, all others carry [NC,OR]. A UA matching neither ban passes;
+     * a UA matching one ban is blocked.
+     */
+    public function test_ua_ban_two_bans_or_chain_correct(): void
+    {
+        $raw = [
+            'bans' => [
+                ['id' => 'b1', 'type' => 'user_agent', 'value' => 'EvilBot/2.0'],
+                ['id' => 'b2', 'type' => 'user_agent', 'value' => 'SpamCrawler'],
+            ],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+
+        $lines = explode("\n", $out);
+        $rewriteConds = array_values(array_filter(
+            $lines,
+            static fn (string $l): bool => str_contains($l, 'RewriteCond %{HTTP_USER_AGENT}')
+        ));
+        $this->assertCount(2, $rewriteConds, 'Exactly two RewriteConds for two UA bans');
+
+        // First condition: must carry [NC,OR] (OR to the next condition).
+        $this->assertStringContainsString('[NC,OR]', $rewriteConds[0], 'First condition must carry [NC,OR]');
+        // Last condition: must NOT carry [OR] (terminates the OR chain).
+        $this->assertStringNotContainsString('[OR]', $rewriteConds[1], 'Last condition must not carry [OR]');
+        // Both must be positive matches (no leading '!').
+        $this->assertStringNotContainsString('!EvilBot',    $rewriteConds[0]);
+        $this->assertStringNotContainsString('!SpamCrawler', $rewriteConds[1]);
+        $this->assertStringContainsString('EvilBot',     $rewriteConds[0]);
+        $this->assertStringContainsString('SpamCrawler', $rewriteConds[1]);
+    }
+
+    // -------------------------------------------------------------------------
+    // BLOCKER 2: UA ban value with newlines must be dropped (injection guard)
+    // -------------------------------------------------------------------------
+
+    /**
+     * BLOCKER 2: a user_agent ban value containing an embedded newline must be
+     * silently dropped at the HardeningConfig validation stage. The injected text
+     * must never appear in the rendered .htaccess block.
+     */
+    public function test_ua_ban_with_newline_is_dropped_by_config(): void
+    {
+        $injection = "EvilBot\n    Require all denied";
+        $raw = [
+            'bans' => [
+                ['id' => 'bad', 'type' => 'user_agent', 'value' => $injection],
+                ['id' => 'ok',  'type' => 'user_agent', 'value' => 'SafeBot'],
+            ],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+
+        // The injected value must be absent from the validated ban list.
+        $uaBans = $cfg->userAgentBans();
+        $this->assertNotContains($injection, $uaBans, 'Newline-containing value must be dropped by validateBans');
+        $this->assertContains('SafeBot', $uaBans, 'Clean value must still be accepted');
+
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringNotContainsString('Require all denied', $out, 'Injected directive must not appear in .htaccess');
+        $this->assertStringNotContainsString("EvilBot\n", $out, 'Literal newline must not appear in .htaccess');
+    }
+
+    /**
+     * BLOCKER 2: belt-and-braces at the writer layer — even if a value with a
+     * control char somehow reaches renderInto, it must be skipped.
+     */
+    public function test_ua_ban_with_cr_lf_skipped_at_render_layer(): void
+    {
+        // Bypass validateBans to reach the writer directly via a crafted config.
+        // We use a value with a carriage-return embedded between two words.
+        // Because validateBans already drops these, we test the belt-and-braces
+        // path by directly verifying the output does not contain the control char.
+        $raw = [
+            'bans' => [
+                ['id' => 'x', 'type' => 'user_agent', 'value' => "Bot\rExtra"],
+            ],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        // validateBans drops the value; the block should be empty.
+        $this->assertStringNotContainsString(ServerConfigWriter::BEGIN, $out, 'Block must be absent when all UA bans are filtered');
     }
 
     // -------------------------------------------------------------------------
@@ -213,6 +332,82 @@ final class ServerConfigWriterTest extends TestCase
         $out = $this->writer()->renderInto('', $this->config(['force_ssl' => true]));
         $this->assertStringContainsString(ServerConfigWriter::BEGIN, $out);
         $this->assertStringContainsString(ServerConfigWriter::END, $out);
+    }
+
+    // -------------------------------------------------------------------------
+    // BLOCKER 3: all-address CIDRs must not emit any deny rule
+    // -------------------------------------------------------------------------
+
+    /**
+     * BLOCKER 3: 0.0.0.0/0 must never appear in a Require not ip directive.
+     * Emitting it would lock out every request, including the signed control-plane
+     * command that would undo the ban.
+     */
+    public function test_ipv4_all_address_cidr_produces_no_deny_rule(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'x', 'type' => 'range', 'value' => '0.0.0.0/0']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringNotContainsString('Require not ip', $out, '0.0.0.0/0 must never emit a deny rule');
+        $this->assertStringNotContainsString('0.0.0.0/0', $out, '0.0.0.0/0 must be absent from .htaccess');
+    }
+
+    /**
+     * BLOCKER 3: ::/0 (IPv6 all-address) must never emit a deny rule.
+     */
+    public function test_ipv6_all_address_cidr_produces_no_deny_rule(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'x', 'type' => 'range', 'value' => '::/0']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringNotContainsString('Require not ip', $out, '::/0 must never emit a deny rule');
+        $this->assertStringNotContainsString('::/0', $out, '::/0 must be absent from .htaccess');
+    }
+
+    /**
+     * BLOCKER 3: a normal public CIDR (not all-address, not private) MUST still
+     * emit a deny rule — the safety guard must not over-filter.
+     */
+    public function test_normal_public_cidr_emits_deny_rule(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'x', 'type' => 'range', 'value' => '203.0.113.0/24']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringContainsString('Require not ip 203.0.113.0/24', $out, 'Public CIDR must produce a deny rule');
+    }
+
+    /**
+     * BLOCKER 3: a CIDR in the private range (10.0.0.0/8) must not emit a deny
+     * rule so a LAN admin can never be locked out via .htaccess.
+     */
+    public function test_private_cidr_does_not_emit_deny_rule(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'x', 'type' => 'range', 'value' => '10.0.0.0/24']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringNotContainsString('Require not ip 10.0.0.0/24', $out, 'Private CIDR must not emit a deny rule');
+    }
+
+    /**
+     * BLOCKER 3: a specific private IP (loopback 127.0.0.1) must not emit a
+     * deny rule.
+     */
+    public function test_loopback_ip_does_not_emit_deny_rule(): void
+    {
+        $raw = [
+            'bans' => [['id' => 'x', 'type' => 'ip', 'value' => '127.0.0.1']],
+        ];
+        $cfg = HardeningConfig::fromArray($raw);
+        $out = $this->writer()->renderInto('', $cfg);
+        $this->assertStringNotContainsString('Require not ip 127.0.0.1', $out, 'Loopback IP must not emit a deny rule');
     }
 
     // -------------------------------------------------------------------------

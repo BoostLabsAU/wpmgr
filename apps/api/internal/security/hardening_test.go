@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
 	"github.com/mosamlife/wpmgr/apps/api/internal/server/httpx"
 )
 
@@ -78,7 +80,8 @@ func (s *fakeHardeningService) createBan(_ context.Context, tenantID, siteID uui
 		return Ban{}, domain.Validation("invalid_ban_type",
 			"ban type must be ip|range|user_agent")
 	}
-	if strings.TrimSpace(ban.Value) == "" {
+	ban.Value = strings.TrimSpace(ban.Value)
+	if ban.Value == "" {
 		return Ban{}, domain.Validation("invalid_ban_value", "ban value is required")
 	}
 	switch ban.Type {
@@ -93,6 +96,11 @@ func (s *fakeHardeningService) createBan(_ context.Context, tenantID, siteID uui
 			return Ban{}, domain.Validation("invalid_ban_cidr",
 				"not a valid CIDR block")
 		}
+	}
+	// Mirror the semantic safety rules from validateBan so the fake and real
+	// service behave consistently.
+	if err := validateBan(ban); err != nil {
+		return Ban{}, err
 	}
 	for _, existing := range s.bans[siteID] {
 		if existing.Type == ban.Type && existing.Value == ban.Value {
@@ -391,9 +399,9 @@ func TestBanCreateListDelete(t *testing.T) {
 		t.Error("created ban must have non-zero ID")
 	}
 
-	// CIDR ban.
+	// CIDR ban — use a public documentation range (RFC 5737 TEST-NET-3).
 	_, err = svc.createBan(ctx, tenantID, siteID, Ban{
-		Type: BanTypeRange, Value: "192.168.1.0/24",
+		Type: BanTypeRange, Value: "203.0.113.0/24",
 	})
 	if err != nil {
 		t.Fatalf("create cidr ban: %v", err)
@@ -428,7 +436,7 @@ func TestBanDuplicateRejection(t *testing.T) {
 	siteID := uuid.New()
 	ctx := context.Background()
 
-	ban := Ban{Type: BanTypeIP, Value: "10.0.0.1"}
+	ban := Ban{Type: BanTypeIP, Value: "203.0.113.42"}
 	if _, err := svc.createBan(ctx, tenantID, siteID, ban); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -476,6 +484,228 @@ func TestBanMalformedIPRejection(t *testing.T) {
 				t.Errorf("want 422 or 409, got %d", domain.HTTPStatus(err))
 			}
 		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests: ban safety validation (defense-in-depth rejections)
+// ---------------------------------------------------------------------------
+
+// TestBanSafetyRejections calls validateBan directly to assert that lock-out-
+// class and private-range bans are rejected at the service layer, independent of
+// any DB or agent interaction.
+func TestBanSafetyRejections(t *testing.T) {
+	cases := []struct {
+		name    string
+		ban     Ban
+		wantCode string // expected domain error code substring
+	}{
+		// --- range: all-addresses ---
+		{
+			name:     "all-addresses IPv4 (0.0.0.0/0)",
+			ban:      Ban{Type: BanTypeRange, Value: "0.0.0.0/0"},
+			wantCode: "ban_range_too_broad",
+		},
+		{
+			name:     "all-addresses IPv6 (::/0)",
+			ban:      Ban{Type: BanTypeRange, Value: "::/0"},
+			wantCode: "ban_range_too_broad",
+		},
+		// --- range: over-broad prefix ---
+		{
+			name:     "IPv4 over-broad /7 (straddles two /8 blocks)",
+			ban:      Ban{Type: BanTypeRange, Value: "10.0.0.0/7"},
+			wantCode: "ban_range_too_broad",
+		},
+		{
+			name:     "IPv6 over-broad /16",
+			ban:      Ban{Type: BanTypeRange, Value: "2001:db8::/16"},
+			wantCode: "ban_range_too_broad",
+		},
+		// --- range: private space ---
+		{
+			name:     "RFC-1918 10/8 private range",
+			ban:      Ban{Type: BanTypeRange, Value: "10.0.0.0/8"},
+			wantCode: "ban_range_private",
+		},
+		{
+			name:     "RFC-1918 172.16/12 private range",
+			ban:      Ban{Type: BanTypeRange, Value: "172.16.0.0/12"},
+			wantCode: "ban_range_private",
+		},
+		{
+			name:     "RFC-1918 192.168/16 private range",
+			ban:      Ban{Type: BanTypeRange, Value: "192.168.0.0/16"},
+			wantCode: "ban_range_private",
+		},
+		{
+			name:     "loopback range 127.0.0.0/8",
+			ban:      Ban{Type: BanTypeRange, Value: "127.0.0.0/8"},
+			wantCode: "ban_range_private",
+		},
+		{
+			// fc00::/7 would first be caught by the over-broad (/7 < /32) check;
+			// use fc00::/32 to isolate the private-range check specifically.
+			name:     "ULA IPv6 range fc00::/32 (not over-broad, but private)",
+			ban:      Ban{Type: BanTypeRange, Value: "fc00::/32"},
+			wantCode: "ban_range_private",
+		},
+		// --- ip: loopback ---
+		{
+			name:     "IPv4 loopback 127.0.0.1",
+			ban:      Ban{Type: BanTypeIP, Value: "127.0.0.1"},
+			wantCode: "ban_ip_private",
+		},
+		{
+			name:     "IPv6 loopback ::1",
+			ban:      Ban{Type: BanTypeIP, Value: "::1"},
+			wantCode: "ban_ip_private",
+		},
+		// --- ip: RFC-1918 private ---
+		{
+			name:     "private IPv4 10.x.x.x",
+			ban:      Ban{Type: BanTypeIP, Value: "10.0.0.1"},
+			wantCode: "ban_ip_private",
+		},
+		{
+			name:     "private IPv4 192.168.x.x",
+			ban:      Ban{Type: BanTypeIP, Value: "192.168.1.1"},
+			wantCode: "ban_ip_private",
+		},
+		{
+			name:     "private IPv4 172.16.x.x",
+			ban:      Ban{Type: BanTypeIP, Value: "172.16.5.5"},
+			wantCode: "ban_ip_private",
+		},
+		// --- ip: link-local and ULA ---
+		{
+			name:     "IPv4 link-local 169.254.1.1",
+			ban:      Ban{Type: BanTypeIP, Value: "169.254.1.1"},
+			wantCode: "ban_ip_private",
+		},
+		{
+			name:     "IPv6 ULA fc00::1",
+			ban:      Ban{Type: BanTypeIP, Value: "fc00::1"},
+			wantCode: "ban_ip_private",
+		},
+		{
+			name:     "IPv6 link-local fe80::1",
+			ban:      Ban{Type: BanTypeIP, Value: "fe80::1"},
+			wantCode: "ban_ip_private",
+		},
+		// --- user_agent: control characters ---
+		{
+			name:     "user_agent with newline",
+			ban:      Ban{Type: BanTypeUserAgent, Value: "badbot\nAnother-Header: injected"},
+			wantCode: "ban_ua_control_char",
+		},
+		{
+			// Trailing \r\n is stripped by TrimSpace before validateBan sees it;
+			// use CR/LF embedded in the middle to test mid-string injection.
+			name:     "user_agent with embedded CR+LF (mid-string injection)",
+			ban:      Ban{Type: BanTypeUserAgent, Value: "bad\r\nbot"},
+			wantCode: "ban_ua_control_char",
+		},
+		{
+			name:     "user_agent with null byte",
+			ban:      Ban{Type: BanTypeUserAgent, Value: "badbot\x00"},
+			wantCode: "ban_ua_control_char",
+		},
+		{
+			name:     "user_agent with tab (control char)",
+			ban:      Ban{Type: BanTypeUserAgent, Value: "bad\tbot"},
+			wantCode: "ban_ua_control_char",
+		},
+		// --- user_agent: over-length ---
+		{
+			name:     "user_agent over 512 bytes",
+			ban:      Ban{Type: BanTypeUserAgent, Value: strings.Repeat("A", banMaxUserAgentLen+1)},
+			wantCode: "ban_ua_too_long",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateBan(tc.ban)
+			if err == nil {
+				t.Fatalf("validateBan: want error for %+v, got nil", tc.ban)
+			}
+			de, ok := domain.AsDomain(err)
+			if !ok {
+				t.Fatalf("want domain error, got %T: %v", err, err)
+			}
+			if domain.HTTPStatus(err) != http.StatusUnprocessableEntity {
+				t.Errorf("want 422, got %d; err=%v", domain.HTTPStatus(err), err)
+			}
+			if de.Code != tc.wantCode {
+				t.Errorf("want domain code %q, got %q (msg: %s)", tc.wantCode, de.Code, err)
+			}
+		})
+	}
+}
+
+// TestBanSafetyAccepts verifies that normal public-facing values pass validateBan
+// so valid legitimate bans are not accidentally rejected.
+func TestBanSafetyAccepts(t *testing.T) {
+	cases := []struct {
+		name string
+		ban  Ban
+	}{
+		{name: "public IPv4", ban: Ban{Type: BanTypeIP, Value: "1.2.3.4"}},
+		{name: "public IPv4 (doc range)", ban: Ban{Type: BanTypeIP, Value: "203.0.113.42"}},
+		{name: "public IPv4 range /24", ban: Ban{Type: BanTypeRange, Value: "203.0.113.0/24"}},
+		{name: "public IPv4 range /16", ban: Ban{Type: BanTypeRange, Value: "203.0.0.0/16"}},
+		{name: "public IPv4 range at /8 boundary", ban: Ban{Type: BanTypeRange, Value: "203.0.0.0/8"}},
+		{name: "public IPv6 /48", ban: Ban{Type: BanTypeRange, Value: "2001:db8::/48"}},
+		{name: "public IPv6 /32 (minimum)", ban: Ban{Type: BanTypeRange, Value: "2001:db8::/32"}},
+		{name: "normal user agent", ban: Ban{Type: BanTypeUserAgent, Value: "BadBot/2.0"}},
+		{name: "user agent exactly at max len", ban: Ban{Type: BanTypeUserAgent, Value: strings.Repeat("A", banMaxUserAgentLen)}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateBan(tc.ban); err != nil {
+				t.Errorf("validateBan: unexpected rejection for %+v: %v", tc.ban, err)
+			}
+		})
+	}
+}
+
+// TestBanSafetyViaIPProviderConsistency cross-checks that every IP we claim is
+// "private/loopback/link-local" here is also considered non-global by
+// ipprovider.IsGlobalUnicast — the function we delegate to in validateBan.
+func TestBanSafetyViaIPProviderConsistency(t *testing.T) {
+	privateIPs := []string{
+		"127.0.0.1", "::1",
+		"10.0.0.1", "172.16.5.5", "192.168.1.1",
+		"169.254.1.1", "fc00::1", "fe80::1",
+	}
+	for _, ip := range privateIPs {
+		if ipprovider.IsGlobalUnicast(ip) {
+			t.Errorf("expected %q to be non-global-unicast, but IsGlobalUnicast returned true", ip)
+		}
+	}
+
+	publicIPs := []string{"1.2.3.4", "203.0.113.42", "8.8.8.8"}
+	for _, ip := range publicIPs {
+		if !ipprovider.IsGlobalUnicast(ip) {
+			t.Errorf("expected %q to be global-unicast, but IsGlobalUnicast returned false", ip)
+		}
+	}
+
+	// Also confirm the range base-address check works for private CIDRs.
+	privateCIDRs := []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"127.0.0.0/8", "fc00::/7",
+	}
+	for _, cidr := range privateCIDRs {
+		_, ipNet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			t.Fatalf("ParseCIDR(%q): %v", cidr, err)
+		}
+		if ipprovider.IsGlobalUnicast(ipNet.IP.String()) {
+			t.Errorf("base of %q (%s) should not be global-unicast", cidr, ipNet.IP)
+		}
 	}
 }
 

@@ -446,20 +446,23 @@ final class HardeningModule
     }
 
     /**
-     * Feed IP/range bans from the hardening config into the existing WAF mu-plugin
-     * by merging them into the deny_cidrs list of wpmgr_security_config.
+     * Feed IP/range bans from the hardening config into the WAF mu-plugin's
+     * dedicated 'hardening_deny_cidrs' key in wpmgr_security_config.
      *
-     * The WAF mu-plugin reads wpmgr_security_config's deny_cidrs at boot time
-     * (before WP loads). We append the hardening bans to that list so they take
-     * effect at the earliest possible point (pre-WP mu-plugin boot), rather than
-     * waiting for the PHP 'init' action.
+     * The WAF mu-plugin reads wpmgr_security_config at boot time (before WP loads)
+     * and evaluates 'hardening_deny_cidrs' in ALL modes, independent of the
+     * login-protection 'mode' field. This is the ITEM 5 fix: explicit operator
+     * bans must always block, not only when brute-force protect mode is on.
+     *
+     * Keeping hardening bans in their own key ('hardening_deny_cidrs') instead of
+     * merging into 'deny_cidrs' keeps the two enforcement layers cleanly separated
+     * and makes removal on ban-list change trivial (overwrite the key, no diff needed).
+     *
+     * SAFETY: the WAF mu-plugin's allow_cidrs guard and private/loopback bypass
+     * both apply before the hardening_deny_cidrs check. No lock-out is possible
+     * for private IPs or allow-listed control-plane egress addresses.
      *
      * This is called by SyncSecurityHardeningCommand after persistence.
-     *
-     * SAFETY: loopback/private IPs and the control-plane allow_cidrs are never
-     * denied — the WAF mu-plugin itself enforces this with its isPrivate() check
-     * and the allow_cidrs guard. We do not validate private-ness here; we rely on
-     * the WAF gate (which is tested independently).
      *
      * @param HardeningConfig $config
      * @return void
@@ -481,38 +484,28 @@ final class HardeningModule
             return;
         }
 
-        // Existing deny_cidrs from the login-protection / WAF config.
-        $existingDeny = isset($wafConfig['deny_cidrs']) && is_array($wafConfig['deny_cidrs'])
-            ? $wafConfig['deny_cidrs']
+        // Write the hardening ban CIDRs into their own dedicated key so the WAF
+        // can evaluate them mode-independently (ITEM 5). The 'deny_cidrs' key
+        // remains owned solely by the login-protection / brute-force subsystem.
+        //
+        // Defence-in-depth: filter out broad/private CIDRs before persisting.
+        // The runtime WAF already bypasses private IPs, but the agent must not
+        // store a dangerous CIDR that it received from the CP (belt-and-braces).
+        // WafCidrGuard applies the same rules used by ServerConfigWriter at render
+        // time, ensuring a single source of truth for what counts as "unsafe".
+        $allowCidrs = isset($wafConfig['allow_cidrs']) && is_array($wafConfig['allow_cidrs'])
+            ? array_values(array_filter($wafConfig['allow_cidrs'], 'is_string'))
             : [];
-
-        // Strip any previously-synced hardening bans (identified by a marker comment
-        // convention in the value is NOT possible, so instead we store them separately
-        // and merge; we rebuild the list from scratch each sync).
-        // We store the hardening-ban CIDRs in a separate wp-option so we know which
-        // deny_cidrs to remove when the ban list changes.
-        $prevHardeningCidrs = get_option('wpmgr_hardening_waf_cidrs', []);
-        if (!is_array($prevHardeningCidrs)) {
-            $prevHardeningCidrs = [];
+        $rawBans           = $config->ipRangeBans();
+        $newHardeningCidrs = [];
+        foreach ($rawBans as $cidr) {
+            $cidr = trim((string) $cidr);
+            if (!WafCidrGuard::isUnsafe($cidr, $allowCidrs)) {
+                $newHardeningCidrs[] = $cidr;
+            }
         }
+        $wafConfig['hardening_deny_cidrs'] = array_values($newHardeningCidrs);
 
-        // Remove only the previously-synced hardening bans from existingDeny.
-        $cleanedDeny = array_values(array_filter(
-            $existingDeny,
-            static fn (mixed $cidr): bool => is_string($cidr) && !in_array($cidr, $prevHardeningCidrs, true)
-        ));
-
-        // New hardening bans.
-        $newHardeningCidrs = $config->ipRangeBans();
-
-        // Merged list.
-        $merged = array_values(array_unique(array_merge($cleanedDeny, $newHardeningCidrs)));
-
-        // Persist the new hardening CIDRs list so next sync knows what to remove.
-        update_option('wpmgr_hardening_waf_cidrs', $newHardeningCidrs, false);
-
-        // Write back the merged deny_cidrs into wpmgr_security_config.
-        $wafConfig['deny_cidrs'] = $merged;
         $encoded = wp_json_encode($wafConfig);
         if ($encoded !== false) {
             update_option('wpmgr_security_config', $encoded, false);

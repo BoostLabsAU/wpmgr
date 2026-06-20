@@ -208,16 +208,38 @@ final class ServerConfigWriter
         }
 
         // IP/range bans (capped to avoid unbounded .htaccess growth).
-        $ipBans = array_slice($config->ipRangeBans(), 0, self::MAX_SERVER_BAN_RULES);
-        if ($ipBans !== []) {
+        // BLOCKER 3: before emitting any deny rule, filter out CIDRs that would
+        // lock out the operator or control plane:
+        //   (a) All-address CIDRs (0.0.0.0/0, ::/0, IPv4 prefix < /8, IPv6 prefix < /16)
+        //       are dropped entirely — they would deny every request including the
+        //       signed command that would undo the ban.
+        //   (b) CIDRs that overlap private/loopback ranges are skipped at render time
+        //       (WAF mu-plugin also enforces this, belt-and-braces here).
+        //   (c) The configured allow_cidrs are read from wpmgr_security_config so
+        //       that a ban can never override an operator-level exemption.
+        // Safety filtering is delegated to WafCidrGuard so the same rules apply
+        // here and in HardeningModule::syncWafDenyCidrs() (single source of truth).
+        $rawIpBans  = array_slice($config->ipRangeBans(), 0, self::MAX_SERVER_BAN_RULES);
+        $allowCidrs = $this->readAllowCidrs();
+        $safeDenies = [];
+        foreach ($rawIpBans as $cidr) {
+            $cidr = trim($cidr);
+            if (WafCidrGuard::isUnsafe($cidr, $allowCidrs)) {
+                continue;
+            }
+            // Belt-and-braces BLOCKER 2: skip values containing control chars.
+            if (preg_match('/[\x00-\x1F\x7F]/', $cidr) === 1) {
+                continue;
+            }
+            $safeDenies[] = $cidr;
+        }
+
+        if ($safeDenies !== []) {
             $lines[] = '<IfModule mod_authz_core.c>';
             $lines[] = '    <RequireAll>';
             $lines[] = '        Require all granted';
-            foreach ($ipBans as $cidr) {
-                $cidr = trim($cidr);
-                if ($cidr !== '') {
-                    $lines[] = '        Require not ip ' . $cidr;
-                }
+            foreach ($safeDenies as $cidr) {
+                $lines[] = '        Require not ip ' . $cidr;
             }
             $lines[] = '    </RequireAll>';
             $lines[] = '</IfModule>';
@@ -225,30 +247,48 @@ final class ServerConfigWriter
             $lines[] = '<IfModule !mod_authz_core.c>';
             $lines[] = '    Order allow,deny';
             $lines[] = '    Allow from all';
-            foreach ($ipBans as $cidr) {
-                $cidr = trim($cidr);
-                if ($cidr !== '') {
-                    $lines[] = '    Deny from ' . $cidr;
-                }
+            foreach ($safeDenies as $cidr) {
+                $lines[] = '    Deny from ' . $cidr;
             }
             $lines[] = '</IfModule>';
         }
 
         // User-agent bans.
+        // BLOCKER 1 FIX: emit one positive RewriteCond per ban pattern, OR-combined,
+        // with the LAST condition NOT carrying [OR]. The RewriteRule ^ - [F,L]
+        // then fires only when the UA MATCHES at least one banned pattern.
+        //
+        // The old negated form (!pattern [NC] AND-chained) was inverted: Apache
+        // AND-combines all RewriteConds, so the rule fired when the UA matched
+        // NONE of the ban patterns — blocking every legitimate visitor and letting
+        // the banned bots through. This is the corrected, positive-match OR-chain.
         $uaBans = $config->userAgentBans();
         if ($uaBans !== []) {
-            $lines[] = '<IfModule mod_rewrite.c>';
-            $lines[] = '    RewriteEngine On';
+            // Pre-filter: drop empty values and values with control chars
+            // (belt-and-braces BLOCKER 2 guard at the render layer).
+            $safeUaBans = [];
             foreach ($uaBans as $ua) {
                 $ua = trim($ua);
-                if ($ua !== '') {
-                    // Escape special regex characters in the UA string.
-                    $escaped = preg_quote($ua, '!');
-                    $lines[] = '    RewriteCond %{HTTP_USER_AGENT} !' . $escaped . ' [NC]';
+                if ($ua !== '' && preg_match('/[\x00-\x1F\x7F]/', $ua) !== 1) {
+                    $safeUaBans[] = $ua;
                 }
             }
-            $lines[] = '    RewriteRule ^ - [F,L]';
-            $lines[] = '</IfModule>';
+
+            if ($safeUaBans !== []) {
+                $lastIdx = count($safeUaBans) - 1;
+                $lines[] = '<IfModule mod_rewrite.c>';
+                $lines[] = '    RewriteEngine On';
+                foreach ($safeUaBans as $idx => $ua) {
+                    $escaped = preg_quote($ua, '!');
+                    // Positive match per pattern. [OR] on every condition except the
+                    // last so Apache OR-combines them: the block fires when ANY single
+                    // pattern matches (banned UA detected).
+                    $flag    = ($idx < $lastIdx) ? ' [NC,OR]' : ' [NC]';
+                    $lines[] = '    RewriteCond %{HTTP_USER_AGENT} ' . $escaped . $flag;
+                }
+                $lines[] = '    RewriteRule ^ - [F,L]';
+                $lines[] = '</IfModule>';
+            }
         }
 
         if ($lines === []) {
@@ -313,5 +353,30 @@ final class ServerConfigWriter
             return '';
         }
         return rtrim($root, '/\\') . DIRECTORY_SEPARATOR . '.htaccess';
+    }
+
+    /**
+     * Read the operator-configured allow_cidrs from wpmgr_security_config.
+     * Used at render time to exempt allow-listed CIDRs from deny rules.
+     *
+     * Returns an empty array when the option is absent or unreadable.
+     *
+     * @return array<int,string>
+     */
+    private function readAllowCidrs(): array
+    {
+        if (!function_exists('get_option')) {
+            return [];
+        }
+        $raw = get_option('wpmgr_security_config', '');
+        if (!is_string($raw) || $raw === '') {
+            return [];
+        }
+        $cfg = json_decode($raw, true);
+        if (!is_array($cfg)) {
+            return [];
+        }
+        $allow = isset($cfg['allow_cidrs']) && is_array($cfg['allow_cidrs']) ? $cfg['allow_cidrs'] : [];
+        return array_values(array_filter($allow, 'is_string'));
     }
 }

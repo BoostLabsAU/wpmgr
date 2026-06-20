@@ -351,7 +351,17 @@ final class HardeningConfig
                     continue;
                 }
             }
-            // user_agent: no structural validation beyond non-empty.
+
+            // BLOCKER 2: Drop any ban value that contains control characters
+            // (CR, LF, NUL, or any char < 0x20). Such values would allow
+            // injection of arbitrary Apache directives into the managed .htaccess
+            // block because preg_quote() does NOT neutralise newlines.
+            // Reject and drop — do not sanitize-and-keep.
+            if (preg_match('/[\x00-\x1F\x7F]/', $value) === 1) {
+                continue;
+            }
+
+            // user_agent: no structural validation beyond non-empty + above control-char check.
 
             $valid[] = [
                 'id'      => $id,

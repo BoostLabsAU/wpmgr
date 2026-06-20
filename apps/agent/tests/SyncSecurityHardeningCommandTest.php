@@ -236,8 +236,13 @@ final class SyncSecurityHardeningCommandTest extends TestCase
     // WAF deny_cidrs sync
     // -------------------------------------------------------------------------
 
-    public function test_ip_bans_are_synced_into_waf_deny_cidrs(): void
+    public function test_ip_bans_are_synced_into_waf_hardening_deny_cidrs(): void
     {
+        // ITEM 5 FIX: hardening bans now go into 'hardening_deny_cidrs' (their
+        // own key) rather than being merged into 'deny_cidrs'. This allows the
+        // WAF to evaluate them mode-independently: an explicit operator ban blocks
+        // regardless of whether login-protection protect mode is enabled.
+        //
         // Pre-seed a minimal wpmgr_security_config (WAF config).
         $this->optionStore['wpmgr_security_config'] = json_encode([
             'mode'        => 'protect',
@@ -257,11 +262,18 @@ final class SyncSecurityHardeningCommandTest extends TestCase
 
         $wafRaw     = $this->optionStore['wpmgr_security_config'] ?? '{}';
         $wafDecoded = json_decode($wafRaw, true);
-        $denyCidrs  = $wafDecoded['deny_cidrs'] ?? [];
 
-        $this->assertContains('5.5.5.5/32', $denyCidrs,      'original deny_cidrs preserved');
-        $this->assertContains('203.0.113.10', $denyCidrs,    'new IP ban synced');
-        $this->assertContains('198.51.100.0/24', $denyCidrs, 'new range ban synced');
+        // The brute-force deny_cidrs must be UNCHANGED — hardening bans no longer
+        // bleed into the brute-force deny list.
+        $denyCidrs = $wafDecoded['deny_cidrs'] ?? [];
+        $this->assertContains('5.5.5.5/32', $denyCidrs, 'original deny_cidrs must be preserved');
+        $this->assertNotContains('203.0.113.10', $denyCidrs, 'hardening ban must not be in deny_cidrs');
+        $this->assertNotContains('198.51.100.0/24', $denyCidrs, 'hardening range must not be in deny_cidrs');
+
+        // Hardening bans go into their own dedicated key so they enforce in all modes.
+        $hardeningCidrs = $wafDecoded['hardening_deny_cidrs'] ?? [];
+        $this->assertContains('203.0.113.10', $hardeningCidrs,    'new IP ban must be in hardening_deny_cidrs');
+        $this->assertContains('198.51.100.0/24', $hardeningCidrs, 'new range ban must be in hardening_deny_cidrs');
     }
 
     // -------------------------------------------------------------------------

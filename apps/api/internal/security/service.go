@@ -8,11 +8,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/google/uuid"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
 )
 
 // AgentHardeningClient is the subset of agentcmd.Client the hardening service
@@ -341,6 +343,105 @@ var validBanTypes = map[BanType]bool{
 	BanTypeUserAgent: true,
 }
 
+// banMaxUserAgentLen is the maximum permitted length for a user_agent ban value.
+// Matches the web client's own input cap (512 bytes) and prevents oversized WAF
+// rules from being injected downstream.
+const banMaxUserAgentLen = 512
+
+// banMinIPv4Prefix is the minimum acceptable IPv4 prefix length for a range ban.
+// A prefix shorter than /8 (e.g. /7, /6, …, /0) covers more than a full /8
+// block — effectively a continent-scale or all-addresses block, which is either
+// a misconfig or an attempt to lock out virtually all traffic. The /8 boundary
+// is a widely accepted "broadest useful" single-ISP/network block.
+const banMinIPv4Prefix = 8
+
+// banMinIPv6Prefix is the minimum acceptable IPv6 prefix length for a range ban.
+// Prefixes shorter than /32 span entire regional internet registries (e.g. a /19
+// covers millions of hosts). /32 is the smallest allocation an ISP typically
+// receives and is a reasonable "broadest useful block" boundary for ban purposes.
+const banMinIPv6Prefix = 32
+
+// validateBan performs semantic safety checks on a ban entry AFTER the basic
+// type/syntax validation in CreateBan. It is a pure function with no DB access,
+// making it straightforward to unit-test in isolation.
+//
+// Rejected cases (all return domain.Validation errors):
+//
+//   - BanTypeRange: all-addresses ranges (0.0.0.0/0, ::/0), over-broad prefixes
+//     (IPv4 < /8, IPv6 < /32), and ranges that wholly contain loopback or
+//     RFC-1918/link-local/ULA private space (banning a private range is a no-op
+//     on public sites and risks self-lockout for shared-hosting operators).
+//
+//   - BanTypeIP: loopback, RFC-1918 private, link-local, and ULA addresses.
+//     Banning a private IP has no effect on inbound public traffic and is almost
+//     certainly a misconfig.
+//
+//   - BanTypeUserAgent: values containing ASCII control characters (including
+//     CR/LF), which could enable rule-injection in downstream WAF/agent
+//     configuration files. Also rejects values that are empty after trimming, or
+//     exceed banMaxUserAgentLen bytes.
+func validateBan(ban Ban) error {
+	switch ban.Type {
+	case BanTypeRange:
+		cidr := strings.TrimSpace(ban.Value)
+		// net.ParseCIDR already ran before validateBan; the parse here always succeeds.
+		_, ipNet, _ := net.ParseCIDR(cidr)
+		ones, bits := ipNet.Mask.Size()
+
+		// Reject all-addresses ranges explicitly for a clear error message.
+		if ones == 0 {
+			return domain.Validation("ban_range_too_broad",
+				"cannot ban an all-addresses range (0.0.0.0/0 or ::/0); use the security-config deny list for global blocks")
+		}
+
+		// Reject over-broad prefixes.
+		if bits == 32 && ones < banMinIPv4Prefix {
+			return domain.Validation("ban_range_too_broad",
+				fmt.Sprintf("IPv4 range ban prefix must be /%d or longer; /%d covers too large an address space", banMinIPv4Prefix, ones))
+		}
+		if bits == 128 && ones < banMinIPv6Prefix {
+			return domain.Validation("ban_range_too_broad",
+				fmt.Sprintf("IPv6 range ban prefix must be /%d or longer; /%d covers too large an address space", banMinIPv6Prefix, ones))
+		}
+
+		// Reject ranges that fully contain private/loopback/link-local/ULA space.
+		// We test by checking whether the network's base address itself is
+		// non-public; for a prefix that wholly covers private space (e.g. 10/8,
+		// 192.168/16, fc00::/7), the base address is not a global unicast address.
+		if !ipprovider.IsGlobalUnicast(ipNet.IP.String()) {
+			return domain.Validation("ban_range_private",
+				"cannot ban a private, loopback, or link-local address range; this has no effect on public traffic and may cause self-lockout")
+		}
+
+	case BanTypeIP:
+		ip := strings.TrimSpace(ban.Value)
+		// net.ParseIP already validated syntax; this check is semantic.
+		if !ipprovider.IsGlobalUnicast(ip) {
+			return domain.Validation("ban_ip_private",
+				"cannot ban a private, loopback, or link-local address; this has no effect on public traffic")
+		}
+
+	case BanTypeUserAgent:
+		ua := strings.TrimSpace(ban.Value)
+		if ua == "" {
+			return domain.Validation("invalid_ban_value", "ban value is required")
+		}
+		if len(ua) > banMaxUserAgentLen {
+			return domain.Validation("ban_ua_too_long",
+				fmt.Sprintf("user agent ban value must be %d characters or fewer", banMaxUserAgentLen))
+		}
+		// Reject any ASCII control character including CR (\r) and LF (\n).
+		// These can break downstream WAF/nginx configuration files via rule injection.
+		for _, r := range ua {
+			if r < 0x20 || r == unicode.MaxRune || unicode.IsControl(r) {
+				return domain.Validation("ban_ua_control_char",
+					"user agent must not contain control characters (including newlines and carriage returns)")
+			}
+		}
+	}
+	return nil
+}
+
 // ListBans returns all bans for a site.
 func (s *Service) ListBans(ctx context.Context, tenantID, siteID uuid.UUID) ([]Ban, error) {
 	return s.repo.ListBans(ctx, tenantID, siteID)
@@ -354,21 +455,26 @@ func (s *Service) CreateBan(ctx context.Context, tenantID, siteID uuid.UUID, ban
 		return Ban{}, domain.Validation("invalid_ban_type",
 			fmt.Sprintf("ban type must be ip|range|user_agent; got %q", ban.Type))
 	}
-	// --- value validation ---
+	// --- value validation: basic syntax ---
+	ban.Value = strings.TrimSpace(ban.Value)
 	if ban.Value == "" {
 		return Ban{}, domain.Validation("invalid_ban_value", "ban value is required")
 	}
 	switch ban.Type {
 	case BanTypeIP:
-		if net.ParseIP(strings.TrimSpace(ban.Value)) == nil {
+		if net.ParseIP(ban.Value) == nil {
 			return Ban{}, domain.Validation("invalid_ban_ip",
 				fmt.Sprintf("%q is not a valid IP address", ban.Value))
 		}
 	case BanTypeRange:
-		if _, _, err := net.ParseCIDR(strings.TrimSpace(ban.Value)); err != nil {
+		if _, _, err := net.ParseCIDR(ban.Value); err != nil {
 			return Ban{}, domain.Validation("invalid_ban_cidr",
 				fmt.Sprintf("%q is not a valid CIDR block", ban.Value))
 		}
+	}
+	// --- value validation: semantic safety (defense-in-depth) ---
+	if err := validateBan(ban); err != nil {
+		return Ban{}, err
 	}
 
 	ban.TenantID = tenantID

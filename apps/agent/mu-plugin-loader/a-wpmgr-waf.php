@@ -227,8 +227,122 @@ function wpmgr_waf_client_ip(string $headerName, array $server): string
 }
 
 /**
- * Main WAF gate. Reads config from wp_options via $wpdb and, when protect mode
- * with a matching deny_cidrs entry is detected, sends a 403 and exits.
+ * Emit a 403 and exit. Centralised so all gate paths use identical headers.
+ *
+ * @return never
+ */
+function wpmgr_waf_deny(): void
+{
+    if (!headers_sent()) {
+        http_response_code(403);
+        header('Cache-Control: no-cache, no-store, must-revalidate');
+        header('Pragma: no-cache');
+        header('Expires: 0');
+        header('Content-Type: text/plain; charset=utf-8');
+    }
+    exit('Access denied.');
+}
+
+/**
+ * Pure gate-decision function — no side effects, no exit().
+ *
+ * Evaluates the two-layer deny logic against a pre-resolved config array and
+ * a pre-resolved client IP string. Returns true when the gate WOULD deny the
+ * request; false when it would pass.
+ *
+ * Layer order (must be preserved exactly — tests assert on this order):
+ *   (1) allow_cidrs match           → no-deny (always wins)
+ *   (2) private/loopback IP         → no-deny (operator lock-out guard)
+ *   (3) hardening_deny_cidrs        → deny    (all modes, mode-independent)
+ *   (4) mode != protect             → no-deny (brute-force gate is mode-gated)
+ *   (5) deny_cidrs in protect mode  → deny
+ *
+ * Extracting the decision into this pure function means:
+ *   - Tests `require_once` this file and call wpmgr_waf_should_deny() directly,
+ *     so any reordering of the layers above breaks the tests immediately.
+ *   - wpmgr_waf_gate() remains the only caller that executes the exit path.
+ *
+ * @param array<string,mixed> $config Decoded wpmgr_security_config array.
+ * @param string              $ip     Pre-resolved client IP (already sanitised).
+ * @param string              $mode   Login-protection mode from $config.
+ * @return bool True → should deny; false → should pass.
+ */
+function wpmgr_waf_should_deny(array $config, string $ip, string $mode): bool
+{
+    if ($ip === '') {
+        return false;
+    }
+
+    $denyCidrs = isset($config['deny_cidrs']) && is_array($config['deny_cidrs'])
+        ? $config['deny_cidrs']
+        : [];
+
+    $allowCidrs = isset($config['allow_cidrs']) && is_array($config['allow_cidrs'])
+        ? $config['allow_cidrs']
+        : [];
+
+    $hardeningCidrs = isset($config['hardening_deny_cidrs']) && is_array($config['hardening_deny_cidrs'])
+        ? $config['hardening_deny_cidrs']
+        : [];
+
+    // Fast path: nothing to deny in any list.
+    if ($denyCidrs === [] && $hardeningCidrs === []) {
+        return false;
+    }
+
+    // (1) allow_cidrs always wins — checked once, applies to ALL paths.
+    if ($allowCidrs !== [] && wpmgr_waf_matches_any_cidr($ip, $allowCidrs)) {
+        return false;
+    }
+
+    // (2) Private/loopback IPs are auto-bypassed in ALL paths.
+    if (wpmgr_waf_is_private($ip)) {
+        return false;
+    }
+
+    // (3) Operator hardening bans — enforced in ALL modes, mode-independent.
+    // ITEM 5 FIX: explicit operator bans must block regardless of login-protection
+    // mode. Stored under 'hardening_deny_cidrs' so they evaluate independently.
+    if ($hardeningCidrs !== [] && wpmgr_waf_matches_any_cidr($ip, $hardeningCidrs)) {
+        return true;
+    }
+
+    // (4) Brute-force protect gate — only active when mode == protect.
+    if ($mode !== 'protect') {
+        return false;
+    }
+
+    if ($denyCidrs === []) {
+        return false;
+    }
+
+    // (5) deny_cidrs in protect mode.
+    if (wpmgr_waf_matches_any_cidr($ip, $denyCidrs)) {
+        return true;
+    }
+
+    return false;
+}
+
+/**
+ * Main WAF gate. Reads config from wp_options via $wpdb and applies two
+ * independent enforcement layers:
+ *
+ *   1. Operator hardening bans (deny_cidrs sourced from the hardening config via
+ *      syncWafDenyCidrs) — enforced in ALL modes, regardless of login-protection
+ *      mode. An explicit operator ban must always block (ITEM 5 FIX).
+ *
+ *   2. Brute-force protect gate (mode == "protect") — the original behaviour,
+ *      unchanged. Only active when the operator has explicitly enabled protect
+ *      mode for login protection.
+ *
+ * Safety invariants preserved in both paths:
+ *   - allow_cidrs always wins (checked before any deny).
+ *   - Private/loopback IPs are auto-bypassed.
+ *   - A DB failure or any exception NEVER blocks a real request (try/catch).
+ *
+ * The actual deny decision is delegated to wpmgr_waf_should_deny() so that
+ * tests can exercise the real logic without triggering exit().
  *
  * @return void
  */
@@ -260,50 +374,15 @@ function wpmgr_waf_gate(): void
         }
 
         $mode = isset($config['mode']) && is_string($config['mode']) ? $config['mode'] : 'protect';
-        if ($mode !== 'protect') {
-            return; // Only hard-gate in protect mode.
-        }
-
-        $denyCidrs  = isset($config['deny_cidrs']) && is_array($config['deny_cidrs'])
-            ? $config['deny_cidrs']
-            : [];
-        if ($denyCidrs === []) {
-            return; // Nothing to deny.
-        }
-
-        $allowCidrs = isset($config['allow_cidrs']) && is_array($config['allow_cidrs'])
-            ? $config['allow_cidrs']
-            : [];
 
         $ipHeader = isset($config['ip_header']) && is_string($config['ip_header']) && $config['ip_header'] !== ''
             ? strtoupper(trim($config['ip_header']))
             : 'REMOTE_ADDR';
 
         $ip = wpmgr_waf_client_ip($ipHeader, $_SERVER);
-        if ($ip === '') {
-            return;
-        }
 
-        // SAFETY RAIL: allow_cidrs always wins first.
-        if ($allowCidrs !== [] && wpmgr_waf_matches_any_cidr($ip, $allowCidrs)) {
-            return;
-        }
-
-        // Private/loopback IPs are auto-bypassed (LAN admin can never be locked out).
-        if (wpmgr_waf_is_private($ip)) {
-            return;
-        }
-
-        // If IP matches deny_cidrs → 403 and exit BEFORE WordPress boots.
-        if (wpmgr_waf_matches_any_cidr($ip, $denyCidrs)) {
-            if (!headers_sent()) {
-                http_response_code(403);
-                header('Cache-Control: no-cache, no-store, must-revalidate');
-                header('Pragma: no-cache');
-                header('Expires: 0');
-                header('Content-Type: text/plain; charset=utf-8');
-            }
-            exit('Access denied.');
+        if (wpmgr_waf_should_deny($config, $ip, $mode)) {
+            wpmgr_waf_deny();
         }
     } catch (\Throwable $e) {
         // A DB failure or any unexpected error must NEVER block a real request.
@@ -312,4 +391,10 @@ function wpmgr_waf_gate(): void
 }
 
 // Execute immediately — $wpdb is available at mu-plugin load time.
-wpmgr_waf_gate();
+// WPMGR_WAF_TESTING: when this constant is defined, the file is being included
+// by the test suite (require_once to load function definitions only). In that
+// case, skip the top-level wpmgr_waf_gate() call — $wpdb is not available in
+// the test environment and the gate would throw/exit anyway.
+if (!defined('WPMGR_WAF_TESTING')) {
+    wpmgr_waf_gate();
+}
