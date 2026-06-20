@@ -39,20 +39,20 @@ func (r *Repo) UpsertFeedRecord(ctx context.Context, tx pgx.Tx, rec FeedRecord) 
 	_, err := tx.Exec(ctx, `
 		INSERT INTO wordfence_vuln_feed
 			(vuln_id, title, cve, cve_link, cvss_score, cvss_rating, cwe,
-			 informational, references, published, updated, raw)
+			 informational, reference_urls, published, updated, raw)
 		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
 		ON CONFLICT (vuln_id) DO UPDATE SET
-			title         = EXCLUDED.title,
-			cve           = EXCLUDED.cve,
-			cve_link      = EXCLUDED.cve_link,
-			cvss_score    = EXCLUDED.cvss_score,
-			cvss_rating   = EXCLUDED.cvss_rating,
-			cwe           = EXCLUDED.cwe,
-			informational = EXCLUDED.informational,
-			references    = EXCLUDED.references,
-			published     = EXCLUDED.published,
-			updated       = EXCLUDED.updated,
-			raw           = EXCLUDED.raw`,
+			title          = EXCLUDED.title,
+			cve            = EXCLUDED.cve,
+			cve_link       = EXCLUDED.cve_link,
+			cvss_score     = EXCLUDED.cvss_score,
+			cvss_rating    = EXCLUDED.cvss_rating,
+			cwe            = EXCLUDED.cwe,
+			informational  = EXCLUDED.informational,
+			reference_urls = EXCLUDED.reference_urls,
+			published      = EXCLUDED.published,
+			updated        = EXCLUDED.updated,
+			raw            = EXCLUDED.raw`,
 		rec.VulnID, rec.Title, nilString(rec.CVE), nilString(rec.CVELink),
 		rec.CVSSScore, nilString(rec.CVSSRating), rec.CWE,
 		rec.Informational, rec.References, rec.Published, rec.Updated, rec.Raw,
@@ -192,7 +192,7 @@ func (r *Repo) LookupSoftware(ctx context.Context, kind, slug string) ([]VulnSof
 	querySlug := normSlug(slug)
 	rows, err := r.pool.Query(ctx, `
 		SELECT s.vuln_id, s.kind, s.slug, s.affected_versions, s.patched, s.patched_versions,
-		       f.title, f.cve, f.cve_link, f.cvss_score, f.cvss_rating, f.references
+		       f.title, f.cve, f.cve_link, f.cvss_score, f.cvss_rating, f.reference_urls
 		FROM wordfence_vuln_software s
 		JOIN wordfence_vuln_feed f USING (vuln_id)
 		WHERE s.kind = $1 AND s.slug = $2`, kind, querySlug)
@@ -307,7 +307,7 @@ func (r *Repo) ListOpenFindings(ctx context.Context, tenantID, siteID uuid.UUID)
 			       v.installed_version, v.fixed_version, v.severity, v.cvss_score,
 			       v.cve, v.title, v.status, v.first_seen, v.last_seen,
 			       v.resolved_at, v.dismissed_at, v.dismissed_by,
-			       f.cve_link, f.references
+			       f.cve_link, f.reference_urls
 			FROM site_vulnerabilities v
 			LEFT JOIN wordfence_vuln_feed f USING (vuln_id)
 			WHERE v.tenant_id = $1 AND v.site_id = $2 AND v.status = 'open'
@@ -347,7 +347,7 @@ func (r *Repo) GetFinding(ctx context.Context, tenantID, siteID, findingID uuid.
 			       v.installed_version, v.fixed_version, v.severity, v.cvss_score,
 			       v.cve, v.title, v.status, v.first_seen, v.last_seen,
 			       v.resolved_at, v.dismissed_at, v.dismissed_by,
-			       COALESCE(fd.cve_link,''), COALESCE(fd.references,'[]'::jsonb)
+			       COALESCE(fd.cve_link,''), COALESCE(fd.reference_urls,'[]'::jsonb)
 			FROM site_vulnerabilities v
 			LEFT JOIN wordfence_vuln_feed fd USING (vuln_id)
 			WHERE v.tenant_id = $1 AND v.site_id = $2 AND v.id = $3`,
@@ -455,7 +455,7 @@ func (r *Repo) FleetOpenFindings(ctx context.Context, tenantID uuid.UUID, limit 
 			       v.installed_version, v.fixed_version, v.severity, v.cvss_score,
 			       v.cve, v.title, v.status, v.first_seen, v.last_seen,
 			       v.resolved_at, v.dismissed_at, v.dismissed_by,
-			       COALESCE(f.cve_link,''), COALESCE(f.references,'[]'::jsonb),
+			       COALESCE(f.cve_link,''), COALESCE(f.reference_urls,'[]'::jsonb),
 			       s.name AS site_name, s.url AS site_url
 			FROM site_vulnerabilities v
 			LEFT JOIN wordfence_vuln_feed f USING (vuln_id)
