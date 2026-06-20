@@ -210,4 +210,95 @@ final class HideBackendModuleTest extends TestCase
 
         $this->assertTrue($ref->invoke($mod), 'autologin REST path must always bail (lockout-proofing)');
     }
+
+    // -------------------------------------------------------------------------
+    // LOW (b): matchesSlug must not match at arbitrary depth
+    // -------------------------------------------------------------------------
+
+    public function test_low_b_matches_slug_only_at_root_depth(): void
+    {
+        $policy = $this->makePolicy(true, 'my-secret-login');
+        $mod    = $this->module($policy);
+
+        $ref = new \ReflectionMethod($mod, 'matchesSlug');
+        $ref->setAccessible(true);
+
+        // Root-depth match: must be true.
+        $this->assertTrue(
+            $ref->invoke($mod, '/my-secret-login', 'my-secret-login'),
+            'LOW (b): slug at root depth must match'
+        );
+
+        // Sub-path match: must be false (the slug appears as a later segment).
+        $this->assertFalse(
+            $ref->invoke($mod, '/some/path/my-secret-login', 'my-secret-login'),
+            'LOW (b): slug at sub-path depth must NOT match (bypass prevented)'
+        );
+
+        // Another sub-path variant.
+        $this->assertFalse(
+            $ref->invoke($mod, '/subdir/my-secret-login', 'my-secret-login'),
+            'LOW (b): slug under /subdir must NOT match'
+        );
+
+        // Exact wrong slug.
+        $this->assertFalse(
+            $ref->invoke($mod, '/other-slug', 'my-secret-login'),
+            'LOW (b): different slug must not match'
+        );
+
+        // Empty path.
+        $this->assertFalse(
+            $ref->invoke($mod, '/', 'my-secret-login'),
+            'LOW (b): root path must not match slug'
+        );
+    }
+
+    public function test_low_b_matches_slug_works_with_no_leading_slash(): void
+    {
+        $policy = $this->makePolicy(true, 'my-login');
+        $mod    = $this->module($policy);
+
+        $ref = new \ReflectionMethod($mod, 'matchesSlug');
+        $ref->setAccessible(true);
+
+        // Path without a leading slash (defensive).
+        $this->assertTrue(
+            $ref->invoke($mod, 'my-login', 'my-login'),
+            'LOW (b): slug match must work even when path has no leading slash'
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // LOW (b): isLoginOrAdminPath catches wp-login.php query-action variants
+    // -------------------------------------------------------------------------
+
+    public function test_low_b_is_login_path_catches_action_variants(): void
+    {
+        $policy = $this->makePolicy();
+        $mod    = $this->module($policy);
+
+        $ref = new \ReflectionMethod($mod, 'isLoginOrAdminPath');
+        $ref->setAccessible(true);
+
+        // Standard form.
+        $this->assertTrue($ref->invoke($mod, '/wp-login.php'), 'isLoginOrAdminPath: bare wp-login.php');
+
+        // With a subdirectory prefix (site installed in /subdir).
+        $this->assertTrue(
+            $ref->invoke($mod, '/subdir/wp-login.php'),
+            'isLoginOrAdminPath: wp-login.php under subdirectory'
+        );
+
+        // wp-admin variants.
+        $this->assertTrue($ref->invoke($mod, '/wp-admin'), 'isLoginOrAdminPath: /wp-admin');
+        $this->assertTrue($ref->invoke($mod, '/wp-admin/'), 'isLoginOrAdminPath: /wp-admin/ (trailing slash stripped by getRequestPath but defensive)');
+        $this->assertTrue($ref->invoke($mod, '/wp-admin/edit.php'), 'isLoginOrAdminPath: /wp-admin/edit.php');
+        $this->assertTrue($ref->invoke($mod, '/wp-admin/options-general.php'), 'isLoginOrAdminPath: /wp-admin/options-general.php');
+
+        // Non-login paths must not match.
+        $this->assertFalse($ref->invoke($mod, '/some-page'), 'isLoginOrAdminPath: non-login page must not match');
+        $this->assertFalse($ref->invoke($mod, '/my-secret-login'), 'isLoginOrAdminPath: custom slug must not match');
+        $this->assertFalse($ref->invoke($mod, '/wp-content/uploads/file.php'), 'isLoginOrAdminPath: wp-content must not match');
+    }
 }

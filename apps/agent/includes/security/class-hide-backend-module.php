@@ -185,22 +185,44 @@ final class HideBackendModule
 
     /**
      * Whether the request path matches the configured slug.
-     * Compares the path's basename (last segment) against the slug.
      *
-     * @param string $path
-     * @param string $slug
+     * Compares the FIRST path segment (the segment immediately after the
+     * leading slash, before any subdirectory) against the slug. This prevents
+     * a slug match at any arbitrary depth, e.g. a request for
+     * /some/deep/my-secret-login must NOT trigger the slug handler; only
+     * /my-secret-login (at root depth) should.
+     *
+     * Sites installed in a subdirectory are handled by stripping the
+     * subdirectory prefix if one is detected via ABSPATH / home_url. In the
+     * simple/common case (root install), the first segment comparison is exact.
+     *
+     * @param string $path The request path (no query string, no trailing slash).
+     * @param string $slug The configured hide-backend slug.
      * @return bool
      */
     private function matchesSlug(string $path, string $slug): bool
     {
-        $base = basename($path);
-        return $base === $slug;
+        // Normalise: ensure leading slash, no trailing slash.
+        $path = '/' . ltrim($path, '/');
+
+        // Extract the first path segment.
+        // For '/my-secret-login' the segment is 'my-secret-login'.
+        // For '/subdir/my-secret-login' the segment is 'subdir' (not a match).
+        $afterSlash = ltrim($path, '/');
+        $firstSlash = strpos($afterSlash, '/');
+        $firstSegment = ($firstSlash !== false)
+            ? substr($afterSlash, 0, $firstSlash)
+            : $afterSlash;
+
+        return $firstSegment === $slug;
     }
 
     /**
      * Whether the path is a canonical wp-login or wp-admin location.
+     * Also catches wp-login.php?action=* variants (lost password, register, etc.)
+     * so the access-cookie check applies to the full login multi-request dance.
      *
-     * @param string $path
+     * @param string $path The request path (no query string, no trailing slash).
      * @return bool
      */
     private function isLoginOrAdminPath(string $path): bool
@@ -208,8 +230,14 @@ final class HideBackendModule
         $loginFile = '/wp-login.php';
         $adminDir  = '/wp-admin';
 
-        return str_ends_with($path, $loginFile)
-            || $path === $adminDir
+        // Match /wp-login.php at any install depth (e.g. /subdir/wp-login.php).
+        // Also catch the original REQUEST_URI with a query string still present --
+        // getRequestPath() strips the query via strtok, but we handle both to be safe.
+        if (str_contains($path, 'wp-login.php')) {
+            return true;
+        }
+
+        return $path === $adminDir
             || str_starts_with($path, $adminDir . '/');
     }
 

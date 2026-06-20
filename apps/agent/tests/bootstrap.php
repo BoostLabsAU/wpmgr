@@ -227,6 +227,12 @@ if (!class_exists('WP_User')) {
 
         public string $user_login = '';
 
+        public string $user_email = '';
+
+        public string $user_pass = '';
+
+        public string $display_name = '';
+
         /** @var array<int,string> */
         public array $roles = [];
     }

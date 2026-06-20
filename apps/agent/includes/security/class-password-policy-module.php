@@ -255,7 +255,8 @@ final class PasswordPolicyModule
             }
         }
 
-        // Check expiry.
+        // Check expiry. The force-list reason (set above) takes precedence:
+        // only set 'expiry' if no flag is already recorded for this user.
         $maxAge = $this->policy->effectiveMaxAgeDays($user);
         if ($maxAge > 0) {
             $lastChanged = (int) get_user_meta($userId, self::META_LAST_CHANGED, true);
@@ -265,8 +266,15 @@ final class PasswordPolicyModule
                     update_user_meta($userId, self::META_LAST_CHANGED, time());
                 }
             } elseif (time() - $lastChanged > $maxAge * 86400) {
-                if (function_exists('update_user_meta')) {
-                    update_user_meta($userId, self::META_FORCE_CHANGE, 'expiry');
+                // Only set 'expiry' if the force-list did not already set a more
+                // specific reason above. This preserves operator intent.
+                $existingFlag = function_exists('get_user_meta')
+                    ? get_user_meta($userId, self::META_FORCE_CHANGE, true)
+                    : '';
+                if (!is_string($existingFlag) || $existingFlag === '') {
+                    if (function_exists('update_user_meta')) {
+                        update_user_meta($userId, self::META_FORCE_CHANGE, 'expiry');
+                    }
                 }
             }
         }
@@ -292,7 +300,12 @@ final class PasswordPolicyModule
             $this->checkCompromised($password, $user, $errors);
             $this->checkReuse($password, $user, $errors);
         } catch (\Throwable $e) {
-            // Validation engine failure is non-fatal; fail-open.
+            // Validation engine failure is non-fatal; fail-open to avoid lockout.
+            // Log the error when WP_DEBUG is on so operators can diagnose failures.
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                // phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log -- WP_DEBUG-gated diagnostic log; never in production
+                error_log('wpmgr-agent: PasswordPolicyModule::validatePassword caught exception: ' . $e->getMessage());
+            }
         }
     }
 
