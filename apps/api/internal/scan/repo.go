@@ -598,6 +598,218 @@ func (r *Repo) UpsertChecksums(ctx context.Context, version, locale string, rows
 }
 
 // ---------------------------------------------------------------------------
+// wporg_plugin_checksums + wporg_plugin_checksums_meta (no RLS)
+// ---------------------------------------------------------------------------
+
+// GetPluginChecksumsMeta returns freshness metadata for a (kind, slug, version).
+// Returns (fetchedAt, ok, found, err). found=false when no meta row exists.
+func (r *Repo) GetPluginChecksumsMeta(ctx context.Context, kind, slug, version string) (time.Time, bool, bool, error) {
+	row := r.pool.QueryRow(ctx,
+		`SELECT fetched_at, ok FROM wporg_plugin_checksums_meta
+		 WHERE kind = $1 AND slug = $2 AND version = $3`,
+		kind, slug, version,
+	)
+	var fetchedAt time.Time
+	var ok bool
+	if err := row.Scan(&fetchedAt, &ok); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return time.Time{}, false, false, nil
+		}
+		return time.Time{}, false, false, domain.Internal("plugin_checksums_meta_get_failed", "failed to get plugin checksums meta").WithCause(err)
+	}
+	return fetchedAt, ok, true, nil
+}
+
+// UpsertPluginChecksumsMeta records a fetch attempt (positive or negative).
+func (r *Repo) UpsertPluginChecksumsMeta(ctx context.Context, kind, slug, version string, ok bool) error {
+	_, err := r.pool.Exec(ctx,
+		`INSERT INTO wporg_plugin_checksums_meta (kind, slug, version, fetched_at, ok)
+		 VALUES ($1, $2, $3, now(), $4)
+		 ON CONFLICT (kind, slug, version) DO UPDATE
+		   SET fetched_at = now(), ok = EXCLUDED.ok`,
+		kind, slug, version, ok,
+	)
+	if err != nil {
+		return domain.Internal("plugin_checksums_meta_upsert_failed", "failed to upsert plugin checksums meta").WithCause(err)
+	}
+	return nil
+}
+
+// GetPluginChecksums returns all checksum rows for a (kind, slug, version).
+// Multiple rows per path are expected (one per accepted md5 variant).
+func (r *Repo) GetPluginChecksums(ctx context.Context, kind, slug, version string) ([]PluginChecksumRow, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT kind, slug, version, path, md5
+		 FROM wporg_plugin_checksums
+		 WHERE kind = $1 AND slug = $2 AND version = $3`,
+		kind, slug, version,
+	)
+	if err != nil {
+		return nil, domain.Internal("plugin_checksums_get_failed", "failed to get plugin checksums").WithCause(err)
+	}
+	defer rows.Close()
+	var out []PluginChecksumRow
+	for rows.Next() {
+		var c PluginChecksumRow
+		if err := rows.Scan(&c.Kind, &c.Slug, &c.Version, &c.Path, &c.MD5); err != nil {
+			return nil, domain.Internal("plugin_checksums_get_failed", "failed to read plugin checksum row").WithCause(err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// UpsertPluginChecksums bulk-inserts plugin/theme checksum rows.
+// ON CONFLICT DO NOTHING: md5 is in the PK so duplicate variants are ignored;
+// re-inserts after a positive-cache refresh land cleanly.
+func (r *Repo) UpsertPluginChecksums(ctx context.Context, rows []PluginChecksumRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	const batchSize = 500
+	for i := 0; i < len(rows); i += batchSize {
+		end := i + batchSize
+		if end > len(rows) {
+			end = len(rows)
+		}
+		batch := rows[i:end]
+		args := make([]any, 0, len(batch)*5)
+		placeholders := make([]string, 0, len(batch))
+		for j, c := range batch {
+			base := j*5 + 1
+			placeholders = append(placeholders,
+				"($"+itoa(base)+", $"+itoa(base+1)+", $"+itoa(base+2)+
+					", $"+itoa(base+3)+", $"+itoa(base+4)+", now())")
+			args = append(args, c.Kind, c.Slug, c.Version, c.Path, c.MD5)
+		}
+		q := `INSERT INTO wporg_plugin_checksums (kind, slug, version, path, md5, fetched_at)
+			  VALUES ` + strings.Join(placeholders, ",") + `
+			  ON CONFLICT (kind, slug, version, path, md5) DO NOTHING`
+		if _, err := r.pool.Exec(ctx, q, args...); err != nil {
+			return domain.Internal("plugin_checksums_upsert_failed", "failed to upsert plugin checksums").WithCause(err)
+		}
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// site_file_baseline (tenant-scoped, RLS)
+// ---------------------------------------------------------------------------
+
+// GetBaseline returns all baseline rows for a site. Used by diffFiles before
+// computing the diff. Runs under InTenantTx.
+func (r *Repo) GetBaseline(ctx context.Context, tenantID, siteID uuid.UUID) ([]BaselineRow, error) {
+	var out []BaselineRow
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT site_id, tenant_id, path, md5, size, mtime, is_link, source, updated_run
+			 FROM site_file_baseline
+			 WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID,
+		)
+		if err != nil {
+			return domain.Internal("baseline_get_failed", "failed to get file baseline").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var b BaselineRow
+			if err := rows.Scan(&b.SiteID, &b.TenantID, &b.Path, &b.MD5, &b.Size, &b.Mtime, &b.IsLink, &b.Source, &b.UpdatedRun); err != nil {
+				return domain.Internal("baseline_get_failed", "failed to read baseline row").WithCause(err)
+			}
+			out = append(out, b)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// PromoteBaseline replaces the entire baseline for a site with the hashes from
+// the given run. Runs in a single tenant-scoped transaction:
+//  1. DELETE all existing baseline rows for the site.
+//  2. INSERT from scan_run_hashes for this run.
+//
+// This is the "promote" step called after a successful full/files run.
+func (r *Repo) PromoteBaseline(ctx context.Context, tenantID, siteID, runID uuid.UUID) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		// Delete existing baseline.
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM site_file_baseline WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID,
+		); err != nil {
+			return domain.Internal("baseline_promote_failed", "failed to delete old baseline").WithCause(err)
+		}
+		// Insert from this run's staged hashes.
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO site_file_baseline
+				(site_id, tenant_id, path, md5, size, mtime, is_link, source, updated_run, updated_at)
+			 SELECT $2, $1, path, md5, size, mtime, is_link, 'baseline', $3, now()
+			 FROM scan_run_hashes
+			 WHERE tenant_id = $1 AND run_id = $3`,
+			tenantID, siteID, runID,
+		); err != nil {
+			return domain.Internal("baseline_promote_failed", "failed to insert new baseline").WithCause(err)
+		}
+		return nil
+	})
+}
+
+// ---------------------------------------------------------------------------
+// site_managed_files (tenant-scoped, RLS)
+// ---------------------------------------------------------------------------
+
+// GetManagedFiles returns all managed-file rows for a site. Used by diffFiles.
+func (r *Repo) GetManagedFiles(ctx context.Context, tenantID, siteID uuid.UUID) ([]ManagedFileRow, error) {
+	var out []ManagedFileRow
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT site_id, tenant_id, path, md5, managed_by
+			 FROM site_managed_files
+			 WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID,
+		)
+		if err != nil {
+			return domain.Internal("managed_files_get_failed", "failed to get managed files").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m ManagedFileRow
+			if err := rows.Scan(&m.SiteID, &m.TenantID, &m.Path, &m.MD5, &m.ManagedBy); err != nil {
+				return domain.Internal("managed_files_get_failed", "failed to read managed file row").WithCause(err)
+			}
+			out = append(out, m)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// UpsertManagedFiles inserts or updates rows in site_managed_files.
+// Called by the record_managed_files agent-callback handler after the agent
+// reports paths + hashes for its own writes.
+func (r *Repo) UpsertManagedFiles(ctx context.Context, tenantID uuid.UUID, rows []ManagedFileRow) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		for _, m := range rows {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO site_managed_files
+					(site_id, tenant_id, path, md5, managed_by, updated_at)
+				 VALUES ($1, $2, $3, $4, $5, now())
+				 ON CONFLICT (site_id, path) DO UPDATE
+				   SET md5 = EXCLUDED.md5,
+				       managed_by = EXCLUDED.managed_by,
+				       updated_at = now()`,
+				m.SiteID, tenantID, m.Path, m.MD5, m.ManagedBy,
+			); err != nil {
+				return domain.Internal("managed_files_upsert_failed", "failed to upsert managed file").WithCause(err)
+			}
+		}
+		return nil
+	})
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
