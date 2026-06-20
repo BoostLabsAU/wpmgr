@@ -214,6 +214,9 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       },
       onError: (err: Error) => {
         setSaveError(err.message);
+        toast.error("Couldn't save login protection settings.", {
+          description: err.message,
+        });
       },
     });
   }
@@ -249,7 +252,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-mode-heading">
         <h3
           id="lp-mode-heading"
-          className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-3 text-sm font-medium text-[var(--color-foreground)]"
         >
           Mode
         </h3>
@@ -284,7 +287,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-allow-heading">
         <h3
           id="lp-allow-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Allow list (never blocked)
         </h3>
@@ -377,7 +380,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-deny-heading">
         <h3
           id="lp-deny-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Deny list (always blocked)
         </h3>
@@ -458,7 +461,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-thresholds-heading">
         <h3
           id="lp-thresholds-heading"
-          className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-3 text-sm font-medium text-[var(--color-foreground)]"
         >
           Brute-force thresholds
         </h3>
@@ -545,7 +548,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-ipheader-heading">
         <h3
           id="lp-ipheader-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Real-IP header
         </h3>

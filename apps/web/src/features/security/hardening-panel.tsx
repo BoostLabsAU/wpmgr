@@ -338,7 +338,7 @@ function SubSection({
     <section aria-labelledby={id}>
       <h3
         id={id}
-        className="mb-4 text-xs font-medium uppercase tracking-wide text-[var(--color-muted-foreground)]"
+        className="mb-4 text-sm font-medium text-[var(--color-foreground)]"
       >
         {title}
       </h3>
