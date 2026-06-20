@@ -79,6 +79,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/tenant"
 	"github.com/mosamlife/wpmgr/apps/api/internal/update"
 	"github.com/mosamlife/wpmgr/apps/api/internal/uptime"
+	"github.com/mosamlife/wpmgr/apps/api/internal/vuln"
 )
 
 // version is overridden at build time via -ldflags.
@@ -1163,6 +1164,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		portalReportSources = &reportSources
 	}
 
+	// m79 — Vulnerability Scanner. The repo, service, and workers are all
+	// constructed before River so they can be handed to the riverDeps struct.
+	// The rescan enqueuer (which needs a started riverClient) is wired after
+	// startRiver returns using vuln.Service.SetEnqueuer (see below).
+	vulnRepo := vuln.NewRepo(pool)
+	vulnFeedWorker := vuln.NewFeedWorker(vulnRepo, pool, nil /*svc: wired below*/, os.Getenv("WPMGR_WORDFENCE_API_KEY"), ssrfClient, logger)
+	vulnRescanWorker := vuln.NewRescanSiteWorker(nil /*svc: wired below*/, logger)
+
 	riverClient, err := startRiver(ctx, pool.Pool, logger, riverDeps{
 		healthChecker:          healthChecker,
 		healthInterval:         cfg.Agent.HealthInterval,
@@ -1219,6 +1228,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// P4b — cron kick (nil when WPMGR_CRON_KICK_ENABLED=false).
 		cronKickWorker:   cronKickWorker,
 		cronKickInterval: cronKickInterval,
+		// m79 — vulnerability scanner workers (always non-nil; feed worker no-ops
+		// when WPMGR_WORDFENCE_API_KEY is unset).
+		vulnFeedWorker:   vulnFeedWorker,
+		vulnRescanWorker: vulnRescanWorker,
 	})
 	if err != nil {
 		return err
@@ -1267,6 +1280,18 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if scanWorker != nil {
 		scanWorker.SetEnqueuer(scanEnqueuer)
 	}
+
+	// m79 — complete the vuln domain wiring now that riverClient is available.
+	// The service is the hub: it wires repo + pool + site-adapter + update-creator
+	// + rescan-enqueuer. The feed worker and rescan worker are registered in River
+	// (via riverDeps above); here we complete their service pointer so they can call
+	// through to RescanSite/RescanAll after a feed refresh or on demand.
+	vulnRescanEnq := vuln.NewRiverRescanEnqueuer(riverClient)
+	vulnSiteAdapterImpl := newVulnSiteAdapter(siteSvc)
+	vulnSvc := vuln.NewService(vulnRepo, pool, vulnSiteAdapterImpl, updateSvc, vulnRescanEnq, logger)
+	vulnFeedWorker.SetService(vulnSvc)
+	vulnRescanWorker.SetService(vulnSvc)
+	vulnH := vuln.NewHandler(vulnSvc, vulnRescanEnq, auditRec)
 
 	// M23 Media Optimizer: wire the EncodeArgs enqueuer now that River has
 	// started. The enqueuer lives in the PURE media package (no encoder import),
@@ -1816,6 +1841,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		PortalH:     portalH,
 		// ADR-059 Phase 3 — HIBP breach-password range proxy (agent-authenticated).
 		HIBPAgentH: hibpAgentH,
+		// m79 — vulnerability scanner: fleet rollup + per-site finding management.
+		VulnH:       vulnH,
 		ServiceName: cfg.OTel.ServiceName,
 		Version:     version,
 	})
@@ -2158,6 +2185,11 @@ type riverDeps struct {
 	// nil when WPMGR_CRON_KICK_ENABLED=false.
 	cronKickWorker   *uptime.CronKicker
 	cronKickInterval time.Duration
+	// m79 — vulnerability scanner: feed refresh worker + per-site rescan worker.
+	// Both are always wired; the feed worker no-ops cleanly when
+	// WPMGR_WORDFENCE_API_KEY is not set.
+	vulnFeedWorker   *vuln.FeedWorker
+	vulnRescanWorker *vuln.RescanSiteWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2533,6 +2565,36 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 			func() (river.JobArgs, *river.InsertOpts) { return uptime.CronKickArgs{}, nil },
 			&river.PeriodicJobOpts{RunOnStart: false},
 		))
+	}
+
+	// m79 — Vulnerability scanner: feed refresh worker + per-site rescan worker.
+	// The feed worker no-ops cleanly when WPMGR_WORDFENCE_API_KEY is not set.
+	// Both workers are registered unconditionally (always non-nil) so jobs
+	// already in the queue are processed even during a rolling redeploy where the
+	// key was only just configured.
+	if d.vulnFeedWorker != nil {
+		river.AddWorker(workers, d.vulnFeedWorker)
+		queues[vuln.FeedRefreshQueue] = river.QueueConfig{MaxWorkers: 1}
+		// Hourly feed refresh. RunOnStart: false — the first boot does not
+		// trigger an immediate full-dump request (respects Wordfence rate limits).
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) {
+				return vuln.FeedRefreshArgs{}, &river.InsertOpts{
+					Queue: vuln.FeedRefreshQueue,
+					// Deduplicate: at most one pending/running feed-refresh job.
+					UniqueOpts: river.UniqueOpts{
+						ByArgs:   true,
+						ByPeriod: time.Hour,
+					},
+				}
+			},
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
+	}
+	if d.vulnRescanWorker != nil {
+		river.AddWorker(workers, d.vulnRescanWorker)
+		queues[vuln.RescanSiteQueue] = river.QueueConfig{MaxWorkers: 8}
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

@@ -48,6 +48,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/tenant"
 	"github.com/mosamlife/wpmgr/apps/api/internal/update"
 	"github.com/mosamlife/wpmgr/apps/api/internal/uptime"
+	"github.com/mosamlife/wpmgr/apps/api/internal/vuln"
 )
 
 // Deps are the server's wired dependencies.
@@ -122,6 +123,10 @@ type Deps struct {
 	// run management + findings under /api/v1/sites/{siteId}/scans and
 	// /api/v1/findings/{id}/ignore.
 	ScanH *scan.Handler
+	// m79 — Vulnerability Scanner. VulnH serves the fleet-rollup endpoint at
+	// GET /api/v1/vulnerabilities and per-site finding management under
+	// /api/v1/sites/{siteId}/vulnerabilities/... nil ⇒ routes not mounted.
+	VulnH *vuln.Handler
 	// m16 — Restore Runs + Logs. RestoreRunH serves the per-site restore
 	// history and the by-id detail + phase-log endpoints.
 	RestoreRunH *backup.RestoreRunHandler
@@ -410,6 +415,10 @@ func New(deps Deps) *Server {
 	// S3 — operator-facing scan run management + findings routes.
 	if deps.ScanH != nil {
 		deps.ScanH.Register(v1)
+	}
+	// m79 — vulnerability scanner: fleet rollup + per-site finding management.
+	if deps.VulnH != nil {
+		deps.VulnH.Register(v1)
 	}
 	// M72 — site screenshot refresh endpoint. Gated on RequireSiteAccess inside
 	// the handler's Register (same as every per-site endpoint).

@@ -8,6 +8,7 @@ import {
   Ban,
   EyeOff,
   Info,
+  ShieldAlert,
 } from "lucide-react";
 
 import { useMe, canOperate } from "@/features/auth/use-auth";
@@ -28,6 +29,8 @@ import { useHardeningConfig } from "@/features/security/use-hardening";
 import { useSecurityConfig } from "@/features/security/use-security";
 import { useScanRuns, useStartScan } from "@/features/security/use-scan";
 import { useSiteSecurityPolicy } from "@/features/security/use-policy";
+import { useSiteVulnerabilities, countHighRisk } from "@/features/security/use-vuln";
+import { VulnPanel } from "@/features/security/vuln-panel";
 import { toast } from "@/components/toast";
 
 // `/sites/$siteId/security` — six cards (Impeccable card-based layout).
@@ -142,6 +145,26 @@ function hideLoginStatus(
     : { variant: "muted", label: "Off" };
 }
 
+function vulnStatus(
+  vulnData: ReturnType<typeof useSiteVulnerabilities>["data"],
+): CardStatus {
+  if (!vulnData) return { variant: "muted", label: "Loading" };
+  if (!vulnData.feed_ok) return { variant: "muted", label: "Feed not configured" };
+  const openFindings = (vulnData.items ?? []).filter((f) => f.status === "open");
+  if (openFindings.length === 0) return { variant: "success", label: "Clean" };
+  const highRisk = countHighRisk(vulnData.items ?? []);
+  if (highRisk > 0) {
+    return {
+      variant: "destructive",
+      label: `${openFindings.length} finding${openFindings.length !== 1 ? "s" : ""}`,
+    };
+  }
+  return {
+    variant: "warning",
+    label: `${openFindings.length} finding${openFindings.length !== 1 ? "s" : ""}`,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Run scan button (used in the File integrity card header action slot)
 // ---------------------------------------------------------------------------
@@ -203,12 +226,14 @@ function SecurityTab() {
   const loginProtQuery = useSecurityConfig(siteId);
   const scanRunsQuery = useScanRuns(siteId);
   const policyQuery = useSiteSecurityPolicy(siteId);
+  const vulnQuery = useSiteVulnerabilities(siteId);
 
   const overviewLoading =
     hardeningQuery.isPending ||
     loginProtQuery.isPending ||
     scanRunsQuery.isPending ||
-    policyQuery.isPending;
+    policyQuery.isPending ||
+    vulnQuery.isPending;
 
   const latestScanRun = scanRunsQuery.data?.[0] ?? null;
   const scanBusy =
@@ -238,6 +263,7 @@ function SecurityTab() {
         loginProtectionConfig={loginProtQuery.data}
         latestScanRun={latestScanRun}
         policy={policyQuery.data}
+        vulnData={vulnQuery.data}
         isLoading={overviewLoading}
         onTileClick={handleTileClick}
       />
@@ -397,6 +423,20 @@ function SecurityTab() {
             canWrite={canWrite}
             section="hide_backend"
           />
+        </SecurityCard>
+      </div>
+
+      {/* ── Card 7: Vulnerabilities ── */}
+      <div data-card-id="card-vulnerabilities">
+        <SecurityCard
+          id="card-vulnerabilities"
+          icon={<ShieldAlert className="size-5" />}
+          iconTint="bg-orange-100 text-orange-600 dark:bg-orange-950 dark:text-orange-400"
+          title="Vulnerabilities"
+          purpose="Checks your installed plugins, themes, and WordPress version against a database of known security vulnerabilities."
+          status={vulnStatus(vulnQuery.data)}
+        >
+          <VulnPanel siteId={siteId} canWrite={canWrite} />
         </SecurityCard>
       </div>
     </div>
