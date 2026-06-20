@@ -6,6 +6,16 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-06-20
+
+### Added
+
+- **Two-factor authentication for WordPress site users.** Operators can require 2FA for chosen user roles on any managed site, enforced at the WordPress login screen. Supported methods: authenticator app (TOTP), email one-time code, and single-use backup codes. Configurable grace logins let users enroll before enforcement kicks in, and a remember-this-device window reduces friction for trusted machines. The WPMgr control plane and wp-config recovery constants can always bypass enforcement, so operators can never be locked out of a site they manage. Note: enabling 2FA applies to new logins; existing authenticated sessions remain valid until they expire naturally.
+- **Password policy for WordPress site users.** Per-site policy options: minimum password strength, blocking known-compromised passwords (checked by a privacy-preserving prefix query against a free public breach corpus so the plaintext password never leaves the site), blocking password reuse, and optional password expiry with a forced-change screen on next login.
+- **Hide login page.** Operators can move the WordPress login page to a secret address per site, reducing automated login attempts without breaking the WPMgr control plane's access to the site.
+
+All three controls are per-site, opt-in, and off by default.
+
 ## [0.53.0] - 2026-06-20
 
 ### Added
