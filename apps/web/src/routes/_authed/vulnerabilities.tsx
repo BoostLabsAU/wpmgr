@@ -279,11 +279,9 @@ function FeedNotConfiguredState() {
           Vulnerability feed not configured yet
         </p>
         <p className="text-sm text-[var(--color-muted-foreground)]">
-          An administrator needs to connect the Wordfence Intelligence feed by
-          setting the{" "}
-          <span className="font-mono text-xs">WPMGR_WORDFENCE_API_KEY</span>{" "}
-          environment variable on the control plane. Vulnerability scanning will
-          begin automatically once the feed is connected.
+          An administrator needs to connect the Wordfence Intelligence feed from
+          the Admin area, under Vulnerability feed. Vulnerability scanning begins
+          automatically once the feed is connected.
         </p>
       </div>
     </div>
