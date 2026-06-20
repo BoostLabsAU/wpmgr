@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-06-20
+
+### Added
+
+- **File integrity monitoring.** Operators can run a file-integrity scan over the whole WordPress install or just wp-content, in addition to the existing core-file check. Scan scope is selectable per run: Core files, wp-content, or Full install. The control plane compares scanned file hashes against WordPress.org checksums for WordPress core and for wp.org-hosted plugins and themes, and against a learned per-site baseline for everything else. The scan reports changed, added, and removed files, and flags modified or unrecognized files in plugins and themes. A flagged file stays flagged on every subsequent scan until an operator reviews and explicitly accepts it; the baseline never silently advances past an unreviewed change. Uses free WordPress.org checksum data only, no external paid service. Results surface in the per-site Security tab alongside existing scan findings.
+
 ## [0.52.0] - 2026-06-20
 
 ### Added
