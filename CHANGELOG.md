@@ -6,6 +6,12 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-06-20
+
+### Added
+
+- **Vulnerability scanner.** WPMgr now checks every managed site's installed plugins, themes, and WordPress core version against the free Wordfence Intelligence vulnerability feed and flags anything with a known security issue. Each finding shows severity, the affected version range, the fixed version, and CVE references. Findings appear per-site on the Security tab (a new Vulnerabilities card and overview tile) and across the whole fleet on the Vulnerabilities page. One-click remediation updates a vulnerable plugin, theme, or core install to the fixed version using the existing update flow. Operators can dismiss a finding and restore it later. Requires a free Wordfence Intelligence API key to connect the feed; the UI shows a clear "feed not configured" state until the key is added.
+
 ## [0.55.0] - 2026-06-20
 
 ### Added
