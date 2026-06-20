@@ -203,6 +203,24 @@ The following invariants are hard requirements on any shipped implementation:
 
 ---
 
+## Accepted residual: pre-enrollment sessions are not retroactively challenged
+
+Enabling 2FA (or enrolling a method) does **not** invalidate auth cookies that
+were issued before that point. New logins, application-password auth, and
+XML-RPC for 2FA-required users are all gated, so an attacker cannot use only a
+password to obtain a fresh session. But a user with a live, already-established
+session keeps access until that cookie expires (bounded by the WordPress session
+cookie lifetime, typically up to 14 days with "remember me"). This was confirmed
+in the Phase 3 security review (finding R1) and is accepted for the initial
+release: there is no `determine_current_user` / `admin_init` re-challenge of
+existing sessions. Operators who need immediate enforcement should advise users
+to log out, or rely on the natural cookie-expiry window. A follow-up may add an
+`admin_init` re-challenge keyed on a "2FA-verified" session marker (mirroring the
+operator-2FA design) if the threat model requires instant cutover; it is gated on
+its own lockout-safety review because it touches every authenticated request.
+
+---
+
 ## Security review mandate
 
 The agent implementation of this feature (P3.2–P3.4) is **HIGH security-review

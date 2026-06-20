@@ -36,6 +36,14 @@
  * via PasswordPolicyModule::validatePassword). The same WPMGR_DISABLE_SITE_2FA
  * escape hatch disables this enforcement.
  *
+ * FORCED-CHANGE ATTEMPT LIMITING (N1 fix):
+ * handleVerifySubmit() runs the cross-request cap and per-session MAX_ATTEMPTS
+ * guard BEFORE routing to either the 2FA handler or the forced-change handler.
+ * Both paths are therefore subject to the same bound. handleForcedChangeSubmit()
+ * increments both counters on every validation failure and clears them on success,
+ * exactly mirroring the 2FA failure/success paths. A legitimate user who changes
+ * their password successfully is NOT counted as a failure.
+ *
  * LOCKOUT-PROOFING:
  * - If define('WPMGR_DISABLE_SITE_2FA', true) is in wp-config, 2FA and
  *   forced-change enforcement are fully disabled.
@@ -439,11 +447,18 @@ final class Site2faModule
      * Validates the new password against the policy, clears META_FORCE_CHANGE,
      * and issues the real auth cookie on success.
      *
+     * Attempt counting (N1 fix): every validation failure increments both the
+     * per-session counter and the cross-request counter, exactly as the 2FA path
+     * does. The shared guards in handleVerifySubmit already ran before this is
+     * called; here we only need to persist the updated count on failure and clear
+     * it on success.
+     *
      * @param int                 $userId
      * @param array<string,mixed> $session
+     * @param int                 $currentAttempts Current value of session['attempts'] (already read by caller).
      * @return void
      */
-    private function handleForcedChangeSubmit(int $userId, array $session): void
+    private function handleForcedChangeSubmit(int $userId, array $session, int $currentAttempts): void
     {
         $user = function_exists('get_userdata') ? get_userdata($userId) : false;
         if (!($user instanceof \WP_User)) {
@@ -469,11 +484,19 @@ final class Site2faModule
         }
 
         if (!is_string($pass1) || $pass1 === '') {
+            // Failure: increment attempt counters before re-rendering the form (N1 fix).
+            $session['attempts'] = $currentAttempts + 1;
+            $this->storeSession($userId, $session);
+            $this->incrementCrossRequestAttempts($userId);
             $this->renderForcedChangeForm($user, $session, $forceReason, esc_html__('Please enter a new password.', 'wpmgr-agent'));
             return;
         }
 
         if (!is_string($pass2) || $pass1 !== $pass2) {
+            // Failure: increment attempt counters before re-rendering the form (N1 fix).
+            $session['attempts'] = $currentAttempts + 1;
+            $this->storeSession($userId, $session);
+            $this->incrementCrossRequestAttempts($userId);
             $this->renderForcedChangeForm($user, $session, $forceReason, esc_html__('Passwords do not match.', 'wpmgr-agent'));
             return;
         }
@@ -499,6 +522,10 @@ final class Site2faModule
             $pwMod->validatePassword($pass1, $user, $errors);
 
             if (!empty($errors->errors)) {
+                // Failure: increment attempt counters before re-rendering the form (N1 fix).
+                $session['attempts'] = $currentAttempts + 1;
+                $this->storeSession($userId, $session);
+                $this->incrementCrossRequestAttempts($userId);
                 $messages = implode(' ', array_map(fn ($m) => is_string($m) ? $m : '', array_column(array_values($errors->errors), 0)));
                 $this->renderForcedChangeForm($user, $session, $forceReason, $messages);
                 return;
@@ -519,8 +546,10 @@ final class Site2faModule
             update_user_meta($userId, PasswordPolicyModule::META_LAST_CHANGED, time());
         }
 
-        // Clear the interstitial session.
+        // Clear the interstitial session and the cross-request attempt counter on
+        // success (N1 fix: mirrors the 2FA success path at line ~683).
         $this->clearSession($userId);
+        $this->clearCrossRequestAttempts($userId);
 
         $redirectTo = isset($session['redirect_to']) && is_string($session['redirect_to'])
             ? $session['redirect_to']
@@ -638,27 +667,30 @@ final class Site2faModule
             wp_die(esc_html__('2FA session expired. Please log in again.', 'wpmgr-agent'), '', ['response' => 403]);
         }
 
-        // Route to the forced-change handler when the session type indicates it.
-        $sessionType = (string) ($session['type'] ?? self::SESSION_TYPE_2FA);
-        if ($sessionType === self::SESSION_TYPE_FORCED_CHANGE) {
-            $this->handleForcedChangeSubmit($userId, $session);
-            return;
-        }
+        // --- Shared brute-force guards (apply to BOTH 2FA and forced-change paths) ---
 
-        // --- Standard 2FA code verification path ---
-
-        // Cross-request brute-force guard: check the per-user cumulative attempt count.
+        // Cross-request guard: checked before routing so forced-change submits cannot
+        // bypass the per-user cumulative cap by recreating a new session (N1 fix).
         if (!$this->checkCrossRequestAttempts($userId)) {
             $this->clearSession($userId);
             wp_die(esc_html__('Too many failed verification attempts. Please log in again.', 'wpmgr-agent'), '', ['response' => 429]);
         }
 
-        // Per-session brute-force guard.
+        // Per-session brute-force guard: also applies to both paths (N1 fix).
         $attempts = (int) ($session['attempts'] ?? 0);
         if ($attempts >= self::MAX_ATTEMPTS) {
             $this->clearSession($userId);
             wp_die(esc_html__('Too many failed attempts. Please log in again.', 'wpmgr-agent'), '', ['response' => 429]);
         }
+
+        // Route to the forced-change handler when the session type indicates it.
+        $sessionType = (string) ($session['type'] ?? self::SESSION_TYPE_2FA);
+        if ($sessionType === self::SESSION_TYPE_FORCED_CHANGE) {
+            $this->handleForcedChangeSubmit($userId, $session, $attempts);
+            return;
+        }
+
+        // --- Standard 2FA code verification path ---
 
         // Find and validate the chosen provider.
         $provider = $this->findProvider($providerKey);
