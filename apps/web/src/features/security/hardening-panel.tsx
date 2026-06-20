@@ -57,9 +57,10 @@ export function HardeningPanel({
 
   if (!data) return null;
 
-  // Key on the full config so the form resets if a background refetch returns
-  // different server values (e.g. another operator changed the config).
-  const configKey = Object.entries(data.config)
+  // The GET returns the config FLAT (data IS the config). Key on it so the form
+  // resets if a background refetch returns different server values (e.g. another
+  // operator changed the config). The "not writable" caveat only arrives on save.
+  const configKey = Object.entries(data)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([k, v]) => `${k}:${String(v)}`)
     .join("|");
@@ -68,8 +69,7 @@ export function HardeningPanel({
     <HardeningLoaded
       key={configKey}
       siteId={siteId}
-      initialConfig={data.config}
-      initialDetail={data.detail}
+      initialConfig={data}
       canWrite={canWrite}
     />
   );
