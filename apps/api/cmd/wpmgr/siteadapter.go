@@ -20,6 +20,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 	"github.com/mosamlife/wpmgr/apps/api/internal/update"
 	"github.com/mosamlife/wpmgr/apps/api/internal/uptime"
+	"github.com/mosamlife/wpmgr/apps/api/internal/vuln"
 )
 
 // uptimeSiteAdapter adapts the site service to the uptime package's SiteVerifier
@@ -416,6 +417,55 @@ func (a *activitySecurityAlerter) NotifySecurity(ctx context.Context, tenantID, 
 }
 
 var _ activity.SecurityAlerter = (*activitySecurityAlerter)(nil)
+
+// vulnSiteAdapter adapts the site service to the vuln package's SiteLoader
+// interface. It keeps the vuln package free of a site import.
+type vulnSiteAdapter struct {
+	svc *site.Service
+}
+
+func newVulnSiteAdapter(svc *site.Service) *vulnSiteAdapter {
+	return &vulnSiteAdapter{svc: svc}
+}
+
+// GetSiteForVuln returns the site's WP version and installed component
+// inventory in the shape the vuln matcher expects.
+func (a *vulnSiteAdapter) GetSiteForVuln(ctx context.Context, tenantID, siteID uuid.UUID) (vuln.SiteSnapshot, error) {
+	s, err := a.svc.Get(ctx, tenantID, siteID)
+	if err != nil {
+		return vuln.SiteSnapshot{}, err
+	}
+	plugins, themes := s.ParsedComponents()
+	snap := vuln.SiteSnapshot{
+		ID:        s.ID,
+		TenantID:  s.TenantID,
+		Name:      s.Name,
+		URL:       s.URL,
+		WPVersion: s.WPVersion,
+	}
+	for _, p := range plugins {
+		snap.Plugins = append(snap.Plugins, vuln.ComponentSnapshot{
+			Slug:    p.Slug,
+			Name:    p.Name,
+			Version: p.Version,
+		})
+	}
+	for _, t := range themes {
+		snap.Themes = append(snap.Themes, vuln.ComponentSnapshot{
+			Slug:    t.Slug,
+			Name:    t.Name,
+			Version: t.Version,
+		})
+	}
+	return snap, nil
+}
+
+// ListAllSiteIDs returns all non-archived site IDs for the tenant.
+func (a *vulnSiteAdapter) ListAllSiteIDs(ctx context.Context, tenantID uuid.UUID) ([]uuid.UUID, error) {
+	return a.svc.ListAllSiteIDs(ctx, tenantID)
+}
+
+var _ vuln.SiteLoader = (*vulnSiteAdapter)(nil)
 
 func toSiteInfo(s site.Site) update.SiteInfo {
 	plugins, themes := s.ParsedComponents()
