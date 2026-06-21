@@ -61,6 +61,13 @@ const (
 	wfProductionURL = "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production"
 )
 
+// errRateLimited marks a 429 from the Wordfence feed. Wordfence documents no
+// Retry-After and no per-window number ("too many requests in a short period"),
+// so a 429 must NOT trigger River's aggressive retry — that just re-hits the
+// endpoint and keeps the rate-limit window warm. Instead we stamp the status and
+// succeed; the hourly periodic refresh is the natural, well-spaced retry.
+var errRateLimited = errors.New("wordfence feed rate limited (429)")
+
 // FeedHTTPDoer is the subset of httpclient.Client the feed worker needs.
 type FeedHTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -149,9 +156,18 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 	// Fetch the Scanner feed (required).
 	records, defiantNotice, defiantLicense, mitreNotice, err := w.fetchFeed(ctx, wfScannerURL, apiKey)
 	if err != nil {
+		// A 429 must NOT be retried by River: Wordfence rate-limits "too many
+		// requests in a short period" with no Retry-After, so aggressive retries
+		// keep the window warm and never recover. Stamp the status and SUCCEED;
+		// the hourly periodic refresh is the natural, well-spaced retry.
+		if errors.Is(err, errRateLimited) {
+			_ = w.repo.StampFeedError(ctx, "rate limited by Wordfence; will retry on the next scheduled refresh")
+			w.logger.Warn("vuln: scanner feed rate limited; skipping this cycle (no River retry)")
+			return nil
+		}
 		errMsg := fmt.Sprintf("scanner feed fetch failed: %v", err)
 		_ = w.repo.StampFeedError(ctx, errMsg)
-		return fmt.Errorf("vuln feed refresh: %w", err) // River will retry
+		return fmt.Errorf("vuln feed refresh: %w", err) // River will retry real failures
 	}
 
 	// Brief spacing between the two fetches reduces the chance of hitting the
@@ -304,7 +320,7 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 		// Single retry.
 		req2, rerr := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 		if rerr != nil {
-			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s: %w", feedURL, errRateLimited)
 		}
 		req2.Header.Set("Authorization", "Bearer "+apiKey)
 		req2.Header.Set("Accept", "application/json")
@@ -314,7 +330,7 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 			if resp2 != nil {
 				_ = resp2.Body.Close()
 			}
-			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s: %w", feedURL, errRateLimited)
 		}
 		// Swap to the retry response for decoding below.
 		_ = resp.Body.Close()
