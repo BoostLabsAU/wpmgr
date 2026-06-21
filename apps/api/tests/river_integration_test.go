@@ -165,6 +165,8 @@ func TestRiverWiringAndHealthJob(t *testing.T) {
 	}
 }
 
+// TestRiverDualSchemaIsolation verifies that API-owned and encoder-owned River
+// jobs land in separate schemas when media isolation is configured.
 func TestRiverDualSchemaIsolation(t *testing.T) {
 	pool := startPostgres(t)
 	ctx := context.Background()
@@ -244,6 +246,8 @@ func TestRiverDualSchemaIsolation(t *testing.T) {
 	}
 }
 
+// countRiverJobs returns the number of River jobs matching a focused
+// integration-test query.
 func countRiverJobs(t *testing.T, pool *db.Pool, query string) int {
 	t.Helper()
 	var n int

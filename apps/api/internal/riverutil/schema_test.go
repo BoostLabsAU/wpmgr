@@ -2,6 +2,9 @@ package riverutil
 
 import "testing"
 
+// TestNormalizeSchema covers empty, default, custom, and invalid River schema
+// identifiers so config parsing fails fast on values that would break SQL
+// qualification.
 func TestNormalizeSchema(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -33,6 +36,8 @@ func TestNormalizeSchema(t *testing.T) {
 	}
 }
 
+// TestQualifiedTable verifies that River table references are left unqualified
+// for the default/public schema and safely quoted only for custom schemas.
 func TestQualifiedTable(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -62,6 +67,8 @@ func TestQualifiedTable(t *testing.T) {
 	}
 }
 
+// TestIsDefaultSchema confirms that empty and public schemas keep the existing
+// single-schema behavior, while any custom schema is treated as isolated.
 func TestIsDefaultSchema(t *testing.T) {
 	if !IsDefaultSchema("") {
 		t.Fatal("empty schema should be default")

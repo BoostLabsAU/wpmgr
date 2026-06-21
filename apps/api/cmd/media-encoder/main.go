@@ -59,6 +59,8 @@ func main() {
 	}
 }
 
+// run boots the media-encoder: loads config, ensures the isolated River schema
+// when configured, wires workers, and starts the health/drain server.
 func run() error {
 	cfg, err := config.Load(os.Getenv("WPMGR_CONFIG_FILE"))
 	if err != nil {
@@ -435,6 +437,10 @@ func liveEncodeJobs(ctx context.Context, pool *db.Pool, mediaSchema string, queu
 	return n, nil
 }
 
+// liveEncodeJobsQuery builds the schema-aware drain query used by the encoder
+// health endpoint. It counts available, running, and retryable jobs across the
+// encoder-owned queues so /internal/drain keeps the instance alive until the
+// work actually finishes.
 func liveEncodeJobsQuery(mediaSchema string) (string, error) {
 	table, err := riverutil.QualifiedTable(mediaSchema, "river_job")
 	if err != nil {
@@ -450,6 +456,9 @@ func writeDrainResult(w http.ResponseWriter, drained bool, reason string) {
 	_, _ = fmt.Fprintf(w, `{"drained":%t,"reason":%q}`, drained, reason)
 }
 
+// encodeWorkerCount returns the configured media_encode concurrency, bounded
+// between 1 and twice the CPU count. The default is tuned for multi-vCPU
+// encoder instances where throughput comes from parallel workers.
 func encodeWorkerCount() int {
 	if s := os.Getenv("WPMGR_MEDIA_ENCODE_WORKERS"); s != "" {
 		if v := atoiClamp(s, 1, runtime.NumCPU()*2); v > 0 {
@@ -459,6 +468,8 @@ func encodeWorkerCount() int {
 	return defaultEncodeWorkers
 }
 
+// atoiClamp parses a non-negative integer and clamps it to [lo, hi]. It
+// returns 0 for non-numeric input so callers can fall back to a default.
 func atoiClamp(s string, lo, hi int) int {
 	n := 0
 	for _, c := range s {
@@ -483,14 +494,20 @@ func (disabledApply) MediaApply(_ context.Context, _ uuid.UUID, _ string, _ agen
 	return agentcmd.MediaApplyResponse{}, errEnv("media_apply disabled: no CP signing key configured")
 }
 
+// newLogger builds a JSON logger at the configured level for production encoder
+// output.
 func newLogger(cfg config.Config) *slog.Logger {
 	level := slog.LevelInfo
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 }
 
+// envError is a typed configuration error so missing/invalid environment values
+// are distinguishable from runtime failures.
 type envError string
 
 func (e envError) Error() string { return string(e) }
 
+// errEnv wraps a message in envError so boot can report a clear fatal config
+// problem.
 func errEnv(msg string) error { return envError(msg) }

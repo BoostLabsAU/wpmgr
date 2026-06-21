@@ -12,6 +12,9 @@ import (
 	"github.com/riverqueue/river/rivermigrate"
 )
 
+// safeIdentifierRE matches a simple Postgres identifier: letters, digits, and
+// underscores, not starting with a digit. Used to reject quoted/dotted values
+// that would change the intended object reference.
 var safeIdentifierRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // NormalizeSchema trims and validates an optional Postgres schema identifier.

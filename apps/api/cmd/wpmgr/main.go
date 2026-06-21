@@ -119,6 +119,8 @@ func main() {
 	}
 }
 
+// run bootstraps the control plane: migrations, services, River worker pool,
+// media schema isolation wiring, and the HTTP server.
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	slog.SetDefault(logger)
 
@@ -1896,6 +1898,8 @@ type orgTenantAdapter struct {
 	svc *tenant.Service
 }
 
+// Create adapts tenant.Service.Create to the org.TenantCreator interface,
+// translating a (name, slug) pair into a tenant creation call.
 func (a *orgTenantAdapter) Create(ctx context.Context, name, slug string) (uuid.UUID, error) {
 	t, err := a.svc.Create(ctx, tenant.CreateInput{Name: name, Slug: slug})
 	if err != nil {
@@ -1912,6 +1916,8 @@ type registryAdapter struct {
 	r *blobstore.Registry
 }
 
+// PresignerForSnapshot resolves the blobstore Registry entry for a snapshot so
+// backup operations can mint presigned URLs without importing blobstore types.
 func (a *registryAdapter) PresignerForSnapshot(ctx context.Context, snap backup.Snapshot) (backup.Presigner, error) {
 	store, err := a.r.StoreForSnapshot(ctx, blobstore.SnapshotLike{
 		TenantID:      snap.TenantID,
@@ -2148,6 +2154,8 @@ func revokeMembership(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logg
 	return nil
 }
 
+// migrateRiver applies River's own schema migrations using the migration-owner
+// pool, matching the ownership model used for WPMgr app migrations.
 func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
 	if err != nil {
@@ -2159,6 +2167,9 @@ func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+// newMediaRiverClient returns an insert-only River client for encoder-owned
+// queues when media schema isolation is enabled. When the schema is empty or
+// public it reuses the default client so existing behavior is preserved.
 func newMediaRiverClient(pool *pgxpool.Pool, logger *slog.Logger, defaultClient *river.Client[pgx.Tx], schema string) (*river.Client[pgx.Tx], error) {
 	if riverutil.IsDefaultSchema(schema) {
 		return defaultClient, nil

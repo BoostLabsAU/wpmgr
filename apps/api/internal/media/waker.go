@@ -159,6 +159,9 @@ func (w *EncoderWaker) liveJobCount(ctx context.Context) (int, error) {
 	return n, nil
 }
 
+// liveJobCountQuery builds the schema-aware query used to count encoder jobs
+// that should keep the media-encoder awake. It mirrors the encoder's own drain
+// query so both sides agree on whether work is pending.
 func (w *EncoderWaker) liveJobCountQuery() (string, error) {
 	table, err := riverutil.QualifiedTable(w.schema, "river_job")
 	if err != nil {

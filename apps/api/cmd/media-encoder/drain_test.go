@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+// testDrainCfg returns a drainConfig with short, test-friendly durations and
+// a discard logger so hold/drain behavior can be exercised quickly.
 func testDrainCfg(count func(ctx context.Context) (int, error)) drainConfig {
 	return drainConfig{
 		poll:    1 * time.Millisecond,
@@ -22,6 +24,8 @@ func testDrainCfg(count func(ctx context.Context) (int, error)) drainConfig {
 	}
 }
 
+// TestHoldUntilDrained_EmptyQueueDrains verifies that an already-empty queue
+// is reported as drained immediately.
 func TestHoldUntilDrained_EmptyQueueDrains(t *testing.T) {
 	drained, reason := holdUntilDrained(context.Background(),
 		testDrainCfg(func(context.Context) (int, error) { return 0, nil }))
@@ -30,6 +34,8 @@ func TestHoldUntilDrained_EmptyQueueDrains(t *testing.T) {
 	}
 }
 
+// TestHoldUntilDrained_HoldsUntilWorkClears verifies the hold continues while
+// the queue reports live work and completes once the count reaches zero.
 func TestHoldUntilDrained_HoldsUntilWorkClears(t *testing.T) {
 	var calls atomic.Int32
 	// Report live work for the first few polls, then empty.
@@ -48,6 +54,8 @@ func TestHoldUntilDrained_HoldsUntilWorkClears(t *testing.T) {
 	}
 }
 
+// TestHoldUntilDrained_ClientGoneReturnsPromptly verifies a canceled context
+// ends the hold without waiting for the queue to drain.
 func TestHoldUntilDrained_ClientGoneReturnsPromptly(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // client already disconnected
@@ -58,6 +66,8 @@ func TestHoldUntilDrained_ClientGoneReturnsPromptly(t *testing.T) {
 	}
 }
 
+// TestHoldUntilDrained_MaxHoldCeiling verifies the hold respects the maximum
+// duration ceiling even when the queue never empties.
 func TestHoldUntilDrained_MaxHoldCeiling(t *testing.T) {
 	cfg := testDrainCfg(func(context.Context) (int, error) { return 1, nil }) // never empties
 	cfg.maxHold = 20 * time.Millisecond
@@ -67,6 +77,9 @@ func TestHoldUntilDrained_MaxHoldCeiling(t *testing.T) {
 	}
 }
 
+// TestHoldUntilDrained_CountErrorDoesNotPrematurelyDrain verifies that count
+// failures are treated as "not known empty" so the hold runs to the max-hold
+// ceiling rather than releasing the instance.
 func TestHoldUntilDrained_CountErrorDoesNotPrematurelyDrain(t *testing.T) {
 	var calls atomic.Int32
 	// Persistent errors must NOT be treated as "empty" — the hold should run to
@@ -83,6 +96,8 @@ func TestHoldUntilDrained_CountErrorDoesNotPrematurelyDrain(t *testing.T) {
 	}
 }
 
+// TestDrainHandler_PostReturns200JSON verifies a POST to /internal/drain
+// returns a JSON drained response.
 func TestDrainHandler_PostReturns200JSON(t *testing.T) {
 	h := drainHandler(testDrainCfg(func(context.Context) (int, error) { return 0, nil }))
 	rec := httptest.NewRecorder()
@@ -96,6 +111,8 @@ func TestDrainHandler_PostReturns200JSON(t *testing.T) {
 	}
 }
 
+// TestDrainHandler_RejectsNonPost verifies non-POST methods are rejected with
+// 405 Method Not Allowed.
 func TestDrainHandler_RejectsNonPost(t *testing.T) {
 	h := drainHandler(testDrainCfg(func(context.Context) (int, error) { return 0, nil }))
 	rec := httptest.NewRecorder()
@@ -106,6 +123,8 @@ func TestDrainHandler_RejectsNonPost(t *testing.T) {
 	}
 }
 
+// TestDrainHandler_ConcurrencyCapReturns429 verifies the semaphore caps
+// concurrent drain holds and returns 429 when no slot is available.
 func TestDrainHandler_ConcurrencyCapReturns429(t *testing.T) {
 	cfg := testDrainCfg(func(context.Context) (int, error) { return 0, nil })
 	cfg.sem = make(chan struct{}, 1)
@@ -119,6 +138,8 @@ func TestDrainHandler_ConcurrencyCapReturns429(t *testing.T) {
 	}
 }
 
+// TestLiveEncodeJobsQuery_DefaultSchema verifies the drain query remains
+// unqualified when no media schema is configured.
 func TestLiveEncodeJobsQuery_DefaultSchema(t *testing.T) {
 	q, err := liveEncodeJobsQuery("")
 	if err != nil {
@@ -130,6 +151,8 @@ func TestLiveEncodeJobsQuery_DefaultSchema(t *testing.T) {
 	}
 }
 
+// TestLiveEncodeJobsQuery_MediaSchema verifies the drain query is qualified to
+// the configured schema when media schema isolation is enabled.
 func TestLiveEncodeJobsQuery_MediaSchema(t *testing.T) {
 	q, err := liveEncodeJobsQuery("media_encoder")
 	if err != nil {
