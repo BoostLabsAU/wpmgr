@@ -13,6 +13,7 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
 )
 
 // metadataIdentityURL is the GCE / Cloud Run metadata endpoint that mints an OIDC
@@ -21,8 +22,8 @@ import (
 // (a private, IAM-gated, internal-ingress Cloud Run service).
 const metadataIdentityURL = "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity"
 
-// EncoderWaker keeps the scale-to-zero media-encoder alive while the media_encode
-// River queue has work.
+// EncoderWaker keeps the scale-to-zero media-encoder alive while encoder-owned
+// River queues have work.
 //
 // The encoder is a PULL worker: it polls Postgres for media_encode jobs. At
 // min-instances=0 nothing would ever process an enqueued job, because enqueuing
@@ -31,7 +32,7 @@ const metadataIdentityURL = "http://metadata.google.internal/computeMetadata/v1/
 // that request.
 //
 // It runs a single reconcile loop: on each tick (or an enqueue Kick) it counts
-// live media_encode jobs and, if any exist, holds a blocking POST to the encoder's
+// live encoder jobs and, if any exist, holds a blocking POST to the encoder's
 // /internal/drain endpoint. The encoder keeps that request open — and thus the
 // instance alive — until the queue drains, then returns 200. Exactly one hold is
 // active at a time (the loop blocks in holdDrain), so this is naturally
@@ -44,7 +45,8 @@ const metadataIdentityURL = "http://metadata.google.internal/computeMetadata/v1/
 // waking. Both Run and Kick become no-ops.
 type EncoderWaker struct {
 	pool     *db.Pool
-	queue    string
+	queues   []string
+	schema   string
 	drainURL string // <encoder-base>/internal/drain ; empty disables the waker
 	audience string // <encoder-base> ; the ID-token audience for Cloud Run IAM
 	tick     time.Duration
@@ -64,13 +66,17 @@ type EncoderWaker struct {
 // NewEncoderWaker builds the waker. encoderBaseURL is WPMGR_MEDIA_ENCODER_URL —
 // the encoder's Cloud Run URL with NO path (e.g. https://wpmgr-media-encoder-…run.app).
 // When empty (self-host / not configured) the waker is disabled.
-func NewEncoderWaker(pool *db.Pool, encoderBaseURL string, logger *slog.Logger) *EncoderWaker {
+func NewEncoderWaker(pool *db.Pool, encoderBaseURL string, logger *slog.Logger, mediaSchema string, queues ...string) *EncoderWaker {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if len(queues) == 0 {
+		queues = []string{model.MediaEncodeQueue}
+	}
 	w := &EncoderWaker{
 		pool:   pool,
-		queue:  model.MediaEncodeQueue,
+		queues: queues,
+		schema: mediaSchema,
 		tick:   60 * time.Second,
 		logger: logger,
 		kick:   make(chan struct{}, 1),
@@ -137,17 +143,28 @@ func (w *EncoderWaker) Run(ctx context.Context) {
 	}
 }
 
-// liveJobCount counts media_encode jobs that need an awake encoder: available
+// liveJobCount counts jobs that need an awake encoder: available
 // (ready now), running (in flight), retryable (failed, retry imminent). It
 // excludes scheduled (future retries) — those flip to available at their due time
 // and the next tick re-wakes. River stores jobs in river_job.
 func (w *EncoderWaker) liveJobCount(ctx context.Context) (int, error) {
-	const q = `SELECT count(*) FROM river_job WHERE queue = $1 AND state IN ('available','running','retryable')`
+	q, err := w.liveJobCountQuery()
+	if err != nil {
+		return 0, err
+	}
 	var n int
-	if err := w.pool.QueryRow(ctx, q, w.queue).Scan(&n); err != nil {
+	if err := w.pool.QueryRow(ctx, q, w.queues).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+func (w *EncoderWaker) liveJobCountQuery() (string, error) {
+	table, err := riverutil.QualifiedTable(w.schema, "river_job")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`SELECT count(*) FROM %s WHERE queue = ANY($1) AND state IN ('available','running','retryable')`, table), nil
 }
 
 // holdDrain mints a Cloud Run ID token and POSTs /internal/drain, blocking until

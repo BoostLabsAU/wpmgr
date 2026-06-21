@@ -13,6 +13,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 ### Fixed
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+- Isolated media-encoder River jobs into a dedicated schema in the bundled self-host profile so the encoder cannot take leadership for API uptime and cron jobs while image optimization and screenshot work still run.
 
 ## [0.57.0] - 2026-06-21
 

@@ -119,6 +119,28 @@ func TestDrainHandler_ConcurrencyCapReturns429(t *testing.T) {
 	}
 }
 
+func TestLiveEncodeJobsQuery_DefaultSchema(t *testing.T) {
+	q, err := liveEncodeJobsQuery("")
+	if err != nil {
+		t.Fatalf("liveEncodeJobsQuery: %v", err)
+	}
+	want := `SELECT count(*) FROM river_job WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+	if q != want {
+		t.Fatalf("query = %q, want %q", q, want)
+	}
+}
+
+func TestLiveEncodeJobsQuery_MediaSchema(t *testing.T) {
+	q, err := liveEncodeJobsQuery("media_encoder")
+	if err != nil {
+		t.Fatalf("liveEncodeJobsQuery: %v", err)
+	}
+	want := `SELECT count(*) FROM "media_encoder"."river_job" WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+	if q != want {
+		t.Fatalf("query = %q, want %q", q, want)
+	}
+}
+
 // TestHoldUntilDrained_RunningJobBlocksDrain verifies that the drain "empty"
 // condition requires count == 0, which includes running jobs. This is the
 // invariant that prevents the drain-vs-scale-down race: if the count function

@@ -64,6 +64,28 @@ func TestMigrateDSNFallback(t *testing.T) {
 	}
 }
 
+func TestLoadRiverMediaSchemaDefault(t *testing.T) {
+	t.Setenv("WPMGR_RIVER_MEDIA_SCHEMA", "")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.River.MediaSchema; got != "" {
+		t.Fatalf("River.MediaSchema = %q, want empty default", got)
+	}
+}
+
+func TestLoadRiverMediaSchemaEnv(t *testing.T) {
+	t.Setenv("WPMGR_RIVER_MEDIA_SCHEMA", "media_encoder")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.River.MediaSchema; got != "media_encoder" {
+		t.Fatalf("River.MediaSchema = %q, want media_encoder", got)
+	}
+}
+
 func TestOIDCEnabled(t *testing.T) {
 	if (OIDCConfig{}).Enabled() {
 		t.Fatal("empty issuer should be disabled")

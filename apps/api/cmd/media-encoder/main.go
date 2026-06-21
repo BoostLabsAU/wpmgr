@@ -33,12 +33,13 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
-	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/encoder"
+	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
 	mediaworker "github.com/mosamlife/wpmgr/apps/api/internal/media/worker"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot/capture"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
@@ -69,6 +70,11 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	mediaSchema, err := riverutil.NormalizeSchema(cfg.River.MediaSchema)
+	if err != nil {
+		return err
+	}
+
 	if !cfg.S3.Enabled() {
 		return errEnv("WPMGR_S3_BUCKET is required: the media-encoder transfers bytes via presigned object storage")
 	}
@@ -82,6 +88,17 @@ func run() error {
 	defer pool.Close()
 	if err := pool.EnforceRLSRole(ctx, logger, cfg.DB.AllowRLSBypassRole); err != nil {
 		return err
+	}
+	if !riverutil.IsDefaultSchema(mediaSchema) {
+		migPool, err := db.Connect(ctx, cfg.DB.MigrateDSN())
+		if err != nil {
+			return err
+		}
+		if err := riverutil.EnsureSchema(ctx, migPool.Pool, mediaSchema, cfg.DB.User); err != nil {
+			migPool.Close()
+			return err
+		}
+		migPool.Close()
 	}
 
 	// Object storage (presigned URLs only — never a live GetObject).
@@ -190,6 +207,7 @@ func run() error {
 
 	client, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
 		Logger: logger,
+		Schema: mediaSchema,
 		Queues: map[string]river.QueueConfig{
 			model.MediaEncodeQueue:       {MaxWorkers: workers},
 			mediafont.FontTranscodeQueue: {MaxWorkers: workers * 2}, // pure-Go, more concurrency is fine
@@ -234,10 +252,9 @@ func run() error {
 	// open there to keep this cold-started instance alive until the media_encode
 	// queue drains. Self-hosters running this via docker-compose (the `media`
 	// profile) run it always-on and never call /internal/drain.
-	// Pass both queues to the drain handler so it counts live screenshot capture
-	// jobs alongside media_encode jobs. The encoder must stay warm while either queue
-	// has pending work.
-	healthSrv := startHealthServer(logger, pool, model.MediaEncodeQueue, screenshot.ScreenshotQueue)
+	// Pass encoder-owned queues to the drain handler. The encoder must stay warm
+	// while any queue it processes has pending work.
+	healthSrv := startHealthServer(logger, pool, mediaSchema, model.MediaEncodeQueue, screenshot.ScreenshotQueue, mediafont.FontTranscodeQueue)
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining encode queue")
@@ -292,7 +309,7 @@ type drainConfig struct {
 // serves the Cloud Run startup/liveness probe (200 on every other path) and the
 // /internal/drain wake endpoint. Runs in a goroutine so it never blocks the
 // queue. pool/queues drive the drain handler's live-job count.
-func startHealthServer(logger *slog.Logger, pool *db.Pool, queues ...string) *http.Server {
+func startHealthServer(logger *slog.Logger, pool *db.Pool, mediaSchema string, queues ...string) *http.Server {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -302,7 +319,7 @@ func startHealthServer(logger *slog.Logger, pool *db.Pool, queues ...string) *ht
 		poll:    drainPollInterval,
 		quiet:   drainQuietPeriod,
 		maxHold: drainMaxHold,
-		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, queues...) },
+		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, mediaSchema, queues...) },
 		logger:  logger,
 		sem:     make(chan struct{}, maxConcurrentDrains),
 	}))
@@ -405,14 +422,25 @@ func holdUntilDrained(ctx context.Context, cfg drainConfig) (bool, string) {
 
 // liveEncodeJobs counts jobs in any of the given queues that need an awake encoder:
 // available, running, or retryable. Mirrors the CP waker's query so both sides agree.
-// Accepts multiple queues so both media_encode and site_screenshot are counted together.
-func liveEncodeJobs(ctx context.Context, pool *db.Pool, queues ...string) (int, error) {
-	const q = `SELECT count(*) FROM river_job WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+// Accepts multiple queues so every encoder-owned queue can keep the process alive.
+func liveEncodeJobs(ctx context.Context, pool *db.Pool, mediaSchema string, queues ...string) (int, error) {
+	q, err := liveEncodeJobsQuery(mediaSchema)
+	if err != nil {
+		return 0, err
+	}
 	var n int
 	if err := pool.QueryRow(ctx, q, queues).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+func liveEncodeJobsQuery(mediaSchema string) (string, error) {
+	table, err := riverutil.QualifiedTable(mediaSchema, "river_job")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`SELECT count(*) FROM %s WHERE queue = ANY($1) AND state IN ('available','running','retryable')`, table), nil
 }
 
 // writeDrainResult writes the small JSON drain summary (best-effort).

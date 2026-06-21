@@ -185,6 +185,16 @@ is opt-in. Enable it with the `media` Compose profile:
 docker compose -f infra/docker-compose.yml --profile media up -d
 ```
 
+The bundled Compose profile sets `WPMGR_RIVER_MEDIA_SCHEMA=media_encoder` on
+both the API and media-encoder services. Custom deployments should set the same
+value on both processes so media and screenshot jobs are inserted into the
+schema the encoder is polling. When this value names a dedicated schema, the
+encoder also needs the migration-owner DSN so it can create and migrate that
+schema safely. Leave the schema empty, or set `public`, only when you
+intentionally want the legacy shared-schema behavior. Existing River jobs are
+not moved between schemas, so deploy this change during a quiet window or drain
+media and screenshot jobs first.
+
 Without the profile the core API starts fine; the Media Optimizer tab in the
 dashboard is unavailable. See [features/media-optimizer.md](./features/media-optimizer.md).
 
