@@ -214,6 +214,9 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       },
       onError: (err: Error) => {
         setSaveError(err.message);
+        toast.error("Couldn't save login protection settings.", {
+          description: err.message,
+        });
       },
     });
   }
@@ -221,12 +224,12 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
   const isProtecting = mode === "protect";
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-5">
       {/* ── Protect-mode enforcing banner ── */}
       {isProtecting && (
         <div
           role="status"
-          className="flex items-start gap-3 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 p-4"
+          className="flex items-start gap-2.5 rounded-lg border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/8 px-3 py-2.5"
         >
           <ShieldAlert
             aria-hidden="true"
@@ -249,15 +252,15 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-mode-heading">
         <h3
           id="lp-mode-heading"
-          className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-2 text-sm font-medium text-[var(--color-foreground)]"
         >
           Mode
         </h3>
-        <div className="space-y-2">
+        <div className="space-y-1.5">
           {MODES.map((m) => (
             <label
               key={m.value}
-              className="flex cursor-pointer items-start gap-3 rounded-lg border border-[var(--color-border)] p-3 transition-colors hover:bg-[var(--color-muted)]/40 has-[:checked]:border-[var(--color-ring)] has-[:checked]:bg-[var(--color-muted)]/20"
+              className="flex cursor-pointer items-center gap-3 rounded-md border border-[var(--color-border)] px-3 py-2 transition-colors hover:bg-[var(--color-muted)]/40 has-[:checked]:border-[var(--color-ring)] has-[:checked]:bg-[var(--color-muted)]/20"
             >
               <input
                 type="radio"
@@ -265,13 +268,13 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
                 value={m.value}
                 checked={mode === m.value}
                 onChange={() => setMode(m.value)}
-                className="mt-0.5 accent-[var(--color-primary)]"
+                className="accent-[var(--color-primary)] shrink-0"
               />
-              <div className="min-w-0">
-                <span className="block text-sm font-medium text-[var(--color-foreground)]">
+              <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+                <span className="text-sm font-medium text-[var(--color-foreground)]">
                   {m.label}
                 </span>
-                <span className="block text-xs text-[var(--color-muted-foreground)]">
+                <span className="text-xs text-[var(--color-muted-foreground)]">
                   {m.description}
                 </span>
               </div>
@@ -284,22 +287,20 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-allow-heading">
         <h3
           id="lp-allow-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Allow list (never blocked)
         </h3>
-        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
-          IPs in this list bypass all login-protection checks entirely. This is
-          your lockout escape hatch — add your office or home CIDR here before
-          enabling Protect mode. When you switch to Protect with an empty list,
-          the server automatically adds your current IP.
+        <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
+          IPs in this list bypass all login-protection checks entirely. Add your
+          office or home CIDR here before enabling Protect mode.
         </p>
 
         {/* Chips */}
         {allowCidrs.length > 0 && (
           <ul
             aria-label="Allow list CIDRs"
-            className="mb-3 flex flex-wrap gap-2"
+            className="mb-2 flex flex-wrap gap-1.5"
           >
             {allowCidrs.map((cidr) => (
               <li key={cidr}>
@@ -365,11 +366,9 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
           </Button>
         </div>
 
-        <p className="mt-2 flex items-start gap-1.5 text-xs text-[var(--color-muted-foreground)]">
-          <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-          When switching to Protect with an empty list, the server
-          auto-adds your current operator IP. You&apos;ll see it reflected
-          here after saving.
+        <p className="mt-1.5 flex items-center gap-1.5 text-xs text-[var(--color-muted-foreground)]">
+          <Info aria-hidden="true" className="size-3.5 shrink-0" />
+          Switching to Protect with an empty list auto-adds your current IP.
         </p>
       </section>
 
@@ -377,20 +376,19 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-deny-heading">
         <h3
           id="lp-deny-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Deny list (always blocked)
         </h3>
-        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
-          IPs matching these CIDRs are denied immediately, before threshold
-          evaluation. Use for known bad actors or ranges you never want on your
-          login page.
+        <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
+          IPs matching these CIDRs are denied before threshold evaluation. Use
+          for known bad actors or ranges to permanently block.
         </p>
 
         {denyCidrs.length > 0 && (
           <ul
             aria-label="Deny list CIDRs"
-            className="mb-3 flex flex-wrap gap-2"
+            className="mb-2 flex flex-wrap gap-1.5"
           >
             {denyCidrs.map((cidr) => (
               <li key={cidr}>
@@ -458,101 +456,85 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       <section aria-labelledby="lp-thresholds-heading">
         <h3
           id="lp-thresholds-heading"
-          className="mb-3 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Brute-force thresholds
         </h3>
-        <p className="mb-4 text-xs text-[var(--color-muted-foreground)]">
-          Defaults: captcha after 3 failures, temporary block after 10, permanent
-          block after 100. Gaps reset the counter after 30 minutes (1800 s) of
-          inactivity.
+        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
+          Defaults: CAPTCHA after 3 failures, temp block after 10, permanent
+          block after 100. Gaps reset the counter after inactivity.
         </p>
 
-        {/* Limits group */}
-        <fieldset className="mb-4">
-          <legend className="mb-2 text-xs font-medium text-[var(--color-foreground)]">
-            Failure limits
-          </legend>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <ThresholdField
-              id="captcha-limit"
-              label="CAPTCHA after"
-              unit="failures"
-              value={thresholds.captcha_limit}
-              onChange={(v) => handleThreshold("captcha_limit", v)}
-              helpId="captcha-limit-help"
-              help="Show a CAPTCHA challenge after this many consecutive failures."
-            />
-            <ThresholdField
-              id="temp-block-limit"
-              label="Temporary block after"
-              unit="failures"
-              value={thresholds.temp_block_limit}
-              onChange={(v) => handleThreshold("temp_block_limit", v)}
-              helpId="temp-block-limit-help"
-              help="Apply a temporary IP block after this many consecutive failures."
-            />
-            <ThresholdField
-              id="block-all-limit"
-              label="Permanent block after"
-              unit="failures"
-              value={thresholds.block_all_limit}
-              onChange={(v) => handleThreshold("block_all_limit", v)}
-              helpId="block-all-limit-help"
-              help="Apply a permanent block after this many consecutive failures."
-            />
-          </div>
-        </fieldset>
-
-        {/* Gaps group */}
-        <fieldset>
-          <legend className="mb-2 text-xs font-medium text-[var(--color-foreground)]">
-            Reset gaps (seconds)
-          </legend>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <ThresholdField
-              id="failed-login-gap"
-              label="Failed-login gap"
-              unit="seconds"
-              value={thresholds.failed_login_gap}
-              onChange={(v) => handleThreshold("failed_login_gap", v)}
-              helpId="failed-login-gap-help"
-              help="Seconds of inactivity that reset the consecutive failure counter."
-            />
-            <ThresholdField
-              id="success-login-gap"
-              label="Success-login gap"
-              unit="seconds"
-              value={thresholds.success_login_gap}
-              onChange={(v) => handleThreshold("success_login_gap", v)}
-              helpId="success-login-gap-help"
-              help="Seconds after a successful login before a new failure series begins."
-            />
-            <ThresholdField
-              id="all-blocked-gap"
-              label="Block duration"
-              unit="seconds"
-              value={thresholds.all_blocked_gap}
-              onChange={(v) => handleThreshold("all_blocked_gap", v)}
-              helpId="all-blocked-gap-help"
-              help="Seconds a permanent block remains active before auto-expiry."
-            />
-          </div>
-        </fieldset>
+        {/* Limits + gaps in a single compact grid */}
+        <div className="grid grid-cols-2 gap-x-4 gap-y-3 sm:grid-cols-3">
+          <ThresholdField
+            id="captcha-limit"
+            label="CAPTCHA after"
+            unit="failures"
+            value={thresholds.captcha_limit}
+            onChange={(v) => handleThreshold("captcha_limit", v)}
+            helpId="captcha-limit-help"
+            help="CAPTCHA challenge threshold."
+          />
+          <ThresholdField
+            id="temp-block-limit"
+            label="Temp block after"
+            unit="failures"
+            value={thresholds.temp_block_limit}
+            onChange={(v) => handleThreshold("temp_block_limit", v)}
+            helpId="temp-block-limit-help"
+            help="Temporary IP block threshold."
+          />
+          <ThresholdField
+            id="block-all-limit"
+            label="Permanent block after"
+            unit="failures"
+            value={thresholds.block_all_limit}
+            onChange={(v) => handleThreshold("block_all_limit", v)}
+            helpId="block-all-limit-help"
+            help="Permanent block threshold."
+          />
+          <ThresholdField
+            id="failed-login-gap"
+            label="Failed-login gap"
+            unit="seconds"
+            value={thresholds.failed_login_gap}
+            onChange={(v) => handleThreshold("failed_login_gap", v)}
+            helpId="failed-login-gap-help"
+            help="Inactivity window that resets failure count."
+          />
+          <ThresholdField
+            id="success-login-gap"
+            label="Success-login gap"
+            unit="seconds"
+            value={thresholds.success_login_gap}
+            onChange={(v) => handleThreshold("success_login_gap", v)}
+            helpId="success-login-gap-help"
+            help="Cooldown after a successful login."
+          />
+          <ThresholdField
+            id="all-blocked-gap"
+            label="Block duration"
+            unit="seconds"
+            value={thresholds.all_blocked_gap}
+            onChange={(v) => handleThreshold("all_blocked_gap", v)}
+            helpId="all-blocked-gap-help"
+            help="Seconds until a permanent block auto-expires."
+          />
+        </div>
       </section>
 
       {/* ── IP header ── */}
       <section aria-labelledby="lp-ipheader-heading">
         <h3
           id="lp-ipheader-heading"
-          className="mb-1 text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="mb-1 text-sm font-medium text-[var(--color-foreground)]"
         >
           Real-IP header
         </h3>
-        <p className="mb-3 text-xs text-[var(--color-muted-foreground)]">
-          Only change this if your site is behind a trusted reverse proxy or CDN.
-          An incorrect value lets attackers spoof their IP by sending a forged
-          header.
+        <p className="mb-2 text-xs text-[var(--color-muted-foreground)]">
+          Only change if behind a trusted reverse proxy or CDN. An incorrect
+          value lets attackers spoof their IP.
         </p>
         <div className="max-w-sm">
           <label htmlFor="ip-header-select" className="sr-only">
@@ -586,7 +568,7 @@ function LoginProtectionLoaded({ siteId, initialConfig }: LoadedProps) {
       ) : null}
 
       {/* ── Save ── */}
-      <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-6">
+      <div className="flex items-center gap-3 border-t border-[var(--color-border)] pt-4">
         <Button
           type="button"
           onClick={handleSave}
@@ -636,14 +618,15 @@ function ThresholdField({
   help,
 }: ThresholdFieldProps) {
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-1">
       <label
         htmlFor={id}
         className="block text-xs font-medium text-[var(--color-foreground)]"
+        title={help}
       >
         {label}
       </label>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <Input
           id={id}
           type="number"
@@ -651,13 +634,13 @@ function ThresholdField({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           aria-describedby={helpId}
-          className="w-24 tabular-nums font-mono text-sm"
+          className="w-20 tabular-nums font-mono text-sm"
         />
         <span className="text-xs text-[var(--color-muted-foreground)]">
           {unit}
         </span>
       </div>
-      <p id={helpId} className="text-xs text-[var(--color-muted-foreground)]">
+      <p id={helpId} className="text-[10px] leading-tight text-[var(--color-muted-foreground)]">
         {help}
       </p>
     </div>
@@ -674,7 +657,7 @@ function LoginProtectionSkeleton() {
       role="status"
       aria-busy="true"
       aria-label="Loading login protection config"
-      className="space-y-8"
+      className="space-y-5"
     >
       <span className="sr-only">Loading login protection config</span>
       {/* Mode skeleton */}

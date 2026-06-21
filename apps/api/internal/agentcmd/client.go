@@ -189,6 +189,23 @@ func (c *Client) SyncSecurityHardening(ctx context.Context, siteID uuid.UUID, si
 	return out, nil
 }
 
+// SyncSecurityPolicy sends the signed `sync_security_policy` command to the
+// site's agent, pushing the full per-site user 2FA + password + hide-backend
+// policy snapshot (ADR-059 Phase 3). siteID is the target site's stable
+// enrollment UUID, bound into the JWT's aud claim. An ok=false response (HTTP
+// 200) is treated as an error with the agent's detail message. DoOnce is used
+// because the JWT jti is single-use.
+func (c *Client) SyncSecurityPolicy(ctx context.Context, siteID uuid.UUID, siteURL string, req SecurityPolicyRequest) (SecurityPolicyResult, error) {
+	var out SecurityPolicyResult
+	if err := c.post(ctx, siteID, siteURL, "sync_security_policy", req, &out); err != nil {
+		return SecurityPolicyResult{}, err
+	}
+	if !out.OK {
+		return out, fmt.Errorf("sync_security_policy rejected by agent: %s", out.Detail)
+	}
+	return out, nil
+}
+
 // SyncLoginBrand sends the signed `sync_login_brand` command to the site's
 // agent, pushing the per-site login brand config (logo URL, logo link,
 // message). siteID is the target site's stable enrollment UUID, bound into the

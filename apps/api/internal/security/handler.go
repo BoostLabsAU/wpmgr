@@ -29,6 +29,11 @@ import (
 //	GET  /security/bans                     — list ban entries
 //	POST /security/bans                     — create ban entry
 //	DELETE /security/bans/:banId            — delete ban entry
+//	GET  /security/policy                   — get site-user auth policy (ADR-059)
+//	PUT  /security/policy                   — save policy + push to agent
+//	GET  /security/policy/groups            — list per-role group overrides
+//	PUT  /security/policy/groups/:role      — upsert a per-role group override
+//	DELETE /security/policy/groups/:role    — delete a per-role group override
 type Handler struct {
 	svc   *Service
 	audit *audit.Recorder
@@ -59,6 +64,13 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	g.GET("/bans", authz.RequirePermission(authz.PermSiteRead), h.listBans)
 	g.POST("/bans", authz.RequirePermission(authz.PermSecurityManage), h.createBan)
 	g.DELETE("/bans/:banId", authz.RequirePermission(authz.PermSecurityManage), h.deleteBan)
+
+	// Site-user auth policy (ADR-059 Phase 3).
+	g.GET("/policy", authz.RequirePermission(authz.PermSiteRead), h.getPolicy)
+	g.PUT("/policy", authz.RequirePermission(authz.PermSecurityManage), h.putPolicy)
+	g.GET("/policy/groups", authz.RequirePermission(authz.PermSiteRead), h.listPolicyGroups)
+	g.PUT("/policy/groups/:role", authz.RequirePermission(authz.PermSecurityManage), h.putPolicyGroup)
+	g.DELETE("/policy/groups/:role", authz.RequirePermission(authz.PermSecurityManage), h.deletePolicyGroup)
 }
 
 // ---------------------------------------------------------------------------
@@ -598,6 +610,320 @@ func (h *Handler) deleteBan(c *gin.Context) {
 		TargetType: "site",
 		TargetID:   siteID.String(),
 		Metadata:   map[string]any{"ban_id": banID.String()},
+	})
+
+	c.Status(http.StatusNoContent)
+}
+
+// ---------------------------------------------------------------------------
+// ADR-059 Phase 3 — site-user auth policy DTOs + handlers
+// ---------------------------------------------------------------------------
+
+// policyDTO is the JSON shape for GET/PUT /security/policy.
+//
+// GET response example:
+//
+//	{
+//	  "two_factor_enabled": false,
+//	  "two_factor_methods": ["totp","email","backup"],
+//	  "two_factor_required_roles": [],
+//	  "two_factor_grace_logins": 3,
+//	  "two_factor_remember_device_days": 30,
+//	  "block_xmlrpc_for_2fa_users": true,
+//	  "password_min_zxcvbn_score": 0,
+//	  "password_min_zxcvbn_roles": [],
+//	  "password_block_compromised": false,
+//	  "password_reuse_block_count": 0,
+//	  "password_max_age_days": 0,
+//	  "password_expiry_roles": [],
+//	  "hide_backend_enabled": false,
+//	  "hide_backend_slug": "",
+//	  "hide_backend_redirect": "",
+//	  "updated_at": "2026-06-20T00:00:00Z"
+//	}
+type policyDTO struct {
+	TwoFactorEnabled            bool     `json:"two_factor_enabled"`
+	TwoFactorMethods            []string `json:"two_factor_methods"`
+	TwoFactorRequiredRoles      []string `json:"two_factor_required_roles"`
+	TwoFactorGraceLogins        int      `json:"two_factor_grace_logins"`
+	TwoFactorRememberDeviceDays int      `json:"two_factor_remember_device_days"`
+	BlockXMLRPCFor2FAUsers      bool     `json:"block_xmlrpc_for_2fa_users"`
+	PasswordMinZxcvbnScore      int      `json:"password_min_zxcvbn_score"`
+	PasswordMinZxcvbnRoles      []string `json:"password_min_zxcvbn_roles"`
+	PasswordBlockCompromised    bool     `json:"password_block_compromised"`
+	PasswordReuseBlockCount     int      `json:"password_reuse_block_count"`
+	PasswordMaxAgeDays          int      `json:"password_max_age_days"`
+	PasswordExpiryRoles         []string `json:"password_expiry_roles"`
+	HideBackendEnabled          bool     `json:"hide_backend_enabled"`
+	HideBackendSlug             string   `json:"hide_backend_slug"`
+	HideBackendRedirect         string   `json:"hide_backend_redirect"`
+	UpdatedAt                   string   `json:"updated_at,omitempty"`
+}
+
+func toPolicyDTO(p SiteSecurityPolicy) policyDTO {
+	dto := policyDTO{
+		TwoFactorEnabled:            p.TwoFactorEnabled,
+		TwoFactorMethods:            coalesceStringSliceDTO(p.TwoFactorMethods),
+		TwoFactorRequiredRoles:      coalesceStringSliceDTO(p.TwoFactorRequiredRoles),
+		TwoFactorGraceLogins:        p.TwoFactorGraceLogins,
+		TwoFactorRememberDeviceDays: p.TwoFactorRememberDeviceDays,
+		BlockXMLRPCFor2FAUsers:      p.BlockXMLRPCFor2FAUsers,
+		PasswordMinZxcvbnScore:      p.PasswordMinZxcvbnScore,
+		PasswordMinZxcvbnRoles:      coalesceStringSliceDTO(p.PasswordMinZxcvbnRoles),
+		PasswordBlockCompromised:    p.PasswordBlockCompromised,
+		PasswordReuseBlockCount:     p.PasswordReuseBlockCount,
+		PasswordMaxAgeDays:          p.PasswordMaxAgeDays,
+		PasswordExpiryRoles:         coalesceStringSliceDTO(p.PasswordExpiryRoles),
+		HideBackendEnabled:          p.HideBackendEnabled,
+		HideBackendSlug:             p.HideBackendSlug,
+		HideBackendRedirect:         p.HideBackendRedirect,
+	}
+	if !p.UpdatedAt.IsZero() {
+		dto.UpdatedAt = p.UpdatedAt.UTC().Format(time.RFC3339)
+	}
+	return dto
+}
+
+func fromPolicyDTO(dto policyDTO, tenantID, siteID uuid.UUID) SiteSecurityPolicy {
+	return SiteSecurityPolicy{
+		TenantID:                    tenantID,
+		SiteID:                      siteID,
+		TwoFactorEnabled:            dto.TwoFactorEnabled,
+		TwoFactorMethods:            coalesceStringSliceDTO(dto.TwoFactorMethods),
+		TwoFactorRequiredRoles:      coalesceStringSliceDTO(dto.TwoFactorRequiredRoles),
+		TwoFactorGraceLogins:        dto.TwoFactorGraceLogins,
+		TwoFactorRememberDeviceDays: dto.TwoFactorRememberDeviceDays,
+		BlockXMLRPCFor2FAUsers:      dto.BlockXMLRPCFor2FAUsers,
+		PasswordMinZxcvbnScore:      dto.PasswordMinZxcvbnScore,
+		PasswordMinZxcvbnRoles:      coalesceStringSliceDTO(dto.PasswordMinZxcvbnRoles),
+		PasswordBlockCompromised:    dto.PasswordBlockCompromised,
+		PasswordReuseBlockCount:     dto.PasswordReuseBlockCount,
+		PasswordMaxAgeDays:          dto.PasswordMaxAgeDays,
+		PasswordExpiryRoles:         coalesceStringSliceDTO(dto.PasswordExpiryRoles),
+		HideBackendEnabled:          dto.HideBackendEnabled,
+		HideBackendSlug:             dto.HideBackendSlug,
+		HideBackendRedirect:         dto.HideBackendRedirect,
+	}
+}
+
+// coalesceStringSliceDTO returns an empty (non-nil) slice for nil JSON arrays
+// so the response always serialises as [] not null.
+func coalesceStringSliceDTO(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// policyGroupDTO is the JSON shape for one per-role group override.
+//
+// GET /security/policy/groups response shape:
+//
+//	{
+//	  "items": [
+//	    {
+//	      "role": "administrator",
+//	      "require_2fa": true,
+//	      "allowed_methods": ["totp","backup"],
+//	      "min_zxcvbn_score": 3,
+//	      "block_compromised": true,
+//	      "max_age_days": 90,
+//	      "created_at": "2026-06-20T00:00:00Z"
+//	    }
+//	  ]
+//	}
+type policyGroupDTO struct {
+	Role             string   `json:"role"`
+	Require2FA       *bool    `json:"require_2fa,omitempty"`
+	AllowedMethods   []string `json:"allowed_methods,omitempty"`
+	MinZxcvbnScore   *int     `json:"min_zxcvbn_score,omitempty"`
+	BlockCompromised *bool    `json:"block_compromised,omitempty"`
+	MaxAgeDays       *int     `json:"max_age_days,omitempty"`
+	CreatedAt        string   `json:"created_at,omitempty"`
+}
+
+type policyGroupListDTO struct {
+	Items []policyGroupDTO `json:"items"`
+}
+
+func toPolicyGroupDTO(g PolicyGroup) policyGroupDTO {
+	dto := policyGroupDTO{
+		Role:             g.Role,
+		Require2FA:       g.Require2FA,
+		AllowedMethods:   g.AllowedMethods,
+		MinZxcvbnScore:   g.MinZxcvbnScore,
+		BlockCompromised: g.BlockCompromised,
+		MaxAgeDays:       g.MaxAgeDays,
+	}
+	if !g.CreatedAt.IsZero() {
+		dto.CreatedAt = g.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	return dto
+}
+
+func (h *Handler) getPolicy(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	pol, err := h.svc.GetSiteSecurityPolicy(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, toPolicyDTO(pol))
+}
+
+func (h *Handler) putPolicy(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	var body policyDTO
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	pol := fromPolicyDTO(body, p.TenantID, siteID)
+	saved, saveErr := h.svc.SaveSiteSecurityPolicy(
+		c.Request.Context(), p.TenantID, siteID, pol,
+		actorType(p), p.ActorID(),
+	)
+	if saveErr != nil {
+		if _, ok := domain.AsDomain(saveErr); ok {
+			httpx.Error(c, saveErr)
+			return
+		}
+		// Non-domain = agent push failed after successful store.
+		c.Header("X-Agent-Push-Warning", saveErr.Error())
+		c.JSON(http.StatusOK, toPolicyDTO(saved))
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_policy.update",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata: map[string]any{
+			"two_factor_enabled":       saved.TwoFactorEnabled,
+			"password_block_compromised": saved.PasswordBlockCompromised,
+			"hide_backend_enabled":     saved.HideBackendEnabled,
+		},
+	})
+
+	c.JSON(http.StatusOK, toPolicyDTO(saved))
+}
+
+func (h *Handler) listPolicyGroups(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	groups, err := h.svc.GetPolicyGroups(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	items := make([]policyGroupDTO, 0, len(groups))
+	for _, g := range groups {
+		items = append(items, toPolicyGroupDTO(g))
+	}
+	c.JSON(http.StatusOK, policyGroupListDTO{Items: items})
+}
+
+func (h *Handler) putPolicyGroup(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	role := strings.TrimSpace(c.Param("role"))
+	if role == "" {
+		httpx.Error(c, domain.Validation("invalid_role", "role path parameter is required"))
+		return
+	}
+
+	var body policyGroupDTO
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	// The role in the body must match the path parameter (or be empty — the
+	// path param wins).
+	body.Role = role
+
+	g := PolicyGroup{
+		TenantID:         p.TenantID,
+		SiteID:           siteID,
+		Role:             role,
+		Require2FA:       body.Require2FA,
+		AllowedMethods:   body.AllowedMethods,
+		MinZxcvbnScore:   body.MinZxcvbnScore,
+		BlockCompromised: body.BlockCompromised,
+		MaxAgeDays:       body.MaxAgeDays,
+	}
+
+	saved, saveErr := h.svc.UpsertPolicyGroup(c.Request.Context(), p.TenantID, siteID, g)
+	if saveErr != nil {
+		if _, ok := domain.AsDomain(saveErr); ok {
+			httpx.Error(c, saveErr)
+			return
+		}
+		c.Header("X-Agent-Push-Warning", saveErr.Error())
+		c.JSON(http.StatusOK, toPolicyGroupDTO(saved))
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_policy_group.upsert",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata:   map[string]any{"role": role},
+	})
+
+	c.JSON(http.StatusOK, toPolicyGroupDTO(saved))
+}
+
+func (h *Handler) deletePolicyGroup(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, err := uuid.Parse(c.Param("siteId"))
+	if err != nil {
+		httpx.Error(c, domain.Validation("invalid_site_id", "siteId is not a valid UUID"))
+		return
+	}
+	role := strings.TrimSpace(c.Param("role"))
+	if role == "" {
+		httpx.Error(c, domain.Validation("invalid_role", "role path parameter is required"))
+		return
+	}
+
+	if err := h.svc.DeletePolicyGroup(c.Request.Context(), p.TenantID, siteID, role); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	_, _ = h.audit.Record(c.Request.Context(), audit.Event{
+		TenantID:   p.TenantID,
+		ActorType:  actorType(p),
+		ActorID:    p.ActorID(),
+		Action:     "site_security_policy_group.delete",
+		TargetType: "site",
+		TargetID:   siteID.String(),
+		Metadata:   map[string]any{"role": role},
 	})
 
 	c.Status(http.StatusNoContent)

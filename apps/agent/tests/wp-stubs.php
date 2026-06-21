@@ -131,6 +131,21 @@ if (!function_exists('sanitize_text_field')) {
     }
 }
 
+if (!function_exists('sanitize_key')) {
+    /**
+     * Sanitizes a string key — lowercases and strips non-alphanumeric characters.
+     *
+     * @param string $key String key.
+     * @return string
+     */
+    function sanitize_key(string $key): string
+    {
+        $sanitized = strtolower($key);
+        $sanitized = preg_replace('/[^a-z0-9_\-]/', '', $sanitized) ?? '';
+        return $sanitized;
+    }
+}
+
 if (!function_exists('sanitize_email')) {
     /**
      * Strips out all characters not allowed in an email address.
