@@ -8,6 +8,13 @@
 // TestBulkIngest_Scale proves the bulk ingest path (BulkUpsertFeedRecords +
 // BulkReplaceAllSoftware) that replaced the per-record loop scales to thousands
 // of records without timing out and upserts idempotently on a second run.
+//
+// TestBulkIngest_DuplicateSoftware reproduces the prod blocker: when a single
+// feed record's software[] array contains two entries with the same (kind, slug),
+// the BulkReplaceAllSoftware CopyFrom path was throwing SQLSTATE 23505
+// (duplicate key violates unique constraint "wordfence_vuln_software_pkey").
+// The fix: dedupSoftwareRows merges the duplicate entries before CopyFrom, unioning
+// affected_versions, OR-ing patched, and unioning patched_versions.
 package tests
 
 import (
@@ -384,5 +391,248 @@ func TestBulkIngest_Scale(t *testing.T) {
 
 		t.Logf("second ingest: %d feed rows (keep=%d new=%d pruned=%d)",
 			feedCount, keep, newCount, N-keep)
+	})
+}
+
+// TestBulkIngest_DuplicateSoftware reproduces the prod blocker
+// (SQLSTATE 23505 on CopyFrom) and verifies the fix: when a single feed
+// record's software[] array contains two entries with the same (kind, slug),
+// the dedup+merge path produces exactly one row in wordfence_vuln_software
+// with the union of both entries' affected_versions and patched_versions.
+//
+// Additionally, two DIFFERENT vulns sharing the same (kind, slug) must each
+// produce their own row (different vuln_id) and must NOT be collapsed.
+func TestBulkIngest_DuplicateSoftware(t *testing.T) {
+	pool := startPostgres(t) // skips if Docker unavailable
+	ctx := context.Background()
+	repo := vuln.NewRepo(pool)
+
+	// --- Case A: one record whose software[] has duplicate (kind, slug) ---
+	//
+	// Two software entries for (plugin, "akismet") with different affected_versions:
+	//   range1: "1.0.0 - 1.2.3"
+	//   range2: "1.5.0 - 1.6.0"
+	// Only range2 is patched; range2 also has patched_versions ["1.6.1"].
+	// After ingest we expect:
+	//   (a) NO error (no 23505)
+	//   (b) exactly ONE row for (vuln-dup-A, plugin, akismet)
+	//   (c) affected_versions contains BOTH range keys (no data lost)
+	//   (d) patched = true  (OR of false, true)
+	//   (e) patched_versions = ["1.6.1"] (union)
+
+	av1, _ := json.Marshal(map[string]any{
+		"1.0.0 - 1.2.3": map[string]any{
+			"from_version": "1.0.0", "from_inclusive": true,
+			"to_version": "1.2.3", "to_inclusive": true,
+		},
+	})
+	av2, _ := json.Marshal(map[string]any{
+		"1.5.0 - 1.6.0": map[string]any{
+			"from_version": "1.5.0", "from_inclusive": true,
+			"to_version": "1.6.0", "to_inclusive": true,
+		},
+	})
+	pv2, _ := json.Marshal([]string{"1.6.1"})
+	pvEmpty, _ := json.Marshal([]string{})
+	refJSON, _ := json.Marshal([]string{"https://example.com/vuln"})
+	rawJSON, _ := json.Marshal(map[string]any{"_test": true})
+	score := 6.5
+
+	dupRec := vuln.FeedRecord{
+		VulnID:        "dup-test-0000-0000-0000-000000000001",
+		Title:         "Akismet dup-software test",
+		CVE:           "CVE-2026-9001",
+		CVSSScore:     &score,
+		CVSSRating:    "Medium",
+		Informational: false,
+		References:    refJSON,
+		Raw:           rawJSON,
+		Software: []vuln.SoftwareRow{
+			// First entry: range1, not patched.
+			{Kind: "plugin", Slug: "akismet", AffectedVersions: av1, Patched: false, PatchedVersions: pvEmpty},
+			// Duplicate entry: same (kind, slug), different range, patched.
+			{Kind: "plugin", Slug: "akismet", AffectedVersions: av2, Patched: true, PatchedVersions: pv2},
+		},
+	}
+
+	// --- Case B: two DIFFERENT vulns sharing the same (kind, slug) ---
+	//
+	// Both affect "akismet" plugin but have different vuln_ids. The PK includes
+	// vuln_id, so both rows must survive — the dedup must NOT collapse across
+	// different vulns.
+	avB, _ := json.Marshal(map[string]any{
+		"* - 2.0.0": map[string]any{"from_version": "*", "from_inclusive": true, "to_version": "2.0.0", "to_inclusive": false},
+	})
+	pvB, _ := json.Marshal([]string{"2.0.1"})
+	scoreB := 8.0
+
+	recB1 := vuln.FeedRecord{
+		VulnID:        "dup-test-0000-0000-0000-000000000002",
+		Title:         "Akismet cross-vuln test 1",
+		CVSSScore:     &scoreB,
+		CVSSRating:    "High",
+		References:    refJSON,
+		Raw:           rawJSON,
+		Software: []vuln.SoftwareRow{
+			{Kind: "plugin", Slug: "akismet", AffectedVersions: avB, Patched: true, PatchedVersions: pvB},
+		},
+	}
+	recB2 := vuln.FeedRecord{
+		VulnID:        "dup-test-0000-0000-0000-000000000003",
+		Title:         "Akismet cross-vuln test 2",
+		CVSSScore:     &scoreB,
+		CVSSRating:    "High",
+		References:    refJSON,
+		Raw:           rawJSON,
+		Software: []vuln.SoftwareRow{
+			{Kind: "plugin", Slug: "akismet", AffectedVersions: avB, Patched: true, PatchedVersions: pvB},
+		},
+	}
+
+	allRecs := []vuln.FeedRecord{dupRec, recB1, recB2}
+
+	// Run the bulk ingest (the same operations ingestRecords uses).
+	t.Run("no_duplicate_key_error", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.agent','on',true)"); err != nil {
+			t.Fatalf("set agent guc: %v", err)
+		}
+		if err := repo.BulkUpsertFeedRecords(ctx, tx, allRecs); err != nil {
+			t.Fatalf("BulkUpsertFeedRecords: %v", err)
+		}
+		// This is the call that previously threw SQLSTATE 23505.
+		if err := repo.BulkReplaceAllSoftware(ctx, tx, allRecs); err != nil {
+			t.Fatalf("BulkReplaceAllSoftware (duplicate software): %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("commit: %v", err)
+		}
+	})
+
+	// (b) Exactly one row for Case A's duplicate (vuln_id, kind, slug).
+	t.Run("exactly_one_software_row_for_dup", func(t *testing.T) {
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM wordfence_vuln_software WHERE vuln_id = $1 AND kind = 'plugin' AND slug = 'akismet'`,
+			dupRec.VulnID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count query: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("wordfence_vuln_software rows for dup record = %d; want 1 (dedup must collapse to one)", count)
+		}
+	})
+
+	// (c) Merged affected_versions contains BOTH range keys — no data lost.
+	t.Run("merged_affected_versions_has_both_ranges", func(t *testing.T) {
+		var avOut []byte
+		if err := pool.QueryRow(ctx,
+			`SELECT affected_versions FROM wordfence_vuln_software WHERE vuln_id = $1 AND kind = 'plugin' AND slug = 'akismet'`,
+			dupRec.VulnID,
+		).Scan(&avOut); err != nil {
+			t.Fatalf("SELECT affected_versions: %v", err)
+		}
+		var avMap map[string]json.RawMessage
+		if err := json.Unmarshal(avOut, &avMap); err != nil {
+			t.Fatalf("unmarshal affected_versions: %v (raw: %s)", err, avOut)
+		}
+		if _, ok := avMap["1.0.0 - 1.2.3"]; !ok {
+			t.Errorf("affected_versions missing range key %q; full map: %v", "1.0.0 - 1.2.3", avMap)
+		}
+		if _, ok := avMap["1.5.0 - 1.6.0"]; !ok {
+			t.Errorf("affected_versions missing range key %q; full map: %v", "1.5.0 - 1.6.0", avMap)
+		}
+	})
+
+	// (d) patched = true (OR of false and true).
+	t.Run("merged_patched_is_true", func(t *testing.T) {
+		var patched bool
+		if err := pool.QueryRow(ctx,
+			`SELECT patched FROM wordfence_vuln_software WHERE vuln_id = $1 AND kind = 'plugin' AND slug = 'akismet'`,
+			dupRec.VulnID,
+		).Scan(&patched); err != nil {
+			t.Fatalf("SELECT patched: %v", err)
+		}
+		if !patched {
+			t.Error("patched = false; want true (OR of false and true from the two dup entries)")
+		}
+	})
+
+	// (e) patched_versions contains the merged version string.
+	t.Run("merged_patched_versions_union", func(t *testing.T) {
+		var pvOut []byte
+		if err := pool.QueryRow(ctx,
+			`SELECT patched_versions FROM wordfence_vuln_software WHERE vuln_id = $1 AND kind = 'plugin' AND slug = 'akismet'`,
+			dupRec.VulnID,
+		).Scan(&pvOut); err != nil {
+			t.Fatalf("SELECT patched_versions: %v", err)
+		}
+		var pvSlice []string
+		if err := json.Unmarshal(pvOut, &pvSlice); err != nil {
+			t.Fatalf("unmarshal patched_versions: %v (raw: %s)", err, pvOut)
+		}
+		found := false
+		for _, v := range pvSlice {
+			if v == "1.6.1" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("patched_versions = %v; want to contain %q", pvSlice, "1.6.1")
+		}
+	})
+
+	// Case B: two different vulns sharing (kind=plugin, slug=akismet) must
+	// produce TWO rows (one per vuln_id) — the dedup must NOT collapse across vulns.
+	t.Run("two_different_vulns_same_slug_produce_two_rows", func(t *testing.T) {
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM wordfence_vuln_software WHERE vuln_id IN ($1, $2) AND kind = 'plugin' AND slug = 'akismet'`,
+			recB1.VulnID, recB2.VulnID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count query: %v", err)
+		}
+		if count != 2 {
+			t.Errorf("software rows for two distinct vulns = %d; want 2 (dedup must NOT collapse across vuln_ids)", count)
+		}
+	})
+
+	// Idempotency: running the same ingest a second time must succeed (no errors,
+	// same row counts — the DELETE+CopyFrom pattern is inherently idempotent).
+	t.Run("second_ingest_is_idempotent", func(t *testing.T) {
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatalf("begin tx: %v", err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err := tx.Exec(ctx, "SELECT set_config('app.agent','on',true)"); err != nil {
+			t.Fatalf("set agent guc: %v", err)
+		}
+		if err := repo.BulkUpsertFeedRecords(ctx, tx, allRecs); err != nil {
+			t.Fatalf("second BulkUpsertFeedRecords: %v", err)
+		}
+		if err := repo.BulkReplaceAllSoftware(ctx, tx, allRecs); err != nil {
+			t.Fatalf("second BulkReplaceAllSoftware: %v", err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			t.Fatalf("second commit: %v", err)
+		}
+
+		// Row counts must be identical after the second ingest.
+		var count int
+		if err := pool.QueryRow(ctx,
+			`SELECT count(*) FROM wordfence_vuln_software WHERE vuln_id = $1 AND kind = 'plugin' AND slug = 'akismet'`,
+			dupRec.VulnID,
+		).Scan(&count); err != nil {
+			t.Fatalf("count query after second ingest: %v", err)
+		}
+		if count != 1 {
+			t.Errorf("after second ingest: rows = %d; want 1", count)
+		}
 	})
 }
