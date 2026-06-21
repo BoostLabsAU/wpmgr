@@ -123,6 +123,15 @@ func NewFeedWorker(repo *Repo, pool *db.Pool, svc *Service, resolver APIKeyResol
 // once at boot after startRiver returns (the service needs the River client).
 func (w *FeedWorker) SetService(svc *Service) { w.svc = svc }
 
+// Timeout gives the feed refresh job 10 minutes. A full-dump ingest of ~13k
+// records via CopyFrom completes in seconds, but the two HTTP fetches + the
+// 2s inter-fetch delay + any Postgres latency under load consume real wall
+// time. 10 minutes is generous headroom well above the expected 30–60s wall
+// time and avoids the context deadline that previously killed the per-record loop.
+func (w *FeedWorker) Timeout(*river.Job[FeedRefreshArgs]) time.Duration {
+	return 10 * time.Minute
+}
+
 // Work performs the feed refresh.
 func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) error {
 	// Resolve the key at run-time so a UI-set key takes effect on the next job
@@ -208,26 +217,41 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 	return nil
 }
 
-// ingestRecords writes all records and the meta row in one InAgentTx.
+// ingestRecords writes all records and the meta row in one transaction using
+// bulk operations. The previous per-record loop (13k × DELETE+INSERT round-trips)
+// exceeded the River context deadline; the bulk path replaces that with:
+//
+//  1. A pgx Batch that sends all feed-row upserts in a single round-trip.
+//  2. A set-based DELETE of software rows for every vuln_id in the batch, then
+//     a single CopyFrom that streams all new software rows to Postgres.
+//  3. PruneMissingVulns (single set-based DELETE of retracted vulns).
+//  4. StampFeedMeta (single UPDATE).
+//
+// The entire operation is one transaction — atomic, with no partial state.
 func (w *FeedWorker) ingestRecords(ctx context.Context, records map[string]FeedRecord, knownIDs []string, meta FeedMetaUpdate) error {
-	// Use raw pool Begin/Commit (global tables, no RLS; InAgentTx sets the GUC
-	// but the global tables don't need it — we use a direct pool transaction to
-	// avoid the GUC overhead and keep the import fast).
+	// Flatten the map into a slice for deterministic ordering (maps in Go are
+	// unordered; a slice makes the Batch and CopyFrom reproducible for debugging).
+	recs := make([]FeedRecord, 0, len(records))
+	for _, r := range records {
+		recs = append(recs, r)
+	}
+
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Set agent GUC anyway (in case a policy is added later).
+	// Set agent GUC (global tables have no RLS today; this is forward-compatible).
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.agent','on',true)"); err != nil {
 		return fmt.Errorf("set agent guc: %w", err)
 	}
 
-	for _, rec := range records {
-		if err := w.repo.UpsertFeedRecord(ctx, tx, rec); err != nil {
-			return err
-		}
+	if err := w.repo.BulkUpsertFeedRecords(ctx, tx, recs); err != nil {
+		return err
+	}
+	if err := w.repo.BulkReplaceAllSoftware(ctx, tx, recs); err != nil {
+		return err
 	}
 	if err := w.repo.PruneMissingVulns(ctx, tx, knownIDs); err != nil {
 		return err

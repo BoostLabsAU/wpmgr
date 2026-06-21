@@ -93,25 +93,130 @@ func (r *Repo) UpsertFeedRecord(ctx context.Context, tx pgx.Tx, rec FeedRecord) 
 	return nil
 }
 
+// BulkUpsertFeedRecords upserts all feed records in a single pgx Batch, sending
+// every INSERT ... ON CONFLICT DO UPDATE in one round-trip instead of one per record.
+// This replaces the O(N) per-record path that timed out on 13k-record full-dump ingest.
+func (r *Repo) BulkUpsertFeedRecords(ctx context.Context, tx pgx.Tx, recs []FeedRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+
+	const upsertSQL = `
+		INSERT INTO wordfence_vuln_feed
+			(vuln_id, title, cve, cve_link, cvss_score, cvss_rating, cwe,
+			 informational, reference_urls, published, updated, raw)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+		ON CONFLICT (vuln_id) DO UPDATE SET
+			title          = EXCLUDED.title,
+			cve            = EXCLUDED.cve,
+			cve_link       = EXCLUDED.cve_link,
+			cvss_score     = EXCLUDED.cvss_score,
+			cvss_rating    = EXCLUDED.cvss_rating,
+			cwe            = EXCLUDED.cwe,
+			informational  = EXCLUDED.informational,
+			reference_urls = EXCLUDED.reference_urls,
+			published      = EXCLUDED.published,
+			updated        = EXCLUDED.updated,
+			raw            = EXCLUDED.raw`
+
+	batch := &pgx.Batch{}
+	for _, rec := range recs {
+		batch.Queue(upsertSQL,
+			rec.VulnID, rec.Title, nilString(rec.CVE), nilString(rec.CVELink),
+			rec.CVSSScore, nilString(rec.CVSSRating), rec.CWE,
+			rec.Informational, rec.References, rec.Published, rec.Updated, rec.Raw,
+		)
+	}
+
+	br := tx.SendBatch(ctx, batch)
+	defer func() { _ = br.Close() }()
+
+	for i := range recs {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("bulk upsert feed record %d (%s): %w", i, recs[i].VulnID, err)
+		}
+	}
+	return br.Close()
+}
+
+// BulkReplaceAllSoftware replaces the software rows for every vuln_id in recs
+// using two set-based operations instead of per-record DELETE + INSERT loops:
+//
+//  1. A single DELETE that removes all existing software rows whose vuln_id is in
+//     the batch. This is one network round-trip regardless of how many vulns or
+//     software rows exist.
+//  2. A pgx CopyFrom that streams all new software rows to Postgres in a single
+//     COPY protocol frame.
+//
+// Together these replace the previous O(N×M) approach (13k vulns × per-vuln DELETE
+// + per-software-row INSERT) that triggered a context deadline on full-dump ingest.
+func (r *Repo) BulkReplaceAllSoftware(ctx context.Context, tx pgx.Tx, recs []FeedRecord) error {
+	if len(recs) == 0 {
+		return nil
+	}
+
+	// Collect all vuln_ids being replaced.
+	vulnIDs := make([]string, len(recs))
+	for i, rec := range recs {
+		vulnIDs[i] = rec.VulnID
+	}
+
+	// Step 1: delete all software rows for these vulns in one statement.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM wordfence_vuln_software WHERE vuln_id = ANY($1::text[])`,
+		vulnIDs,
+	); err != nil {
+		return fmt.Errorf("bulk delete software rows: %w", err)
+	}
+
+	// Step 2: collect all new software rows and stream them via CopyFrom.
+	// Preallocate a reasonable capacity (average ~2 software rows per vuln).
+	rows := make([][]any, 0, len(recs)*2)
+	for _, rec := range recs {
+		for _, sw := range rec.Software {
+			slug := normSlug(sw.Slug)
+			if slug == "" {
+				continue
+			}
+			rows = append(rows, []any{
+				rec.VulnID,
+				sw.Kind,
+				slug,
+				sw.AffectedVersions,
+				sw.Patched,
+				sw.PatchedVersions,
+			})
+		}
+	}
+
+	if len(rows) == 0 {
+		return nil // nothing to copy (all vulns had no software — should not occur in practice)
+	}
+
+	cols := []string{"vuln_id", "kind", "slug", "affected_versions", "patched", "patched_versions"}
+	if _, err := tx.CopyFrom(ctx,
+		pgx.Identifier{"wordfence_vuln_software"},
+		cols,
+		pgx.CopyFromRows(rows),
+	); err != nil {
+		return fmt.Errorf("bulk copy software rows: %w", err)
+	}
+	return nil
+}
+
 // PruneMissingVulns deletes feed rows whose vuln_id is not in the provided set.
 // Called after a full-dump ingest to remove retracted vulnerabilities.
 func (r *Repo) PruneMissingVulns(ctx context.Context, tx pgx.Tx, knownIDs []string) error {
-	// Build a temporary table of known IDs for the NOT IN filter.
 	if len(knownIDs) == 0 {
 		// Safety: if the ingested set is empty (e.g. feed returned nothing) do NOT
 		// prune — something went wrong upstream.
 		return nil
 	}
-	ids := make([]any, len(knownIDs))
-	for i, id := range knownIDs {
-		ids[i] = id
-	}
-	// pgx parameterized ANY($1::text[]).
-	_, err := tx.Exec(ctx,
+	// pgx parameterized ANY($1::text[]): deletes every row NOT in the full set.
+	if _, err := tx.Exec(ctx,
 		`DELETE FROM wordfence_vuln_feed WHERE vuln_id != ALL($1::text[])`,
 		knownIDs,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("prune missing vulns: %w", err)
 	}
 	return nil
