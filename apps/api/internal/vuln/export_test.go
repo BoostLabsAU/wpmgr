@@ -22,3 +22,12 @@ func ParseFeedRecord(vulnID string, raw json.RawMessage) (FeedRecord, string, st
 
 // ErrNoUsableSoftware exposes errNoUsableSoftware so tests can assert the skip sentinel.
 var ErrNoUsableSoftware = errNoUsableSoftware
+
+// DedupSoftwareRows exposes dedupSoftwareRows for white-box unit tests.
+func DedupSoftwareRows(rows []SoftwareRow) []SoftwareRow { return dedupSoftwareRows(rows) }
+
+// MergeAffectedVersions exposes mergeAffectedVersions for unit tests.
+func MergeAffectedVersions(a, b []byte) []byte { return mergeAffectedVersions(a, b) }
+
+// MergePatchedVersions exposes mergePatchedVersions for unit tests.
+func MergePatchedVersions(a, b []byte) []byte { return mergePatchedVersions(a, b) }

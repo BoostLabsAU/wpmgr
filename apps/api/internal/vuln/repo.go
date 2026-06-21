@@ -150,6 +150,21 @@ func (r *Repo) BulkUpsertFeedRecords(ctx context.Context, tx pgx.Tx, recs []Feed
 //
 // Together these replace the previous O(N×M) approach (13k vulns × per-vuln DELETE
 // + per-software-row INSERT) that triggered a context deadline on full-dump ingest.
+//
+// Duplicate handling: CopyFrom uses the COPY protocol which cannot express
+// ON CONFLICT DO UPDATE. Any duplicate (vuln_id, kind, slug) tuples in the
+// input batch would therefore violate the PK and abort the entire COPY.
+// Two real sources produce duplicates:
+//
+//   - A single feed record's software[] array listing the same (kind, slug) more
+//     than once (e.g. a plugin entry that appears with two different affected-version
+//     ranges).
+//   - Future expansion of mergeEnrichment to merge production software rows into
+//     scanner rows.
+//
+// Both are eliminated by dedupSoftwareRows, which merges rows sharing the same
+// normalised (vuln_id, kind, slug) key. A final map-based guard prevents any
+// residual duplicate from reaching CopyFrom regardless of feed quirks.
 func (r *Repo) BulkReplaceAllSoftware(ctx context.Context, tx pgx.Tx, recs []FeedRecord) error {
 	if len(recs) == 0 {
 		return nil
@@ -171,13 +186,24 @@ func (r *Repo) BulkReplaceAllSoftware(ctx context.Context, tx pgx.Tx, recs []Fee
 
 	// Step 2: collect all new software rows and stream them via CopyFrom.
 	// Preallocate a reasonable capacity (average ~2 software rows per vuln).
+	// Apply per-record dedup first (mergeSoftwareRows), then a final PK-level
+	// guard map to prevent any residual duplicate from reaching CopyFrom.
+	type pkKey struct{ vulnID, kind, slug string }
+	seen := make(map[pkKey]struct{}, len(recs)*2)
+
 	rows := make([][]any, 0, len(recs)*2)
 	for _, rec := range recs {
-		for _, sw := range rec.Software {
+		for _, sw := range dedupSoftwareRows(rec.Software) {
 			slug := normSlug(sw.Slug)
 			if slug == "" {
 				continue
 			}
+			pk := pkKey{rec.VulnID, sw.Kind, slug}
+			if _, dup := seen[pk]; dup {
+				// Should not reach here after dedupSoftwareRows, but guard anyway.
+				continue
+			}
+			seen[pk] = struct{}{}
 			rows = append(rows, []any{
 				rec.VulnID,
 				sw.Kind,
@@ -202,6 +228,143 @@ func (r *Repo) BulkReplaceAllSoftware(ctx context.Context, tx pgx.Tx, recs []Fee
 		return fmt.Errorf("bulk copy software rows: %w", err)
 	}
 	return nil
+}
+
+// dedupSoftwareRows collapses any SoftwareRow entries that share the same
+// normalised (kind, slug) key by merging their version data.  It is called
+// per-record inside BulkReplaceAllSoftware before building the CopyFrom batch.
+//
+// Merge semantics:
+//   - affected_versions: union of JSON object keys from all duplicate entries.
+//     Both the feed and the real Wordfence schema represent affected_versions as
+//     a JSON object keyed by a human-readable range label (e.g. "1.0.0 - 1.2.3").
+//     Merging their keys ensures the matcher sees every affected range.
+//   - patched: OR — true if any duplicate entry says patched=true (a fix exists
+//     even if only one feed variant lists patched_versions).
+//   - patched_versions: union of the two arrays, deduplicated.
+//
+// The function is a no-op (O(n) scan, no allocation) when every (kind, slug)
+// key is already unique, which is the common case.
+func dedupSoftwareRows(rows []SoftwareRow) []SoftwareRow {
+	if len(rows) <= 1 {
+		return rows
+	}
+
+	// Fast path: check whether there are any duplicates at all. If the set of
+	// normalised (kind, slug) keys has the same cardinality as the slice, return
+	// the slice unchanged (no allocation, no merge).
+	type key struct{ kind, slug string }
+	keySet := make(map[key]int, len(rows)) // maps key → first-seen index in result
+	hasDup := false
+	for _, sw := range rows {
+		k := key{sw.Kind, normSlug(sw.Slug)}
+		if _, exists := keySet[k]; exists {
+			hasDup = true
+			break
+		}
+		keySet[k] = 0
+	}
+	if !hasDup {
+		return rows
+	}
+
+	// Slow path: rebuild the slice, merging duplicates as we go.
+	type entry struct {
+		idx int // position in result slice
+		sw  SoftwareRow
+	}
+	result := make([]SoftwareRow, 0, len(rows))
+	indexByKey := make(map[key]int, len(rows)) // key → index in result
+
+	for _, sw := range rows {
+		k := key{sw.Kind, normSlug(sw.Slug)}
+		if idx, exists := indexByKey[k]; !exists {
+			indexByKey[k] = len(result)
+			result = append(result, sw)
+		} else {
+			// Merge into the existing entry.
+			existing := &result[idx]
+			existing.AffectedVersions = mergeAffectedVersions(existing.AffectedVersions, sw.AffectedVersions)
+			existing.Patched = existing.Patched || sw.Patched
+			existing.PatchedVersions = mergePatchedVersions(existing.PatchedVersions, sw.PatchedVersions)
+		}
+	}
+	return result
+}
+
+// mergeAffectedVersions unions two JSON objects keyed by range labels.
+// Both inputs are expected to be JSON objects (the Wordfence v3 schema).
+// If either is empty/null/not-an-object, the other is returned unchanged.
+// On any parse error the first input is returned as-is (defensive: don't lose data).
+func mergeAffectedVersions(a, b []byte) []byte {
+	if len(a) == 0 || string(a) == "null" || string(a) == "{}" {
+		if len(b) > 0 {
+			return b
+		}
+		return a
+	}
+	if len(b) == 0 || string(b) == "null" || string(b) == "{}" {
+		return a
+	}
+	// Both are non-empty: unmarshal as maps and union their keys.
+	var ma, mb map[string]json.RawMessage
+	if err := json.Unmarshal(a, &ma); err != nil {
+		return a // a is not an object; keep a and discard b
+	}
+	if err := json.Unmarshal(b, &mb); err != nil {
+		return a // b is not an object; keep a
+	}
+	for k, v := range mb {
+		if _, exists := ma[k]; !exists {
+			ma[k] = v
+		}
+	}
+	merged, err := json.Marshal(ma)
+	if err != nil {
+		return a
+	}
+	return merged
+}
+
+// mergePatchedVersions unions two JSON arrays of version strings, deduplicating.
+// Both inputs are expected to be JSON arrays.
+// If either is empty/null, the other is returned unchanged.
+func mergePatchedVersions(a, b []byte) []byte {
+	if len(a) == 0 || string(a) == "null" || string(a) == "[]" {
+		if len(b) > 0 {
+			return b
+		}
+		return a
+	}
+	if len(b) == 0 || string(b) == "null" || string(b) == "[]" {
+		return a
+	}
+	var va, vb []string
+	if err := json.Unmarshal(a, &va); err != nil {
+		return a
+	}
+	if err := json.Unmarshal(b, &vb); err != nil {
+		return a
+	}
+	seen := make(map[string]struct{}, len(va)+len(vb))
+	merged := make([]string, 0, len(va)+len(vb))
+	for _, v := range va {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			merged = append(merged, v)
+		}
+	}
+	for _, v := range vb {
+		if _, ok := seen[v]; !ok {
+			seen[v] = struct{}{}
+			merged = append(merged, v)
+		}
+	}
+	out, err := json.Marshal(merged)
+	if err != nil {
+		return a
+	}
+	return out
 }
 
 // PruneMissingVulns deletes feed rows whose vuln_id is not in the provided set.
