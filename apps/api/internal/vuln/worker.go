@@ -61,6 +61,13 @@ const (
 	wfProductionURL = "https://www.wordfence.com/api/intelligence/v3/vulnerabilities/production"
 )
 
+// errRateLimited marks a 429 from the Wordfence feed. Wordfence documents no
+// Retry-After and no per-window number ("too many requests in a short period"),
+// so a 429 must NOT trigger River's aggressive retry — that just re-hits the
+// endpoint and keeps the rate-limit window warm. Instead we stamp the status and
+// succeed; the hourly periodic refresh is the natural, well-spaced retry.
+var errRateLimited = errors.New("wordfence feed rate limited (429)")
+
 // FeedHTTPDoer is the subset of httpclient.Client the feed worker needs.
 type FeedHTTPDoer interface {
 	Do(req *http.Request) (*http.Response, error)
@@ -123,6 +130,15 @@ func NewFeedWorker(repo *Repo, pool *db.Pool, svc *Service, resolver APIKeyResol
 // once at boot after startRiver returns (the service needs the River client).
 func (w *FeedWorker) SetService(svc *Service) { w.svc = svc }
 
+// Timeout gives the feed refresh job 10 minutes. A full-dump ingest of ~13k
+// records via CopyFrom completes in seconds, but the two HTTP fetches + the
+// 2s inter-fetch delay + any Postgres latency under load consume real wall
+// time. 10 minutes is generous headroom well above the expected 30–60s wall
+// time and avoids the context deadline that previously killed the per-record loop.
+func (w *FeedWorker) Timeout(*river.Job[FeedRefreshArgs]) time.Duration {
+	return 10 * time.Minute
+}
+
 // Work performs the feed refresh.
 func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) error {
 	// Resolve the key at run-time so a UI-set key takes effect on the next job
@@ -140,9 +156,18 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 	// Fetch the Scanner feed (required).
 	records, defiantNotice, defiantLicense, mitreNotice, err := w.fetchFeed(ctx, wfScannerURL, apiKey)
 	if err != nil {
+		// A 429 must NOT be retried by River: Wordfence rate-limits "too many
+		// requests in a short period" with no Retry-After, so aggressive retries
+		// keep the window warm and never recover. Stamp the status and SUCCEED;
+		// the hourly periodic refresh is the natural, well-spaced retry.
+		if errors.Is(err, errRateLimited) {
+			_ = w.repo.StampFeedError(ctx, "rate limited by Wordfence; will retry on the next scheduled refresh")
+			w.logger.Warn("vuln: scanner feed rate limited; skipping this cycle (no River retry)")
+			return nil
+		}
 		errMsg := fmt.Sprintf("scanner feed fetch failed: %v", err)
 		_ = w.repo.StampFeedError(ctx, errMsg)
-		return fmt.Errorf("vuln feed refresh: %w", err) // River will retry
+		return fmt.Errorf("vuln feed refresh: %w", err) // River will retry real failures
 	}
 
 	// Brief spacing between the two fetches reduces the chance of hitting the
@@ -208,26 +233,41 @@ func (w *FeedWorker) Work(ctx context.Context, job *river.Job[FeedRefreshArgs]) 
 	return nil
 }
 
-// ingestRecords writes all records and the meta row in one InAgentTx.
+// ingestRecords writes all records and the meta row in one transaction using
+// bulk operations. The previous per-record loop (13k × DELETE+INSERT round-trips)
+// exceeded the River context deadline; the bulk path replaces that with:
+//
+//  1. A pgx Batch that sends all feed-row upserts in a single round-trip.
+//  2. A set-based DELETE of software rows for every vuln_id in the batch, then
+//     a single CopyFrom that streams all new software rows to Postgres.
+//  3. PruneMissingVulns (single set-based DELETE of retracted vulns).
+//  4. StampFeedMeta (single UPDATE).
+//
+// The entire operation is one transaction — atomic, with no partial state.
 func (w *FeedWorker) ingestRecords(ctx context.Context, records map[string]FeedRecord, knownIDs []string, meta FeedMetaUpdate) error {
-	// Use raw pool Begin/Commit (global tables, no RLS; InAgentTx sets the GUC
-	// but the global tables don't need it — we use a direct pool transaction to
-	// avoid the GUC overhead and keep the import fast).
+	// Flatten the map into a slice for deterministic ordering (maps in Go are
+	// unordered; a slice makes the Batch and CopyFrom reproducible for debugging).
+	recs := make([]FeedRecord, 0, len(records))
+	for _, r := range records {
+		recs = append(recs, r)
+	}
+
 	tx, err := w.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// Set agent GUC anyway (in case a policy is added later).
+	// Set agent GUC (global tables have no RLS today; this is forward-compatible).
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.agent','on',true)"); err != nil {
 		return fmt.Errorf("set agent guc: %w", err)
 	}
 
-	for _, rec := range records {
-		if err := w.repo.UpsertFeedRecord(ctx, tx, rec); err != nil {
-			return err
-		}
+	if err := w.repo.BulkUpsertFeedRecords(ctx, tx, recs); err != nil {
+		return err
+	}
+	if err := w.repo.BulkReplaceAllSoftware(ctx, tx, recs); err != nil {
+		return err
 	}
 	if err := w.repo.PruneMissingVulns(ctx, tx, knownIDs); err != nil {
 		return err
@@ -280,7 +320,7 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 		// Single retry.
 		req2, rerr := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
 		if rerr != nil {
-			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s: %w", feedURL, errRateLimited)
 		}
 		req2.Header.Set("Authorization", "Bearer "+apiKey)
 		req2.Header.Set("Accept", "application/json")
@@ -290,7 +330,7 @@ func (w *FeedWorker) fetchFeed(ctx context.Context, feedURL, apiKey string) (map
 			if resp2 != nil {
 				_ = resp2.Body.Close()
 			}
-			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s; will retry next cycle", feedURL)
+			return nil, "", "", "", fmt.Errorf("rate limited (429) fetching %s: %w", feedURL, errRateLimited)
 		}
 		// Swap to the retry response for decoding below.
 		_ = resp.Body.Close()
