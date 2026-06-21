@@ -6,6 +6,10 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+### Added
+
+- **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
+
 ### Fixed
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
