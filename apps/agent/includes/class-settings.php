@@ -28,7 +28,7 @@ namespace WPMgr\Agent;
 /**
  * Typed wrapper around the agent's wp-options.
  */
-final class Settings
+final class Settings implements \WPMgr\Agent\Security\CpUrlProvider
 {
     /** Control-plane base URL (e.g. https://cp.example.com). */
     public const OPTION_CP_URL = 'wpmgr_agent_cp_url';

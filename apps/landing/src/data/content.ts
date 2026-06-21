@@ -345,12 +345,12 @@ export const FEATURES: {
         {
           icon: "ShieldCheck",
           title: "Hardening, bans, integrity",
-          summary: "Per-site hardening, an IP ban list, and continuous file-integrity monitoring, all opt-in and default-off.",
+          summary: "Per-site hardening, bans, file integrity, vulnerability scanning, user 2FA, and password policy, all opt-in.",
           bullets: [
             "Disable file editor, restrict XML-RPC, REST API, and login IDs",
-            "Force SSL with HSTS, block PHP in uploads, protect system files",
-            "IP and CIDR ban list enforced at early-boot and web-server level",
-            "File hashes compared to WordPress.org and a per-site baseline",
+            "File hashes vs WordPress.org and baseline; vuln scan vs CVEs",
+            "Site-user 2FA: authenticator app, email code, backup codes",
+            "Password policy: strength, breach check, reuse, expiry",
           ],
         },
         {
@@ -631,9 +631,12 @@ export const SECURITY = {
     { icon: "ShieldCheck", title: "WordPress hardening controls", desc: "Push hardening rules from the dashboard to any site: disable the file editor, restrict XML-RPC and the REST API, force SSL with HSTS, block PHP in uploads, and protect system files. All opt-in and default-off." },
     { icon: "ShieldAlert", title: "IP and user-agent ban list", desc: "Block individual IPs, CIDR ranges, and user agents at early-boot and at the web-server level. The operator allow-list is always honoured so a ban can never lock out the operator." },
     { icon: "FileScan", title: "File integrity monitoring", desc: "Scan the whole WordPress install or just wp-content on demand. File hashes are compared against WordPress.org checksums for core, wp.org-hosted plugins, and themes, and against a learned per-site baseline for everything else. Changed, added, and removed files are reported; a flagged file stays flagged until an operator reviews and accepts it, so the baseline never silently advances past an unreviewed change." },
+    { icon: "ShieldAlert", title: "Vulnerability scanner", desc: "Plugins, themes, and WordPress core are checked against the Wordfence Intelligence vulnerability feed. Each finding shows severity, affected version, fixed version, and CVE references. One-click remediation updates the vulnerable component through the existing update flow. Findings appear per-site on the Security tab and fleet-wide on the Vulnerabilities page. Operators can dismiss and restore findings. Requires a free Wordfence Intelligence API key." },
     { icon: "FileLock2", title: "Client-side encrypted backups", desc: "Optional end-to-end encryption means the control plane stores only ciphertext and never holds a key to decrypt it." },
     { icon: "EyeOff", title: "Redacted diagnostics", desc: "Emails, passwords, secrets, tokens, and salts are stripped before any diagnostics leave a site." },
     { icon: "ScrollText", title: "Tamper-evident audit log", desc: "Every login, role change, and site action is recorded in an audit log you can review." },
+    { icon: "ShieldUser", title: "Two-factor auth for site users", desc: "Require TOTP, email codes, or backup codes for chosen WordPress user roles, enforced at the login screen. Grace logins, remember-device window, and wp-config recovery constants mean operators are never locked out." },
+    { icon: "KeySquare", title: "Password policy for site users", desc: "Set a minimum strength, block known-compromised passwords via a privacy-preserving prefix query (the plaintext never leaves the site), block reuse, and optionally expire passwords with a forced-change screen. Hide the login page behind a secret address to cut automated login attempts." },
   ],
 };
 

@@ -147,3 +147,82 @@ type LoginEvent struct {
 	OccurredAt   time.Time
 	IngestedAt   time.Time
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3 — site-user 2FA + password policy (ADR-059)
+// ---------------------------------------------------------------------------
+
+// SiteSecurityPolicy is the per-site user auth policy stored in
+// site_security_policy and pushed to the agent via sync_security_policy.
+// All fields default to the OFF/safe value (zero values are safe defaults).
+type SiteSecurityPolicy struct {
+	TenantID uuid.UUID
+	SiteID   uuid.UUID
+
+	// 2FA
+	TwoFactorEnabled            bool
+	TwoFactorMethods            []string
+	TwoFactorRequiredRoles      []string
+	TwoFactorGraceLogins        int
+	TwoFactorRememberDeviceDays int
+	BlockXMLRPCFor2FAUsers      bool
+
+	// Password
+	PasswordMinZxcvbnScore   int
+	PasswordMinZxcvbnRoles   []string
+	PasswordBlockCompromised bool
+	PasswordReuseBlockCount  int
+	PasswordMaxAgeDays       int
+	PasswordExpiryRoles      []string
+
+	// Hide-backend
+	HideBackendEnabled  bool
+	HideBackendSlug     string
+	HideBackendRedirect string
+
+	// Audit
+	UpdatedAt time.Time
+	ActorType string
+	ActorID   string
+}
+
+// DefaultSiteSecurityPolicy returns the safe default policy for a site that
+// has no stored row yet. Everything is OFF; no 2FA, no password requirements,
+// no hide-backend.
+func DefaultSiteSecurityPolicy(tenantID, siteID uuid.UUID) SiteSecurityPolicy {
+	return SiteSecurityPolicy{
+		TenantID:                    tenantID,
+		SiteID:                      siteID,
+		TwoFactorEnabled:            false,
+		TwoFactorMethods:            []string{"totp", "email", "backup"},
+		TwoFactorRequiredRoles:      []string{},
+		TwoFactorGraceLogins:        3,
+		TwoFactorRememberDeviceDays: 30,
+		BlockXMLRPCFor2FAUsers:      true,
+		PasswordMinZxcvbnScore:      0,
+		PasswordMinZxcvbnRoles:      []string{},
+		PasswordBlockCompromised:    false,
+		PasswordReuseBlockCount:     0,
+		PasswordMaxAgeDays:          0,
+		PasswordExpiryRoles:         []string{},
+		HideBackendEnabled:          false,
+		HideBackendSlug:             "",
+		HideBackendRedirect:         "",
+	}
+}
+
+// PolicyGroup is one per-role policy override stored in
+// site_security_policy_groups. Nullable fields use pointers; nil = inherit
+// from the site-level policy.
+type PolicyGroup struct {
+	ID               uuid.UUID
+	TenantID         uuid.UUID
+	SiteID           uuid.UUID
+	Role             string
+	Require2FA       *bool
+	AllowedMethods   []string
+	MinZxcvbnScore   *int
+	BlockCompromised *bool
+	MaxAgeDays       *int
+	CreatedAt        time.Time
+}

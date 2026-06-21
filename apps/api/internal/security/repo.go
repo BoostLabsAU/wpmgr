@@ -13,6 +13,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
+
 // Repo is the tenant-scoped persistence layer for the security domain.
 //
 // Operator reads/writes use InTenantTx (app.tenant_id GUC).
@@ -436,4 +437,339 @@ func isUniqueViolation(err error) bool {
 		return pe.SQLState() == "23505"
 	}
 	return false
+}
+
+// ---------------------------------------------------------------------------
+// Phase 3 — site-user 2FA + password policy (ADR-059)
+// ---------------------------------------------------------------------------
+
+// GetSiteSecurityPolicy returns the stored policy for (tenantID, siteID).
+// found=false (and no error) when no row exists yet; callers return the default.
+func (r *Repo) GetSiteSecurityPolicy(ctx context.Context, tenantID, siteID uuid.UUID) (SiteSecurityPolicy, bool, error) {
+	var out SiteSecurityPolicy
+	var found bool
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`SELECT tenant_id, site_id,
+			        two_factor_enabled, two_factor_methods, two_factor_required_roles,
+			        two_factor_grace_logins, two_factor_remember_device_days,
+			        block_xmlrpc_for_2fa_users,
+			        password_min_zxcvbn_score, password_min_zxcvbn_roles,
+			        password_block_compromised, password_reuse_block_count,
+			        password_max_age_days, password_expiry_roles,
+			        hide_backend_enabled, hide_backend_slug, hide_backend_redirect,
+			        updated_at, actor_type, actor_id
+			   FROM site_security_policy
+			  WHERE tenant_id = $1 AND site_id = $2`,
+			tenantID, siteID,
+		)
+		var actorType, actorID *string
+		if err := row.Scan(
+			&out.TenantID, &out.SiteID,
+			&out.TwoFactorEnabled, &out.TwoFactorMethods, &out.TwoFactorRequiredRoles,
+			&out.TwoFactorGraceLogins, &out.TwoFactorRememberDeviceDays,
+			&out.BlockXMLRPCFor2FAUsers,
+			&out.PasswordMinZxcvbnScore, &out.PasswordMinZxcvbnRoles,
+			&out.PasswordBlockCompromised, &out.PasswordReuseBlockCount,
+			&out.PasswordMaxAgeDays, &out.PasswordExpiryRoles,
+			&out.HideBackendEnabled, &out.HideBackendSlug, &out.HideBackendRedirect,
+			&out.UpdatedAt, &actorType, &actorID,
+		); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil
+			}
+			return domain.Internal("security_policy_get_failed",
+				"failed to get site security policy").WithCause(err)
+		}
+		if actorType != nil {
+			out.ActorType = *actorType
+		}
+		if actorID != nil {
+			out.ActorID = *actorID
+		}
+		// Ensure nil slices are returned as empty slices.
+		if out.TwoFactorMethods == nil {
+			out.TwoFactorMethods = []string{}
+		}
+		if out.TwoFactorRequiredRoles == nil {
+			out.TwoFactorRequiredRoles = []string{}
+		}
+		if out.PasswordMinZxcvbnRoles == nil {
+			out.PasswordMinZxcvbnRoles = []string{}
+		}
+		if out.PasswordExpiryRoles == nil {
+			out.PasswordExpiryRoles = []string{}
+		}
+		found = true
+		return nil
+	})
+	return out, found, err
+}
+
+// UpsertSiteSecurityPolicy inserts or replaces the policy for (tenantID, siteID).
+// updated_at is refreshed on every upsert. Returns the stored policy.
+func (r *Repo) UpsertSiteSecurityPolicy(ctx context.Context, p SiteSecurityPolicy) (SiteSecurityPolicy, error) {
+	var out SiteSecurityPolicy
+	// Coalesce nil slices to empty so the array literals bind correctly.
+	methods := coalesceStringSlice(p.TwoFactorMethods)
+	requiredRoles := coalesceStringSlice(p.TwoFactorRequiredRoles)
+	zxcvbnRoles := coalesceStringSlice(p.PasswordMinZxcvbnRoles)
+	expiryRoles := coalesceStringSlice(p.PasswordExpiryRoles)
+
+	err := r.pool.InTenantTx(ctx, p.TenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`INSERT INTO site_security_policy (
+			    site_id, tenant_id,
+			    two_factor_enabled, two_factor_methods, two_factor_required_roles,
+			    two_factor_grace_logins, two_factor_remember_device_days,
+			    block_xmlrpc_for_2fa_users,
+			    password_min_zxcvbn_score, password_min_zxcvbn_roles,
+			    password_block_compromised, password_reuse_block_count,
+			    password_max_age_days, password_expiry_roles,
+			    hide_backend_enabled, hide_backend_slug, hide_backend_redirect,
+			    updated_at, actor_type, actor_id
+			 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,now(),$18,$19)
+			 ON CONFLICT (site_id) DO UPDATE
+			   SET two_factor_enabled              = EXCLUDED.two_factor_enabled,
+			       two_factor_methods              = EXCLUDED.two_factor_methods,
+			       two_factor_required_roles       = EXCLUDED.two_factor_required_roles,
+			       two_factor_grace_logins         = EXCLUDED.two_factor_grace_logins,
+			       two_factor_remember_device_days = EXCLUDED.two_factor_remember_device_days,
+			       block_xmlrpc_for_2fa_users      = EXCLUDED.block_xmlrpc_for_2fa_users,
+			       password_min_zxcvbn_score       = EXCLUDED.password_min_zxcvbn_score,
+			       password_min_zxcvbn_roles       = EXCLUDED.password_min_zxcvbn_roles,
+			       password_block_compromised      = EXCLUDED.password_block_compromised,
+			       password_reuse_block_count      = EXCLUDED.password_reuse_block_count,
+			       password_max_age_days           = EXCLUDED.password_max_age_days,
+			       password_expiry_roles           = EXCLUDED.password_expiry_roles,
+			       hide_backend_enabled            = EXCLUDED.hide_backend_enabled,
+			       hide_backend_slug               = EXCLUDED.hide_backend_slug,
+			       hide_backend_redirect           = EXCLUDED.hide_backend_redirect,
+			       updated_at                      = now(),
+			       actor_type                      = EXCLUDED.actor_type,
+			       actor_id                        = EXCLUDED.actor_id
+			 RETURNING tenant_id, site_id,
+			           two_factor_enabled, two_factor_methods, two_factor_required_roles,
+			           two_factor_grace_logins, two_factor_remember_device_days,
+			           block_xmlrpc_for_2fa_users,
+			           password_min_zxcvbn_score, password_min_zxcvbn_roles,
+			           password_block_compromised, password_reuse_block_count,
+			           password_max_age_days, password_expiry_roles,
+			           hide_backend_enabled, hide_backend_slug, hide_backend_redirect,
+			           updated_at, actor_type, actor_id`,
+			p.SiteID, p.TenantID,
+			p.TwoFactorEnabled, methods, requiredRoles,
+			p.TwoFactorGraceLogins, p.TwoFactorRememberDeviceDays,
+			p.BlockXMLRPCFor2FAUsers,
+			p.PasswordMinZxcvbnScore, zxcvbnRoles,
+			p.PasswordBlockCompromised, p.PasswordReuseBlockCount,
+			p.PasswordMaxAgeDays, expiryRoles,
+			p.HideBackendEnabled, p.HideBackendSlug, p.HideBackendRedirect,
+			p.ActorType, p.ActorID,
+		)
+		var actorType, actorID *string
+		if err := row.Scan(
+			&out.TenantID, &out.SiteID,
+			&out.TwoFactorEnabled, &out.TwoFactorMethods, &out.TwoFactorRequiredRoles,
+			&out.TwoFactorGraceLogins, &out.TwoFactorRememberDeviceDays,
+			&out.BlockXMLRPCFor2FAUsers,
+			&out.PasswordMinZxcvbnScore, &out.PasswordMinZxcvbnRoles,
+			&out.PasswordBlockCompromised, &out.PasswordReuseBlockCount,
+			&out.PasswordMaxAgeDays, &out.PasswordExpiryRoles,
+			&out.HideBackendEnabled, &out.HideBackendSlug, &out.HideBackendRedirect,
+			&out.UpdatedAt, &actorType, &actorID,
+		); err != nil {
+			return domain.Internal("security_policy_upsert_failed",
+				"failed to upsert site security policy").WithCause(err)
+		}
+		if actorType != nil {
+			out.ActorType = *actorType
+		}
+		if actorID != nil {
+			out.ActorID = *actorID
+		}
+		if out.TwoFactorMethods == nil {
+			out.TwoFactorMethods = []string{}
+		}
+		if out.TwoFactorRequiredRoles == nil {
+			out.TwoFactorRequiredRoles = []string{}
+		}
+		if out.PasswordMinZxcvbnRoles == nil {
+			out.PasswordMinZxcvbnRoles = []string{}
+		}
+		if out.PasswordExpiryRoles == nil {
+			out.PasswordExpiryRoles = []string{}
+		}
+		return nil
+	})
+	return out, err
+}
+
+// ---------------------------------------------------------------------------
+// Policy groups
+// ---------------------------------------------------------------------------
+
+// ListPolicyGroups returns all group overrides for a site, ordered by role.
+func (r *Repo) ListPolicyGroups(ctx context.Context, tenantID, siteID uuid.UUID) ([]PolicyGroup, error) {
+	var out []PolicyGroup
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := tx.Query(ctx,
+			`SELECT id, tenant_id, site_id, role,
+			        require_2fa, allowed_methods, min_zxcvbn_score,
+			        block_compromised, max_age_days, created_at
+			   FROM site_security_policy_groups
+			  WHERE tenant_id = $1 AND site_id = $2
+			  ORDER BY role ASC`,
+			tenantID, siteID,
+		)
+		if err != nil {
+			return domain.Internal("security_groups_list_failed",
+				"failed to list security policy groups").WithCause(err)
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var g PolicyGroup
+			if err := rows.Scan(
+				&g.ID, &g.TenantID, &g.SiteID, &g.Role,
+				&g.Require2FA, &g.AllowedMethods, &g.MinZxcvbnScore,
+				&g.BlockCompromised, &g.MaxAgeDays, &g.CreatedAt,
+			); err != nil {
+				return domain.Internal("security_groups_list_failed",
+					"failed to read security policy group").WithCause(err)
+			}
+			out = append(out, g)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// UpsertPolicyGroup inserts or replaces the group override for (siteID, role).
+// Returns the stored group.
+func (r *Repo) UpsertPolicyGroup(ctx context.Context, g PolicyGroup) (PolicyGroup, error) {
+	var out PolicyGroup
+	err := r.pool.InTenantTx(ctx, g.TenantID, func(tx pgx.Tx) error {
+		row := tx.QueryRow(ctx,
+			`INSERT INTO site_security_policy_groups
+			    (tenant_id, site_id, role, require_2fa, allowed_methods,
+			     min_zxcvbn_score, block_compromised, max_age_days)
+			 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+			 ON CONFLICT (site_id, role) DO UPDATE
+			   SET require_2fa       = EXCLUDED.require_2fa,
+			       allowed_methods   = EXCLUDED.allowed_methods,
+			       min_zxcvbn_score  = EXCLUDED.min_zxcvbn_score,
+			       block_compromised = EXCLUDED.block_compromised,
+			       max_age_days      = EXCLUDED.max_age_days
+			 RETURNING id, tenant_id, site_id, role,
+			           require_2fa, allowed_methods, min_zxcvbn_score,
+			           block_compromised, max_age_days, created_at`,
+			g.TenantID, g.SiteID, g.Role,
+			g.Require2FA, g.AllowedMethods, g.MinZxcvbnScore,
+			g.BlockCompromised, g.MaxAgeDays,
+		)
+		if err := row.Scan(
+			&out.ID, &out.TenantID, &out.SiteID, &out.Role,
+			&out.Require2FA, &out.AllowedMethods, &out.MinZxcvbnScore,
+			&out.BlockCompromised, &out.MaxAgeDays, &out.CreatedAt,
+		); err != nil {
+			return domain.Internal("security_group_upsert_failed",
+				"failed to upsert security policy group").WithCause(err)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// DeletePolicyGroup removes the group override for (siteID, role).
+// Returns domain.NotFound when no such row exists.
+func (r *Repo) DeletePolicyGroup(ctx context.Context, tenantID, siteID uuid.UUID, role string) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		tag, err := tx.Exec(ctx,
+			`DELETE FROM site_security_policy_groups
+			  WHERE tenant_id = $1 AND site_id = $2 AND role = $3`,
+			tenantID, siteID, role,
+		)
+		if err != nil {
+			return domain.Internal("security_group_delete_failed",
+				"failed to delete security policy group").WithCause(err)
+		}
+		if tag.RowsAffected() == 0 {
+			return domain.NotFound("policy_group_not_found", "policy group not found for this role")
+		}
+		return nil
+	})
+}
+
+// ---------------------------------------------------------------------------
+// HIBP breach cache (global, no tenant RLS)
+// ---------------------------------------------------------------------------
+
+// GetHIBPCache returns the cached range body for the given 5-char prefix.
+// found=false when no cached entry exists or it has expired (older than ttl).
+// hibp_breach_cache has no RLS and no tenant_id, so we begin a plain
+// transaction with no GUC set (the embedded pgxpool.Pool.Begin suffices).
+func (r *Repo) GetHIBPCache(ctx context.Context, prefix string, ttl time.Duration) (string, bool, error) {
+	var body string
+	var found bool
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", false, domain.Internal("hibp_cache_get_failed",
+			"failed to begin tx for HIBP cache read").WithCause(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	row := tx.QueryRow(ctx,
+		`SELECT body FROM hibp_breach_cache
+		  WHERE prefix = $1 AND fetched_at > now() - ($2 * interval '1 second')`,
+		prefix, int64(ttl.Seconds()),
+	)
+	if scanErr := row.Scan(&body); scanErr != nil {
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			_ = tx.Commit(ctx)
+			return "", false, nil
+		}
+		return "", false, domain.Internal("hibp_cache_get_failed",
+			"failed to get HIBP cache entry").WithCause(scanErr)
+	}
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return "", false, domain.Internal("hibp_cache_get_failed",
+			"failed to commit HIBP cache read").WithCause(commitErr)
+	}
+	found = true
+	return body, found, nil
+}
+
+// UpsertHIBPCache stores or refreshes the range body for the given prefix.
+func (r *Repo) UpsertHIBPCache(ctx context.Context, prefix, body string) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return domain.Internal("hibp_cache_upsert_failed",
+			"failed to begin tx for HIBP cache write").WithCause(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, execErr := tx.Exec(ctx,
+		`INSERT INTO hibp_breach_cache (prefix, body, fetched_at)
+		 VALUES ($1, $2, now())
+		 ON CONFLICT (prefix) DO UPDATE
+		   SET body       = EXCLUDED.body,
+		       fetched_at = now()`,
+		prefix, body,
+	); execErr != nil {
+		return domain.Internal("hibp_cache_upsert_failed",
+			"failed to upsert HIBP cache entry").WithCause(execErr)
+	}
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return domain.Internal("hibp_cache_upsert_failed",
+			"failed to commit HIBP cache write").WithCause(commitErr)
+	}
+	return nil
+}
+
+// coalesceStringSlice returns an empty (non-nil) slice when the input is nil.
+func coalesceStringSlice(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }

@@ -28,7 +28,7 @@ namespace WPMgr\Agent;
 /**
  * Produces Ed25519-signed request headers for the control plane.
  */
-final class Signer
+final class Signer implements \WPMgr\Agent\Security\RequestSigner
 {
     /** Header carrying the base64-std agent Ed25519 public key. */
     public const HEADER_KEY = 'X-WPMgr-Agent-Key';

@@ -10,6 +10,42 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
 
+## [0.57.0] - 2026-06-21
+
+### Added
+
+- **Connect the vulnerability feed from the dashboard.** Instance administrators can now set the Wordfence Intelligence API key from a new "Vulnerability feed" page in the admin area, instead of an environment variable. The page shows the live connection status (connected with the vulnerability count and last sync time, not configured, or an error), lets you save or remove the key, and has a "Sync now" action. The key is encrypted at rest and is never shown again after saving. Self-hosted instances can still set the key by environment variable.
+
+## [0.56.0] - 2026-06-20
+
+### Added
+
+- **Vulnerability scanner.** WPMgr now checks every managed site's installed plugins, themes, and WordPress core version against the free Wordfence Intelligence vulnerability feed and flags anything with a known security issue. Each finding shows severity, the affected version range, the fixed version, and CVE references. Findings appear per-site on the Security tab (a new Vulnerabilities card and overview tile) and across the whole fleet on the Vulnerabilities page. One-click remediation updates a vulnerable plugin, theme, or core install to the fixed version using the existing update flow. Operators can dismiss a finding and restore it later. Requires a free Wordfence Intelligence API key to connect the feed; the UI shows a clear "feed not configured" state until the key is added.
+
+## [0.55.0] - 2026-06-20
+
+### Added
+
+- **Two-factor enrollment flow for WordPress site users.** After an operator requires 2FA for a user role, the affected user now sees a guided setup screen on their next login: scan a QR code with any authenticator app, enter a confirmation code to activate it, then save a set of one-time backup codes before continuing. Users can also start enrollment proactively from their WordPress profile at any time. Previously the policy could require 2FA but there was no way for site users to actually complete enrollment.
+
+### Changed
+
+- **Redesigned per-site Security tab.** The Security tab is now a card-based layout. A status overview strip at the top shows active protection at a glance. Settings are grouped into collapsible cards: Login and Two-Factor, Password policy, Hardening, File integrity, Bans and login protection, and Hide login. Each card has a plain-language description of what it does and a color-coded status indicator. Replaces the previous flat list of toggles and eliminates the large empty area that appeared when few settings were active.
+
+### Fixed
+
+- Consistent success and error toasts across all security actions on the per-site Security tab.
+
+## [0.54.0] - 2026-06-20
+
+### Added
+
+- **Two-factor authentication for WordPress site users.** Operators can require 2FA for chosen user roles on any managed site, enforced at the WordPress login screen. Supported methods: authenticator app (TOTP), email one-time code, and single-use backup codes. Configurable grace logins let users enroll before enforcement kicks in, and a remember-this-device window reduces friction for trusted machines. The WPMgr control plane and wp-config recovery constants can always bypass enforcement, so operators can never be locked out of a site they manage. Note: enabling 2FA applies to new logins; existing authenticated sessions remain valid until they expire naturally.
+- **Password policy for WordPress site users.** Per-site policy options: minimum password strength, blocking known-compromised passwords (checked by a privacy-preserving prefix query against a free public breach corpus so the plaintext password never leaves the site), blocking password reuse, and optional password expiry with a forced-change screen on next login.
+- **Hide login page.** Operators can move the WordPress login page to a secret address per site, reducing automated login attempts without breaking the WPMgr control plane's access to the site.
+
+All three controls are per-site, opt-in, and off by default.
+
 ## [0.53.0] - 2026-06-20
 
 ### Added

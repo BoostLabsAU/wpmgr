@@ -2844,3 +2844,255 @@ ALTER TABLE trusted_devices FORCE ROW LEVEL SECURITY;
 CREATE POLICY trusted_devices_agent ON trusted_devices
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- m78 — Security Suite Phase 3: per-site user 2FA + password policy
+-- ---------------------------------------------------------------------------
+
+-- site_security_policy: one row per site; the CP source of truth for the
+-- site-user 2FA + password + hide-backend policy knobs. All knobs default OFF.
+CREATE TABLE IF NOT EXISTS site_security_policy (
+    site_id                         uuid PRIMARY KEY,
+    tenant_id                       uuid NOT NULL,
+    two_factor_enabled              boolean NOT NULL DEFAULT false,
+    two_factor_methods              text[] NOT NULL DEFAULT '{totp,email,backup}',
+    two_factor_required_roles       text[] NOT NULL DEFAULT '{}',
+    two_factor_grace_logins         int NOT NULL DEFAULT 3
+        CONSTRAINT site_security_policy_grace_logins_chk
+        CHECK (two_factor_grace_logins >= 0 AND two_factor_grace_logins <= 100),
+    two_factor_remember_device_days int NOT NULL DEFAULT 30
+        CONSTRAINT site_security_policy_remember_device_days_chk
+        CHECK (two_factor_remember_device_days >= 0 AND two_factor_remember_device_days <= 365),
+    block_xmlrpc_for_2fa_users      boolean NOT NULL DEFAULT true,
+    password_min_zxcvbn_score       int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_zxcvbn_score_chk
+        CHECK (password_min_zxcvbn_score >= 0 AND password_min_zxcvbn_score <= 4),
+    password_min_zxcvbn_roles       text[] NOT NULL DEFAULT '{}',
+    password_block_compromised      boolean NOT NULL DEFAULT false,
+    password_reuse_block_count      int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_reuse_block_count_chk
+        CHECK (password_reuse_block_count >= 0 AND password_reuse_block_count <= 50),
+    password_max_age_days           int NOT NULL DEFAULT 0
+        CONSTRAINT site_security_policy_max_age_days_chk
+        CHECK (password_max_age_days >= 0 AND password_max_age_days <= 3650),
+    password_expiry_roles           text[] NOT NULL DEFAULT '{}',
+    hide_backend_enabled            boolean NOT NULL DEFAULT false,
+    hide_backend_slug               text NOT NULL DEFAULT '',
+    hide_backend_redirect           text NOT NULL DEFAULT '',
+    updated_at                      timestamptz NOT NULL DEFAULT now(),
+    actor_type                      text,
+    actor_id                        text,
+    CONSTRAINT site_security_policy_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT site_security_policy_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS site_security_policy_tenant_idx
+    ON site_security_policy (tenant_id);
+
+ALTER TABLE site_security_policy ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_security_policy FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_security_policy_tenant_isolation ON site_security_policy
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_security_policy_agent ON site_security_policy
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- site_security_policy_groups: per-role policy overrides.
+-- One row per (site_id, role); nullable override columns.
+CREATE TABLE IF NOT EXISTS site_security_policy_groups (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         uuid NOT NULL,
+    site_id           uuid NOT NULL,
+    role              text NOT NULL,
+    require_2fa       boolean,
+    allowed_methods   text[],
+    min_zxcvbn_score  int
+        CONSTRAINT site_security_policy_groups_zxcvbn_score_chk
+        CHECK (min_zxcvbn_score IS NULL OR (min_zxcvbn_score >= 0 AND min_zxcvbn_score <= 4)),
+    block_compromised boolean,
+    max_age_days      int
+        CONSTRAINT site_security_policy_groups_max_age_days_chk
+        CHECK (max_age_days IS NULL OR (max_age_days >= 0 AND max_age_days <= 3650)),
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT site_security_policy_groups_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT site_security_policy_groups_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON DELETE CASCADE
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS site_security_policy_groups_site_role_idx
+    ON site_security_policy_groups (site_id, role);
+
+CREATE INDEX IF NOT EXISTS site_security_policy_groups_tenant_site_idx
+    ON site_security_policy_groups (tenant_id, site_id);
+
+ALTER TABLE site_security_policy_groups ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_security_policy_groups FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_security_policy_groups_tenant_isolation ON site_security_policy_groups
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_security_policy_groups_agent ON site_security_policy_groups
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- hibp_breach_cache: global CP-side cache for the HIBP Pwned Passwords range API.
+-- Public breach data; no tenant association; no RLS.
+CREATE TABLE IF NOT EXISTS hibp_breach_cache (
+    prefix     char(5) PRIMARY KEY,
+    body       text NOT NULL,
+    fetched_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS hibp_breach_cache_fetched_at_idx
+    ON hibp_breach_cache (fetched_at);
+
+-- ---------------------------------------------------------------------------
+-- instance_settings  (m80 — UI-configurable instance-level secrets)
+-- ---------------------------------------------------------------------------
+-- Generic key/value store for INSTANCE-GLOBAL (non-tenant-scoped) settings
+-- that require encrypted-at-rest storage. The first consumer is the Wordfence
+-- Intelligence API key.
+--
+-- No tenant_id column — intentionally instance-global. RLS mirrors
+-- smtp_settings (m30): ENABLE + FORCE + single _agent policy. Real access
+-- control is the HTTP-layer requireSuperadmin middleware. value_enc holds the
+-- age-encrypted ciphertext; NULL means the key is unset for that setting.
+-- updated_at is set in SQL (now()); no trigger.
+CREATE TABLE IF NOT EXISTS instance_settings (
+    key        text        PRIMARY KEY,
+    value_enc  bytea,      -- age-encrypted ciphertext; NULL = unset
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE instance_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE instance_settings FORCE ROW LEVEL SECURITY;
+
+-- Instance-global infra row: readable/writable only under app.agent='on'.
+-- HTTP-layer requireSuperadmin gating is the real access control.
+CREATE POLICY instance_settings_agent ON instance_settings
+    USING  (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- wordfence_vuln_feed  (m79 — global public vulnerability record cache)
+-- ---------------------------------------------------------------------------
+-- No RLS. Public reference data from the Wordfence Intelligence V3 feed.
+-- Written by the ingester via InAgentTx; read by inventory matching directly.
+-- reference_urls (renamed from "references" in m81 — "references" is a
+-- reserved keyword in PostgreSQL that causes SQLSTATE 42601 when unquoted).
+CREATE TABLE IF NOT EXISTS wordfence_vuln_feed (
+    vuln_id        text PRIMARY KEY,
+    title          text NOT NULL DEFAULT '',
+    cve            text,
+    cve_link       text,
+    cvss_score     numeric(3,1),
+    cvss_rating    text,
+    cwe            jsonb,
+    informational  boolean NOT NULL DEFAULT false,
+    reference_urls jsonb NOT NULL DEFAULT '[]',
+    published      timestamptz,
+    updated        timestamptz,
+    raw            jsonb NOT NULL DEFAULT '{}',
+    created_at     timestamptz NOT NULL DEFAULT now()
+);
+
+-- ---------------------------------------------------------------------------
+-- wordfence_vuln_software  (m79 — per-software index)
+-- ---------------------------------------------------------------------------
+-- No RLS. One row per software[] entry per vuln. Serves (kind, slug) lookup.
+CREATE TABLE IF NOT EXISTS wordfence_vuln_software (
+    vuln_id           text NOT NULL
+        REFERENCES wordfence_vuln_feed (vuln_id) ON DELETE CASCADE,
+    kind              text NOT NULL,
+    slug              text NOT NULL,
+    affected_versions jsonb NOT NULL,
+    patched           boolean NOT NULL DEFAULT false,
+    patched_versions  jsonb NOT NULL DEFAULT '[]',
+
+    CONSTRAINT wordfence_vuln_software_pkey
+        PRIMARY KEY (vuln_id, kind, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_wf_vuln_software_lookup
+    ON wordfence_vuln_software (kind, slug);
+
+-- ---------------------------------------------------------------------------
+-- wordfence_vuln_feed_meta  (m79 — freshness + attribution sentinel)
+-- ---------------------------------------------------------------------------
+-- No RLS. Single row (id=1). Freshness timestamp, attribution notices, error.
+CREATE TABLE IF NOT EXISTS wordfence_vuln_feed_meta (
+    id              integer PRIMARY KEY DEFAULT 1
+        CONSTRAINT wordfence_vuln_feed_meta_singleton_chk CHECK (id = 1),
+    fetched_at      timestamptz,
+    ok              boolean NOT NULL DEFAULT false,
+    record_count    integer NOT NULL DEFAULT 0,
+    defiant_notice  text,
+    defiant_license text,
+    mitre_notice    text,
+    last_error      text
+);
+
+-- ---------------------------------------------------------------------------
+-- site_vulnerabilities  (m79 — per-site matched findings, tenant-RLS)
+-- ---------------------------------------------------------------------------
+-- One row per (site_id, vuln_id, kind, slug). RLS mirrors m76/m77.
+CREATE TABLE IF NOT EXISTS site_vulnerabilities (
+    id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id         uuid NOT NULL,
+    site_id           uuid NOT NULL
+        REFERENCES sites (id) ON UPDATE NO ACTION ON DELETE CASCADE,
+    vuln_id           text NOT NULL,
+    kind              text NOT NULL,
+    slug              text NOT NULL,
+    name              text NOT NULL,
+    installed_version text NOT NULL,
+    fixed_version     text,
+    severity          text NOT NULL
+        CONSTRAINT site_vulnerabilities_severity_chk
+        CHECK (severity IN ('critical', 'high', 'medium', 'low')),
+    cvss_score        numeric(3,1),
+    cve               text,
+    title             text NOT NULL,
+    status            text NOT NULL DEFAULT 'open'
+        CONSTRAINT site_vulnerabilities_status_chk
+        CHECK (status IN ('open', 'dismissed', 'resolved')),
+    first_seen        timestamptz NOT NULL DEFAULT now(),
+    last_seen         timestamptz NOT NULL DEFAULT now(),
+    resolved_at       timestamptz,
+    dismissed_at      timestamptz,
+    dismissed_by      uuid,
+
+    CONSTRAINT site_vulnerabilities_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON DELETE CASCADE,
+    CONSTRAINT site_vulnerabilities_uq
+        UNIQUE (site_id, vuln_id, kind, slug)
+);
+
+CREATE INDEX IF NOT EXISTS idx_site_vuln_site_open
+    ON site_vulnerabilities (site_id)
+    WHERE status = 'open';
+
+CREATE INDEX IF NOT EXISTS idx_site_vuln_tenant_sev
+    ON site_vulnerabilities (tenant_id, severity)
+    WHERE status = 'open';
+
+CREATE INDEX IF NOT EXISTS site_vulnerabilities_tenant_idx
+    ON site_vulnerabilities (tenant_id, site_id);
+
+ALTER TABLE site_vulnerabilities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_vulnerabilities FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_vulnerabilities_tenant_isolation ON site_vulnerabilities
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_vulnerabilities_agent ON site_vulnerabilities
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

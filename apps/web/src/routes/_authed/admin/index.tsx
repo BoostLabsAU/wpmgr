@@ -1,5 +1,5 @@
 import { Fragment, useId, useState } from "react";
-import { createFileRoute, redirect } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import {
   Ban,
   CheckCircle2,
@@ -35,7 +35,6 @@ import {
 } from "@/components/ui/dialog";
 import { PageError } from "@/components/feedback";
 import { PageHeader } from "@/components/shared/page-header";
-import { ensureMe, isSuperadmin } from "@/features/auth/use-auth";
 import {
   useAdminStats,
   useAdminUsers,
@@ -47,21 +46,21 @@ import {
   type AdminUserSite,
 } from "@/features/admin/use-admin";
 
-export const Route = createFileRoute("/_authed/admin")({
-  beforeLoad: async ({ context }) => {
-    const me = await ensureMe(context.queryClient);
-    if (!isSuperadmin(me)) {
-      throw redirect({ to: "/sites" });
-    }
-  },
-  component: AdminPage,
+// ---------------------------------------------------------------------------
+// Route — no beforeLoad guard needed here because the parent /admin layout
+// route (route.tsx) already enforces the superadmin check on every navigation
+// into the /admin/* tree.
+// ---------------------------------------------------------------------------
+
+export const Route = createFileRoute("/_authed/admin/")({
+  component: AdminUsersPage,
 });
 
 // ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
-function AdminPage() {
+function AdminUsersPage() {
   const [search, setSearch] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null);
   const [confirmText, setConfirmText] = useState("");
@@ -96,10 +95,10 @@ function AdminPage() {
   }
 
   return (
-    <section aria-labelledby="admin-heading" className="max-w-5xl space-y-6">
+    <section aria-labelledby="admin-users-heading" className="space-y-6">
       <PageHeader
-        title="Instance Admin"
-        subline="Superadmin view — all users across this WPMgr installation."
+        title="Users"
+        subline="All users across this WPMgr installation."
       />
 
       {/* Stats strip */}

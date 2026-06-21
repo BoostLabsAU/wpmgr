@@ -85,7 +85,7 @@ export function LoginEventsTable({ siteId }: { siteId: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3
           id="login-events-heading"
-          className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+          className="text-sm font-medium text-[var(--color-foreground)]"
         >
           Recent login events
         </h3>
