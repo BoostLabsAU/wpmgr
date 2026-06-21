@@ -1,0 +1,48 @@
+name: verify-media-river
+
+on:
+  push:
+    branches: ["ci/media-river-verify"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  river-integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: apps/api/go.sum
+      - env:
+          GOWORK: "off"
+        run: go test ./tests/ -run River -count=1 -v
+
+  media-encoder-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f infra/Dockerfile.media-encoder -t media-encoder-verify .
+
+  media-encoder-tests:
+    runs-on: ubuntu-latest
+    container: golang:1.26
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          CGO_ENABLED: "1"
+          GOWORK: "off"
+        run: |
+          go get github.com/discord/lilliput@v1.5.0
+          INC="$(go env GOMODCACHE)/github.com/discord/lilliput@v1.5.0/deps/linux/amd64/include"
+          export CGO_CFLAGS="-I${INC}/libpng16" CGO_CXXFLAGS="-I${INC}/libpng16"
+          go test ./cmd/media-encoder -count=1
