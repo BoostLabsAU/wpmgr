@@ -16,6 +16,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ### Fixed
 
+- Saved CDN rewrite settings now reach the WordPress agent with the selected asset type scope while CDN credentials remain control-plane only.
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
 
 ## [0.57.0] - 2026-06-21

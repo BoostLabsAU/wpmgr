@@ -258,6 +258,20 @@ final class OptimizerTransformsTest extends TestCase
         $this->assertStringContainsString('https://example.com/a.css', $out, 'css not rewritten in image-only mode');
     }
 
+    public function test_cdn_css_js_font_only_skips_images(): void
+    {
+        $cfg  = new PerfConfig(['cdn' => true, 'cdn_url' => 'cdn.example.net', 'cdn_file_types' => 'css_js_font']);
+        $urls = new UrlHelper('https://example.com', '/tmp');
+        $html = '<html><head><link rel="stylesheet" href="https://example.com/a.css"><script src="https://example.com/b.js"></script></head>'
+            . '<body><img src="https://example.com/c.png"><img src="https://example.com/d.woff2"></body></html>';
+        $out  = (new CdnRewrite($cfg, $urls))->process($html);
+
+        $this->assertStringContainsString('//cdn.example.net/a.css', $out, 'css rewritten in css_js_font mode');
+        $this->assertStringContainsString('//cdn.example.net/b.js', $out, 'js rewritten in css_js_font mode');
+        $this->assertStringContainsString('//cdn.example.net/d.woff2', $out, 'font rewritten in css_js_font mode');
+        $this->assertStringContainsString('https://example.com/c.png', $out, 'image not rewritten in css_js_font mode');
+    }
+
     public function test_cdn_disabled_is_noop(): void
     {
         $cfg  = new PerfConfig(['cdn' => false]);
