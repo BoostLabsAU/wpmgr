@@ -325,6 +325,10 @@ type GetSiteErrorConfigRes interface {
 	getSiteErrorConfigRes()
 }
 
+type GetSiteFilesSettingsRes interface {
+	getSiteFilesSettingsRes()
+}
+
 type GetSiteRes interface {
 	getSiteRes()
 }
@@ -433,6 +437,10 @@ type ListSiteEmailSuppressionRes interface {
 	listSiteEmailSuppressionRes()
 }
 
+type ListSiteFilesRes interface {
+	listSiteFilesRes()
+}
+
 type ListSiteSharesRes interface {
 	listSiteSharesRes()
 }
@@ -463,6 +471,10 @@ type PatchMemberRes interface {
 
 type PatchSiteErrorConfigRes interface {
 	patchSiteErrorConfigRes()
+}
+
+type PrepareSiteFileDownloadRes interface {
+	prepareSiteFileDownloadRes()
 }
 
 type PurgeCacheRes interface {
@@ -527,6 +539,10 @@ type PutSiteLoginBrandRes interface {
 
 type PutSiteLoginProtectionRes interface {
 	putSiteLoginProtectionRes()
+}
+
+type ReadSiteFileContentRes interface {
+	readSiteFileContentRes()
 }
 
 type RefreshSiteDiagnosticsRes interface {
@@ -611,6 +627,10 @@ type UpdateClientRes interface {
 
 type UpdateSiteDestinationRes interface {
 	updateSiteDestinationRes()
+}
+
+type UpdateSiteFilesSettingsRes interface {
+	updateSiteFilesSettingsRes()
 }
 
 type VerifyAuditRes interface {

@@ -4885,6 +4885,164 @@ export type ObjectCacheStatsHistory = {
 };
 
 /**
+ * One entry in a site directory listing.
+ */
+export type FileEntry = {
+  /**
+   * Filename (basename only; no directory component).
+   */
+  name: string;
+  /**
+   * File size in bytes (0 for directories).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * Human-readable permission string (e.g. "-rw-r--r--").
+   */
+  mode: string;
+  /**
+   * True when the entry is a directory.
+   */
+  is_dir: boolean;
+  /**
+   * True when the entry is a symlink. The agent never follows symlinks.
+   */
+  is_link: boolean;
+  /**
+   * True when the agent process can write to this entry.
+   */
+  is_writable: boolean;
+};
+
+/**
+ * One page of directory entries from a `file_list` agent command.
+ */
+export type FileListResult = {
+  /**
+   * Absolute resolved path (echoed from the agent).
+   */
+  path: string;
+  entries: Array<FileEntry>;
+  /**
+   * Total count of entries in the directory (before cursor pagination).
+   */
+  total: number;
+  /**
+   * True when more entries remain beyond this page.
+   */
+  truncated: boolean;
+  /**
+   * Opaque resume cursor; present only when `truncated=true`.
+   */
+  cursor?: string;
+};
+
+/**
+ * Inline base64-encoded content of a file (≤ 256 KiB).
+ */
+export type FileReadResult = {
+  /**
+   * Echoed path.
+   */
+  path: string;
+  /**
+   * Full file size in bytes (before any byte-cap truncation).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * Human-readable permission string.
+   */
+  mode: string;
+  /**
+   * Always "base64" in v1.
+   */
+  encoding: "base64";
+  /**
+   * Base64-encoded file content (up to 256 KiB).
+   */
+  content_base64: string;
+  /**
+   * True when the file was larger than the byte cap (256 KiB). Use the download endpoint to retrieve the full file.
+   *
+   */
+  truncated: boolean;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/download`.
+ */
+export type FileDownloadRequest = {
+  /**
+   * Site-relative path to the file to stage for download.
+   */
+  path: string;
+};
+
+/**
+ * Presigned download URL and transfer metadata returned by the `file_download_prepare` flow.
+ *
+ */
+export type FileDownloadResult = {
+  ok: boolean;
+  /**
+   * CP-assigned transfer ID (for audit correlation).
+   */
+  transfer_id: string;
+  /**
+   * Presigned GET URL for the browser to fetch the staged file directly from object storage. Valid for at most 5 minutes. Never log this URL.
+   *
+   */
+  download_url: string;
+  /**
+   * Staged file size in bytes.
+   */
+  size_bytes: number;
+  /**
+   * Number of S3 parts the agent uploaded.
+   */
+  chunk_count: number;
+  /**
+   * Unix epoch seconds when the presigned GET URL expires.
+   */
+  expires_at: number;
+};
+
+/**
+ * Per-site file manager configuration. Returned by both `GET /sites/{siteId}/files/settings` and `PUT /sites/{siteId}/files/settings`.
+ *
+ */
+export type FileManagerSettings = {
+  /**
+   * Whether the file manager is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).
+   *
+   */
+  enabled: boolean;
+  /**
+   * The filesystem root the agent restricts all file operations to. Always `""` in P1 — the agent defaults to the site's `ABSPATH`. Reserved for future P2 configuration.
+   *
+   */
+  root_jail: string;
+};
+
+/**
+ * Request body for `PUT /sites/{siteId}/files/settings`.
+ */
+export type UpdateFileManagerSettingsRequest = {
+  /**
+   * Set to `true` to enable the file manager, `false` to disable it.
+   */
+  enabled: boolean;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -11691,3 +11849,232 @@ export type DownloadPortalReportResponses = {
 
 export type DownloadPortalReportResponse =
   DownloadPortalReportResponses[keyof DownloadPortalReportResponses];
+
+export type GetSiteFilesSettingsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/settings";
+};
+
+export type GetSiteFilesSettingsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetSiteFilesSettingsError =
+  GetSiteFilesSettingsErrors[keyof GetSiteFilesSettingsErrors];
+
+export type GetSiteFilesSettingsResponses = {
+  /**
+   * Current file manager settings
+   */
+  200: FileManagerSettings;
+};
+
+export type GetSiteFilesSettingsResponse =
+  GetSiteFilesSettingsResponses[keyof GetSiteFilesSettingsResponses];
+
+export type UpdateSiteFilesSettingsData = {
+  body: UpdateFileManagerSettingsRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/settings";
+};
+
+export type UpdateSiteFilesSettingsErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type UpdateSiteFilesSettingsError =
+  UpdateSiteFilesSettingsErrors[keyof UpdateSiteFilesSettingsErrors];
+
+export type UpdateSiteFilesSettingsResponses = {
+  /**
+   * Updated file manager settings
+   */
+  200: FileManagerSettings;
+};
+
+export type UpdateSiteFilesSettingsResponse =
+  UpdateSiteFilesSettingsResponses[keyof UpdateSiteFilesSettingsResponses];
+
+export type ListSiteFilesData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Site-relative directory path to list (forward-slash separated).
+     */
+    path?: string;
+    /**
+     * Opaque resume cursor from a prior response with `truncated=true`. Absent means start from the beginning of the directory.
+     *
+     */
+    cursor?: string;
+  };
+  url: "/api/v1/sites/{siteId}/files";
+};
+
+export type ListSiteFilesErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListSiteFilesError = ListSiteFilesErrors[keyof ListSiteFilesErrors];
+
+export type ListSiteFilesResponses = {
+  /**
+   * Directory listing
+   */
+  200: FileListResult;
+};
+
+export type ListSiteFilesResponse =
+  ListSiteFilesResponses[keyof ListSiteFilesResponses];
+
+export type ReadSiteFileContentData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative file path to read.
+     */
+    path: string;
+    /**
+     * Must be `true` when reading a sensitive path (wp-config.php, .env*, *.pem, *.key, id_rsa*, .git/, .htpasswd, auth.json). Absent or false causes a 403 for sensitive paths regardless of role.
+     *
+     */
+    confirm_sensitive?: boolean;
+  };
+  url: "/api/v1/sites/{siteId}/files/content";
+};
+
+export type ReadSiteFileContentErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * File is too large for inline read. Use the download endpoint (`POST /sites/{siteId}/files/download`) for files > 256 KiB.
+   *
+   */
+  413: Error;
+};
+
+export type ReadSiteFileContentError =
+  ReadSiteFileContentErrors[keyof ReadSiteFileContentErrors];
+
+export type ReadSiteFileContentResponses = {
+  /**
+   * File content (base64-encoded)
+   */
+  200: FileReadResult;
+};
+
+export type ReadSiteFileContentResponse =
+  ReadSiteFileContentResponses[keyof ReadSiteFileContentResponses];
+
+export type PrepareSiteFileDownloadData = {
+  body: FileDownloadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/download";
+};
+
+export type PrepareSiteFileDownloadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type PrepareSiteFileDownloadError =
+  PrepareSiteFileDownloadErrors[keyof PrepareSiteFileDownloadErrors];
+
+export type PrepareSiteFileDownloadResponses = {
+  /**
+   * Presigned download URL and transfer metadata
+   */
+  200: FileDownloadResult;
+};
+
+export type PrepareSiteFileDownloadResponse =
+  PrepareSiteFileDownloadResponses[keyof PrepareSiteFileDownloadResponses];

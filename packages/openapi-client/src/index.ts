@@ -201,6 +201,12 @@ export {
   getFleetEmailDeliverability,
   // screenshots (M72)
   refreshSiteScreenshot,
+  // file manager (P1 read-only browser)
+  getSiteFilesSettings,
+  updateSiteFilesSettings,
+  listSiteFiles,
+  readSiteFileContent,
+  prepareSiteFileDownload,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -699,4 +705,22 @@ export type {
   // screenshots (M72)
   RefreshSiteScreenshotData,
   RefreshSiteScreenshotResponse,
+  // file manager (P1 read-only browser)
+  FileEntry,
+  FileListResult,
+  FileReadResult,
+  FileDownloadRequest,
+  FileDownloadResult,
+  FileManagerSettings,
+  UpdateFileManagerSettingsRequest,
+  GetSiteFilesSettingsData,
+  GetSiteFilesSettingsResponse,
+  UpdateSiteFilesSettingsData,
+  UpdateSiteFilesSettingsResponse,
+  ListSiteFilesData,
+  ListSiteFilesResponse,
+  ReadSiteFileContentData,
+  ReadSiteFileContentResponse,
+  PrepareSiteFileDownloadData,
+  PrepareSiteFileDownloadResponse,
 } from "./generated/types.gen";

@@ -1,0 +1,548 @@
+// Package files implements the P1 (read-only) File Manager feature.
+//
+// Every request flow:
+//  1. The handler resolves the principal (TenantID / UserID) from context.
+//  2. The handler calls the service, passing the verified TenantID and siteID.
+//  3. The service checks the per-site opt-in flag (files_enabled); an unenabled
+//     site returns ErrFilesNotEnabled so the handler can emit a clean 4xx.
+//  4. The service looks up the site URL, issues the signed agent command via
+//     agentcmd.Client.Do, and maps agent error codes to domain errors.
+//  5. The handler records an audit entry (including elevated-severity entries
+//     for sensitive-path reads) and returns the DTO.
+//
+// Write endpoints (file_write, file_mkdir, file_rename, file_delete, file_chmod,
+// file_upload_apply) are NOT in scope for P1 and are not wired here.
+package files
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"path"
+	"strings"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db"
+	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
+	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+)
+
+// downloadPartSize is the chunk size passed to the agent for presigned multipart
+// uploads. 5 MiB matches the S3 minimum part size.
+const downloadPartSize = 5 << 20 // 5 MiB
+
+// downloadPresignTTL is the lifetime for each presigned PUT/GET URL.
+const downloadPresignTTL = 5 * time.Minute
+
+// ErrFilesNotEnabled is returned by the service when a site has not opted in to
+// the file manager. The handler maps this to a 403 with code "files_not_enabled".
+var ErrFilesNotEnabled = errors.New("file manager is not enabled for this site")
+
+// errNotFound is the package-local sentinel returned by getConfig when no row
+// exists. It is never surfaced to callers; IsEnabled converts it to false.
+var errNotFound = errors.New("files: not found")
+
+// AgentFileClient is the narrow subset of agentcmd.Client the service uses.
+// *agentcmd.Client satisfies it via Do. Tests substitute a fake.
+type AgentFileClient interface {
+	Do(ctx context.Context, siteID uuid.UUID, siteURL, command string, body, out any) error
+}
+
+// SiteLookup resolves the agent URL for a site. *site.Service satisfies this
+// via a narrow adapter wired in main (same pattern as perf.SiteLookup).
+type SiteLookup interface {
+	GetSiteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, error)
+}
+
+// Presigner mints presigned PUT/GET URLs over object storage.
+// *blobstore.Store satisfies this.
+type Presigner interface {
+	PresignPut(ctx context.Context, key string, ttl time.Duration) (string, error)
+	PresignGet(ctx context.Context, key string, ttl time.Duration) (string, error)
+}
+
+// Service is the file manager business-logic layer (read-only P1).
+type Service struct {
+	pool      *db.Pool
+	agent     AgentFileClient
+	sites     SiteLookup
+	presigner Presigner // may be nil — download path degrades to not-configured
+}
+
+// NewService builds the file manager service.
+func NewService(pool *db.Pool) *Service {
+	return &Service{pool: pool}
+}
+
+// SetAgentClient wires the agent command client and site-URL lookup.
+func (s *Service) SetAgentClient(agent AgentFileClient, sites SiteLookup) {
+	s.agent = agent
+	s.sites = sites
+}
+
+// SetPresigner wires the object-storage presigner used for download staging.
+func (s *Service) SetPresigner(p Presigner) {
+	s.presigner = p
+}
+
+// ---------------------------------------------------------------------------
+// enable flag
+// ---------------------------------------------------------------------------
+
+// IsEnabled reports whether the file manager is enabled for a site.
+func (s *Service) IsEnabled(ctx context.Context, tenantID, siteID uuid.UUID) (bool, error) {
+	cfg, err := s.getConfig(ctx, tenantID, siteID)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return false, nil // no row → not enabled
+		}
+		return false, err
+	}
+	return cfg.FilesEnabled, nil
+}
+
+// EnableSite enables the file manager for a site (owner/admin only; called by
+// a future settings handler). Creates the config row if absent.
+func (s *Service) EnableSite(ctx context.Context, tenantID, siteID uuid.UUID) error {
+	return s.upsertEnabled(ctx, tenantID, siteID, true)
+}
+
+// DisableSite disables the file manager for a site.
+func (s *Service) DisableSite(ctx context.Context, tenantID, siteID uuid.UUID) error {
+	return s.upsertEnabled(ctx, tenantID, siteID, false)
+}
+
+// ---------------------------------------------------------------------------
+// Settings (P1 enable/disable toggle)
+// ---------------------------------------------------------------------------
+
+// Settings is the service output for GET /sites/{siteId}/files/settings.
+// RootJail is always "" in P1 (the agent defaults to ABSPATH).
+type Settings struct {
+	Enabled  bool
+	RootJail string
+}
+
+// GetSettings returns the current file manager settings for a site. When no
+// row exists (the default state), returns Settings{Enabled: false, RootJail: ""}.
+func (s *Service) GetSettings(ctx context.Context, tenantID, siteID uuid.UUID) (Settings, error) {
+	cfg, err := s.getConfig(ctx, tenantID, siteID)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return Settings{}, nil // no row → defaults
+		}
+		return Settings{}, err
+	}
+	return Settings{Enabled: cfg.FilesEnabled, RootJail: cfg.RootJail}, nil
+}
+
+// UpdateSettings enables or disables the file manager for a site. RootJail is
+// read-only in P1 and is not accepted as an input; the argument is ignored.
+// Returns the post-update Settings so the handler can echo the canonical state.
+func (s *Service) UpdateSettings(ctx context.Context, tenantID, siteID uuid.UUID, enabled bool) (Settings, error) {
+	if err := s.upsertEnabled(ctx, tenantID, siteID, enabled); err != nil {
+		return Settings{}, err
+	}
+	// Read back the row so we return the canonical DB state (root_jail included).
+	return s.GetSettings(ctx, tenantID, siteID)
+}
+
+// ---------------------------------------------------------------------------
+// P1 read operations
+// ---------------------------------------------------------------------------
+
+// ListDirResult is the service output for a directory listing request.
+type ListDirResult struct {
+	Path      string
+	Entries   []agentcmd.FileEntry
+	Total     int
+	Truncated bool
+	Cursor    *string
+}
+
+// ListDir issues a file_list command to the agent and returns the directory
+// listing. Returns ErrFilesNotEnabled when the site has not opted in.
+func (s *Service) ListDir(ctx context.Context, tenantID, siteID uuid.UUID, reqPath string, cursor *string) (ListDirResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return ListDirResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ListDirResult{}, err
+	}
+
+	req := agentcmd.FileListRequest{
+		Path:   reqPath,
+		Cursor: cursor,
+	}
+	var resp agentcmd.FileListResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_list", req, &resp); err != nil {
+		return ListDirResult{}, mapAgentTransportErr(err, "file_list")
+	}
+	if resp.Error != nil {
+		return ListDirResult{}, mapAgentErrorCode(resp.Error)
+	}
+	if resp.Entries == nil {
+		resp.Entries = []agentcmd.FileEntry{}
+	}
+	return ListDirResult{
+		Path:      resp.Path,
+		Entries:   resp.Entries,
+		Total:     resp.Total,
+		Truncated: resp.Truncated,
+		Cursor:    resp.Cursor,
+	}, nil
+}
+
+// ReadFileResult is the service output for a small inline file read.
+type ReadFileResult struct {
+	Path          string
+	Size          int64
+	Mtime         int64
+	Mode          string
+	ContentBase64 string
+	Truncated     bool
+}
+
+// ReadFile issues a file_read command to the agent. Returns
+// ErrFilesNotEnabled when the site has not opted in. For sensitive paths
+// confirmSensitive must be true and the caller (handler) must have verified
+// owner-level permission BEFORE calling this method.
+func (s *Service) ReadFile(ctx context.Context, tenantID, siteID uuid.UUID, filePath string, confirmSensitive bool) (ReadFileResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return ReadFileResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ReadFileResult{}, err
+	}
+
+	req := agentcmd.FileReadRequest{
+		Path:             filePath,
+		MaxBytes:         agentcmd.FileReadMaxBytes,
+		ConfirmSensitive: confirmSensitive,
+	}
+	var resp agentcmd.FileReadResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_read", req, &resp); err != nil {
+		return ReadFileResult{}, mapAgentTransportErr(err, "file_read")
+	}
+	if resp.Error != nil {
+		return ReadFileResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return ReadFileResult{
+		Path:          resp.Path,
+		Size:          resp.Size,
+		Mtime:         resp.Mtime,
+		Mode:          resp.Mode,
+		ContentBase64: resp.ContentBase64,
+		Truncated:     resp.Truncated,
+	}, nil
+}
+
+// DownloadResult is returned by PrepareDownload.
+type DownloadResult struct {
+	TransferID    uuid.UUID
+	DownloadURL   string // presigned GET URL for the browser
+	ObjectKey     string
+	SizeBytes     int64
+	ChunkCount    int
+	ExpiresAt     time.Time
+}
+
+// PrepareDownload stages a file for browser download:
+//  1. Mints presigned PUT URLs (CP-owned object storage staging area).
+//  2. Issues file_download_prepare to the agent, which uploads chunked content.
+//  3. Persists a file_transfers row (bookkeeping + GC).
+//  4. Mints a presigned GET URL for the browser (short-TTL).
+//
+// Returns ErrFilesNotEnabled when the site has not opted in. Returns
+// domain.ServiceUnavailable when the presigner is not configured (self-host
+// without object storage).
+func (s *Service) PrepareDownload(ctx context.Context, tenantID, siteID uuid.UUID, filePath string, createdBy uuid.UUID) (DownloadResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return DownloadResult{}, err
+	}
+	if s.presigner == nil {
+		return DownloadResult{}, domain.ServiceUnavailable("storage_not_configured", "object storage is not configured; file downloads are unavailable")
+	}
+
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return DownloadResult{}, err
+	}
+
+	// Derive the tenant-namespaced staging key for this transfer.
+	transferID := uuid.New()
+	objectKey := fileTransferS3Key(tenantID, transferID)
+
+	// Mint presigned PUT URLs for each chunk slot. We provision enough slots for
+	// a generous file size (32 × 5 MiB = 160 MiB). The agent stops uploading when
+	// the file is exhausted and reports the actual chunk_count.
+	const maxParts = 32
+	presignedPuts := make([]agentcmd.FileDownloadPresignedPut, maxParts)
+	for i := 0; i < maxParts; i++ {
+		partKey := fmt.Sprintf("%s/part%04d", objectKey, i)
+		putURL, perr := s.presigner.PresignPut(ctx, partKey, downloadPresignTTL)
+		if perr != nil {
+			return DownloadResult{}, domain.Internal("presign_put_failed", "failed to mint presigned PUT URL").WithCause(perr)
+		}
+		presignedPuts[i] = agentcmd.FileDownloadPresignedPut{Index: i, URL: putURL}
+	}
+
+	req := agentcmd.FileDownloadPrepareRequest{
+		Path:          filePath,
+		PresignedPuts: presignedPuts,
+		PartSize:      downloadPartSize,
+	}
+	var resp agentcmd.FileDownloadPrepareResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_download_prepare", req, &resp); err != nil {
+		return DownloadResult{}, mapAgentTransportErr(err, "file_download_prepare")
+	}
+	if resp.Error != nil {
+		return DownloadResult{}, mapAgentErrorCode(resp.Error)
+	}
+
+	// Mint the presigned GET URL for the browser. The key is the first part for
+	// single-chunk files; for multi-part the caller assembles via the parts list.
+	// In v1 we return the GET for the first part (single-file, not directory zip).
+	getKey := fmt.Sprintf("%s/part0000", objectKey)
+	expiresAt := time.Now().Add(downloadPresignTTL)
+	downloadURL, perr := s.presigner.PresignGet(ctx, getKey, downloadPresignTTL)
+	if perr != nil {
+		return DownloadResult{}, domain.Internal("presign_get_failed", "failed to mint presigned GET URL").WithCause(perr)
+	}
+
+	// Persist the transfer bookkeeping row.
+	// A bucket lifecycle policy on the file-transfers/ prefix is the GC backstop
+	// when this bookkeeping insert fails (the infra config is a separate ops task).
+	if err := s.insertTransfer(ctx, tenantID, siteID, transferID, filePath, objectKey, resp.Size, resp.ChunkCount, createdBy, expiresAt); err != nil {
+		// Non-fatal: the download URL is already minted and the staged object sits
+		// in object storage. Log loudly so the failure is visible and alertable.
+		slog.Error("file_transfer bookkeeping insert failed; staged object has no expiry row",
+			"tenant_id", tenantID,
+			"site_id", siteID,
+			"transfer_id", transferID,
+			"object_key", objectKey,
+			"error", err,
+		)
+	}
+
+	return DownloadResult{
+		TransferID:  transferID,
+		DownloadURL: downloadURL,
+		ObjectKey:   objectKey,
+		SizeBytes:   resp.Size,
+		ChunkCount:  resp.ChunkCount,
+		ExpiresAt:   expiresAt,
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+type siteFileManagerRow struct {
+	FilesEnabled bool
+	RootJail     string
+}
+
+func (s *Service) getConfig(ctx context.Context, tenantID, siteID uuid.UUID) (siteFileManagerRow, error) {
+	var cfg siteFileManagerRow
+	err := s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		row, err := q.GetSiteFileManager(ctx, siteID)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return errNotFound
+			}
+			return domain.Internal("db_error", "failed to read file manager config").WithCause(err)
+		}
+		cfg.FilesEnabled = row.FilesEnabled
+		cfg.RootJail = row.RootJail
+		return nil
+	})
+	return cfg, err
+}
+
+func (s *Service) requireEnabled(ctx context.Context, tenantID, siteID uuid.UUID) error {
+	enabled, err := s.IsEnabled(ctx, tenantID, siteID)
+	if err != nil {
+		return err
+	}
+	if !enabled {
+		return domain.Forbidden("files_not_enabled", "the file manager is not enabled for this site; enable it in site settings first")
+	}
+	return nil
+}
+
+func (s *Service) upsertEnabled(ctx context.Context, tenantID, siteID uuid.UUID, enabled bool) error {
+	return s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		return q.UpsertSiteFileManager(ctx, sqlc.UpsertSiteFileManagerParams{
+			SiteID:       siteID,
+			TenantID:     tenantID,
+			FilesEnabled: enabled,
+		})
+	})
+}
+
+func (s *Service) insertTransfer(ctx context.Context, tenantID, siteID, transferID uuid.UUID, relPath, objectKey string, sizeBytes int64, chunkCount int, createdBy uuid.UUID, expiresAt time.Time) error {
+	return s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		return q.InsertFileTransfer(ctx, sqlc.InsertFileTransferParams{
+			ID:         transferID,
+			TenantID:   tenantID,
+			SiteID:     siteID,
+			Direction:  "download",
+			RelPath:    relPath,
+			Status:     "done",
+			ObjectKey:  objectKey,
+			SizeBytes:  sizeBytes,
+			ChunkCount: int32(chunkCount),
+			CreatedBy:  createdBy,
+			ExpiresAt:  expiresAt,
+		})
+	})
+}
+
+func (s *Service) siteURL(ctx context.Context, tenantID, siteID uuid.UUID) (string, error) {
+	if s.sites == nil {
+		return "", domain.Internal("sites_not_wired", "site lookup not configured")
+	}
+	url, err := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+// fileTransferS3Key returns the tenant-namespaced staging key for a file
+// transfer. Namespaced by tenant so a presigned URL can never target another
+// tenant's staging area.
+func fileTransferS3Key(tenantID, transferID uuid.UUID) string {
+	return "file-transfers/" + tenantID.String() + "/" + transferID.String()
+}
+
+// IsSensitivePath reports whether a given path matches the sensitive-file
+// deny-list. This list is enforced identically by the PHP agent's isSensitive
+// function — both sides must agree or one enforcer becomes a bypass.
+//
+// Covered cases (all comparisons are case-insensitive):
+//   - wp-config.php (exact basename)
+//   - wp-config-*.php (glob: basename starts with "wp-config-" and ends with ".php")
+//   - wp-config.php backup/editor variants: basename lowercased starts with
+//     "wp-config.php" and is NOT exactly "wp-config.php"
+//     (catches .bak, .save, .orig, .old, .swp, .swo, ~ suffixes, etc.)
+//   - .env* (any file whose basename starts with ".env")
+//   - *.pem, *.key, *.crt, *.p12, *.pfx, *.ppk (certificate/key extensions)
+//   - id_rsa*, id_dsa*, id_ecdsa*, id_ed25519* (SSH private-key prefixes)
+//   - .htpasswd, auth.json, .npmrc, .git-credentials (exact basenames)
+//   - path contains .aws/credentials (substring match on the full path)
+//   - any path segment equal to .git
+//
+// The CP enforces this as belt-and-braces; the agent independently enforces it
+// before returning content. If either side denies without confirm_sensitive,
+// the read is rejected.
+func IsSensitivePath(p string) bool {
+	base := path.Base(p)
+	lower := strings.ToLower(base)
+	lowerPath := strings.ToLower(p)
+
+	// Exact basename matches.
+	switch lower {
+	case "wp-config.php", ".htpasswd", "auth.json", ".npmrc", ".git-credentials":
+		return true
+	}
+
+	// wp-config-*.php: starts with "wp-config-" and ends with ".php".
+	if strings.HasPrefix(lower, "wp-config-") && strings.HasSuffix(lower, ".php") {
+		return true
+	}
+
+	// wp-config.php backup/editor variants: starts with "wp-config.php" but is
+	// not exactly "wp-config.php" (e.g. wp-config.php.bak, wp-config.php~).
+	if strings.HasPrefix(lower, "wp-config.php") && lower != "wp-config.php" {
+		return true
+	}
+
+	// .env* — any basename starting with ".env".
+	if strings.HasPrefix(lower, ".env") {
+		return true
+	}
+
+	// SSH private-key prefixes.
+	for _, prefix := range []string{"id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+
+	// Certificate and key file extensions.
+	for _, ext := range []string{".pem", ".key", ".crt", ".p12", ".pfx", ".ppk"} {
+		if strings.HasSuffix(lower, ext) {
+			return true
+		}
+	}
+
+	// .aws/credentials anywhere in the full path.
+	if strings.Contains(lowerPath, ".aws/credentials") {
+		return true
+	}
+
+	// .git as a path segment anywhere in the path.
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".git" {
+			return true
+		}
+	}
+
+	return false
+}
+
+// ---------------------------------------------------------------------------
+// Agent error mapping
+// ---------------------------------------------------------------------------
+
+// mapAgentErrorCode maps the agent's semantic error codes to domain errors.
+// CP HTTP status mapping:
+//
+//	sensitive_denied  → 403 Forbidden
+//	outside_root      → 400 Bad Request
+//	invalid_path      → 400 Bad Request
+//	not_found         → 404 Not Found
+//	not_readable      → 403 Forbidden (analogous to a permission deny)
+//	is_directory      → 400 Bad Request
+//	too_large         → 413 Request Entity Too Large (domain maps as Validation)
+//	<anything else>   → 502 Bad Gateway (agent returned unknown error)
+func mapAgentErrorCode(e *agentcmd.FileError) error {
+	switch e.Code {
+	case "sensitive_denied":
+		return domain.Forbidden("sensitive_denied", e.Message)
+	case "outside_root", "invalid_path", "is_directory":
+		return domain.Validation(e.Code, e.Message)
+	case "not_found":
+		return domain.NotFound(e.Code, e.Message)
+	case "not_readable":
+		return domain.Forbidden("not_readable", e.Message)
+	case "too_large":
+		return domain.Validation("file_too_large", e.Message)
+	default:
+		return domain.Internal("agent_file_error", fmt.Sprintf("agent returned error %q: %s", e.Code, e.Message))
+	}
+}
+
+// mapAgentTransportErr wraps a raw agentcmd transport error as a domain error.
+// A non-2xx agent response arrives as a "rejected by agent: status NNN" string;
+// we pass it through as an internal error so the handler's httpx.Error path
+// surfaces it without a misleading 500.
+func mapAgentTransportErr(err error, cmd string) error {
+	if err == nil {
+		return nil
+	}
+	return domain.Internal("agent_transport_error", fmt.Sprintf("%s command failed: %s", cmd, err.Error())).WithCause(err)
+}

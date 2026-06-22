@@ -196,6 +196,27 @@ const (
 	// ActionObjectCacheTested: metadata: ok (bool), config_hash.
 	ActionObjectCacheTested = "site.objectcache.tested"
 
+	// File Manager (P1 read-only). Three audit events cover the read lifecycle.
+	//
+	// ActionSiteFilesRead is the standard audit event for a successful
+	// directory listing, inline file read, or file download (non-sensitive path).
+	// Metadata: op ("list"|"read"|"download"), path (read/download only), size,
+	// truncated (read only), transfer_id (download only).
+	ActionSiteFilesRead = "site.files.read"
+	// ActionSiteFilesSensitiveRead is recorded when a SENSITIVE path is
+	// successfully read or downloaded (T6 elevated-severity entry). The full path
+	// is always included in metadata. Requires confirm_sensitive + owner permission.
+	// Metadata: op ("read"|"download"), path, size, transfer_id (download only).
+	ActionSiteFilesSensitiveRead = "site.files.sensitive.read"
+	// ActionSiteFilesSensitiveDenied is recorded on every DENIED attempt to read
+	// or download a sensitive path, whether due to missing confirm_sensitive or
+	// insufficient permission (T9: log denials). Metadata: op, path, reason.
+	ActionSiteFilesSensitiveDenied = "site.files.sensitive.denied"
+	// ActionSiteFilesSettingsChanged is recorded when a user enables or disables
+	// the file manager for a site via PUT /sites/{siteId}/files/settings
+	// (PermSiteFilesManage, admin+). Metadata: enabled (bool).
+	ActionSiteFilesSettingsChanged = "site.files.settings.changed"
+
 	// Dashboard 2FA (ADR-056, Phase 2). These actions are account-scoped:
 	// they are recorded under the user's first tenant when one exists; otherwise
 	// best-effort under a client-member tenant. All carry ActorUser.

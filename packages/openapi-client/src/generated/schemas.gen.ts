@@ -9049,6 +9049,222 @@ export const ObjectCacheStatsHistorySchema = {
   },
 } as const;
 
+export const FileEntrySchema = {
+  type: "object",
+  description: "One entry in a site directory listing.",
+  required: [
+    "name",
+    "size",
+    "mtime",
+    "mode",
+    "is_dir",
+    "is_link",
+    "is_writable",
+  ],
+  properties: {
+    name: {
+      type: "string",
+      description: "Filename (basename only; no directory component).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes (0 for directories).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    mode: {
+      type: "string",
+      description: 'Human-readable permission string (e.g. "-rw-r--r--").',
+    },
+    is_dir: {
+      type: "boolean",
+      description: "True when the entry is a directory.",
+    },
+    is_link: {
+      type: "boolean",
+      description:
+        "True when the entry is a symlink. The agent never follows symlinks.",
+    },
+    is_writable: {
+      type: "boolean",
+      description: "True when the agent process can write to this entry.",
+    },
+  },
+} as const;
+
+export const FileListResultSchema = {
+  type: "object",
+  description:
+    "One page of directory entries from a `file_list` agent command.",
+  required: ["path", "entries", "total", "truncated"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Absolute resolved path (echoed from the agent).",
+    },
+    entries: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileEntry",
+      },
+    },
+    total: {
+      type: "integer",
+      description:
+        "Total count of entries in the directory (before cursor pagination).",
+    },
+    truncated: {
+      type: "boolean",
+      description: "True when more entries remain beyond this page.",
+    },
+    cursor: {
+      type: "string",
+      nullable: true,
+      description: "Opaque resume cursor; present only when `truncated=true`.",
+    },
+  },
+} as const;
+
+export const FileReadResultSchema = {
+  type: "object",
+  description: "Inline base64-encoded content of a file (≤ 256 KiB).",
+  required: [
+    "path",
+    "size",
+    "mtime",
+    "mode",
+    "encoding",
+    "content_base64",
+    "truncated",
+  ],
+  properties: {
+    path: {
+      type: "string",
+      description: "Echoed path.",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Full file size in bytes (before any byte-cap truncation).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    mode: {
+      type: "string",
+      description: "Human-readable permission string.",
+    },
+    encoding: {
+      type: "string",
+      description: 'Always "base64" in v1.',
+      enum: ["base64"],
+    },
+    content_base64: {
+      type: "string",
+      description: "Base64-encoded file content (up to 256 KiB).",
+    },
+    truncated: {
+      type: "boolean",
+      description:
+        "True when the file was larger than the byte cap (256 KiB). Use the download endpoint to retrieve the full file.\n",
+    },
+  },
+} as const;
+
+export const FileDownloadRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/download`.",
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path to the file to stage for download.",
+    },
+  },
+} as const;
+
+export const FileDownloadResultSchema = {
+  type: "object",
+  description:
+    "Presigned download URL and transfer metadata returned by the `file_download_prepare` flow.\n",
+  required: [
+    "ok",
+    "transfer_id",
+    "download_url",
+    "size_bytes",
+    "chunk_count",
+    "expires_at",
+  ],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    transfer_id: {
+      type: "string",
+      format: "uuid",
+      description: "CP-assigned transfer ID (for audit correlation).",
+    },
+    download_url: {
+      type: "string",
+      format: "uri",
+      description:
+        "Presigned GET URL for the browser to fetch the staged file directly from object storage. Valid for at most 5 minutes. Never log this URL.\n",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Staged file size in bytes.",
+    },
+    chunk_count: {
+      type: "integer",
+      description: "Number of S3 parts the agent uploaded.",
+    },
+    expires_at: {
+      type: "integer",
+      format: "int64",
+      description: "Unix epoch seconds when the presigned GET URL expires.",
+    },
+  },
+} as const;
+
+export const FileManagerSettingsSchema = {
+  type: "object",
+  description:
+    "Per-site file manager configuration. Returned by both `GET /sites/{siteId}/files/settings` and `PUT /sites/{siteId}/files/settings`.\n",
+  required: ["enabled", "root_jail"],
+  properties: {
+    enabled: {
+      type: "boolean",
+      description:
+        "Whether the file manager is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).\n",
+    },
+    root_jail: {
+      type: "string",
+      description:
+        'The filesystem root the agent restricts all file operations to. Always `""` in P1 — the agent defaults to the site\'s `ABSPATH`. Reserved for future P2 configuration.\n',
+    },
+  },
+} as const;
+
+export const UpdateFileManagerSettingsRequestSchema = {
+  type: "object",
+  description: "Request body for `PUT /sites/{siteId}/files/settings`.",
+  required: ["enabled"],
+  properties: {
+    enabled: {
+      type: "boolean",
+      description:
+        "Set to `true` to enable the file manager, `false` to disable it.",
+    },
+  },
+} as const;
+
 export const PerfConfigWritableSchema = {
   type: "object",
   description:

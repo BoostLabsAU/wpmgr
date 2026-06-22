@@ -6925,6 +6925,253 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
 
+  # ---------------------------------------------------------------------------
+  # m82 — File Manager (P1 settings + read-only)
+  # ---------------------------------------------------------------------------
+
+  /api/v1/sites/{siteId}/files/settings:
+    get:
+      operationId: getSiteFilesSettings
+      summary: Get file manager settings for a site
+      description: |
+        Returns the current file manager settings for a site, including whether
+        the feature is enabled.
+
+        Any site member (viewer+) may call this endpoint so the UI can render
+        the correct enable/disable state without an extra permission check.
+
+        No permission beyond `RequireSiteAccess` is required.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Current file manager settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileManagerSettings"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: updateSiteFilesSettings
+      summary: Enable or disable the file manager for a site
+      description: |
+        Enables or disables the file manager feature for a site. The feature is
+        **off by default** (migration m82); an explicit enable is required before
+        any file browse/read/download endpoint will work.
+
+        `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+        site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+
+        An audit entry (`site.files.settings.changed`) is recorded on every call,
+        capturing the resulting `enabled` state.
+
+        Requires `site.files.manage` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFileManagerSettingsRequest"
+      responses:
+        "200":
+          description: Updated file manager settings
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileManagerSettings"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/files:
+    get:
+      operationId: listSiteFiles
+      summary: List a directory on a managed site
+      description: |
+        Issues a `file_list` command to the site's agent and returns one page
+        of directory entries for the given path.
+
+        The feature must be **explicitly enabled per site** (off by default).
+        Returns `403 files_not_enabled` when the site has not opted in.
+
+        Requires the `site.files.read` permission (admin+).
+
+        Pagination is cursor-based: when `truncated=true` the response carries
+        an opaque `cursor` that the caller passes on the next request.
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: path
+          in: query
+          required: false
+          schema:
+            type: string
+            default: "/"
+          description: Site-relative directory path to list (forward-slash separated).
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+          description: >
+            Opaque resume cursor from a prior response with `truncated=true`.
+            Absent means start from the beginning of the directory.
+      responses:
+        "200":
+          description: Directory listing
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileListResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/files/content:
+    get:
+      operationId: readSiteFileContent
+      summary: Read a small file inline (base64, ≤ 256 KiB)
+      description: |
+        Issues a `file_read` command to the site's agent and returns the
+        base64-encoded content of a file up to 256 KiB. When the file is
+        larger than the cap, `truncated=true` is returned; use the download
+        endpoint for the full file.
+
+        **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+        `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+        require **both**:
+        - `confirm_sensitive=true` query parameter, and
+        - Owner-level permission (`site.files.read_sensitive`).
+
+        Both the successful read AND any denied attempt are recorded in the
+        tamper-evident audit log with the full path.
+
+        The feature must be explicitly enabled per site. Returns
+        `403 files_not_enabled` when not opted in.
+
+        Requires the `site.files.read` permission (admin+). Sensitive-path
+        reads additionally require `site.files.read_sensitive` (owner only).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Site-relative file path to read.
+        - name: confirm_sensitive
+          in: query
+          required: false
+          schema:
+            type: boolean
+            default: false
+          description: >
+            Must be `true` when reading a sensitive path (wp-config.php, .env*,
+            *.pem, *.key, id_rsa*, .git/, .htpasswd, auth.json). Absent or
+            false causes a 403 for sensitive paths regardless of role.
+      responses:
+        "200":
+          description: File content (base64-encoded)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileReadResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "413":
+          description: >
+            File is too large for inline read. Use the download endpoint
+            (`POST /sites/{siteId}/files/download`) for files > 256 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/files/download:
+    post:
+      operationId: prepareSiteFileDownload
+      summary: Stage a file for browser download (presigned URL)
+      description: |
+        Prepares a file for large-file download in three steps:
+        1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+        2. CP issues `file_download_prepare` to the agent, which uploads the
+           file in chunks directly to S3 (never through the CP).
+        3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+           browser to fetch the staged file directly from object storage.
+
+        Large files bypass the CP's response path entirely — only the
+        presigned URL is returned in the 200 body.
+
+        A `file_transfers` row is persisted for audit and GC tracking.
+
+        **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+        owner-level permission required; the attempt is always audited.
+
+        Returns `503 storage_not_configured` when object storage is not
+        configured (self-hosted deployments without S3).
+
+        The feature must be explicitly enabled per site. Returns
+        `403 files_not_enabled` when not opted in.
+
+        Requires the `site.files.read` permission (admin+). Sensitive-path
+        downloads additionally require `site.files.read_sensitive` (owner only).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileDownloadRequest"
+      responses:
+        "200":
+          description: Presigned download URL and transfer metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDownloadResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "503":
+          description: Object storage is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
 components:
   responses:
     Unauthorized:
@@ -13406,3 +13653,160 @@ components:
         avg_ratio_pct:
           type: number
           description: Average hit ratio across all data points in the window.
+
+    # -------------------------------------------------------------------------
+    # m82 — File Manager (P1 read-only)
+    # -------------------------------------------------------------------------
+
+    FileEntry:
+      type: object
+      description: One entry in a site directory listing.
+      required: [name, size, mtime, mode, is_dir, is_link, is_writable]
+      properties:
+        name:
+          type: string
+          description: Filename (basename only; no directory component).
+        size:
+          type: integer
+          format: int64
+          description: File size in bytes (0 for directories).
+        mtime:
+          type: integer
+          format: int64
+          description: Last-modified time as Unix epoch seconds.
+        mode:
+          type: string
+          description: Human-readable permission string (e.g. "-rw-r--r--").
+        is_dir:
+          type: boolean
+          description: True when the entry is a directory.
+        is_link:
+          type: boolean
+          description: True when the entry is a symlink. The agent never follows symlinks.
+        is_writable:
+          type: boolean
+          description: True when the agent process can write to this entry.
+
+    FileListResult:
+      type: object
+      description: One page of directory entries from a `file_list` agent command.
+      required: [path, entries, total, truncated]
+      properties:
+        path:
+          type: string
+          description: Absolute resolved path (echoed from the agent).
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/FileEntry"
+        total:
+          type: integer
+          description: Total count of entries in the directory (before cursor pagination).
+        truncated:
+          type: boolean
+          description: True when more entries remain beyond this page.
+        cursor:
+          type: string
+          nullable: true
+          description: Opaque resume cursor; present only when `truncated=true`.
+
+    FileReadResult:
+      type: object
+      description: Inline base64-encoded content of a file (≤ 256 KiB).
+      required: [path, size, mtime, mode, encoding, content_base64, truncated]
+      properties:
+        path:
+          type: string
+          description: Echoed path.
+        size:
+          type: integer
+          format: int64
+          description: Full file size in bytes (before any byte-cap truncation).
+        mtime:
+          type: integer
+          format: int64
+          description: Last-modified time as Unix epoch seconds.
+        mode:
+          type: string
+          description: Human-readable permission string.
+        encoding:
+          type: string
+          description: Always "base64" in v1.
+          enum: [base64]
+        content_base64:
+          type: string
+          description: Base64-encoded file content (up to 256 KiB).
+        truncated:
+          type: boolean
+          description: >
+            True when the file was larger than the byte cap (256 KiB). Use the
+            download endpoint to retrieve the full file.
+
+    FileDownloadRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/download`.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Site-relative path to the file to stage for download.
+
+    FileDownloadResult:
+      type: object
+      description: >
+        Presigned download URL and transfer metadata returned by the
+        `file_download_prepare` flow.
+      required: [ok, transfer_id, download_url, size_bytes, chunk_count, expires_at]
+      properties:
+        ok:
+          type: boolean
+        transfer_id:
+          type: string
+          format: uuid
+          description: CP-assigned transfer ID (for audit correlation).
+        download_url:
+          type: string
+          format: uri
+          description: >
+            Presigned GET URL for the browser to fetch the staged file directly
+            from object storage. Valid for at most 5 minutes. Never log this URL.
+        size_bytes:
+          type: integer
+          format: int64
+          description: Staged file size in bytes.
+        chunk_count:
+          type: integer
+          description: Number of S3 parts the agent uploaded.
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix epoch seconds when the presigned GET URL expires.
+
+    FileManagerSettings:
+      type: object
+      description: >
+        Per-site file manager configuration. Returned by both
+        `GET /sites/{siteId}/files/settings` and
+        `PUT /sites/{siteId}/files/settings`.
+      required: [enabled, root_jail]
+      properties:
+        enabled:
+          type: boolean
+          description: >
+            Whether the file manager is enabled for this site. Defaults to
+            `false` (off by default, explicit opt-in required).
+        root_jail:
+          type: string
+          description: >
+            The filesystem root the agent restricts all file operations to.
+            Always `""` in P1 — the agent defaults to the site's `ABSPATH`.
+            Reserved for future P2 configuration.
+
+    UpdateFileManagerSettingsRequest:
+      type: object
+      description: Request body for `PUT /sites/{siteId}/files/settings`.
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          description: Set to `true` to enable the file manager, `false` to disable it.

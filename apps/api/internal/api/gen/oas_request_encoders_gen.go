@@ -762,6 +762,20 @@ func encodePatchSiteErrorConfigRequest(
 	return nil
 }
 
+func encodePrepareSiteFileDownloadRequest(
+	req *FileDownloadRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodePurgeCacheRequest(
 	req *PurgeRequest,
 	r *http.Request,
@@ -1242,6 +1256,20 @@ func encodeUpdateClientRequest(
 
 func encodeUpdateSiteDestinationRequest(
 	req *SiteDestinationUpdate,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeUpdateSiteFilesSettingsRequest(
+	req *UpdateFileManagerSettingsRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

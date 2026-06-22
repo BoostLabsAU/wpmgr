@@ -129,6 +129,27 @@ const (
 	// a collaborator with access to a site can manage that site's security
 	// hardening. Viewers get read access via PermSiteRead on the GET routes.
 	PermSecurityManage Permission = "site.security.manage"
+
+	// PermSiteFilesRead authorises browse/list/read/download operations on the
+	// per-site File Manager (P1, read-only). Admin+ — the file manager exposes
+	// raw filesystem content including configuration files, and is
+	// off-by-default per site. Viewer and operator tiers are excluded: this is
+	// a high-privilege, site-filesystem-access capability.
+	PermSiteFilesRead Permission = "site.files.read"
+
+	// PermSiteFilesReadSensitive authorises reading or downloading a sensitive
+	// file (wp-config.php, .env*, *.pem, *.key, id_rsa*, .git/, .htpasswd,
+	// auth.json). Owner only — these files contain secrets and their exposure
+	// is the highest-risk read operation in the manager. The caller must also
+	// pass confirm_sensitive=true (belt-and-braces, T6).
+	PermSiteFilesReadSensitive Permission = "site.files.read_sensitive"
+
+	// PermSiteFilesManage enables or disables the file manager for a site via
+	// the settings endpoint (PUT /sites/{siteId}/files/settings). Admin+ —
+	// turning on the file manager is an access-control decision that grants
+	// filesystem visibility to all admin+ members of the site; it should not be
+	// delegated to operator-level principals.
+	PermSiteFilesManage Permission = "site.files.manage"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -173,6 +194,11 @@ var minRoleFor = map[Permission]Role{
 	// Security Suite (ADR-057). Hardening config + ban list: operator+;
 	// site-write-class, mirrors PermSiteCacheManage and PermEmailManage.
 	PermSecurityManage: RoleOperator,
+	// File Manager (P1). Browse/read/download: admin+; sensitive-file reads: owner only.
+	// Settings (enable/disable toggle): admin+ (access-control decision).
+	PermSiteFilesRead:          RoleAdmin,
+	PermSiteFilesReadSensitive: RoleOwner,
+	PermSiteFilesManage:        RoleAdmin,
 }
 
 // Allows reports whether role r is permitted to perform p.

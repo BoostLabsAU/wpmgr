@@ -91,6 +91,8 @@ const TABS = [
   // #188 — site-level tools tab (search-replace, etc.).
   { to: "/sites/$siteId/tools", label: "Tools" },
   { to: "/sites/$siteId/email", label: "Email" },
+  // File manager (P1 read-only browser). Route: $siteId.files.tsx.
+  { to: "/sites/$siteId/files", label: "Files" },
   { to: "/sites/$siteId/settings", label: "Settings" },
 ] as const;
 

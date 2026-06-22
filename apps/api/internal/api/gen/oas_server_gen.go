@@ -1008,6 +1008,16 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/errors/config
 	GetSiteErrorConfig(ctx context.Context, params GetSiteErrorConfigParams) (GetSiteErrorConfigRes, error)
+	// GetSiteFilesSettings implements getSiteFilesSettings operation.
+	//
+	// Returns the current file manager settings for a site, including whether
+	// the feature is enabled.
+	// Any site member (viewer+) may call this endpoint so the UI can render
+	// the correct enable/disable state without an extra permission check.
+	// No permission beyond `RequireSiteAccess` is required.
+	//
+	// GET /api/v1/sites/{siteId}/files/settings
+	GetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (GetSiteFilesSettingsRes, error)
 	// GetSiteLoginBrand implements getSiteLoginBrand operation.
 	//
 	// Returns the current login brand config (logo URL, logo link, message)
@@ -1338,6 +1348,18 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/suppression
 	ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (ListSiteEmailSuppressionRes, error)
+	// ListSiteFiles implements listSiteFiles operation.
+	//
+	// Issues a `file_list` command to the site's agent and returns one page
+	// of directory entries for the given path.
+	// The feature must be **explicitly enabled per site** (off by default).
+	// Returns `403 files_not_enabled` when the site has not opted in.
+	// Requires the `site.files.read` permission (admin+).
+	// Pagination is cursor-based: when `truncated=true` the response carries
+	// an opaque `cursor` that the caller passes on the next request.
+	//
+	// GET /api/v1/sites/{siteId}/files
+	ListSiteFiles(ctx context.Context, params ListSiteFilesParams) (ListSiteFilesRes, error)
 	// ListSiteLoginEvents implements listSiteLoginEvents operation.
 	//
 	// Returns the agent-ingested login events for the site, ordered by
@@ -1453,6 +1475,28 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/preload
 	PreloadCache(ctx context.Context, params PreloadCacheParams) (*PerfActionResult, error)
+	// PrepareSiteFileDownload implements prepareSiteFileDownload operation.
+	//
+	// Prepares a file for large-file download in three steps:
+	// 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+	// 2. CP issues `file_download_prepare` to the agent, which uploads the
+	// file in chunks directly to S3 (never through the CP).
+	// 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+	// browser to fetch the staged file directly from object storage.
+	// Large files bypass the CP's response path entirely — only the
+	// presigned URL is returned in the 200 body.
+	// A `file_transfers` row is persisted for audit and GC tracking.
+	// **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+	// owner-level permission required; the attempt is always audited.
+	// Returns `503 storage_not_configured` when object storage is not
+	// configured (self-hosted deployments without S3).
+	// The feature must be explicitly enabled per site. Returns
+	// `403 files_not_enabled` when not opted in.
+	// Requires the `site.files.read` permission (admin+). Sensitive-path
+	// downloads additionally require `site.files.read_sensitive` (owner only).
+	//
+	// POST /api/v1/sites/{siteId}/files/download
+	PrepareSiteFileDownload(ctx context.Context, req *FileDownloadRequest, params PrepareSiteFileDownloadParams) (PrepareSiteFileDownloadRes, error)
 	// PurgeCache implements purgeCache operation.
 	//
 	// Purges the whole cache (`scope: all`), a single URL (`scope: url` with
@@ -1609,6 +1653,26 @@ type Handler interface {
 	//
 	// PUT /api/v1/sites/{siteId}/security/login-protection
 	PutSiteLoginProtection(ctx context.Context, req *SiteLoginProtectionConfigUpdate, params PutSiteLoginProtectionParams) (PutSiteLoginProtectionRes, error)
+	// ReadSiteFileContent implements readSiteFileContent operation.
+	//
+	// Issues a `file_read` command to the site's agent and returns the
+	// base64-encoded content of a file up to 256 KiB. When the file is
+	// larger than the cap, `truncated=true` is returned; use the download
+	// endpoint for the full file.
+	// **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+	// `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+	// require **both**:
+	// - `confirm_sensitive=true` query parameter, and
+	// - Owner-level permission (`site.files.read_sensitive`).
+	// Both the successful read AND any denied attempt are recorded in the
+	// tamper-evident audit log with the full path.
+	// The feature must be explicitly enabled per site. Returns
+	// `403 files_not_enabled` when not opted in.
+	// Requires the `site.files.read` permission (admin+). Sensitive-path
+	// reads additionally require `site.files.read_sensitive` (owner only).
+	//
+	// GET /api/v1/sites/{siteId}/files/content
+	ReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (ReadSiteFileContentRes, error)
 	// RefreshSiteDiagnostics implements refreshSiteDiagnostics operation.
 	//
 	// Enqueues a signed `diagnostics` command to the agent. The agent runs
@@ -1904,6 +1968,19 @@ type Handler interface {
 	//
 	// PATCH /api/v1/sites/{siteId}/destinations/{destinationId}
 	UpdateSiteDestination(ctx context.Context, req *SiteDestinationUpdate, params UpdateSiteDestinationParams) (UpdateSiteDestinationRes, error)
+	// UpdateSiteFilesSettings implements updateSiteFilesSettings operation.
+	//
+	// Enables or disables the file manager feature for a site. The feature is
+	// **off by default** (migration m82); an explicit enable is required before
+	// any file browse/read/download endpoint will work.
+	// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+	// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+	// An audit entry (`site.files.settings.changed`) is recorded on every call,
+	// capturing the resulting `enabled` state.
+	// Requires `site.files.manage` permission (admin+).
+	//
+	// PUT /api/v1/sites/{siteId}/files/settings
+	UpdateSiteFilesSettings(ctx context.Context, req *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (UpdateSiteFilesSettingsRes, error)
 	// VerifyAudit implements verifyAudit operation.
 	//
 	// Verify the integrity of the audit hash-chain (admin+).

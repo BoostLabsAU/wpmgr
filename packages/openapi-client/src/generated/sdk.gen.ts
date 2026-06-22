@@ -304,6 +304,9 @@ import type {
   GetSiteErrorConfigErrors,
   GetSiteErrorConfigResponses,
   GetSiteErrors,
+  GetSiteFilesSettingsData,
+  GetSiteFilesSettingsErrors,
+  GetSiteFilesSettingsResponses,
   GetSiteLoginBrandData,
   GetSiteLoginBrandResponses,
   GetSiteLoginProtectionData,
@@ -411,6 +414,9 @@ import type {
   ListSiteEmailSuppressionData,
   ListSiteEmailSuppressionErrors,
   ListSiteEmailSuppressionResponses,
+  ListSiteFilesData,
+  ListSiteFilesErrors,
+  ListSiteFilesResponses,
   ListSiteLoginEventsData,
   ListSiteLoginEventsResponses,
   ListSitePhpErrorsData,
@@ -448,6 +454,9 @@ import type {
   PatchSiteErrorConfigResponses,
   PreloadCacheData,
   PreloadCacheResponses,
+  PrepareSiteFileDownloadData,
+  PrepareSiteFileDownloadErrors,
+  PrepareSiteFileDownloadResponses,
   PurgeCacheData,
   PurgeCacheErrors,
   PurgeCacheResponses,
@@ -496,6 +505,9 @@ import type {
   PutSiteLoginProtectionData,
   PutSiteLoginProtectionErrors,
   PutSiteLoginProtectionResponses,
+  ReadSiteFileContentData,
+  ReadSiteFileContentErrors,
+  ReadSiteFileContentResponses,
   RefreshSiteDiagnosticsData,
   RefreshSiteDiagnosticsErrors,
   RefreshSiteDiagnosticsResponses,
@@ -588,6 +600,9 @@ import type {
   UpdateSiteDestinationData,
   UpdateSiteDestinationErrors,
   UpdateSiteDestinationResponses,
+  UpdateSiteFilesSettingsData,
+  UpdateSiteFilesSettingsErrors,
+  UpdateSiteFilesSettingsResponses,
   VerifyAuditData,
   VerifyAuditErrors,
   VerifyAuditResponses,
@@ -5000,3 +5015,157 @@ export const downloadPortalReport = <ThrowOnError extends boolean = false>(
     DownloadPortalReportErrors,
     ThrowOnError
   >({ url: "/api/v1/portal/reports/{reportId}/download", ...options });
+
+/**
+ * Get file manager settings for a site
+ *
+ * Returns the current file manager settings for a site, including whether
+ * the feature is enabled.
+ *
+ * Any site member (viewer+) may call this endpoint so the UI can render
+ * the correct enable/disable state without an extra permission check.
+ *
+ * No permission beyond `RequireSiteAccess` is required.
+ *
+ */
+export const getSiteFilesSettings = <ThrowOnError extends boolean = false>(
+  options: Options<GetSiteFilesSettingsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetSiteFilesSettingsResponses,
+    GetSiteFilesSettingsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/settings", ...options });
+
+/**
+ * Enable or disable the file manager for a site
+ *
+ * Enables or disables the file manager feature for a site. The feature is
+ * **off by default** (migration m82); an explicit enable is required before
+ * any file browse/read/download endpoint will work.
+ *
+ * `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+ * site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+ *
+ * An audit entry (`site.files.settings.changed`) is recorded on every call,
+ * capturing the resulting `enabled` state.
+ *
+ * Requires `site.files.manage` permission (admin+).
+ *
+ */
+export const updateSiteFilesSettings = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateSiteFilesSettingsData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    UpdateSiteFilesSettingsResponses,
+    UpdateSiteFilesSettingsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/settings",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List a directory on a managed site
+ *
+ * Issues a `file_list` command to the site's agent and returns one page
+ * of directory entries for the given path.
+ *
+ * The feature must be **explicitly enabled per site** (off by default).
+ * Returns `403 files_not_enabled` when the site has not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+).
+ *
+ * Pagination is cursor-based: when `truncated=true` the response carries
+ * an opaque `cursor` that the caller passes on the next request.
+ *
+ */
+export const listSiteFiles = <ThrowOnError extends boolean = false>(
+  options: Options<ListSiteFilesData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListSiteFilesResponses,
+    ListSiteFilesErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files", ...options });
+
+/**
+ * Read a small file inline (base64, ≤ 256 KiB)
+ *
+ * Issues a `file_read` command to the site's agent and returns the
+ * base64-encoded content of a file up to 256 KiB. When the file is
+ * larger than the cap, `truncated=true` is returned; use the download
+ * endpoint for the full file.
+ *
+ * **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+ * `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+ * require **both**:
+ * - `confirm_sensitive=true` query parameter, and
+ * - Owner-level permission (`site.files.read_sensitive`).
+ *
+ * Both the successful read AND any denied attempt are recorded in the
+ * tamper-evident audit log with the full path.
+ *
+ * The feature must be explicitly enabled per site. Returns
+ * `403 files_not_enabled` when not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+). Sensitive-path
+ * reads additionally require `site.files.read_sensitive` (owner only).
+ *
+ */
+export const readSiteFileContent = <ThrowOnError extends boolean = false>(
+  options: Options<ReadSiteFileContentData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ReadSiteFileContentResponses,
+    ReadSiteFileContentErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/content", ...options });
+
+/**
+ * Stage a file for browser download (presigned URL)
+ *
+ * Prepares a file for large-file download in three steps:
+ * 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+ * 2. CP issues `file_download_prepare` to the agent, which uploads the
+ * file in chunks directly to S3 (never through the CP).
+ * 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+ * browser to fetch the staged file directly from object storage.
+ *
+ * Large files bypass the CP's response path entirely — only the
+ * presigned URL is returned in the 200 body.
+ *
+ * A `file_transfers` row is persisted for audit and GC tracking.
+ *
+ * **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+ * owner-level permission required; the attempt is always audited.
+ *
+ * Returns `503 storage_not_configured` when object storage is not
+ * configured (self-hosted deployments without S3).
+ *
+ * The feature must be explicitly enabled per site. Returns
+ * `403 files_not_enabled` when not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+). Sensitive-path
+ * downloads additionally require `site.files.read_sensitive` (owner only).
+ *
+ */
+export const prepareSiteFileDownload = <ThrowOnError extends boolean = false>(
+  options: Options<PrepareSiteFileDownloadData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    PrepareSiteFileDownloadResponses,
+    PrepareSiteFileDownloadErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/download",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });

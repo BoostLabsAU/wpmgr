@@ -30,6 +30,9 @@ use WPMgr\Agent\Commands\MetadataCommand;
 use WPMgr\Agent\Commands\RefreshInventoryCommand;
 use WPMgr\Agent\Commands\RestoreCommand;
 use WPMgr\Agent\Commands\RollbackCommand;
+use WPMgr\Agent\Commands\FileDownloadPrepareCommand;
+use WPMgr\Agent\Commands\FileListCommand;
+use WPMgr\Agent\Commands\FileReadCommand;
 use WPMgr\Agent\Commands\GetFileCommand;
 use WPMgr\Agent\Commands\ScanCommand;
 use WPMgr\Agent\Commands\SyncErrorConfigCommand;
@@ -1420,6 +1423,16 @@ final class Plugin
             // and kicks spawn_cron() so every verify dial drains overdue cron events
             // on page-cached idle sites.
             new PingCommand(),
+            // P1 read-only file manager (v1). Jail root = WPMGR_FILE_JAIL_ROOT
+            // constant (defaults to ABSPATH). Every path goes through the
+            // FileScanner realpath+strncmp containment guard. Sensitive-file
+            // deny-list (T6) applies to file_read and file_download_prepare.
+            //   file_list             -> one-level directory listing
+            //   file_read             -> base64 preview (≤ 256 KiB)
+            //   file_download_prepare -> stream file to CP-minted presigned S3 PUTs
+            new FileListCommand(),
+            new FileReadCommand(),
+            new FileDownloadPrepareCommand(),
         ];
     }
 

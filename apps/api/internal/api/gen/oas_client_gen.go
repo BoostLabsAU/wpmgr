@@ -1028,6 +1028,16 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/errors/config
 	GetSiteErrorConfig(ctx context.Context, params GetSiteErrorConfigParams) (GetSiteErrorConfigRes, error)
+	// GetSiteFilesSettings invokes getSiteFilesSettings operation.
+	//
+	// Returns the current file manager settings for a site, including whether
+	// the feature is enabled.
+	// Any site member (viewer+) may call this endpoint so the UI can render
+	// the correct enable/disable state without an extra permission check.
+	// No permission beyond `RequireSiteAccess` is required.
+	//
+	// GET /api/v1/sites/{siteId}/files/settings
+	GetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (GetSiteFilesSettingsRes, error)
 	// GetSiteLoginBrand invokes getSiteLoginBrand operation.
 	//
 	// Returns the current login brand config (logo URL, logo link, message)
@@ -1358,6 +1368,18 @@ type Invoker interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/suppression
 	ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (ListSiteEmailSuppressionRes, error)
+	// ListSiteFiles invokes listSiteFiles operation.
+	//
+	// Issues a `file_list` command to the site's agent and returns one page
+	// of directory entries for the given path.
+	// The feature must be **explicitly enabled per site** (off by default).
+	// Returns `403 files_not_enabled` when the site has not opted in.
+	// Requires the `site.files.read` permission (admin+).
+	// Pagination is cursor-based: when `truncated=true` the response carries
+	// an opaque `cursor` that the caller passes on the next request.
+	//
+	// GET /api/v1/sites/{siteId}/files
+	ListSiteFiles(ctx context.Context, params ListSiteFilesParams) (ListSiteFilesRes, error)
 	// ListSiteLoginEvents invokes listSiteLoginEvents operation.
 	//
 	// Returns the agent-ingested login events for the site, ordered by
@@ -1473,6 +1495,28 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/perf/cache/preload
 	PreloadCache(ctx context.Context, params PreloadCacheParams) (*PerfActionResult, error)
+	// PrepareSiteFileDownload invokes prepareSiteFileDownload operation.
+	//
+	// Prepares a file for large-file download in three steps:
+	// 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+	// 2. CP issues `file_download_prepare` to the agent, which uploads the
+	// file in chunks directly to S3 (never through the CP).
+	// 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+	// browser to fetch the staged file directly from object storage.
+	// Large files bypass the CP's response path entirely — only the
+	// presigned URL is returned in the 200 body.
+	// A `file_transfers` row is persisted for audit and GC tracking.
+	// **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+	// owner-level permission required; the attempt is always audited.
+	// Returns `503 storage_not_configured` when object storage is not
+	// configured (self-hosted deployments without S3).
+	// The feature must be explicitly enabled per site. Returns
+	// `403 files_not_enabled` when not opted in.
+	// Requires the `site.files.read` permission (admin+). Sensitive-path
+	// downloads additionally require `site.files.read_sensitive` (owner only).
+	//
+	// POST /api/v1/sites/{siteId}/files/download
+	PrepareSiteFileDownload(ctx context.Context, request *FileDownloadRequest, params PrepareSiteFileDownloadParams) (PrepareSiteFileDownloadRes, error)
 	// PurgeCache invokes purgeCache operation.
 	//
 	// Purges the whole cache (`scope: all`), a single URL (`scope: url` with
@@ -1629,6 +1673,26 @@ type Invoker interface {
 	//
 	// PUT /api/v1/sites/{siteId}/security/login-protection
 	PutSiteLoginProtection(ctx context.Context, request *SiteLoginProtectionConfigUpdate, params PutSiteLoginProtectionParams) (PutSiteLoginProtectionRes, error)
+	// ReadSiteFileContent invokes readSiteFileContent operation.
+	//
+	// Issues a `file_read` command to the site's agent and returns the
+	// base64-encoded content of a file up to 256 KiB. When the file is
+	// larger than the cap, `truncated=true` is returned; use the download
+	// endpoint for the full file.
+	// **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+	// `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+	// require **both**:
+	// - `confirm_sensitive=true` query parameter, and
+	// - Owner-level permission (`site.files.read_sensitive`).
+	// Both the successful read AND any denied attempt are recorded in the
+	// tamper-evident audit log with the full path.
+	// The feature must be explicitly enabled per site. Returns
+	// `403 files_not_enabled` when not opted in.
+	// Requires the `site.files.read` permission (admin+). Sensitive-path
+	// reads additionally require `site.files.read_sensitive` (owner only).
+	//
+	// GET /api/v1/sites/{siteId}/files/content
+	ReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (ReadSiteFileContentRes, error)
 	// RefreshSiteDiagnostics invokes refreshSiteDiagnostics operation.
 	//
 	// Enqueues a signed `diagnostics` command to the agent. The agent runs
@@ -1924,6 +1988,19 @@ type Invoker interface {
 	//
 	// PATCH /api/v1/sites/{siteId}/destinations/{destinationId}
 	UpdateSiteDestination(ctx context.Context, request *SiteDestinationUpdate, params UpdateSiteDestinationParams) (UpdateSiteDestinationRes, error)
+	// UpdateSiteFilesSettings invokes updateSiteFilesSettings operation.
+	//
+	// Enables or disables the file manager feature for a site. The feature is
+	// **off by default** (migration m82); an explicit enable is required before
+	// any file browse/read/download endpoint will work.
+	// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+	// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+	// An audit entry (`site.files.settings.changed`) is recorded on every call,
+	// capturing the resulting `enabled` state.
+	// Requires `site.files.manage` permission (admin+).
+	//
+	// PUT /api/v1/sites/{siteId}/files/settings
+	UpdateSiteFilesSettings(ctx context.Context, request *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (UpdateSiteFilesSettingsRes, error)
 	// VerifyAudit invokes verifyAudit operation.
 	//
 	// Verify the integrity of the audit hash-chain (admin+).
@@ -12919,6 +12996,103 @@ func (c *Client) sendGetSiteErrorConfig(ctx context.Context, params GetSiteError
 	return result, nil
 }
 
+// GetSiteFilesSettings invokes getSiteFilesSettings operation.
+//
+// Returns the current file manager settings for a site, including whether
+// the feature is enabled.
+// Any site member (viewer+) may call this endpoint so the UI can render
+// the correct enable/disable state without an extra permission check.
+// No permission beyond `RequireSiteAccess` is required.
+//
+// GET /api/v1/sites/{siteId}/files/settings
+func (c *Client) GetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (GetSiteFilesSettingsRes, error) {
+	res, err := c.sendGetSiteFilesSettings(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendGetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (res GetSiteFilesSettingsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("getSiteFilesSettings"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/files/settings"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, GetSiteFilesSettingsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/files/settings"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeGetSiteFilesSettingsResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // GetSiteLoginBrand invokes getSiteLoginBrand operation.
 //
 // Returns the current login brand config (logo URL, logo link, message)
@@ -17700,6 +17874,143 @@ func (c *Client) sendListSiteEmailSuppression(ctx context.Context, params ListSi
 	return result, nil
 }
 
+// ListSiteFiles invokes listSiteFiles operation.
+//
+// Issues a `file_list` command to the site's agent and returns one page
+// of directory entries for the given path.
+// The feature must be **explicitly enabled per site** (off by default).
+// Returns `403 files_not_enabled` when the site has not opted in.
+// Requires the `site.files.read` permission (admin+).
+// Pagination is cursor-based: when `truncated=true` the response carries
+// an opaque `cursor` that the caller passes on the next request.
+//
+// GET /api/v1/sites/{siteId}/files
+func (c *Client) ListSiteFiles(ctx context.Context, params ListSiteFilesParams) (ListSiteFilesRes, error) {
+	res, err := c.sendListSiteFiles(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendListSiteFiles(ctx context.Context, params ListSiteFilesParams) (res ListSiteFilesRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("listSiteFiles"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/files"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ListSiteFilesOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/files"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "path" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "path",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Path.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "cursor" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.Cursor.Get(); ok {
+				return e.EncodeValue(conv.StringToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeListSiteFilesResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // ListSiteLoginEvents invokes listSiteLoginEvents operation.
 //
 // Returns the agent-ingested login events for the site, ordered by
@@ -19311,6 +19622,118 @@ func (c *Client) sendPreloadCache(ctx context.Context, params PreloadCacheParams
 	return result, nil
 }
 
+// PrepareSiteFileDownload invokes prepareSiteFileDownload operation.
+//
+// Prepares a file for large-file download in three steps:
+// 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+// 2. CP issues `file_download_prepare` to the agent, which uploads the
+// file in chunks directly to S3 (never through the CP).
+// 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+// browser to fetch the staged file directly from object storage.
+// Large files bypass the CP's response path entirely — only the
+// presigned URL is returned in the 200 body.
+// A `file_transfers` row is persisted for audit and GC tracking.
+// **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+// owner-level permission required; the attempt is always audited.
+// Returns `503 storage_not_configured` when object storage is not
+// configured (self-hosted deployments without S3).
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// downloads additionally require `site.files.read_sensitive` (owner only).
+//
+// POST /api/v1/sites/{siteId}/files/download
+func (c *Client) PrepareSiteFileDownload(ctx context.Context, request *FileDownloadRequest, params PrepareSiteFileDownloadParams) (PrepareSiteFileDownloadRes, error) {
+	res, err := c.sendPrepareSiteFileDownload(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendPrepareSiteFileDownload(ctx context.Context, request *FileDownloadRequest, params PrepareSiteFileDownloadParams) (res PrepareSiteFileDownloadRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("prepareSiteFileDownload"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/files/download"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, PrepareSiteFileDownloadOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/files/download"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodePrepareSiteFileDownloadRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodePrepareSiteFileDownloadResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
 // PurgeCache invokes purgeCache operation.
 //
 // Purges the whole cache (`scope: all`), a single URL (`scope: url` with
@@ -20842,6 +21265,148 @@ func (c *Client) sendPutSiteLoginProtection(ctx context.Context, request *SiteLo
 
 	stage = "DecodeResponse"
 	result, err := decodePutSiteLoginProtectionResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ReadSiteFileContent invokes readSiteFileContent operation.
+//
+// Issues a `file_read` command to the site's agent and returns the
+// base64-encoded content of a file up to 256 KiB. When the file is
+// larger than the cap, `truncated=true` is returned; use the download
+// endpoint for the full file.
+// **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+// `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+// require **both**:
+// - `confirm_sensitive=true` query parameter, and
+// - Owner-level permission (`site.files.read_sensitive`).
+// Both the successful read AND any denied attempt are recorded in the
+// tamper-evident audit log with the full path.
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// reads additionally require `site.files.read_sensitive` (owner only).
+//
+// GET /api/v1/sites/{siteId}/files/content
+func (c *Client) ReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (ReadSiteFileContentRes, error) {
+	res, err := c.sendReadSiteFileContent(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (res ReadSiteFileContentRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("readSiteFileContent"),
+		semconv.HTTPRequestMethodKey.String("GET"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/files/content"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ReadSiteFileContentOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/files/content"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeQueryParams"
+	q := uri.NewQueryEncoder()
+	{
+		// Encode "path" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "path",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			return e.EncodeValue(conv.StringToString(params.Path))
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	{
+		// Encode "confirm_sensitive" parameter.
+		cfg := uri.QueryParameterEncodingConfig{
+			Name:    "confirm_sensitive",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.EncodeParam(cfg, func(e uri.Encoder) error {
+			if val, ok := params.ConfirmSensitive.Get(); ok {
+				return e.EncodeValue(conv.BoolToString(val))
+			}
+			return nil
+		}); err != nil {
+			return res, errors.Wrap(err, "encode query")
+		}
+	}
+	u.RawQuery = q.Values().Encode()
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "GET", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeReadSiteFileContentResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}
@@ -23996,6 +24561,109 @@ func (c *Client) sendUpdateSiteDestination(ctx context.Context, request *SiteDes
 
 	stage = "DecodeResponse"
 	result, err := decodeUpdateSiteDestinationResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// UpdateSiteFilesSettings invokes updateSiteFilesSettings operation.
+//
+// Enables or disables the file manager feature for a site. The feature is
+// **off by default** (migration m82); an explicit enable is required before
+// any file browse/read/download endpoint will work.
+// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+// An audit entry (`site.files.settings.changed`) is recorded on every call,
+// capturing the resulting `enabled` state.
+// Requires `site.files.manage` permission (admin+).
+//
+// PUT /api/v1/sites/{siteId}/files/settings
+func (c *Client) UpdateSiteFilesSettings(ctx context.Context, request *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (UpdateSiteFilesSettingsRes, error) {
+	res, err := c.sendUpdateSiteFilesSettings(ctx, request, params)
+	return res, err
+}
+
+func (c *Client) sendUpdateSiteFilesSettings(ctx context.Context, request *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (res UpdateSiteFilesSettingsRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("updateSiteFilesSettings"),
+		semconv.HTTPRequestMethodKey.String("PUT"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/files/settings"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, UpdateSiteFilesSettingsOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/files/settings"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "PUT", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+	if err := encodeUpdateSiteFilesSettingsRequest(request, r); err != nil {
+		return res, errors.Wrap(err, "encode request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeUpdateSiteFilesSettingsResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

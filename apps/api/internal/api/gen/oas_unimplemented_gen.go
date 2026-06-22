@@ -1343,6 +1343,19 @@ func (UnimplementedHandler) GetSiteErrorConfig(ctx context.Context, params GetSi
 	return r, ht.ErrNotImplemented
 }
 
+// GetSiteFilesSettings implements getSiteFilesSettings operation.
+//
+// Returns the current file manager settings for a site, including whether
+// the feature is enabled.
+// Any site member (viewer+) may call this endpoint so the UI can render
+// the correct enable/disable state without an extra permission check.
+// No permission beyond `RequireSiteAccess` is required.
+//
+// GET /api/v1/sites/{siteId}/files/settings
+func (UnimplementedHandler) GetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (r GetSiteFilesSettingsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetSiteLoginBrand implements getSiteLoginBrand operation.
 //
 // Returns the current login brand config (logo URL, logo link, message)
@@ -1793,6 +1806,21 @@ func (UnimplementedHandler) ListSiteEmailSuppression(ctx context.Context, params
 	return r, ht.ErrNotImplemented
 }
 
+// ListSiteFiles implements listSiteFiles operation.
+//
+// Issues a `file_list` command to the site's agent and returns one page
+// of directory entries for the given path.
+// The feature must be **explicitly enabled per site** (off by default).
+// Returns `403 files_not_enabled` when the site has not opted in.
+// Requires the `site.files.read` permission (admin+).
+// Pagination is cursor-based: when `truncated=true` the response carries
+// an opaque `cursor` that the caller passes on the next request.
+//
+// GET /api/v1/sites/{siteId}/files
+func (UnimplementedHandler) ListSiteFiles(ctx context.Context, params ListSiteFilesParams) (r ListSiteFilesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListSiteLoginEvents implements listSiteLoginEvents operation.
 //
 // Returns the agent-ingested login events for the site, ordered by
@@ -1950,6 +1978,31 @@ func (UnimplementedHandler) PatchSiteErrorConfig(ctx context.Context, req *SiteE
 //
 // POST /api/v1/sites/{siteId}/perf/cache/preload
 func (UnimplementedHandler) PreloadCache(ctx context.Context, params PreloadCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PrepareSiteFileDownload implements prepareSiteFileDownload operation.
+//
+// Prepares a file for large-file download in three steps:
+// 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+// 2. CP issues `file_download_prepare` to the agent, which uploads the
+// file in chunks directly to S3 (never through the CP).
+// 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+// browser to fetch the staged file directly from object storage.
+// Large files bypass the CP's response path entirely — only the
+// presigned URL is returned in the 200 body.
+// A `file_transfers` row is persisted for audit and GC tracking.
+// **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+// owner-level permission required; the attempt is always audited.
+// Returns `503 storage_not_configured` when object storage is not
+// configured (self-hosted deployments without S3).
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// downloads additionally require `site.files.read_sensitive` (owner only).
+//
+// POST /api/v1/sites/{siteId}/files/download
+func (UnimplementedHandler) PrepareSiteFileDownload(ctx context.Context, req *FileDownloadRequest, params PrepareSiteFileDownloadParams) (r PrepareSiteFileDownloadRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2154,6 +2207,29 @@ func (UnimplementedHandler) PutSiteLoginBrand(ctx context.Context, req *SiteLogi
 //
 // PUT /api/v1/sites/{siteId}/security/login-protection
 func (UnimplementedHandler) PutSiteLoginProtection(ctx context.Context, req *SiteLoginProtectionConfigUpdate, params PutSiteLoginProtectionParams) (r PutSiteLoginProtectionRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ReadSiteFileContent implements readSiteFileContent operation.
+//
+// Issues a `file_read` command to the site's agent and returns the
+// base64-encoded content of a file up to 256 KiB. When the file is
+// larger than the cap, `truncated=true` is returned; use the download
+// endpoint for the full file.
+// **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+// `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+// require **both**:
+// - `confirm_sensitive=true` query parameter, and
+// - Owner-level permission (`site.files.read_sensitive`).
+// Both the successful read AND any denied attempt are recorded in the
+// tamper-evident audit log with the full path.
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// reads additionally require `site.files.read_sensitive` (owner only).
+//
+// GET /api/v1/sites/{siteId}/files/content
+func (UnimplementedHandler) ReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (r ReadSiteFileContentRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2542,6 +2618,22 @@ func (UnimplementedHandler) UpdateClient(ctx context.Context, req *UpdateAgencyC
 //
 // PATCH /api/v1/sites/{siteId}/destinations/{destinationId}
 func (UnimplementedHandler) UpdateSiteDestination(ctx context.Context, req *SiteDestinationUpdate, params UpdateSiteDestinationParams) (r UpdateSiteDestinationRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// UpdateSiteFilesSettings implements updateSiteFilesSettings operation.
+//
+// Enables or disables the file manager feature for a site. The feature is
+// **off by default** (migration m82); an explicit enable is required before
+// any file browse/read/download endpoint will work.
+// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+// An audit entry (`site.files.settings.changed`) is recorded on every call,
+// capturing the resulting `enabled` state.
+// Requires `site.files.manage` permission (admin+).
+//
+// PUT /api/v1/sites/{siteId}/files/settings
+func (UnimplementedHandler) UpdateSiteFilesSettings(ctx context.Context, req *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (r UpdateSiteFilesSettingsRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 

@@ -6474,6 +6474,71 @@ func decodeGetSiteErrorConfigParams(args [1]string, argsEscaped bool, r *http.Re
 	return params, nil
 }
 
+// GetSiteFilesSettingsParams is parameters of getSiteFilesSettings operation.
+type GetSiteFilesSettingsParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackGetSiteFilesSettingsParams(packed middleware.Parameters) (params GetSiteFilesSettingsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeGetSiteFilesSettingsParams(args [1]string, argsEscaped bool, r *http.Request) (params GetSiteFilesSettingsParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // GetSiteLoginBrandParams is parameters of getSiteLoginBrand operation.
 type GetSiteLoginBrandParams struct {
 	SiteId uuid.UUID
@@ -12647,6 +12712,182 @@ func decodeListSiteEmailSuppressionParams(args [1]string, argsEscaped bool, r *h
 	return params, nil
 }
 
+// ListSiteFilesParams is parameters of listSiteFiles operation.
+type ListSiteFilesParams struct {
+	SiteId uuid.UUID
+	// Site-relative directory path to list (forward-slash separated).
+	Path OptString `json:",omitempty,omitzero"`
+	// Opaque resume cursor from a prior response with `truncated=true`. Absent means start from the
+	// beginning of the directory.
+	Cursor OptString `json:",omitempty,omitzero"`
+}
+
+func unpackListSiteFilesParams(packed middleware.Parameters) (params ListSiteFilesParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "path",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Path = v.(OptString)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "cursor",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Cursor = v.(OptString)
+		}
+	}
+	return params
+}
+
+func decodeListSiteFilesParams(args [1]string, argsEscaped bool, r *http.Request) (params ListSiteFilesParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	// Set default value for query: path.
+	{
+		val := string("/")
+		params.Path.SetTo(val)
+	}
+	// Decode query: path.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "path",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotPathVal string
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotPathVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Path.SetTo(paramsDotPathVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "path",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Decode query: cursor.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "cursor",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotCursorVal string
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotCursorVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Cursor.SetTo(paramsDotCursorVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "cursor",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // ListSiteLoginEventsParams is parameters of listSiteLoginEvents operation.
 type ListSiteLoginEventsParams struct {
 	SiteId uuid.UUID
@@ -14409,6 +14650,71 @@ func decodePreloadCacheParams(args [1]string, argsEscaped bool, r *http.Request)
 	return params, nil
 }
 
+// PrepareSiteFileDownloadParams is parameters of prepareSiteFileDownload operation.
+type PrepareSiteFileDownloadParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackPrepareSiteFileDownloadParams(packed middleware.Parameters) (params PrepareSiteFileDownloadParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodePrepareSiteFileDownloadParams(args [1]string, argsEscaped bool, r *http.Request) (params PrepareSiteFileDownloadParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // PurgeCacheParams is parameters of purgeCache operation.
 type PurgeCacheParams struct {
 	SiteId uuid.UUID
@@ -15237,6 +15543,175 @@ func decodePutSiteLoginProtectionParams(args [1]string, argsEscaped bool, r *htt
 		return params, &ogenerrors.DecodeParamError{
 			Name: "siteId",
 			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// ReadSiteFileContentParams is parameters of readSiteFileContent operation.
+type ReadSiteFileContentParams struct {
+	SiteId uuid.UUID
+	// Site-relative file path to read.
+	Path string
+	// Must be `true` when reading a sensitive path (wp-config.php, .env*, *.pem, *.key, id_rsa*, .git/, .
+	// htpasswd, auth.json). Absent or false causes a 403 for sensitive paths regardless of role.
+	ConfirmSensitive OptBool `json:",omitempty,omitzero"`
+}
+
+func unpackReadSiteFileContentParams(packed middleware.Parameters) (params ReadSiteFileContentParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "path",
+			In:   "query",
+		}
+		params.Path = packed[key].(string)
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "confirm_sensitive",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.ConfirmSensitive = v.(OptBool)
+		}
+	}
+	return params
+}
+
+func decodeReadSiteFileContentParams(args [1]string, argsEscaped bool, r *http.Request) (params ReadSiteFileContentParams, _ error) {
+	q := uri.NewQueryDecoder(r.URL.Query())
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	// Decode query: path.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "path",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToString(val)
+				if err != nil {
+					return err
+				}
+
+				params.Path = c
+				return nil
+			}); err != nil {
+				return err
+			}
+		} else {
+			return err
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "path",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Set default value for query: confirm_sensitive.
+	{
+		val := bool(false)
+		params.ConfirmSensitive.SetTo(val)
+	}
+	// Decode query: confirm_sensitive.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "confirm_sensitive",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotConfirmSensitiveVal bool
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToBool(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotConfirmSensitiveVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.ConfirmSensitive.SetTo(paramsDotConfirmSensitiveVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "confirm_sensitive",
+			In:   "query",
 			Err:  err,
 		}
 	}
@@ -17593,6 +18068,71 @@ func decodeUpdateSiteDestinationParams(args [2]string, argsEscaped bool, r *http
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "destinationId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// UpdateSiteFilesSettingsParams is parameters of updateSiteFilesSettings operation.
+type UpdateSiteFilesSettingsParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackUpdateSiteFilesSettingsParams(packed middleware.Parameters) (params UpdateSiteFilesSettingsParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeUpdateSiteFilesSettingsParams(args [1]string, argsEscaped bool, r *http.Request) (params UpdateSiteFilesSettingsParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
 			In:   "path",
 			Err:  err,
 		}
