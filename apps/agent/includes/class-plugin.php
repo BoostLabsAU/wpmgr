@@ -30,9 +30,15 @@ use WPMgr\Agent\Commands\MetadataCommand;
 use WPMgr\Agent\Commands\RefreshInventoryCommand;
 use WPMgr\Agent\Commands\RestoreCommand;
 use WPMgr\Agent\Commands\RollbackCommand;
+use WPMgr\Agent\Commands\FileChmodCommand;
+use WPMgr\Agent\Commands\FileDeleteCommand;
 use WPMgr\Agent\Commands\FileDownloadPrepareCommand;
 use WPMgr\Agent\Commands\FileListCommand;
+use WPMgr\Agent\Commands\FileMkdirCommand;
 use WPMgr\Agent\Commands\FileReadCommand;
+use WPMgr\Agent\Commands\FileRenameCommand;
+use WPMgr\Agent\Commands\FileUploadApplyCommand;
+use WPMgr\Agent\Commands\FileWriteCommand;
 use WPMgr\Agent\Commands\GetFileCommand;
 use WPMgr\Agent\Commands\ScanCommand;
 use WPMgr\Agent\Commands\SyncErrorConfigCommand;
@@ -1433,6 +1439,23 @@ final class Plugin
             new FileListCommand(),
             new FileReadCommand(),
             new FileDownloadPrepareCommand(),
+            // P2 guarded write / upload (v1.1). All paths go through jailPath();
+            // all writes enforce the T3 base-unresolved guard (throw before write).
+            // The executable-write prevention (T1, the core RCE control) covers:
+            //   extension deny-list + double-extension + content sniff + web-dir
+            //   — confirmed by the CP with confirm_executable_write=true (owner only).
+            //   file_write          -> atomic temp→rename write of ≤ 256 KiB text
+            //   file_mkdir          -> hardened directory creation
+            //   file_rename         -> atomic rename with guards on BOTH src+dst
+            //   file_delete         -> protected-root guard (T13) + recursive flag
+            //   file_chmod          -> safe-mode allowlist (no setuid/world-write)
+            //   file_upload_apply   -> stream-reassemble presigned-GET chunks + sniff
+            new FileWriteCommand(),
+            new FileMkdirCommand(),
+            new FileRenameCommand(),
+            new FileDeleteCommand(),
+            new FileChmodCommand(),
+            new FileUploadApplyCommand(),
         ];
     }
 

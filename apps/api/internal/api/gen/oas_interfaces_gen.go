@@ -73,6 +73,10 @@ type AgentMetadataRes interface {
 	agentMetadataRes()
 }
 
+type ApplySiteFileUploadRes interface {
+	applySiteFileUploadRes()
+}
+
 type ArchiveSiteRes interface {
 	archiveSiteRes()
 }
@@ -105,6 +109,10 @@ type CancelEnrollmentRes interface {
 	cancelEnrollmentRes()
 }
 
+type ChmodSiteFileRes interface {
+	chmodSiteFileRes()
+}
+
 type CreateApiKeyRes interface {
 	createApiKeyRes()
 }
@@ -135,6 +143,10 @@ type CreateRestoreRes interface {
 
 type CreateSiteDestinationRes interface {
 	createSiteDestinationRes()
+}
+
+type CreateSiteDirectoryRes interface {
+	createSiteDirectoryRes()
 }
 
 type CreateSiteRes interface {
@@ -183,6 +195,10 @@ type DeleteSiteDestinationRes interface {
 
 type DeleteSiteEmailSuppressionRes interface {
 	deleteSiteEmailSuppressionRes()
+}
+
+type DeleteSiteFileRes interface {
+	deleteSiteFileRes()
 }
 
 type DeleteSiteRes interface {
@@ -477,6 +493,10 @@ type PrepareSiteFileDownloadRes interface {
 	prepareSiteFileDownloadRes()
 }
 
+type PrepareSiteFileUploadRes interface {
+	prepareSiteFileUploadRes()
+}
+
 type PurgeCacheRes interface {
 	purgeCacheRes()
 }
@@ -569,6 +589,10 @@ type RemoveClientMemberRes interface {
 	removeClientMemberRes()
 }
 
+type RenameSiteFileRes interface {
+	renameSiteFileRes()
+}
+
 type ResendEmailLogRes interface {
 	resendEmailLogRes()
 }
@@ -639,4 +663,8 @@ type VerifyAuditRes interface {
 
 type VerifyEmailRes interface {
 	verifyEmailRes()
+}
+
+type WriteSiteFileContentRes interface {
+	writeSiteFileContentRes()
 }

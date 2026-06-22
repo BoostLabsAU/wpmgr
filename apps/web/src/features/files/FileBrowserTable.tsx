@@ -19,13 +19,22 @@ import { TableVirtuoso, type TableComponents } from "react-virtuoso";
 import { cn, formatBytes, relativeTime } from "@/lib/utils";
 import type { FileEntry } from "@wpmgr/api";
 
+import { FileActionMenu } from "./FileActionMenu";
+
 // FileBrowserTable — virtualized directory listing.
 //
 // Mirrors AssetsTable.tsx: TanStack Table v8 owns column defs + row model;
 // react-virtuoso's <TableVirtuoso> handles the scroll container, sticky
 // header, and row virtualization. The table uses role="grid" semantics.
 //
-// Columns: icon+name, size, modified, mode.
+// P2 additions:
+//   - Actions column: per-row FileActionMenu (open/download/rename/chmod/delete).
+//   - The "Edit" action is intentionally omitted from the row menu: the user
+//     opens the file (clicks the row) to get the detail drawer, then clicks
+//     "Edit" in the drawer where the content is already loaded. This avoids
+//     loading file content for every visible table row.
+//
+// Columns: icon+name, size, modified, mode, actions.
 // Directories sort first (done in use-files.ts, not here).
 
 export interface FileBrowserTableProps {
@@ -38,6 +47,11 @@ export interface FileBrowserTableProps {
   /** Called when the user scrolls near the bottom — triggers fetchNextPage. */
   onEndReached?: () => void;
   isFetchingNextPage?: boolean;
+  // P2 props
+  siteId: string;
+  writeEnabled: boolean;
+  canManage: boolean;
+  isOwner: boolean;
 }
 
 // Stable per-row context so selection + click handlers don't change row identity.
@@ -46,11 +60,16 @@ interface RowContext {
   onNavigate: (path: string) => void;
   onFileClick: (entry: FileEntry) => void;
   isFetchingNextPage: boolean;
+  siteId: string;
+  writeEnabled: boolean;
+  canManage: boolean;
+  isOwner: boolean;
 }
 
 const COL_SIZE_PX = 90;
 const COL_MODIFIED_PX = 110;
 const COL_MODE_PX = 100;
+const COL_ACTIONS_PX = 48;
 
 // Determine an entry's full relative path by combining the current dir path.
 function entryPath(currentPath: string, name: string): string {
@@ -134,6 +153,14 @@ function buildColumns(): ColumnDef<FileEntry>[] {
         </span>
       ),
     },
+    {
+      id: "actions",
+      header: "",
+      enableSorting: false,
+      size: COL_ACTIONS_PX,
+      // Rendered in BodyCells where context is accessible.
+      cell: () => null,
+    },
   ];
 }
 
@@ -210,6 +237,10 @@ export function FileBrowserTable({
   onFileClick,
   onEndReached,
   isFetchingNextPage = false,
+  siteId,
+  writeEnabled,
+  canManage,
+  isOwner,
 }: FileBrowserTableProps) {
   const table = useReactTable({
     data: entries,
@@ -228,17 +259,22 @@ export function FileBrowserTable({
       TableHead: VirtuosoTableHead,
       TableRow: ({ item, style, context, ...rest }) => {
         const entry = item.original;
+        const ep = entryPath(context?.currentPath ?? "", entry.name);
         return (
           <tr
             {...rest}
             style={style}
             role="row"
-            aria-label={entry.is_dir ? `Directory: ${entry.name}` : `File: ${entry.name}`}
+            aria-label={
+              entry.is_dir
+                ? `Directory: ${entry.name}`
+                : `File: ${entry.name}`
+            }
             tabIndex={0}
             onClick={() => {
               if (!context) return;
               if (entry.is_dir) {
-                context.onNavigate(entryPath(context.currentPath, entry.name));
+                context.onNavigate(ep);
               } else {
                 context.onFileClick(entry);
               }
@@ -248,7 +284,7 @@ export function FileBrowserTable({
                 e.preventDefault();
                 if (!context) return;
                 if (entry.is_dir) {
-                  context.onNavigate(entryPath(context.currentPath, entry.name));
+                  context.onNavigate(ep);
                 } else {
                   context.onFileClick(entry);
                 }
@@ -265,14 +301,14 @@ export function FileBrowserTable({
         context?.isFetchingNextPage ? (
           <tr>
             <td
-              colSpan={4}
+              colSpan={5}
               className="border-t border-[var(--color-border)] px-4 py-3 text-center text-xs text-[var(--color-muted-foreground)]"
               aria-live="polite"
               aria-label="Loading more entries"
             >
               <span className="inline-flex items-center gap-1.5">
                 <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
-                Loading more…
+                Loading more...
               </span>
             </td>
           </tr>
@@ -282,14 +318,30 @@ export function FileBrowserTable({
   );
 
   const rowContext = useMemo<RowContext>(
-    () => ({ currentPath, onNavigate, onFileClick, isFetchingNextPage }),
-    [currentPath, onNavigate, onFileClick, isFetchingNextPage],
+    () => ({
+      currentPath,
+      onNavigate,
+      onFileClick,
+      isFetchingNextPage,
+      siteId,
+      writeEnabled,
+      canManage,
+      isOwner,
+    }),
+    [
+      currentPath,
+      onNavigate,
+      onFileClick,
+      isFetchingNextPage,
+      siteId,
+      writeEnabled,
+      canManage,
+      isOwner,
+    ],
   );
 
   return (
-    <div
-      className="relative h-[calc(100vh-22rem)] min-h-[300px] w-full overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]"
-    >
+    <div className="relative h-[calc(100vh-22rem)] min-h-[300px] w-full overflow-hidden rounded-lg border border-[var(--color-border)] bg-[var(--color-card)]">
       <TableVirtuoso<Row<FileEntry>, RowContext>
         data={rows}
         context={rowContext}
@@ -300,7 +352,12 @@ export function FileBrowserTable({
         fixedHeaderContent={() => (
           <HeaderRow headerGroups={table.getHeaderGroups()} />
         )}
-        itemContent={(_, row) => <BodyCells row={row} />}
+        itemContent={(_, row) => (
+          <BodyCells
+            row={row}
+            context={rowContext}
+          />
+        )}
       />
     </div>
   );
@@ -336,6 +393,7 @@ function HeaderRow({
                   "px-3 text-left align-middle text-xs font-medium uppercase tracking-[0.02em] text-[var(--color-muted-foreground)]",
                   isNumeric && "text-right",
                   header.column.id === "name" && "pl-4",
+                  header.column.id === "actions" && "pr-2",
                 )}
               >
                 {header.isPlaceholder
@@ -353,10 +411,42 @@ function HeaderRow({
   );
 }
 
-function BodyCells({ row }: { row: Row<FileEntry> }) {
+function BodyCells({
+  row,
+  context,
+}: {
+  row: Row<FileEntry>;
+  context: RowContext;
+}) {
+  const entry = row.original;
+  const ep = entryPath(context.currentPath, entry.name);
+
   return (
     <>
       {row.getVisibleCells().map((cell) => {
+        if (cell.column.id === "actions") {
+          return (
+            <td
+              key={cell.id}
+              className="border-b border-[var(--color-border)] pr-2 align-middle"
+              // Stop the row click handler from also firing when clicking the menu.
+              onClick={(e) => e.stopPropagation()}
+            >
+              <FileActionMenu
+                siteId={context.siteId}
+                entry={entry}
+                currentDirPath={context.currentPath}
+                entryPath={ep}
+                writeEnabled={context.writeEnabled}
+                canManage={context.canManage}
+                isOwner={context.isOwner}
+                onOpen={() => context.onNavigate(ep)}
+                // Edit is handled via the detail drawer (click row → open drawer → Edit)
+                // to avoid loading content for every visible row.
+              />
+            </td>
+          );
+        }
         const isNumeric =
           cell.column.id === "size" || cell.column.id === "modified";
         return (

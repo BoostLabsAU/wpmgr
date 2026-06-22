@@ -260,6 +260,20 @@ func encodeAgentMetadataRequest(
 	return nil
 }
 
+func encodeApplySiteFileUploadRequest(
+	req *ApplyUploadRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeArchiveSiteRequest(
 	req OptSiteLifecycleReason,
 	r *http.Request,
@@ -338,6 +352,20 @@ func encodeBulkPurgeCacheRequest(
 
 func encodeBulkResendEmailLogRequest(
 	req *BulkResendRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeChmodSiteFileRequest(
+	req *FileChmodRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -528,6 +556,20 @@ func encodeCreateSiteDestinationRequest(
 	return nil
 }
 
+func encodeCreateSiteDirectoryRequest(
+	req *FileMkdirRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeCreateSiteShareRequest(
 	req *CreateSiteShareRequest,
 	r *http.Request,
@@ -598,6 +640,20 @@ func encodeDeleteMediaOriginalsRequest(
 		if req.Set {
 			req.Encode(e)
 		}
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeDeleteSiteFileRequest(
+	req *FileDeleteRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
 	}
 	encoded := e.Bytes()
 	ht.SetBody(r, bytes.NewReader(encoded), contentType)
@@ -764,6 +820,20 @@ func encodePatchSiteErrorConfigRequest(
 
 func encodePrepareSiteFileDownloadRequest(
 	req *FileDownloadRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodePrepareSiteFileUploadRequest(
+	req *PrepareUploadRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -1002,6 +1072,20 @@ func encodePutSiteLoginProtectionRequest(
 
 func encodeRegisterRequest(
 	req *RegisterRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeRenameSiteFileRequest(
+	req *FileRenameRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -1284,6 +1368,20 @@ func encodeUpdateSiteFilesSettingsRequest(
 
 func encodeVerifyEmailRequest(
 	req *VerifyEmailReq,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeWriteSiteFileContentRequest(
+	req *WriteFileContentRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"

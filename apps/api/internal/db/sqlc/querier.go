@@ -781,6 +781,9 @@ type Querier interface {
 	// -----------------------------------------------------------------------
 	// Create a new factor-agnostic login challenge. Returns the created row.
 	InsertTwoFactorChallenge(ctx context.Context, arg InsertTwoFactorChallengeParams) (TwoFactorChallenge, error)
+	// Record an upload-direction file_transfers row created when the CP stages
+	// chunks for a browser upload.
+	InsertUploadTransfer(ctx context.Context, arg InsertUploadTransferParams) error
 	// -----------------------------------------------------------------------
 	// webauthn_credentials
 	// -----------------------------------------------------------------------
@@ -1439,6 +1442,9 @@ type Querier interface {
 	// Insert-or-update the per-site file manager flag. tenant_id is always the
 	// principal's tenant (belt-and-braces alongside the RLS policy).
 	UpsertSiteFileManager(ctx context.Context, arg UpsertSiteFileManagerParams) error
+	// Insert-or-update the per-site write opt-in flag (P2). Separate from the
+	// read opt-in so read and write can be toggled independently.
+	UpsertSiteFileManagerWrite(ctx context.Context, arg UpsertSiteFileManagerWriteParams) error
 }
 
 var _ Querier = (*Queries)(nil)

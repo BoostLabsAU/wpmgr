@@ -194,6 +194,224 @@ type FileDownloadPrepareResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// file_write  (P2)
+// ---------------------------------------------------------------------------
+
+// FileWriteRequest is the POST body for the `file_write` command.
+//
+// The agent writes content_base64 atomically (temp-write → rename swap) to
+// the resolved path, which must be within the configured root jail.
+//
+//	path                   — site-relative path to create or overwrite.
+//	content_base64         — base64-encoded file content (≤ 256 KiB).
+//	confirm_executable_write — must be true when the target path or name
+//	                         matches the executable-extension deny-list or is
+//	                         within a web-served PHP-executable directory.
+//	                         Absent / false → agent returns error_code=
+//	                         "executable_write_denied".  The CP must also
+//	                         verify the caller holds PermSiteFilesWriteCode.
+//	confirm_sensitive      — must be true when the target path matches the
+//	                         sensitive-file deny-list (wp-config.php, .env*, …).
+//	                         Absent / false → agent returns "sensitive_denied".
+//	                         The CP must also verify PermSiteFilesWriteCode.
+type FileWriteRequest struct {
+	Path                  string `json:"path"`
+	ContentBase64         string `json:"content_base64"`
+	ConfirmExecutableWrite bool   `json:"confirm_executable_write,omitempty"`
+	ConfirmSensitive      bool   `json:"confirm_sensitive,omitempty"`
+}
+
+// FileWriteResponse is the agent's response to `file_write`.
+//
+//	path  — echoed resolved path.
+//	size  — bytes written.
+//	mtime — last-modified time (Unix epoch seconds) after the write.
+//	mode  — 4-digit octal string, e.g. "0644".
+//	error — agent error struct present on failure.
+type FileWriteResponse struct {
+	Path  string     `json:"path"`
+	Size  int64      `json:"size"`
+	Mtime int64      `json:"mtime"`
+	Mode  string     `json:"mode"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_mkdir  (P2)
+// ---------------------------------------------------------------------------
+
+// FileMkdirRequest is the POST body for the `file_mkdir` command.
+//
+//	path — site-relative path for the new directory.  The agent applies the
+//	       same containment guard as all other file_* commands.
+type FileMkdirRequest struct {
+	Path string `json:"path"`
+}
+
+// FileMkdirResponse is the agent's response to `file_mkdir`.
+//
+//	path  — resolved path of the created directory (echoed).
+//	error — agent error struct present on failure.
+type FileMkdirResponse struct {
+	Path  string     `json:"path"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_rename  (P2)
+// ---------------------------------------------------------------------------
+
+// FileRenameRequest is the POST body for the `file_rename` command.
+//
+// Both src and dst are checked against the containment guard — the agent
+// must reject any operation where either path resolves outside the jail.
+//
+//	src                    — site-relative source path (must exist).
+//	dst                    — site-relative destination path (must not exist
+//	                         unless the agent supports atomic overwrite, which
+//	                         is implementation-defined for the PHP side).
+//	confirm_executable_write — required when dst matches the executable-
+//	                           extension deny-list or a PHP-executable dir.
+//	confirm_sensitive      — required when either src or dst is a sensitive path.
+type FileRenameRequest struct {
+	Src                   string `json:"src"`
+	Dst                   string `json:"dst"`
+	ConfirmExecutableWrite bool   `json:"confirm_executable_write,omitempty"`
+	ConfirmSensitive      bool   `json:"confirm_sensitive,omitempty"`
+}
+
+// FileRenameResponse is the agent's response to `file_rename`.
+//
+//	src   — echoed source path.
+//	dst   — echoed destination path.
+//	error — agent error struct present on failure.
+type FileRenameResponse struct {
+	Src   string     `json:"src"`
+	Dst   string     `json:"dst"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_delete  (P2)
+// ---------------------------------------------------------------------------
+
+// FileDeleteRequest is the POST body for the `file_delete` command.
+//
+// The CP checks the typed confirm token AND PermSiteFilesDelete (owner) before
+// issuing this command. The agent independently enforces its own path-jail and
+// protected-root guards.
+//
+//	path      — site-relative path to delete.
+//	recursive — when true, delete a non-empty directory and all its contents.
+//	            When false, the agent refuses to delete a non-empty directory
+//	            (returns error_code="not_directory" / "exists").
+type FileDeleteRequest struct {
+	Path      string `json:"path"`
+	Recursive bool   `json:"recursive,omitempty"`
+}
+
+// FileDeleteResponse is the agent's response to `file_delete`.
+//
+//	path    — echoed path.
+//	deleted — number of filesystem entries removed (1 for a file; ≥1 for
+//	          a recursive directory removal).
+//	error   — agent error struct present on failure.
+type FileDeleteResponse struct {
+	Path    string     `json:"path"`
+	Deleted int        `json:"deleted"`
+	Error   *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_chmod  (P2)
+// ---------------------------------------------------------------------------
+
+// FileChmodRequest is the POST body for the `file_chmod` command.
+//
+// The agent MUST validate mode against a safe allowlist — no setuid (4xxx),
+// no setgid (2xxx), no sticky-on-file (1xxx for files), no world-write (?x2).
+// Refuse modes that would make the target world-writable.
+//
+//	path — site-relative path.
+//	mode — 4-digit octal string, e.g. "0644" or "0755".
+type FileChmodRequest struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+}
+
+// FileChmodResponse is the agent's response to `file_chmod`.
+//
+//	path  — echoed path.
+//	mode  — effective mode after the chmod (echoed back).
+//	error — agent error struct present on failure.
+type FileChmodResponse struct {
+	Path  string     `json:"path"`
+	Mode  string     `json:"mode"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_upload_apply  (P2)
+// ---------------------------------------------------------------------------
+
+// FileUploadPresignedGet is one presigned GET slot the CP has minted for the
+// agent to fetch a staged upload chunk from object storage.
+//
+//	index — zero-based part index.
+//	url   — S3 presigned GET URL. Short-lived (≤5 min TTL). Single-use.
+type FileUploadPresignedGet struct {
+	Index int    `json:"index"`
+	URL   string `json:"url"`
+}
+
+// FileUploadApplyRequest is the POST body for the `file_upload_apply` command.
+//
+// The agent fetches each chunk from the presigned GET URLs, reassembles them
+// in order into a temp file, validates the SHA-256 digest, and atomic-swaps
+// the temp file into the target path (same FilesRestorer swap primitive used
+// by restore).
+//
+//	path                     — site-relative target path (containment-guarded).
+//	presigned_gets           — the CP-minted presigned GET slots for each chunk.
+//	part_count               — total number of chunks (must match len(presigned_gets)).
+//	total_size               — expected assembled size in bytes (agent verifies before swap).
+//	sha256                   — hex-encoded SHA-256 of the assembled content (agent verifies
+//	                           before swap; mismatch → "write_failed").
+//	confirm_executable_write — must be true when the target path matches the
+//	                           executable-extension deny-list or is inside a
+//	                           PHP-executable directory.  Absent / false → agent
+//	                           returns error_code="executable_write_denied".  The CP
+//	                           must also verify PermSiteFilesWriteCode (owner) before
+//	                           setting this field; a non-owner caller is rejected at the
+//	                           CP before any agent call is issued.
+//	confirm_sensitive        — must be true when the target path matches the
+//	                           sensitive-file deny-list (wp-config.php, .env*, …).
+//	                           Absent / false → agent returns "sensitive_denied".
+//	                           The CP must also verify PermSiteFilesWriteCode (owner).
+type FileUploadApplyRequest struct {
+	Path                   string                   `json:"path"`
+	PresignedGets          []FileUploadPresignedGet  `json:"presigned_gets"`
+	PartCount              int                      `json:"part_count"`
+	TotalSize              int64                    `json:"total_size"`
+	SHA256                 string                   `json:"sha256"`
+	ConfirmExecutableWrite bool                     `json:"confirm_executable_write,omitempty"`
+	ConfirmSensitive       bool                     `json:"confirm_sensitive,omitempty"`
+}
+
+// FileUploadApplyResponse is the agent's response to `file_upload_apply`.
+//
+//	path  — echoed resolved path.
+//	size  — bytes written (should match total_size).
+//	mtime — last-modified time after the swap (Unix epoch seconds).
+//	error — agent error struct present on failure.
+type FileUploadApplyResponse struct {
+	Path  string     `json:"path"`
+	Size  int64      `json:"size"`
+	Mtime int64      `json:"mtime"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
 // Agent error envelope
 // ---------------------------------------------------------------------------
 
@@ -203,14 +421,38 @@ type FileDownloadPrepareResponse struct {
 //
 // Error codes:
 //
-//	invalid_path    — the path is malformed (empty, NUL byte, etc.).
-//	outside_root    — the resolved path escapes the configured root jail.
-//	not_found       — the path does not exist on the filesystem.
-//	not_readable    — the agent process cannot read the path.
-//	is_directory    — the path is a directory (unexpected for file_read).
-//	too_large       — the file exceeds the per-command byte cap.
+// P1 (read) codes:
+//
+//	invalid_path     — the path is malformed (empty, NUL byte, etc.).
+//	outside_root     — the resolved path escapes the configured root jail.
+//	not_found        — the path does not exist on the filesystem.
+//	not_readable     — the agent process cannot read the path.
+//	is_directory     — the path is a directory (unexpected for file_read).
+//	too_large        — the file exceeds the per-command byte cap.
 //	sensitive_denied — the path matches the sensitive-file deny-list and
 //	                   confirm_sensitive was absent / false.
+//
+// P2 (write) codes:
+//
+//	executable_write_denied — the target path or destination name matches the
+//	                          executable-extension deny-list (php, phar, asp,
+//	                          jsp, cgi, htaccess, …) or is inside a web-served
+//	                          PHP-executable directory, and confirm_executable_write
+//	                          was absent / false.  CP maps to 403.
+//	protected_root          — the path targets a protected directory (wp-admin,
+//	                          wp-includes) without an explicit override.  CP maps
+//	                          to 403.
+//	mode_denied             — the requested mode is unsafe (setuid/world-write).
+//	                          CP maps to 400.
+//	exists                  — the destination already exists (file_mkdir or
+//	                          file_rename when overwrite not permitted).  CP
+//	                          maps to 409.
+//	not_directory           — the path is not a directory (file_delete
+//	                          non-recursive on a non-empty dir).  CP maps to 400.
+//	base_unresolved         — the write base could not be resolved to a real
+//	                          path (empty-base guard, T3).  CP maps to 500.
+//	write_failed            — the atomic-write / swap failed (temp-write error,
+//	                          SHA-256 mismatch, disk full).  CP maps to 502.
 type FileError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

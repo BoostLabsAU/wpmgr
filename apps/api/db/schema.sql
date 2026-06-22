@@ -3105,7 +3105,12 @@ CREATE POLICY site_vulnerabilities_agent ON site_vulnerabilities
 CREATE TABLE IF NOT EXISTS site_file_manager (
     site_id        uuid PRIMARY KEY,
     tenant_id      uuid NOT NULL,
-    files_enabled  boolean NOT NULL DEFAULT false,
+    files_enabled       boolean NOT NULL DEFAULT false,
+    -- files_write_enabled is the SEPARATE P2 opt-in for write operations.
+    -- Both files_enabled AND files_write_enabled must be true before the CP
+    -- will sign any file_write / file_mkdir / file_rename / file_delete /
+    -- file_chmod / file_upload_apply command.  Default: false.
+    files_write_enabled boolean NOT NULL DEFAULT false,
     root_jail      text NOT NULL DEFAULT '',
     created_at     timestamptz NOT NULL DEFAULT now(),
     updated_at     timestamptz NOT NULL DEFAULT now(),

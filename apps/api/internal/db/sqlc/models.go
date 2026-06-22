@@ -730,12 +730,13 @@ type SiteEvent struct {
 }
 
 type SiteFileManager struct {
-	SiteID       uuid.UUID `json:"site_id"`
-	TenantID     uuid.UUID `json:"tenant_id"`
-	FilesEnabled bool      `json:"files_enabled"`
-	RootJail     string    `json:"root_jail"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	SiteID            uuid.UUID `json:"site_id"`
+	TenantID          uuid.UUID `json:"tenant_id"`
+	FilesEnabled      bool      `json:"files_enabled"`
+	FilesWriteEnabled bool      `json:"files_write_enabled"`
+	RootJail          string    `json:"root_jail"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type SiteObjectCacheConfig struct {

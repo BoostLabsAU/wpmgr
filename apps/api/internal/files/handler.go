@@ -38,20 +38,27 @@ func NewHandler(svc *Service, rec *audit.Recorder) *Handler {
 func (h *Handler) Register(r *gin.RouterGroup) {
 	g := r.Group("/sites/:siteId", authz.RequireSiteAccess("siteId"))
 
-	// GET /sites/:siteId/files/settings — read the enable flag (any site member)
+	// P1: Settings
 	g.GET("/files/settings", h.getSettings)
-
-	// PUT /sites/:siteId/files/settings — toggle the enable flag (admin+)
 	g.PUT("/files/settings", authz.RequirePermission(authz.PermSiteFilesManage), h.putSettings)
 
-	// GET /sites/:siteId/files — list a directory (?path=&cursor=)
+	// P1: Read-only
 	g.GET("/files", authz.RequirePermission(authz.PermSiteFilesRead), h.listDir)
-
-	// GET /sites/:siteId/files/content — read a small file inline (?path=&confirm_sensitive=true)
 	g.GET("/files/content", authz.RequirePermission(authz.PermSiteFilesRead), h.readContent)
-
-	// POST /sites/:siteId/files/download — stage a file and return a presigned GET URL
 	g.POST("/files/download", authz.RequirePermission(authz.PermSiteFilesRead), h.download)
+
+	// P2: Write (all require PermSiteFilesWrite + files_write_enabled flag)
+	g.PUT("/files/content", authz.RequirePermission(authz.PermSiteFilesWrite), h.writeContent)
+	g.POST("/files/mkdir", authz.RequirePermission(authz.PermSiteFilesWrite), h.mkdir)
+	g.POST("/files/rename", authz.RequirePermission(authz.PermSiteFilesWrite), h.rename)
+	g.POST("/files/chmod", authz.RequirePermission(authz.PermSiteFilesWrite), h.chmod)
+
+	// P2: Delete — requires BOTH PermSiteFilesWrite AND PermSiteFilesDelete (owner)
+	g.POST("/files/delete", authz.RequirePermission(authz.PermSiteFilesWrite), h.deleteFile)
+
+	// P2: Upload — two-step: prepare (mints presigned PUTs) + apply (agent fetches + swaps)
+	g.POST("/files/upload", authz.RequirePermission(authz.PermSiteFilesWrite), h.prepareUpload)
+	g.POST("/files/upload/apply", authz.RequirePermission(authz.PermSiteFilesWrite), h.applyUpload)
 }
 
 // ---------------------------------------------------------------------------
@@ -75,8 +82,9 @@ func (h *Handler) getSettings(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"enabled":   settings.Enabled,
-		"root_jail": settings.RootJail,
+		"enabled":       settings.Enabled,
+		"write_enabled": settings.WriteEnabled,
+		"root_jail":     settings.RootJail,
 	})
 }
 
@@ -86,13 +94,15 @@ func (h *Handler) getSettings(c *gin.Context) {
 
 // updateSettingsBody is the request body for PUT /files/settings.
 type updateSettingsBody struct {
-	// Enabled enables or disables the file manager for the site.
+	// Enabled enables or disables the file manager (read) for the site.
 	Enabled bool `json:"enabled"`
+	// WriteEnabled enables or disables the write mode (P2). Separate opt-in
+	// so read and write can be toggled independently. Default false.
+	WriteEnabled bool `json:"write_enabled"`
 }
 
-// putSettings enables or disables the file manager for the site.
-// Requires PermSiteFilesManage (admin+). Records an audit entry on every
-// change (both enable and disable).
+// putSettings enables or disables the file manager and/or the write mode.
+// Requires PermSiteFilesManage (admin+). Records an audit entry on every call.
 func (h *Handler) putSettings(c *gin.Context) {
 	p, _ := domain.PrincipalFromContext(c.Request.Context())
 	siteID, ok := parseSiteID(c)
@@ -106,19 +116,21 @@ func (h *Handler) putSettings(c *gin.Context) {
 		return
 	}
 
-	settings, err := h.svc.UpdateSettings(c.Request.Context(), p.TenantID, siteID, body.Enabled)
+	settings, err := h.svc.UpdateSettings(c.Request.Context(), p.TenantID, siteID, body.Enabled, body.WriteEnabled)
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
 
 	h.record(c, p, ActionSiteFilesSettingsChanged, siteID, map[string]any{
-		"enabled": settings.Enabled,
+		"enabled":       settings.Enabled,
+		"write_enabled": settings.WriteEnabled,
 	})
 
 	c.JSON(http.StatusOK, gin.H{
-		"enabled":   settings.Enabled,
-		"root_jail": settings.RootJail,
+		"enabled":       settings.Enabled,
+		"write_enabled": settings.WriteEnabled,
+		"root_jail":     settings.RootJail,
 	})
 }
 
@@ -356,6 +368,524 @@ func (h *Handler) download(c *gin.Context) {
 		"size_bytes":   result.SizeBytes,
 		"chunk_count":  result.ChunkCount,
 		"expires_at":   result.ExpiresAt.UTC().Unix(),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: PUT /sites/:siteId/files/content  (write small text file)
+// ---------------------------------------------------------------------------
+
+// writeContentBody is the request body for PUT /files/content.
+type writeContentBody struct {
+	// Path is the site-relative file path to create or overwrite (required).
+	Path string `json:"path"`
+	// ContentBase64 is the base64-encoded file content (≤ 256 KiB).
+	ContentBase64 string `json:"content_base64"`
+	// ConfirmExecutableWrite must be true when the target path matches the
+	// executable-extension deny-list or is inside a PHP-executable web dir.
+	// Requires PermSiteFilesWriteCode (owner) — rejected otherwise.
+	ConfirmExecutableWrite bool `json:"confirm_executable_write"`
+	// ConfirmSensitive must be true when the target path matches the
+	// sensitive-file deny-list. Also requires PermSiteFilesWriteCode (owner).
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// writeContent creates or overwrites a small text file on the site.
+// Elevated guards (T1/T6): if confirm_executable_write or confirm_sensitive is
+// set, the caller must additionally hold PermSiteFilesWriteCode (owner).
+func (h *Handler) writeContent(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body writeContentBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path is required"))
+		return
+	}
+
+	// Elevated-permission gate: executable/sensitive writes require owner.
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			reason := "executable"
+			if body.ConfirmSensitive {
+				reason = "sensitive"
+			}
+			h.record(c, p, ActionSiteFilesWriteCodeDenied, siteID, map[string]any{
+				"op":     "write",
+				"path":   body.Path,
+				"reason": reason,
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"writing executable or sensitive files requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.WriteFile(c.Request.Context(), p.TenantID, siteID, body.Path, body.ContentBase64, body.ConfirmExecutableWrite, body.ConfirmSensitive)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Record elevated audit for executable/sensitive writes (T1/T6).
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		reason := "executable"
+		if body.ConfirmSensitive {
+			reason = "sensitive"
+		}
+		h.record(c, p, ActionSiteFilesWriteCode, siteID, map[string]any{
+			"op":     "write",
+			"path":   result.Path,
+			"size":   result.Size,
+			"reason": reason,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesWrite, siteID, map[string]any{
+			"path": result.Path,
+			"size": result.Size,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":  result.Path,
+		"size":  result.Size,
+		"mtime": result.Mtime,
+		"mode":  result.Mode,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/mkdir
+// ---------------------------------------------------------------------------
+
+// mkdirBody is the request body for POST /files/mkdir.
+type mkdirBody struct {
+	Path string `json:"path"`
+}
+
+// mkdir creates a directory on the site.
+func (h *Handler) mkdir(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body mkdirBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path is required"))
+		return
+	}
+
+	result, err := h.svc.Mkdir(c.Request.Context(), p.TenantID, siteID, body.Path)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	h.record(c, p, ActionSiteFilesMkdir, siteID, map[string]any{
+		"path": result.Path,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"path": result.Path,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/rename
+// ---------------------------------------------------------------------------
+
+// renameBody is the request body for POST /files/rename.
+type renameBody struct {
+	Src                   string `json:"src"`
+	Dst                   string `json:"dst"`
+	ConfirmExecutableWrite bool   `json:"confirm_executable_write"`
+	ConfirmSensitive      bool   `json:"confirm_sensitive"`
+}
+
+// rename renames or moves a file/directory within the jail.
+// Elevated-permission gate mirrors writeContent.
+func (h *Handler) rename(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body renameBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Src == "" || body.Dst == "" {
+		httpx.Error(c, domain.Validation("missing_path", "src and dst are required"))
+		return
+	}
+
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			reason := "executable"
+			if body.ConfirmSensitive {
+				reason = "sensitive"
+			}
+			h.record(c, p, ActionSiteFilesWriteCodeDenied, siteID, map[string]any{
+				"op":     "rename",
+				"src":    body.Src,
+				"dst":    body.Dst,
+				"reason": reason,
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"renaming to an executable or sensitive path requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.Rename(c.Request.Context(), p.TenantID, siteID, body.Src, body.Dst, body.ConfirmExecutableWrite, body.ConfirmSensitive)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		reason := "executable"
+		if body.ConfirmSensitive {
+			reason = "sensitive"
+		}
+		h.record(c, p, ActionSiteFilesWriteCode, siteID, map[string]any{
+			"op":     "rename",
+			"src":    result.Src,
+			"dst":    result.Dst,
+			"reason": reason,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesRename, siteID, map[string]any{
+			"src": result.Src,
+			"dst": result.Dst,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"src": result.Src,
+		"dst": result.Dst,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/delete
+// ---------------------------------------------------------------------------
+
+// deleteFileBody is the request body for POST /files/delete.
+type deleteFileBody struct {
+	// Path is the site-relative path to delete (required).
+	Path string `json:"path"`
+	// Recursive, when true, deletes a non-empty directory and all contents.
+	Recursive bool `json:"recursive"`
+	// Confirm must be exactly "DELETE" — the typed confirmation token (T12/T13).
+	Confirm string `json:"confirm"`
+}
+
+// deleteFile deletes a file or directory.
+// Security gates:
+//  1. PermSiteFilesWrite (admin+) — inherited from route middleware.
+//  2. PermSiteFilesDelete (owner) — checked here; denial is audited.
+//  3. confirm="DELETE" — typed token; missing → 400 with clear code.
+func (h *Handler) deleteFile(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body deleteFileBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path is required"))
+		return
+	}
+
+	// Gate 1: typed confirm token (T12/T13).
+	if body.Confirm != "DELETE" {
+		h.record(c, p, ActionSiteFilesDeleteDenied, siteID, map[string]any{
+			"path":   body.Path,
+			"reason": "confirm_token_missing",
+		})
+		httpx.Error(c, domain.Validation("confirm_required",
+			`delete requires confirm="DELETE" in the request body`))
+		return
+	}
+
+	// Gate 2: owner permission required (PermSiteFilesDelete).
+	if !h.allows(c, authz.PermSiteFilesDelete) {
+		h.record(c, p, ActionSiteFilesDeleteDenied, siteID, map[string]any{
+			"path":   body.Path,
+			"reason": "insufficient_permission",
+		})
+		httpx.Error(c, domain.Forbidden("insufficient_permission",
+			"deleting files requires owner-level permission"))
+		return
+	}
+
+	result, err := h.svc.Delete(c.Request.Context(), p.TenantID, siteID, body.Path, body.Recursive)
+	if err != nil {
+		h.record(c, p, ActionSiteFilesDeleteDenied, siteID, map[string]any{
+			"path":   body.Path,
+			"reason": err.Error(),
+		})
+		httpx.Error(c, err)
+		return
+	}
+
+	h.record(c, p, ActionSiteFilesDelete, siteID, map[string]any{
+		"path":      result.Path,
+		"recursive": body.Recursive,
+		"deleted":   result.Deleted,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":    result.Path,
+		"deleted": result.Deleted,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/chmod
+// ---------------------------------------------------------------------------
+
+// chmodBody is the request body for POST /files/chmod.
+type chmodBody struct {
+	Path string `json:"path"`
+	Mode string `json:"mode"`
+}
+
+// chmod sets the permission mode of a file or directory.
+// The agent validates the mode against a safe allowlist (no setuid, no world-write).
+func (h *Handler) chmod(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body chmodBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" || body.Mode == "" {
+		httpx.Error(c, domain.Validation("missing_field", "path and mode are required"))
+		return
+	}
+
+	result, err := h.svc.Chmod(c.Request.Context(), p.TenantID, siteID, body.Path, body.Mode)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	h.record(c, p, ActionSiteFilesChmod, siteID, map[string]any{
+		"path": result.Path,
+		"mode": result.Mode,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"path": result.Path,
+		"mode": result.Mode,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/upload  (prepare — mint presigned PUTs)
+// ---------------------------------------------------------------------------
+
+// prepareUploadBody is the request body for POST /files/upload.
+type prepareUploadBody struct {
+	// Path is the site-relative target path for the uploaded file (required).
+	Path string `json:"path"`
+	// PartCount is the number of chunks the browser will PUT. Must be 1–32.
+	// Default: 1 (single-chunk for files ≤ 5 MiB).
+	PartCount int `json:"part_count"`
+	// ConfirmExecutableWrite must be true when Path matches the executable-
+	// extension deny-list. Requires PermSiteFilesWriteCode (owner).
+	ConfirmExecutableWrite bool `json:"confirm_executable_write"`
+	// ConfirmSensitive must be true when Path matches the sensitive-file
+	// deny-list. Requires PermSiteFilesWriteCode (owner).
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// prepareUpload mints presigned S3 PUT URLs for the browser to push chunks.
+// The browser PUTs the chunks, then calls /files/upload/apply to trigger the
+// agent to fetch, reassemble, validate, and atomic-swap the file into place.
+func (h *Handler) prepareUpload(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body prepareUploadBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path is required"))
+		return
+	}
+	if body.PartCount < 1 {
+		body.PartCount = 1
+	}
+
+	// Elevated-permission gate for executable/sensitive target paths.
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			reason := "executable"
+			if body.ConfirmSensitive {
+				reason = "sensitive"
+			}
+			h.record(c, p, ActionSiteFilesWriteCodeDenied, siteID, map[string]any{
+				"op":     "upload_prepare",
+				"path":   body.Path,
+				"reason": reason,
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"uploading to an executable or sensitive path requires owner-level permission"))
+			return
+		}
+	}
+
+	createdBy := p.GetUserID()
+	result, err := h.svc.PrepareUpload(c.Request.Context(), p.TenantID, siteID, body.Path, body.PartCount, createdBy)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Return the presigned PUTs to the browser. Never log the URLs (T8).
+	puts := make([]map[string]any, len(result.PresignedPuts))
+	for i, pt := range result.PresignedPuts {
+		puts[i] = map[string]any{
+			"index": pt.Index,
+			"url":   pt.URL,
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":             true,
+		"transfer_id":    result.TransferID.String(),
+		"object_key":     result.ObjectKey,
+		"presigned_puts": puts,
+		"expires_at":     result.ExpiresAt.UTC().Unix(),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P2: POST /sites/:siteId/files/upload/apply  (apply staged upload)
+// ---------------------------------------------------------------------------
+
+// applyUploadBody is the request body for POST /files/upload/apply.
+type applyUploadBody struct {
+	// Path is the site-relative target path (must match the prepare call).
+	Path string `json:"path"`
+	// ObjectKey is the S3 staging key prefix returned by the prepare step.
+	ObjectKey string `json:"object_key"`
+	// PartCount is the number of chunks staged (must match the prepare call).
+	PartCount int `json:"part_count"`
+	// TotalSize is the expected assembled file size in bytes.
+	TotalSize int64 `json:"total_size"`
+	// SHA256 is the hex-encoded SHA-256 of the assembled file content.
+	// The agent validates this after reassembly before the atomic swap.
+	SHA256 string `json:"sha256"`
+	// ConfirmExecutableWrite mirrors the prepare call (passed to the agent).
+	ConfirmExecutableWrite bool `json:"confirm_executable_write"`
+	// ConfirmSensitive mirrors the prepare call (passed to the agent).
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// applyUpload mints presigned GET URLs for the staged chunks and issues
+// file_upload_apply to the agent.
+func (h *Handler) applyUpload(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body applyUploadBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" || body.ObjectKey == "" || body.SHA256 == "" {
+		httpx.Error(c, domain.Validation("missing_field", "path, object_key, and sha256 are required"))
+		return
+	}
+	if body.PartCount < 1 {
+		body.PartCount = 1
+	}
+
+	// Elevated-permission gate mirrors the prepare step.
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			reason := "executable"
+			if body.ConfirmSensitive {
+				reason = "sensitive"
+			}
+			h.record(c, p, ActionSiteFilesWriteCodeDenied, siteID, map[string]any{
+				"op":     "upload_apply",
+				"path":   body.Path,
+				"reason": reason,
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"uploading to an executable or sensitive path requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.ApplyUpload(c.Request.Context(), p.TenantID, siteID, body.Path, body.ObjectKey, body.SHA256, body.PartCount, body.TotalSize, body.ConfirmExecutableWrite, body.ConfirmSensitive)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Elevated audit for executable/sensitive uploads.
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		reason := "executable"
+		if body.ConfirmSensitive {
+			reason = "sensitive"
+		}
+		h.record(c, p, ActionSiteFilesWriteCode, siteID, map[string]any{
+			"op":         "upload",
+			"path":       result.Path,
+			"size_bytes": result.Size,
+			"reason":     reason,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesUpload, siteID, map[string]any{
+			"path":       result.Path,
+			"size_bytes": result.Size,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":    true,
+		"path":  result.Path,
+		"size":  result.Size,
+		"mtime": result.Mtime,
 	})
 }
 

@@ -207,6 +207,24 @@ type Handler interface {
 	//
 	// POST /agent/v1/metadata
 	AgentMetadata(ctx context.Context, req *AgentMetadata) (AgentMetadataRes, error)
+	// ApplySiteFileUpload implements applySiteFileUpload operation.
+	//
+	// Step 2 of 2 for browser file upload. After the browser has PUT all
+	// chunks to the presigned S3 URLs returned by `prepareSiteFileUpload`,
+	// this endpoint:
+	// 1. Mints presigned S3 GET URLs for each staged chunk.
+	// 2. Issues `file_upload_apply` to the agent, which fetches all chunks,
+	// reassembles them in order, validates the SHA-256 digest, and
+	// atomic-swaps the assembled file into the target path (same
+	// FilesRestorer swap primitive used by restore).
+	// The agent returns `400 write_failed` when the SHA-256 digest does not
+	// match. The caller should retry the full upload in that case.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// **Executable/sensitive gate:** Same as `prepareSiteFileUpload`.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/upload/apply
+	ApplySiteFileUpload(ctx context.Context, req *ApplyUploadRequest, params ApplySiteFileUploadParams) (ApplySiteFileUploadRes, error)
 	// ArchiveSite implements archiveSite operation.
 	//
 	// M21 / ADR-041 — operator action. Transitions the site to `archived`
@@ -301,6 +319,16 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/media/cancel
 	CancelMedia(ctx context.Context, params CancelMediaParams) (*CancelMediaOK, error)
+	// ChmodSiteFile implements chmodSiteFile operation.
+	//
+	// Issues a `file_chmod` command to the site's agent. The agent validates
+	// the mode against a safe allowlist — no setuid (4xxx), no setgid (2xxx),
+	// no world-write; returns `400 mode_denied` for unsafe modes.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/chmod
+	ChmodSiteFile(ctx context.Context, req *FileChmodRequest, params ChmodSiteFileParams) (ChmodSiteFileRes, error)
 	// CleanDatabase implements cleanDatabase operation.
 	//
 	// Runs the site's configured database cleanup (revisions, auto-drafts,
@@ -434,6 +462,15 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/destinations
 	CreateSiteDestination(ctx context.Context, req *SiteDestinationCreate, params CreateSiteDestinationParams) (CreateSiteDestinationRes, error)
+	// CreateSiteDirectory implements createSiteDirectory operation.
+	//
+	// Issues a `file_mkdir` command to the site's agent.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// Returns `403 files_write_not_enabled` when write mode is off.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/mkdir
+	CreateSiteDirectory(ctx context.Context, req *FileMkdirRequest, params CreateSiteDirectoryParams) (CreateSiteDirectoryRes, error)
 	// CreateSiteShare implements createSiteShare operation.
 	//
 	// Grant site access to an email (admin+; org-scope only). If the email
@@ -555,6 +592,23 @@ type Handler interface {
 	//
 	// DELETE /api/v1/sites/{siteId}/email/suppression/{suppressionId}
 	DeleteSiteEmailSuppression(ctx context.Context, params DeleteSiteEmailSuppressionParams) (DeleteSiteEmailSuppressionRes, error)
+	// DeleteSiteFile implements deleteSiteFile operation.
+	//
+	// Issues a `file_delete` command to the site's agent after verifying
+	// three layered gates (T12/T13):
+	// 1. **PermSiteFilesWrite** (admin+) — inherited from route middleware.
+	// 2. **PermSiteFilesDelete** (owner) — checked in the handler; denial is
+	// audited with action `site.files.delete.denied`.
+	// 3. **Typed confirm token** — `confirm` in the request body must be the
+	// string `"DELETE"` exactly. Missing or wrong value returns
+	// `400 confirm_required`.
+	// The agent independently enforces its protected-root guard (`wp-admin`,
+	// `wp-includes`).
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// Requires `site.files.write` + `site.files.delete` (owner only).
+	//
+	// POST /api/v1/sites/{siteId}/files/delete
+	DeleteSiteFile(ctx context.Context, req *FileDeleteRequest, params DeleteSiteFileParams) (DeleteSiteFileRes, error)
 	// DeleteSiteShare implements deleteSiteShare operation.
 	//
 	// Revoke a collaborator's site access (admin+; org-scope only).
@@ -1497,6 +1551,25 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/files/download
 	PrepareSiteFileDownload(ctx context.Context, req *FileDownloadRequest, params PrepareSiteFileDownloadParams) (PrepareSiteFileDownloadRes, error)
+	// PrepareSiteFileUpload implements prepareSiteFileUpload operation.
+	//
+	// Step 1 of 2 for browser file upload. The CP mints short-lived presigned
+	// S3 PUT URLs in the tenant-namespaced staging area and returns them to
+	// the browser. The browser PUTs each chunk directly to S3 (never through
+	// the CP). After all chunks are staged, the caller invokes
+	// `POST /files/upload/apply` to have the agent fetch, reassemble,
+	// validate (SHA-256), and atomic-swap the file into place.
+	// Presigned PUT URLs are **never logged** (T8). TTL is ≤ 5 minutes.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+	// `confirm_executable_write` or `confirm_sensitive` is set, owner
+	// permission (`site.files.write_code`) is required.
+	// Returns `503 storage_not_configured` on self-hosted deployments without
+	// object storage.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/upload
+	PrepareSiteFileUpload(ctx context.Context, req *PrepareUploadRequest, params PrepareSiteFileUploadParams) (PrepareSiteFileUploadRes, error)
 	// PurgeCache implements purgeCache operation.
 	//
 	// Purges the whole cache (`scope: all`), a single URL (`scope: url` with
@@ -1730,6 +1803,19 @@ type Handler interface {
 	//
 	// DELETE /api/v1/clients/{clientId}/members/{userId}
 	RemoveClientMember(ctx context.Context, params RemoveClientMemberParams) (RemoveClientMemberRes, error)
+	// RenameSiteFile implements renameSiteFile operation.
+	//
+	// Issues a `file_rename` command to the site's agent. Both `src` and `dst`
+	// are containment-checked by the agent; escaping the jail on either path
+	// returns `400 outside_root`.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+	// **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+	// `confirm_executable_write` or `confirm_sensitive` is set, owner
+	// permission (`site.files.write_code`) is required.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/rename
+	RenameSiteFile(ctx context.Context, req *FileRenameRequest, params RenameSiteFileParams) (RenameSiteFileRes, error)
 	// ResendEmailLog implements resendEmailLog operation.
 	//
 	// Dispatches the `resend_email` agent command for the given log entry.
@@ -1976,7 +2062,9 @@ type Handler interface {
 	// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
 	// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
 	// An audit entry (`site.files.settings.changed`) is recorded on every call,
-	// capturing the resulting `enabled` state.
+	// capturing the resulting `enabled` and `write_enabled` state.
+	// `root_jail` is read-only in P1/P2 (always `""`) — the agent defaults to
+	// the site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
 	// Requires `site.files.manage` permission (admin+).
 	//
 	// PUT /api/v1/sites/{siteId}/files/settings
@@ -2006,6 +2094,27 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/activity/verify
 	VerifySiteActivity(ctx context.Context, params VerifySiteActivityParams) (*ActivityVerifyResult, error)
+	// WriteSiteFileContent implements writeSiteFileContent operation.
+	//
+	// Issues a `file_write` command to the site's agent. The agent writes the
+	// content atomically (temp-write → rename swap) to the resolved path.
+	// **Write-enabled gate:** The site must have both `enabled=true` AND
+	// `write_enabled=true` in its file manager settings. Returns
+	// `403 files_write_not_enabled` when write mode is off.
+	// **Executable-write gate (T1):** When `confirm_executable_write=true` is
+	// set in the request body, the caller must additionally hold
+	// `site.files.write_code` (owner). If an admin-level caller passes
+	// `confirm_executable_write=true`, the request is rejected with
+	// `403 insufficient_permission` and the denial is audited at elevated
+	// severity. The agent independently enforces its executable deny-list
+	// regardless.
+	// **Sensitive-file gate (T6):** Same as above for `confirm_sensitive=true`
+	// — requires owner (`site.files.write_code`) and is audited at elevated
+	// severity on both success and denial.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// PUT /api/v1/sites/{siteId}/files/content
+	WriteSiteFileContent(ctx context.Context, req *WriteFileContentRequest, params WriteSiteFileContentParams) (WriteSiteFileContentRes, error)
 }
 
 // Server implements http server based on OpenAPI v3 specification and

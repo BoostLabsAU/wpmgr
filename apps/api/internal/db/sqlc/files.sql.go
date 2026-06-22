@@ -15,7 +15,7 @@ import (
 const getSiteFileManager = `-- name: GetSiteFileManager :one
 
 
-SELECT site_id, tenant_id, files_enabled, root_jail, created_at, updated_at FROM site_file_manager
+SELECT site_id, tenant_id, files_enabled, files_write_enabled, root_jail, created_at, updated_at FROM site_file_manager
 WHERE site_id = $1
 `
 
@@ -33,6 +33,7 @@ func (q *Queries) GetSiteFileManager(ctx context.Context, siteID uuid.UUID) (Sit
 		&i.SiteID,
 		&i.TenantID,
 		&i.FilesEnabled,
+		&i.FilesWriteEnabled,
 		&i.RootJail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -82,6 +83,47 @@ func (q *Queries) InsertFileTransfer(ctx context.Context, arg InsertFileTransfer
 		arg.Status,
 		arg.ObjectKey,
 		arg.SizeBytes,
+		arg.ChunkCount,
+		arg.CreatedBy,
+		arg.ExpiresAt,
+	)
+	return err
+}
+
+const insertUploadTransfer = `-- name: InsertUploadTransfer :exec
+INSERT INTO file_transfers (
+    id, tenant_id, site_id,
+    direction, rel_path, status,
+    object_key, size_bytes, chunk_count,
+    created_by, expires_at
+) VALUES (
+    $1, $2, $3,
+    'upload', $4, 'staged',
+    $5, 0, $6,
+    $7, $8
+)
+`
+
+type InsertUploadTransferParams struct {
+	ID         uuid.UUID `json:"id"`
+	TenantID   uuid.UUID `json:"tenant_id"`
+	SiteID     uuid.UUID `json:"site_id"`
+	RelPath    string    `json:"rel_path"`
+	ObjectKey  string    `json:"object_key"`
+	ChunkCount int32     `json:"chunk_count"`
+	CreatedBy  uuid.UUID `json:"created_by"`
+	ExpiresAt  time.Time `json:"expires_at"`
+}
+
+// Record an upload-direction file_transfers row created when the CP stages
+// chunks for a browser upload.
+func (q *Queries) InsertUploadTransfer(ctx context.Context, arg InsertUploadTransferParams) error {
+	_, err := q.db.Exec(ctx, insertUploadTransfer,
+		arg.ID,
+		arg.TenantID,
+		arg.SiteID,
+		arg.RelPath,
+		arg.ObjectKey,
 		arg.ChunkCount,
 		arg.CreatedBy,
 		arg.ExpiresAt,
@@ -164,5 +206,28 @@ type UpsertSiteFileManagerParams struct {
 // principal's tenant (belt-and-braces alongside the RLS policy).
 func (q *Queries) UpsertSiteFileManager(ctx context.Context, arg UpsertSiteFileManagerParams) error {
 	_, err := q.db.Exec(ctx, upsertSiteFileManager, arg.SiteID, arg.TenantID, arg.FilesEnabled)
+	return err
+}
+
+const upsertSiteFileManagerWrite = `-- name: UpsertSiteFileManagerWrite :exec
+INSERT INTO site_file_manager (
+    site_id, tenant_id, files_write_enabled, updated_at
+) VALUES (
+    $1, $2, $3, now()
+) ON CONFLICT (site_id) DO UPDATE SET
+    files_write_enabled = EXCLUDED.files_write_enabled,
+    updated_at          = now()
+`
+
+type UpsertSiteFileManagerWriteParams struct {
+	SiteID            uuid.UUID `json:"site_id"`
+	TenantID          uuid.UUID `json:"tenant_id"`
+	FilesWriteEnabled bool      `json:"files_write_enabled"`
+}
+
+// Insert-or-update the per-site write opt-in flag (P2). Separate from the
+// read opt-in so read and write can be toggled independently.
+func (q *Queries) UpsertSiteFileManagerWrite(ctx context.Context, arg UpsertSiteFileManagerWriteParams) error {
+	_, err := q.db.Exec(ctx, upsertSiteFileManagerWrite, arg.SiteID, arg.TenantID, arg.FilesWriteEnabled)
 	return err
 }

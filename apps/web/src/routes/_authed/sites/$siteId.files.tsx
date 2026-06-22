@@ -14,15 +14,17 @@ import { FileBrowser } from "@/features/files/FileBrowser";
 
 // `/sites/$siteId/files` — site-level file manager tab.
 //
-// This is a READ-ONLY browser (P1). Write/upload/delete are P2.
+// P2 (write mode) is controlled by two flags:
+//   - `enabled`: the feature is on (read browser visible).
+//   - `write_enabled`: write mode is on (edit/upload/delete affordances).
+//
+// Both flags are off by default per site. `write_enabled` requires `enabled`
+// to be true. The toggle for `write_enabled` lives in the browser toolbar
+// (admin+), keeping the read-only flow in FilesDisabledGate.
 //
 // Authorization: `site.files.read` = admin+ (enforced by the server).
 // Viewers and operators never see this tab — even if they reach the URL,
 // the backend returns 403.
-//
-// Settings gate: the feature is off by default per site (migration m82).
-// On load we fetch settings; if `enabled === false` we show FilesDisabledGate.
-// Admins see an Enable button; lower roles see a "contact admin" message.
 
 export const Route = createFileRoute("/_authed/sites/$siteId/files")({
   component: FilesTabRoute,
@@ -47,11 +49,26 @@ function FilesTabRoute() {
     updateSettings.mutate({ enabled: false });
   };
 
+  const handleToggleWrite = () => {
+    const current = settings.data?.write_enabled ?? false;
+    updateSettings.mutate({
+      enabled: true,
+      write_enabled: !current,
+    });
+  };
+
   return (
-    <section aria-label="File manager" className="space-y-4 px-4 pb-8 pt-6 sm:px-6">
+    <section
+      aria-label="File manager"
+      className="space-y-4 px-4 pb-8 pt-6 sm:px-6"
+    >
       <PageHeader
         title="Files"
-        subline="Read-only file browser. All access is audited."
+        subline={
+          settings.data?.write_enabled
+            ? "Write mode on. Edits, uploads, and deletions are live and audited."
+            : "Read-only file browser. All access is audited."
+        }
       />
 
       {settings.isPending ? (
@@ -68,8 +85,11 @@ function FilesTabRoute() {
           siteId={siteId}
           canManage={manage}
           isOwner={isOwner}
+          writeEnabled={settings.data.write_enabled}
           onDisable={handleDisable}
           isDisabling={updateSettings.isPending}
+          onToggleWrite={handleToggleWrite}
+          isTogglingWrite={updateSettings.isPending}
         />
       ) : (
         <FilesDisabledGate

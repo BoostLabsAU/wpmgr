@@ -19,6 +19,18 @@ func (s *AlertConfigUpdate) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *ApplyUploadRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.ConfirmExecutableWrite.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *BackupCreate) setDefaults() {
 	{
 		val := BackupCreateKind("full")
@@ -67,6 +79,26 @@ func (s *ClientReportSectionFlags) setDefaults() {
 	{
 		val := bool(false)
 		s.Email.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *FileDeleteRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.Recursive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *FileRenameRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.ConfirmExecutableWrite.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
 	}
 }
 
@@ -127,6 +159,22 @@ func (s *PerfConfig) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *PrepareUploadRequest) setDefaults() {
+	{
+		val := int(1)
+		s.PartCount.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmExecutableWrite.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *RestoreCreate) setDefaults() {
 	{
 		val := bool(false)
@@ -167,5 +215,17 @@ func (s *UpdateRunCreate) setDefaults() {
 	{
 		val := bool(false)
 		s.DryRun.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *WriteFileContentRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.ConfirmExecutableWrite.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
 	}
 }

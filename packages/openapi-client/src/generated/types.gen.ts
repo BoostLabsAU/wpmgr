@@ -5021,12 +5021,17 @@ export type FileDownloadResult = {
  */
 export type FileManagerSettings = {
   /**
-   * Whether the file manager is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).
+   * Whether the file manager read mode is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).
    *
    */
   enabled: boolean;
   /**
-   * The filesystem root the agent restricts all file operations to. Always `""` in P1 — the agent defaults to the site's `ABSPATH`. Reserved for future P2 configuration.
+   * Whether the file manager write mode is enabled for this site (P2). Separate opt-in from `enabled` so read and write can be toggled independently. Defaults to `false`. Both `enabled` AND `write_enabled` must be `true` before any write/delete/chmod/ mkdir/rename/upload command will be signed.
+   *
+   */
+  write_enabled: boolean;
+  /**
+   * The filesystem root the agent restricts all file operations to. Always `""` in P1/P2 — the agent defaults to the site's `ABSPATH`. Reserved for future P3 configuration.
    *
    */
   root_jail: string;
@@ -5037,9 +5042,288 @@ export type FileManagerSettings = {
  */
 export type UpdateFileManagerSettingsRequest = {
   /**
-   * Set to `true` to enable the file manager, `false` to disable it.
+   * Set to `true` to enable the file manager (read), `false` to disable it.
    */
   enabled: boolean;
+  /**
+   * Set to `true` to also enable write mode (P2). Defaults to `false` when omitted (the read flag is updated but write remains off).
+   *
+   */
+  write_enabled?: boolean;
+};
+
+/**
+ * Request body for `PUT /sites/{siteId}/files/content`.
+ */
+export type WriteFileContentRequest = {
+  /**
+   * Site-relative file path to create or overwrite.
+   */
+  path: string;
+  /**
+   * Base64-encoded file content (≤ 256 KiB).
+   */
+  content_base64: string;
+  /**
+   * Must be `true` when the target path matches the executable-extension deny-list (`.php`, `.phar`, `.htaccess`, etc.) or is inside a PHP-executable web directory. Requires owner permission (`site.files.write_code`). Absence causes a `403 executable_write_denied` from the agent.
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Must be `true` when the target path matches the sensitive-file deny-list (`wp-config.php`, `.env*`, `*.pem`, etc.). Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `PUT /sites/{siteId}/files/content`.
+ */
+export type WriteFileResult = {
+  /**
+   * Resolved path of the written file (echoed).
+   */
+  path: string;
+  /**
+   * Bytes written.
+   */
+  size: number;
+  /**
+   * Last-modified time after the write (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * 4-digit octal permission string, e.g. `"0644"`.
+   */
+  mode: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/mkdir`.
+ */
+export type FileMkdirRequest = {
+  /**
+   * Site-relative path for the new directory.
+   */
+  path: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/mkdir`.
+ */
+export type FileMkdirResult = {
+  /**
+   * Resolved path of the created directory (echoed).
+   */
+  path: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/rename`.
+ */
+export type FileRenameRequest = {
+  /**
+   * Site-relative source path (must exist).
+   */
+  src: string;
+  /**
+   * Site-relative destination path.
+   */
+  dst: string;
+  /**
+   * Required when `dst` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Required when either `src` or `dst` is a sensitive path. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/rename`.
+ */
+export type FileRenameResult = {
+  src: string;
+  dst: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/delete`.
+ */
+export type FileDeleteRequest = {
+  /**
+   * Site-relative path to delete.
+   */
+  path: string;
+  /**
+   * When `true`, recursively delete a non-empty directory and all its contents. When `false`, the agent refuses to delete a non-empty directory (returns `400 not_directory`).
+   *
+   */
+  recursive?: boolean;
+  /**
+   * Typed confirmation token — must be the string `"DELETE"` exactly. Missing or wrong value returns `400 confirm_required` without issuing the delete command to the agent.
+   *
+   */
+  confirm: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/delete`.
+ */
+export type FileDeleteResult = {
+  /**
+   * Echoed path that was deleted.
+   */
+  path: string;
+  /**
+   * Number of filesystem entries removed (1 for a file; ≥1 for a recursive directory removal).
+   *
+   */
+  deleted: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/chmod`.
+ */
+export type FileChmodRequest = {
+  /**
+   * Site-relative path.
+   */
+  path: string;
+  /**
+   * 4-digit octal permission string, e.g. `"0644"` or `"0755"`. The agent validates against a safe allowlist — no setuid, no setgid, no world-write.
+   *
+   */
+  mode: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/chmod`.
+ */
+export type FileChmodResult = {
+  path: string;
+  /**
+   * Effective mode after the chmod (echoed).
+   */
+  mode: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/upload`.
+ */
+export type PrepareUploadRequest = {
+  /**
+   * Site-relative target path for the uploaded file.
+   */
+  path: string;
+  /**
+   * Number of chunks the browser will PUT. Each chunk corresponds to one presigned S3 PUT URL. Use 1 for files ≤ 5 MiB; increase for larger files (max 32 × 5 MiB = 160 MiB total).
+   *
+   */
+  part_count?: number;
+  /**
+   * Required when `path` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Required when `path` matches the sensitive-file deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * One presigned S3 PUT slot returned by `prepareSiteFileUpload`.
+ */
+export type PrepareUploadPresignedPut = {
+  /**
+   * Zero-based chunk index.
+   */
+  index: number;
+  /**
+   * Presigned S3 PUT URL. Short TTL (≤ 5 min). Single-use. The browser PUTs the corresponding chunk bytes directly to this URL.
+   *
+   */
+  url: string;
+};
+
+/**
+ * Response body for `POST /sites/{siteId}/files/upload`.
+ */
+export type PrepareUploadResult = {
+  ok: boolean;
+  /**
+   * Opaque transfer ID — pass to `applySiteFileUpload` for audit.
+   */
+  transfer_id: string;
+  /**
+   * S3 key prefix for the staged chunks. Pass to `applySiteFileUpload` so the CP can mint presigned GETs for the agent.
+   *
+   */
+  object_key: string;
+  presigned_puts: Array<PrepareUploadPresignedPut>;
+  /**
+   * Unix epoch seconds when the presigned URLs expire (≤ 5 min from now).
+   */
+  expires_at: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/upload/apply`.
+ */
+export type ApplyUploadRequest = {
+  /**
+   * Site-relative target path (must match the prepare call).
+   */
+  path: string;
+  /**
+   * The `object_key` returned by `prepareSiteFileUpload`.
+   */
+  object_key: string;
+  /**
+   * Number of chunks staged (must match `part_count` from the prepare call).
+   */
+  part_count: number;
+  /**
+   * Expected assembled file size in bytes.
+   */
+  total_size: number;
+  /**
+   * Hex-encoded SHA-256 of the fully assembled file content. The agent validates this after reassembly and before the atomic swap; a mismatch returns `400 write_failed`.
+   *
+   */
+  sha256: string;
+  /**
+   * Mirrors the prepare call — required for executable target paths.
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Mirrors the prepare call — required for sensitive target paths.
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/upload/apply`.
+ */
+export type ApplyUploadResult = {
+  ok: boolean;
+  /**
+   * Resolved path of the written file (echoed).
+   */
+  path: string;
+  /**
+   * Bytes written (should match `total_size`).
+   */
+  size: number;
+  /**
+   * Last-modified time after the atomic swap (Unix epoch seconds).
+   */
+  mtime: number;
 };
 
 /**
@@ -12033,6 +12317,304 @@ export type ReadSiteFileContentResponses = {
 
 export type ReadSiteFileContentResponse =
   ReadSiteFileContentResponses[keyof ReadSiteFileContentResponses];
+
+export type WriteSiteFileContentData = {
+  body: WriteFileContentRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/content";
+};
+
+export type WriteSiteFileContentErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type WriteSiteFileContentError =
+  WriteSiteFileContentErrors[keyof WriteSiteFileContentErrors];
+
+export type WriteSiteFileContentResponses = {
+  /**
+   * File written successfully
+   */
+  200: WriteFileResult;
+};
+
+export type WriteSiteFileContentResponse =
+  WriteSiteFileContentResponses[keyof WriteSiteFileContentResponses];
+
+export type CreateSiteDirectoryData = {
+  body: FileMkdirRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/mkdir";
+};
+
+export type CreateSiteDirectoryErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type CreateSiteDirectoryError =
+  CreateSiteDirectoryErrors[keyof CreateSiteDirectoryErrors];
+
+export type CreateSiteDirectoryResponses = {
+  /**
+   * Directory created
+   */
+  200: FileMkdirResult;
+};
+
+export type CreateSiteDirectoryResponse =
+  CreateSiteDirectoryResponses[keyof CreateSiteDirectoryResponses];
+
+export type RenameSiteFileData = {
+  body: FileRenameRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/rename";
+};
+
+export type RenameSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type RenameSiteFileError =
+  RenameSiteFileErrors[keyof RenameSiteFileErrors];
+
+export type RenameSiteFileResponses = {
+  /**
+   * Rename succeeded
+   */
+  200: FileRenameResult;
+};
+
+export type RenameSiteFileResponse =
+  RenameSiteFileResponses[keyof RenameSiteFileResponses];
+
+export type DeleteSiteFileData = {
+  body: FileDeleteRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/delete";
+};
+
+export type DeleteSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteSiteFileError =
+  DeleteSiteFileErrors[keyof DeleteSiteFileErrors];
+
+export type DeleteSiteFileResponses = {
+  /**
+   * Delete succeeded
+   */
+  200: FileDeleteResult;
+};
+
+export type DeleteSiteFileResponse =
+  DeleteSiteFileResponses[keyof DeleteSiteFileResponses];
+
+export type ChmodSiteFileData = {
+  body: FileChmodRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/chmod";
+};
+
+export type ChmodSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ChmodSiteFileError = ChmodSiteFileErrors[keyof ChmodSiteFileErrors];
+
+export type ChmodSiteFileResponses = {
+  /**
+   * Chmod succeeded
+   */
+  200: FileChmodResult;
+};
+
+export type ChmodSiteFileResponse =
+  ChmodSiteFileResponses[keyof ChmodSiteFileResponses];
+
+export type PrepareSiteFileUploadData = {
+  body: PrepareUploadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/upload";
+};
+
+export type PrepareSiteFileUploadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type PrepareSiteFileUploadError =
+  PrepareSiteFileUploadErrors[keyof PrepareSiteFileUploadErrors];
+
+export type PrepareSiteFileUploadResponses = {
+  /**
+   * Presigned PUT URLs and transfer metadata
+   */
+  200: PrepareUploadResult;
+};
+
+export type PrepareSiteFileUploadResponse =
+  PrepareSiteFileUploadResponses[keyof PrepareSiteFileUploadResponses];
+
+export type ApplySiteFileUploadData = {
+  body: ApplyUploadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/upload/apply";
+};
+
+export type ApplySiteFileUploadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type ApplySiteFileUploadError =
+  ApplySiteFileUploadErrors[keyof ApplySiteFileUploadErrors];
+
+export type ApplySiteFileUploadResponses = {
+  /**
+   * Upload applied successfully
+   */
+  200: ApplyUploadResult;
+};
+
+export type ApplySiteFileUploadResponse =
+  ApplySiteFileUploadResponses[keyof ApplySiteFileUploadResponses];
 
 export type PrepareSiteFileDownloadData = {
   body: FileDownloadRequest;

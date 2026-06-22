@@ -50,21 +50,35 @@ export function useFileManagerSettings(
 /** Enable or disable the file manager for a site (admin+ only). */
 export function useUpdateFileManagerSettings(
   siteId: string,
-): UseMutationResult<FileManagerSettings, Error, { enabled: boolean }> {
+): UseMutationResult<
+  FileManagerSettings,
+  Error,
+  { enabled: boolean; write_enabled?: boolean }
+> {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ enabled }) => {
+    mutationFn: async ({ enabled, write_enabled }) => {
       const { data, error } = await updateSiteFilesSettings({
         path: { siteId },
-        body: { enabled },
+        body: { enabled, ...(write_enabled !== undefined ? { write_enabled } : {}) },
       });
       if (error) throw toError(error);
       if (!data) throw new Error("Empty response");
       return data;
     },
-    onSuccess: (result) => {
+    onSuccess: (result, vars) => {
       qc.setQueryData(filesKeys.settings(siteId), result);
-      if (result.enabled) {
+      if (vars.write_enabled !== undefined) {
+        // write_enabled toggled
+        if (result.write_enabled) {
+          toast.success("Write mode enabled", {
+            description:
+              "Files can now be edited, uploaded, and deleted on this site. All writes are audited.",
+          });
+        } else {
+          toast.success("Write mode disabled");
+        }
+      } else if (result.enabled) {
         toast.success("File manager enabled", {
           description:
             "You can now browse and download files on this site. All access is audited.",

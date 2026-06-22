@@ -4,6 +4,7 @@ import {
   Binary,
   ChevronRight,
   Download,
+  Edit3,
   FileX,
   Lock,
   ShieldAlert,
@@ -35,6 +36,7 @@ import { useFileDownload } from "./hooks/use-file-download";
 //  - Inline preview: base64-decoded text OR binary-detect banner OR truncation banner
 //  - Sensitive-path gate (confirm for owners, hard block for others)
 //  - Download action via prepareSiteFileDownload → presigned GET
+//  - Edit action (P2): only shown when writeEnabled=true, admin+, file is not binary
 //
 // Widen from the default 480px to 720px, matching AssetDetailDrawer.
 
@@ -45,6 +47,12 @@ export interface FileDetailDrawerProps {
   onClose: () => void;
   /** Whether the current user is an owner (allowed to confirm sensitive reads). */
   isOwner: boolean;
+  /** P2: whether write mode is enabled. */
+  writeEnabled?: boolean;
+  /** P2: whether the current user can manage (admin+). */
+  canManage?: boolean;
+  /** P2: called when the user wants to edit. Receives decoded text content. */
+  onEdit?: (content: string) => void;
 }
 
 /** Try to detect binary content by looking for NUL bytes or very high density
@@ -82,6 +90,9 @@ export function FileDetailDrawer({
   currentPath,
   onClose,
   isOwner,
+  writeEnabled = false,
+  canManage = false,
+  onEdit,
 }: FileDetailDrawerProps) {
   // Track whether the owner has confirmed reading a sensitive file.
   const [confirmedSensitive, setConfirmedSensitive] = useState(false);
@@ -116,9 +127,12 @@ export function FileDetailDrawer({
 
   // Determine preview content once we have data.
   let previewContent: React.ReactNode = null;
+  let decodedText: string | null = null;
+  let isBinary = false;
+
   if (content.data) {
-    const binary = isBinaryContent(content.data.content_base64);
-    if (binary) {
+    isBinary = isBinaryContent(content.data.content_base64);
+    if (isBinary) {
       previewContent = (
         <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-4 py-3">
           <Binary
@@ -137,8 +151,8 @@ export function FileDetailDrawer({
         </div>
       );
     } else {
-      const text = decodeBase64Text(content.data.content_base64);
-      if (text === null) {
+      decodedText = decodeBase64Text(content.data.content_base64);
+      if (decodedText === null) {
         previewContent = (
           <div className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-4 py-3">
             <FileX
@@ -164,7 +178,7 @@ export function FileDetailDrawer({
               aria-label="File content preview"
               className="max-h-96 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-3 font-mono text-[11px] leading-relaxed text-[var(--color-foreground)] scrollbar-thin"
             >
-              {text}
+              {decodedText}
             </pre>
           </div>
         );
@@ -178,6 +192,16 @@ export function FileDetailDrawer({
   const mtimeRelative = entry.mtime
     ? relativeTime(new Date(entry.mtime * 1000).toISOString())
     : null;
+
+  // Edit is shown when: admin+, write_enabled, file is text, not too large.
+  const canEdit =
+    canManage &&
+    writeEnabled &&
+    !entry.is_dir &&
+    decodedText !== null &&
+    !isBinary &&
+    !isTooLargeError &&
+    !isSensitiveError;
 
   return (
     <Dialog open={true} onClose={handleClose}>
@@ -277,19 +301,38 @@ export function FileDetailDrawer({
           <Button type="button" variant="ghost" onClick={handleClose}>
             Close
           </Button>
+          {/* Edit button: P2, admin+, write_enabled, text file only */}
+          {canEdit ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                if (decodedText !== null) onEdit?.(decodedText);
+                handleClose();
+              }}
+              className={cn(
+                "gap-1.5",
+              )}
+            >
+              <Edit3 aria-hidden="true" className="size-4" />
+              Edit
+            </Button>
+          ) : null}
           <Button
             type="button"
             variant="outline"
-            disabled={download.isPending}
+            disabled={download.isPending || entry.is_dir}
             onClick={() => {
-              download.mutate({
-                path: filePath ?? entry.name,
-                filename: entry.name,
-              });
+              if (!entry.is_dir) {
+                download.mutate({
+                  path: filePath ?? entry.name,
+                  filename: entry.name,
+                });
+              }
             }}
           >
             <Download aria-hidden="true" className="size-4" />
-            {download.isPending ? "Preparing…" : "Download"}
+            {download.isPending ? "Preparing..." : "Download"}
           </Button>
         </DialogFooter>
       </DialogContent>

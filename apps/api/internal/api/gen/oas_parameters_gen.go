@@ -211,6 +211,71 @@ func decodeAddSiteEmailSuppressionParams(args [1]string, argsEscaped bool, r *ht
 	return params, nil
 }
 
+// ApplySiteFileUploadParams is parameters of applySiteFileUpload operation.
+type ApplySiteFileUploadParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackApplySiteFileUploadParams(packed middleware.Parameters) (params ApplySiteFileUploadParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeApplySiteFileUploadParams(args [1]string, argsEscaped bool, r *http.Request) (params ApplySiteFileUploadParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // ArchiveSiteParams is parameters of archiveSite operation.
 type ArchiveSiteParams struct {
 	SiteId uuid.UUID
@@ -618,6 +683,71 @@ func unpackCancelMediaParams(packed middleware.Parameters) (params CancelMediaPa
 }
 
 func decodeCancelMediaParams(args [1]string, argsEscaped bool, r *http.Request) (params CancelMediaParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// ChmodSiteFileParams is parameters of chmodSiteFile operation.
+type ChmodSiteFileParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackChmodSiteFileParams(packed middleware.Parameters) (params ChmodSiteFileParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeChmodSiteFileParams(args [1]string, argsEscaped bool, r *http.Request) (params ChmodSiteFileParams, _ error) {
 	// Decode path: siteId.
 	if err := func() error {
 		param := args[0]
@@ -1138,6 +1268,71 @@ func unpackCreateSiteDestinationParams(packed middleware.Parameters) (params Cre
 }
 
 func decodeCreateSiteDestinationParams(args [1]string, argsEscaped bool, r *http.Request) (params CreateSiteDestinationParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// CreateSiteDirectoryParams is parameters of createSiteDirectory operation.
+type CreateSiteDirectoryParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackCreateSiteDirectoryParams(packed middleware.Parameters) (params CreateSiteDirectoryParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeCreateSiteDirectoryParams(args [1]string, argsEscaped bool, r *http.Request) (params CreateSiteDirectoryParams, _ error) {
 	// Decode path: siteId.
 	if err := func() error {
 		param := args[0]
@@ -2290,6 +2485,71 @@ func decodeDeleteSiteEmailSuppressionParams(args [2]string, argsEscaped bool, r 
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "suppressionId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// DeleteSiteFileParams is parameters of deleteSiteFile operation.
+type DeleteSiteFileParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackDeleteSiteFileParams(packed middleware.Parameters) (params DeleteSiteFileParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeDeleteSiteFileParams(args [1]string, argsEscaped bool, r *http.Request) (params DeleteSiteFileParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
 			In:   "path",
 			Err:  err,
 		}
@@ -14715,6 +14975,71 @@ func decodePrepareSiteFileDownloadParams(args [1]string, argsEscaped bool, r *ht
 	return params, nil
 }
 
+// PrepareSiteFileUploadParams is parameters of prepareSiteFileUpload operation.
+type PrepareSiteFileUploadParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackPrepareSiteFileUploadParams(packed middleware.Parameters) (params PrepareSiteFileUploadParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodePrepareSiteFileUploadParams(args [1]string, argsEscaped bool, r *http.Request) (params PrepareSiteFileUploadParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
 // PurgeCacheParams is parameters of purgeCache operation.
 type PurgeCacheParams struct {
 	SiteId uuid.UUID
@@ -16142,6 +16467,71 @@ func decodeRemoveClientMemberParams(args [2]string, argsEscaped bool, r *http.Re
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "userId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// RenameSiteFileParams is parameters of renameSiteFile operation.
+type RenameSiteFileParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackRenameSiteFileParams(packed middleware.Parameters) (params RenameSiteFileParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeRenameSiteFileParams(args [1]string, argsEscaped bool, r *http.Request) (params RenameSiteFileParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
 			In:   "path",
 			Err:  err,
 		}
@@ -18157,6 +18547,71 @@ func unpackVerifySiteActivityParams(packed middleware.Parameters) (params Verify
 }
 
 func decodeVerifySiteActivityParams(args [1]string, argsEscaped bool, r *http.Request) (params VerifySiteActivityParams, _ error) {
+	// Decode path: siteId.
+	if err := func() error {
+		param := args[0]
+		if argsEscaped {
+			unescaped, err := url.PathUnescape(args[0])
+			if err != nil {
+				return errors.Wrap(err, "unescape path")
+			}
+			param = unescaped
+		}
+		if len(param) > 0 {
+			d := uri.NewPathDecoder(uri.PathDecoderConfig{
+				Param:   "siteId",
+				Value:   param,
+				Style:   uri.PathStyleSimple,
+				Explode: false,
+			})
+
+			if err := func() error {
+				val, err := d.DecodeValue()
+				if err != nil {
+					return err
+				}
+
+				c, err := conv.ToUUID(val)
+				if err != nil {
+					return err
+				}
+
+				params.SiteId = c
+				return nil
+			}(); err != nil {
+				return err
+			}
+		} else {
+			return validate.ErrFieldRequired
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "siteId",
+			In:   "path",
+			Err:  err,
+		}
+	}
+	return params, nil
+}
+
+// WriteSiteFileContentParams is parameters of writeSiteFileContent operation.
+type WriteSiteFileContentParams struct {
+	SiteId uuid.UUID
+}
+
+func unpackWriteSiteFileContentParams(packed middleware.Parameters) (params WriteSiteFileContentParams) {
+	{
+		key := middleware.ParameterKey{
+			Name: "siteId",
+			In:   "path",
+		}
+		params.SiteId = packed[key].(uuid.UUID)
+	}
+	return params
+}
+
+func decodeWriteSiteFileContentParams(args [1]string, argsEscaped bool, r *http.Request) (params WriteSiteFileContentParams, _ error) {
 	// Decode path: siteId.
 	if err := func() error {
 		param := args[0]

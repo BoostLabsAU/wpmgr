@@ -6969,7 +6969,10 @@ paths:
         site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
 
         An audit entry (`site.files.settings.changed`) is recorded on every call,
-        capturing the resulting `enabled` state.
+        capturing the resulting `enabled` and `write_enabled` state.
+
+        `root_jail` is read-only in P1/P2 (always `""`) — the agent defaults to
+        the site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
 
         Requires `site.files.manage` permission (admin+).
       tags: [sites]
@@ -7108,6 +7111,325 @@ paths:
           description: >
             File is too large for inline read. Use the download endpoint
             (`POST /sites/{siteId}/files/download`) for files > 256 KiB.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+    put:
+      operationId: writeSiteFileContent
+      summary: Write (create or overwrite) a small text file (≤ 256 KiB)
+      description: |
+        Issues a `file_write` command to the site's agent. The agent writes the
+        content atomically (temp-write → rename swap) to the resolved path.
+
+        **Write-enabled gate:** The site must have both `enabled=true` AND
+        `write_enabled=true` in its file manager settings. Returns
+        `403 files_write_not_enabled` when write mode is off.
+
+        **Executable-write gate (T1):** When `confirm_executable_write=true` is
+        set in the request body, the caller must additionally hold
+        `site.files.write_code` (owner). If an admin-level caller passes
+        `confirm_executable_write=true`, the request is rejected with
+        `403 insufficient_permission` and the denial is audited at elevated
+        severity. The agent independently enforces its executable deny-list
+        regardless.
+
+        **Sensitive-file gate (T6):** Same as above for `confirm_sensitive=true`
+        — requires owner (`site.files.write_code`) and is audited at elevated
+        severity on both success and denial.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WriteFileContentRequest"
+      responses:
+        "200":
+          description: File written successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WriteFileResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/sites/{siteId}/files/mkdir:
+    post:
+      operationId: createSiteDirectory
+      summary: Create a directory on a managed site
+      description: |
+        Issues a `file_mkdir` command to the site's agent.
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+        Returns `403 files_write_not_enabled` when write mode is off.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileMkdirRequest"
+      responses:
+        "200":
+          description: Directory created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileMkdirResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/sites/{siteId}/files/rename:
+    post:
+      operationId: renameSiteFile
+      summary: Rename or move a file/directory within the jail
+      description: |
+        Issues a `file_rename` command to the site's agent. Both `src` and `dst`
+        are containment-checked by the agent; escaping the jail on either path
+        returns `400 outside_root`.
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+
+        **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+        `confirm_executable_write` or `confirm_sensitive` is set, owner
+        permission (`site.files.write_code`) is required.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileRenameRequest"
+      responses:
+        "200":
+          description: Rename succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileRenameResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+
+  /api/v1/sites/{siteId}/files/delete:
+    post:
+      operationId: deleteSiteFile
+      summary: Delete a file or directory on a managed site
+      description: |
+        Issues a `file_delete` command to the site's agent after verifying
+        three layered gates (T12/T13):
+
+        1. **PermSiteFilesWrite** (admin+) — inherited from route middleware.
+        2. **PermSiteFilesDelete** (owner) — checked in the handler; denial is
+           audited with action `site.files.delete.denied`.
+        3. **Typed confirm token** — `confirm` in the request body must be the
+           string `"DELETE"` exactly. Missing or wrong value returns
+           `400 confirm_required`.
+
+        The agent independently enforces its protected-root guard (`wp-admin`,
+        `wp-includes`).
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+
+        Requires `site.files.write` + `site.files.delete` (owner only).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileDeleteRequest"
+      responses:
+        "200":
+          description: Delete succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileDeleteResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/files/chmod:
+    post:
+      operationId: chmodSiteFile
+      summary: Change file/directory permissions on a managed site
+      description: |
+        Issues a `file_chmod` command to the site's agent. The agent validates
+        the mode against a safe allowlist — no setuid (4xxx), no setgid (2xxx),
+        no world-write; returns `400 mode_denied` for unsafe modes.
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FileChmodRequest"
+      responses:
+        "200":
+          description: Chmod succeeded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FileChmodResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /api/v1/sites/{siteId}/files/upload:
+    post:
+      operationId: prepareSiteFileUpload
+      summary: Stage an upload — mint presigned S3 PUT URLs for the browser
+      description: |
+        Step 1 of 2 for browser file upload. The CP mints short-lived presigned
+        S3 PUT URLs in the tenant-namespaced staging area and returns them to
+        the browser. The browser PUTs each chunk directly to S3 (never through
+        the CP). After all chunks are staged, the caller invokes
+        `POST /files/upload/apply` to have the agent fetch, reassemble,
+        validate (SHA-256), and atomic-swap the file into place.
+
+        Presigned PUT URLs are **never logged** (T8). TTL is ≤ 5 minutes.
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+
+        **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+        `confirm_executable_write` or `confirm_sensitive` is set, owner
+        permission (`site.files.write_code`) is required.
+
+        Returns `503 storage_not_configured` on self-hosted deployments without
+        object storage.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PrepareUploadRequest"
+      responses:
+        "200":
+          description: Presigned PUT URLs and transfer metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PrepareUploadResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Object storage is not configured
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /api/v1/sites/{siteId}/files/upload/apply:
+    post:
+      operationId: applySiteFileUpload
+      summary: Apply a staged upload — agent fetches chunks and atomic-swaps
+      description: |
+        Step 2 of 2 for browser file upload. After the browser has PUT all
+        chunks to the presigned S3 URLs returned by `prepareSiteFileUpload`,
+        this endpoint:
+
+        1. Mints presigned S3 GET URLs for each staged chunk.
+        2. Issues `file_upload_apply` to the agent, which fetches all chunks,
+           reassembles them in order, validates the SHA-256 digest, and
+           atomic-swaps the assembled file into the target path (same
+           FilesRestorer swap primitive used by restore).
+
+        The agent returns `400 write_failed` when the SHA-256 digest does not
+        match. The caller should retry the full upload in that case.
+
+        **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+
+        **Executable/sensitive gate:** Same as `prepareSiteFileUpload`.
+
+        Requires `site.files.write` permission (admin+).
+      tags: [sites]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApplyUploadRequest"
+      responses:
+        "200":
+          description: Upload applied successfully
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApplyUploadResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "503":
+          description: Object storage is not configured
           content:
             application/json:
               schema:
@@ -13788,19 +14110,27 @@ components:
         Per-site file manager configuration. Returned by both
         `GET /sites/{siteId}/files/settings` and
         `PUT /sites/{siteId}/files/settings`.
-      required: [enabled, root_jail]
+      required: [enabled, write_enabled, root_jail]
       properties:
         enabled:
           type: boolean
           description: >
-            Whether the file manager is enabled for this site. Defaults to
-            `false` (off by default, explicit opt-in required).
+            Whether the file manager read mode is enabled for this site.
+            Defaults to `false` (off by default, explicit opt-in required).
+        write_enabled:
+          type: boolean
+          description: >
+            Whether the file manager write mode is enabled for this site (P2).
+            Separate opt-in from `enabled` so read and write can be toggled
+            independently. Defaults to `false`. Both `enabled` AND
+            `write_enabled` must be `true` before any write/delete/chmod/
+            mkdir/rename/upload command will be signed.
         root_jail:
           type: string
           description: >
             The filesystem root the agent restricts all file operations to.
-            Always `""` in P1 — the agent defaults to the site's `ABSPATH`.
-            Reserved for future P2 configuration.
+            Always `""` in P1/P2 — the agent defaults to the site's `ABSPATH`.
+            Reserved for future P3 configuration.
 
     UpdateFileManagerSettingsRequest:
       type: object
@@ -13809,4 +14139,296 @@ components:
       properties:
         enabled:
           type: boolean
-          description: Set to `true` to enable the file manager, `false` to disable it.
+          description: Set to `true` to enable the file manager (read), `false` to disable it.
+        write_enabled:
+          type: boolean
+          description: >
+            Set to `true` to also enable write mode (P2). Defaults to `false`
+            when omitted (the read flag is updated but write remains off).
+
+    # -------------------------------------------------------------------------
+    # P2 Write request/response schemas
+    # -------------------------------------------------------------------------
+
+    WriteFileContentRequest:
+      type: object
+      description: Request body for `PUT /sites/{siteId}/files/content`.
+      required: [path, content_base64]
+      properties:
+        path:
+          type: string
+          description: Site-relative file path to create or overwrite.
+        content_base64:
+          type: string
+          description: Base64-encoded file content (≤ 256 KiB).
+        confirm_executable_write:
+          type: boolean
+          default: false
+          description: >
+            Must be `true` when the target path matches the executable-extension
+            deny-list (`.php`, `.phar`, `.htaccess`, etc.) or is inside a
+            PHP-executable web directory. Requires owner permission
+            (`site.files.write_code`). Absence causes a
+            `403 executable_write_denied` from the agent.
+        confirm_sensitive:
+          type: boolean
+          default: false
+          description: >
+            Must be `true` when the target path matches the sensitive-file
+            deny-list (`wp-config.php`, `.env*`, `*.pem`, etc.). Requires
+            owner permission (`site.files.write_code`).
+
+    WriteFileResult:
+      type: object
+      description: Response body for a successful `PUT /sites/{siteId}/files/content`.
+      required: [path, size, mtime, mode]
+      properties:
+        path:
+          type: string
+          description: Resolved path of the written file (echoed).
+        size:
+          type: integer
+          format: int64
+          description: Bytes written.
+        mtime:
+          type: integer
+          format: int64
+          description: Last-modified time after the write (Unix epoch seconds).
+        mode:
+          type: string
+          description: 4-digit octal permission string, e.g. `"0644"`.
+
+    FileMkdirRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/mkdir`.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Site-relative path for the new directory.
+
+    FileMkdirResult:
+      type: object
+      description: Response body for a successful `POST /sites/{siteId}/files/mkdir`.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Resolved path of the created directory (echoed).
+
+    FileRenameRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/rename`.
+      required: [src, dst]
+      properties:
+        src:
+          type: string
+          description: Site-relative source path (must exist).
+        dst:
+          type: string
+          description: Site-relative destination path.
+        confirm_executable_write:
+          type: boolean
+          default: false
+          description: >
+            Required when `dst` matches the executable-extension deny-list.
+            Requires owner permission (`site.files.write_code`).
+        confirm_sensitive:
+          type: boolean
+          default: false
+          description: >
+            Required when either `src` or `dst` is a sensitive path.
+            Requires owner permission (`site.files.write_code`).
+
+    FileRenameResult:
+      type: object
+      description: Response body for a successful `POST /sites/{siteId}/files/rename`.
+      required: [src, dst]
+      properties:
+        src:
+          type: string
+        dst:
+          type: string
+
+    FileDeleteRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/delete`.
+      required: [path, confirm]
+      properties:
+        path:
+          type: string
+          description: Site-relative path to delete.
+        recursive:
+          type: boolean
+          default: false
+          description: >
+            When `true`, recursively delete a non-empty directory and all its
+            contents. When `false`, the agent refuses to delete a non-empty
+            directory (returns `400 not_directory`).
+        confirm:
+          type: string
+          description: >
+            Typed confirmation token — must be the string `"DELETE"` exactly.
+            Missing or wrong value returns `400 confirm_required` without
+            issuing the delete command to the agent.
+
+    FileDeleteResult:
+      type: object
+      description: Response body for a successful `POST /sites/{siteId}/files/delete`.
+      required: [path, deleted]
+      properties:
+        path:
+          type: string
+          description: Echoed path that was deleted.
+        deleted:
+          type: integer
+          description: >
+            Number of filesystem entries removed (1 for a file; ≥1 for a
+            recursive directory removal).
+
+    FileChmodRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/chmod`.
+      required: [path, mode]
+      properties:
+        path:
+          type: string
+          description: Site-relative path.
+        mode:
+          type: string
+          description: >
+            4-digit octal permission string, e.g. `"0644"` or `"0755"`.
+            The agent validates against a safe allowlist — no setuid, no
+            setgid, no world-write.
+
+    FileChmodResult:
+      type: object
+      description: Response body for a successful `POST /sites/{siteId}/files/chmod`.
+      required: [path, mode]
+      properties:
+        path:
+          type: string
+        mode:
+          type: string
+          description: Effective mode after the chmod (echoed).
+
+    PrepareUploadRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/upload`.
+      required: [path]
+      properties:
+        path:
+          type: string
+          description: Site-relative target path for the uploaded file.
+        part_count:
+          type: integer
+          minimum: 1
+          maximum: 32
+          default: 1
+          description: >
+            Number of chunks the browser will PUT. Each chunk corresponds to
+            one presigned S3 PUT URL. Use 1 for files ≤ 5 MiB; increase for
+            larger files (max 32 × 5 MiB = 160 MiB total).
+        confirm_executable_write:
+          type: boolean
+          default: false
+          description: >
+            Required when `path` matches the executable-extension deny-list.
+            Requires owner permission (`site.files.write_code`).
+        confirm_sensitive:
+          type: boolean
+          default: false
+          description: >
+            Required when `path` matches the sensitive-file deny-list.
+            Requires owner permission (`site.files.write_code`).
+
+    PrepareUploadPresignedPut:
+      type: object
+      description: One presigned S3 PUT slot returned by `prepareSiteFileUpload`.
+      required: [index, url]
+      properties:
+        index:
+          type: integer
+          description: Zero-based chunk index.
+        url:
+          type: string
+          description: >
+            Presigned S3 PUT URL. Short TTL (≤ 5 min). Single-use.
+            The browser PUTs the corresponding chunk bytes directly to this URL.
+
+    PrepareUploadResult:
+      type: object
+      description: Response body for `POST /sites/{siteId}/files/upload`.
+      required: [ok, transfer_id, object_key, presigned_puts, expires_at]
+      properties:
+        ok:
+          type: boolean
+        transfer_id:
+          type: string
+          format: uuid
+          description: Opaque transfer ID — pass to `applySiteFileUpload` for audit.
+        object_key:
+          type: string
+          description: >
+            S3 key prefix for the staged chunks. Pass to `applySiteFileUpload`
+            so the CP can mint presigned GETs for the agent.
+        presigned_puts:
+          type: array
+          items:
+            $ref: "#/components/schemas/PrepareUploadPresignedPut"
+        expires_at:
+          type: integer
+          format: int64
+          description: Unix epoch seconds when the presigned URLs expire (≤ 5 min from now).
+
+    ApplyUploadRequest:
+      type: object
+      description: Request body for `POST /sites/{siteId}/files/upload/apply`.
+      required: [path, object_key, part_count, total_size, sha256]
+      properties:
+        path:
+          type: string
+          description: Site-relative target path (must match the prepare call).
+        object_key:
+          type: string
+          description: The `object_key` returned by `prepareSiteFileUpload`.
+        part_count:
+          type: integer
+          description: Number of chunks staged (must match `part_count` from the prepare call).
+        total_size:
+          type: integer
+          format: int64
+          description: Expected assembled file size in bytes.
+        sha256:
+          type: string
+          description: >
+            Hex-encoded SHA-256 of the fully assembled file content.
+            The agent validates this after reassembly and before the atomic swap;
+            a mismatch returns `400 write_failed`.
+        confirm_executable_write:
+          type: boolean
+          default: false
+          description: Mirrors the prepare call — required for executable target paths.
+        confirm_sensitive:
+          type: boolean
+          default: false
+          description: Mirrors the prepare call — required for sensitive target paths.
+
+    ApplyUploadResult:
+      type: object
+      description: Response body for a successful `POST /sites/{siteId}/files/upload/apply`.
+      required: [ok, path, size, mtime]
+      properties:
+        ok:
+          type: boolean
+        path:
+          type: string
+          description: Resolved path of the written file (echoed).
+        size:
+          type: integer
+          format: int64
+          description: Bytes written (should match `total_size`).
+        mtime:
+          type: integer
+          format: int64
+          description: Last-modified time after the atomic swap (Unix epoch seconds).

@@ -1,17 +1,15 @@
-// Package files implements the P1 (read-only) File Manager feature.
+// Package files implements the File Manager feature (P1 read-only + P2 write).
 //
 // Every request flow:
 //  1. The handler resolves the principal (TenantID / UserID) from context.
 //  2. The handler calls the service, passing the verified TenantID and siteID.
-//  3. The service checks the per-site opt-in flag (files_enabled); an unenabled
-//     site returns ErrFilesNotEnabled so the handler can emit a clean 4xx.
+//  3. The service checks the per-site opt-in flag(s):
+//     - Read ops:  files_enabled must be true.
+//     - Write ops: files_enabled AND files_write_enabled must both be true.
 //  4. The service looks up the site URL, issues the signed agent command via
 //     agentcmd.Client.Do, and maps agent error codes to domain errors.
 //  5. The handler records an audit entry (including elevated-severity entries
-//     for sensitive-path reads) and returns the DTO.
-//
-// Write endpoints (file_write, file_mkdir, file_rename, file_delete, file_chmod,
-// file_upload_apply) are NOT in scope for P1 and are not wired here.
+//     for sensitive-path reads/writes) and returns the DTO.
 package files
 
 import (
@@ -42,6 +40,11 @@ const downloadPresignTTL = 5 * time.Minute
 // ErrFilesNotEnabled is returned by the service when a site has not opted in to
 // the file manager. The handler maps this to a 403 with code "files_not_enabled".
 var ErrFilesNotEnabled = errors.New("file manager is not enabled for this site")
+
+// ErrFilesWriteNotEnabled is returned by write service methods when the site
+// has the read flag on but the write flag is still off. The handler maps this
+// to a 403 with code "files_write_not_enabled".
+var ErrFilesWriteNotEnabled = errors.New("file manager write is not enabled for this site")
 
 // errNotFound is the package-local sentinel returned by getConfig when no row
 // exists. It is never surfaced to callers; IsEnabled converts it to false.
@@ -121,15 +124,16 @@ func (s *Service) DisableSite(ctx context.Context, tenantID, siteID uuid.UUID) e
 // Settings (P1 enable/disable toggle)
 // ---------------------------------------------------------------------------
 
-// Settings is the service output for GET /sites/{siteId}/files/settings.
-// RootJail is always "" in P1 (the agent defaults to ABSPATH).
+// Settings is the service output for GET/PUT /sites/{siteId}/files/settings.
+// RootJail is always "" in P1/P2 (the agent defaults to ABSPATH).
 type Settings struct {
-	Enabled  bool
-	RootJail string
+	Enabled      bool
+	WriteEnabled bool
+	RootJail     string
 }
 
 // GetSettings returns the current file manager settings for a site. When no
-// row exists (the default state), returns Settings{Enabled: false, RootJail: ""}.
+// row exists (the default state), returns the zero Settings (all false, empty jail).
 func (s *Service) GetSettings(ctx context.Context, tenantID, siteID uuid.UUID) (Settings, error) {
 	cfg, err := s.getConfig(ctx, tenantID, siteID)
 	if err != nil {
@@ -138,17 +142,27 @@ func (s *Service) GetSettings(ctx context.Context, tenantID, siteID uuid.UUID) (
 		}
 		return Settings{}, err
 	}
-	return Settings{Enabled: cfg.FilesEnabled, RootJail: cfg.RootJail}, nil
+	return Settings{
+		Enabled:      cfg.FilesEnabled,
+		WriteEnabled: cfg.FilesWriteEnabled,
+		RootJail:     cfg.RootJail,
+	}, nil
 }
 
-// UpdateSettings enables or disables the file manager for a site. RootJail is
-// read-only in P1 and is not accepted as an input; the argument is ignored.
-// Returns the post-update Settings so the handler can echo the canonical state.
-func (s *Service) UpdateSettings(ctx context.Context, tenantID, siteID uuid.UUID, enabled bool) (Settings, error) {
+// UpdateSettings sets the read and/or write opt-in flags for a site. Each flag
+// is upserted independently so they can be toggled one at a time. RootJail is
+// read-only (always "") and is not accepted as an input.
+// Returns the post-update Settings so the handler can echo canonical state.
+func (s *Service) UpdateSettings(ctx context.Context, tenantID, siteID uuid.UUID, enabled, writeEnabled bool) (Settings, error) {
+	// Always upsert the read flag (it was the only flag in P1; backwards-compat).
 	if err := s.upsertEnabled(ctx, tenantID, siteID, enabled); err != nil {
 		return Settings{}, err
 	}
-	// Read back the row so we return the canonical DB state (root_jail included).
+	// Upsert the write flag independently.
+	if err := s.upsertWriteEnabled(ctx, tenantID, siteID, writeEnabled); err != nil {
+		return Settings{}, err
+	}
+	// Read back the row so we return the canonical DB state.
 	return s.GetSettings(ctx, tenantID, siteID)
 }
 
@@ -347,8 +361,9 @@ func (s *Service) PrepareDownload(ctx context.Context, tenantID, siteID uuid.UUI
 // ---------------------------------------------------------------------------
 
 type siteFileManagerRow struct {
-	FilesEnabled bool
-	RootJail     string
+	FilesEnabled      bool
+	FilesWriteEnabled bool
+	RootJail          string
 }
 
 func (s *Service) getConfig(ctx context.Context, tenantID, siteID uuid.UUID) (siteFileManagerRow, error) {
@@ -363,6 +378,7 @@ func (s *Service) getConfig(ctx context.Context, tenantID, siteID uuid.UUID) (si
 			return domain.Internal("db_error", "failed to read file manager config").WithCause(err)
 		}
 		cfg.FilesEnabled = row.FilesEnabled
+		cfg.FilesWriteEnabled = row.FilesWriteEnabled
 		cfg.RootJail = row.RootJail
 		return nil
 	})
@@ -387,6 +403,17 @@ func (s *Service) upsertEnabled(ctx context.Context, tenantID, siteID uuid.UUID,
 			SiteID:       siteID,
 			TenantID:     tenantID,
 			FilesEnabled: enabled,
+		})
+	})
+}
+
+func (s *Service) upsertWriteEnabled(ctx context.Context, tenantID, siteID uuid.UUID, writeEnabled bool) error {
+	return s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		return q.UpsertSiteFileManagerWrite(ctx, sqlc.UpsertSiteFileManagerWriteParams{
+			SiteID:             siteID,
+			TenantID:           tenantID,
+			FilesWriteEnabled:  writeEnabled,
 		})
 	})
 }
@@ -426,6 +453,349 @@ func (s *Service) siteURL(ctx context.Context, tenantID, siteID uuid.UUID) (stri
 // tenant's staging area.
 func fileTransferS3Key(tenantID, transferID uuid.UUID) string {
 	return "file-transfers/" + tenantID.String() + "/" + transferID.String()
+}
+
+// requireWriteEnabled returns a typed domain error when write ops are not
+// permitted (either read flag is off or write flag is off).
+func (s *Service) requireWriteEnabled(ctx context.Context, tenantID, siteID uuid.UUID) error {
+	cfg, err := s.getConfig(ctx, tenantID, siteID)
+	if err != nil {
+		if errors.Is(err, errNotFound) {
+			return domain.Forbidden("files_not_enabled",
+				"the file manager is not enabled for this site; enable it in site settings first")
+		}
+		return err
+	}
+	if !cfg.FilesEnabled {
+		return domain.Forbidden("files_not_enabled",
+			"the file manager is not enabled for this site; enable it in site settings first")
+	}
+	if !cfg.FilesWriteEnabled {
+		return domain.Forbidden("files_write_not_enabled",
+			"the file manager write mode is not enabled for this site; enable it in site settings first")
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// P2 write operations
+// ---------------------------------------------------------------------------
+
+// WriteFileResult is the service output for PUT /sites/{siteId}/files/content.
+type WriteFileResult struct {
+	Path  string
+	Size  int64
+	Mtime int64
+	Mode  string
+}
+
+// WriteFile issues a file_write command to the agent (atomic temp-write+rename).
+// Returns ErrFilesWriteNotEnabled when the site has write mode off, or
+// ErrFilesNotEnabled when not opted in at all.
+// The handler must have already verified PermSiteFilesWriteCode when
+// confirmExecutableWrite or confirmSensitive is true.
+func (s *Service) WriteFile(ctx context.Context, tenantID, siteID uuid.UUID, filePath, contentBase64 string, confirmExecutableWrite, confirmSensitive bool) (WriteFileResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return WriteFileResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return WriteFileResult{}, err
+	}
+
+	req := agentcmd.FileWriteRequest{
+		Path:                  filePath,
+		ContentBase64:         contentBase64,
+		ConfirmExecutableWrite: confirmExecutableWrite,
+		ConfirmSensitive:      confirmSensitive,
+	}
+	var resp agentcmd.FileWriteResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_write", req, &resp); err != nil {
+		return WriteFileResult{}, mapAgentTransportErr(err, "file_write")
+	}
+	if resp.Error != nil {
+		return WriteFileResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return WriteFileResult{
+		Path:  resp.Path,
+		Size:  resp.Size,
+		Mtime: resp.Mtime,
+		Mode:  resp.Mode,
+	}, nil
+}
+
+// MkdirResult is the service output for POST /sites/{siteId}/files/mkdir.
+type MkdirResult struct {
+	Path string
+}
+
+// Mkdir issues a file_mkdir command to the agent.
+func (s *Service) Mkdir(ctx context.Context, tenantID, siteID uuid.UUID, dirPath string) (MkdirResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return MkdirResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return MkdirResult{}, err
+	}
+
+	req := agentcmd.FileMkdirRequest{Path: dirPath}
+	var resp agentcmd.FileMkdirResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_mkdir", req, &resp); err != nil {
+		return MkdirResult{}, mapAgentTransportErr(err, "file_mkdir")
+	}
+	if resp.Error != nil {
+		return MkdirResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return MkdirResult{Path: resp.Path}, nil
+}
+
+// RenameResult is the service output for POST /sites/{siteId}/files/rename.
+type RenameResult struct {
+	Src string
+	Dst string
+}
+
+// Rename issues a file_rename command to the agent.
+// The handler must have verified PermSiteFilesWriteCode when
+// confirmExecutableWrite or confirmSensitive is true.
+func (s *Service) Rename(ctx context.Context, tenantID, siteID uuid.UUID, src, dst string, confirmExecutableWrite, confirmSensitive bool) (RenameResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return RenameResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return RenameResult{}, err
+	}
+
+	req := agentcmd.FileRenameRequest{
+		Src:                   src,
+		Dst:                   dst,
+		ConfirmExecutableWrite: confirmExecutableWrite,
+		ConfirmSensitive:      confirmSensitive,
+	}
+	var resp agentcmd.FileRenameResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_rename", req, &resp); err != nil {
+		return RenameResult{}, mapAgentTransportErr(err, "file_rename")
+	}
+	if resp.Error != nil {
+		return RenameResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return RenameResult{Src: resp.Src, Dst: resp.Dst}, nil
+}
+
+// DeleteResult is the service output for POST /sites/{siteId}/files/delete.
+type DeleteResult struct {
+	Path    string
+	Deleted int
+}
+
+// Delete issues a file_delete command to the agent.
+// The handler must have verified PermSiteFilesDelete (owner) AND the typed
+// confirm="DELETE" token before calling this method.
+func (s *Service) Delete(ctx context.Context, tenantID, siteID uuid.UUID, filePath string, recursive bool) (DeleteResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return DeleteResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return DeleteResult{}, err
+	}
+
+	req := agentcmd.FileDeleteRequest{
+		Path:      filePath,
+		Recursive: recursive,
+	}
+	var resp agentcmd.FileDeleteResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_delete", req, &resp); err != nil {
+		return DeleteResult{}, mapAgentTransportErr(err, "file_delete")
+	}
+	if resp.Error != nil {
+		return DeleteResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return DeleteResult{Path: resp.Path, Deleted: resp.Deleted}, nil
+}
+
+// ChmodResult is the service output for POST /sites/{siteId}/files/chmod.
+type ChmodResult struct {
+	Path string
+	Mode string
+}
+
+// Chmod issues a file_chmod command to the agent.
+func (s *Service) Chmod(ctx context.Context, tenantID, siteID uuid.UUID, filePath, mode string) (ChmodResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return ChmodResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ChmodResult{}, err
+	}
+
+	req := agentcmd.FileChmodRequest{Path: filePath, Mode: mode}
+	var resp agentcmd.FileChmodResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_chmod", req, &resp); err != nil {
+		return ChmodResult{}, mapAgentTransportErr(err, "file_chmod")
+	}
+	if resp.Error != nil {
+		return ChmodResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return ChmodResult{Path: resp.Path, Mode: resp.Mode}, nil
+}
+
+// uploadPresignTTL is the presigned PUT/GET TTL for upload staging chunks.
+const uploadPresignTTL = 5 * time.Minute
+
+// UploadResult is returned by PrepareUpload.
+type UploadResult struct {
+	TransferID    uuid.UUID
+	PresignedPuts []agentcmd.FileDownloadPresignedPut // PUT URLs for the browser
+	ObjectKey     string
+	ExpiresAt     time.Time
+}
+
+// PrepareUpload stages an upload:
+//  1. Mints presigned PUT URLs for the browser to push chunks into the
+//     tenant-namespaced staging area.
+//  2. Persists a file_transfers row (direction=upload, status=staged).
+//  3. Returns the presigned PUTs and the transfer ID to the caller.
+//
+// After the browser has PUT all chunks, the caller invokes ApplyUpload,
+// which mints presigned GET URLs and issues file_upload_apply to the agent.
+func (s *Service) PrepareUpload(ctx context.Context, tenantID, siteID uuid.UUID, relPath string, partCount int, createdBy uuid.UUID) (UploadResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return UploadResult{}, err
+	}
+	if s.presigner == nil {
+		return UploadResult{}, domain.ServiceUnavailable("storage_not_configured",
+			"object storage is not configured; file uploads are unavailable")
+	}
+
+	transferID := uuid.New()
+	objectKey := fileTransferS3Key(tenantID, transferID)
+	expiresAt := time.Now().Add(uploadPresignTTL)
+
+	// Mint one presigned PUT per chunk slot requested by the caller.
+	if partCount < 1 {
+		partCount = 1
+	}
+	const maxParts = 32
+	if partCount > maxParts {
+		return UploadResult{}, domain.Validation("too_many_parts",
+			fmt.Sprintf("upload may not exceed %d parts", maxParts))
+	}
+
+	presignedPuts := make([]agentcmd.FileDownloadPresignedPut, partCount)
+	for i := 0; i < partCount; i++ {
+		partKey := fmt.Sprintf("%s/part%04d", objectKey, i)
+		putURL, perr := s.presigner.PresignPut(ctx, partKey, uploadPresignTTL)
+		if perr != nil {
+			return UploadResult{}, domain.Internal("presign_put_failed",
+				"failed to mint presigned PUT URL").WithCause(perr)
+		}
+		presignedPuts[i] = agentcmd.FileDownloadPresignedPut{Index: i, URL: putURL}
+	}
+
+	// Persist the transfer row (status=staged so a GC sweep can clean orphans).
+	if err := s.insertUploadTransfer(ctx, tenantID, siteID, transferID, relPath, objectKey, partCount, createdBy, expiresAt); err != nil {
+		slog.Error("file_transfer upload bookkeeping insert failed",
+			"tenant_id", tenantID, "site_id", siteID,
+			"transfer_id", transferID, "error", err)
+		// Non-fatal: presigned URLs are already minted. Log for alerting.
+	}
+
+	return UploadResult{
+		TransferID:    transferID,
+		PresignedPuts: presignedPuts,
+		ObjectKey:     objectKey,
+		ExpiresAt:     expiresAt,
+	}, nil
+}
+
+// ApplyUploadResult is returned by ApplyUpload.
+type ApplyUploadResult struct {
+	Path  string
+	Size  int64
+	Mtime int64
+}
+
+// ApplyUpload mints presigned GET URLs for the staged upload chunks and
+// issues file_upload_apply to the agent, which fetches, reassembles,
+// validates (SHA-256), and atomic-swaps the file into place.
+//
+// confirmExecutableWrite and confirmSensitive are forwarded to the agent only
+// after the caller (handler) has already verified PermSiteFilesWriteCode (owner).
+// A non-owner who sets either flag is rejected at the handler before this method
+// is ever called — the service never weakens that gate.
+//
+// The agent is the authoritative executable-extension enforcer (deny-list: php,
+// php8, php9, phpt, phar, asp, aspx, jsp, cgi, htaccess, …). The CP does not
+// maintain a duplicate extension list for the upload-apply path; confirm flags
+// are forwarded as-is so the agent can enforce its own copy of the list.
+// Any future extension added to the agent deny-list is covered automatically
+// without a CP change.
+func (s *Service) ApplyUpload(ctx context.Context, tenantID, siteID uuid.UUID, targetPath, objectKey, sha256 string, partCount int, totalSize int64, confirmExecutableWrite, confirmSensitive bool) (ApplyUploadResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return ApplyUploadResult{}, err
+	}
+	if s.presigner == nil {
+		return ApplyUploadResult{}, domain.ServiceUnavailable("storage_not_configured",
+			"object storage is not configured; file uploads are unavailable")
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ApplyUploadResult{}, err
+	}
+
+	// Mint presigned GET URLs for each chunk so the agent can fetch them.
+	presignedGets := make([]agentcmd.FileUploadPresignedGet, partCount)
+	for i := 0; i < partCount; i++ {
+		partKey := fmt.Sprintf("%s/part%04d", objectKey, i)
+		getURL, perr := s.presigner.PresignGet(ctx, partKey, uploadPresignTTL)
+		if perr != nil {
+			return ApplyUploadResult{}, domain.Internal("presign_get_failed",
+				"failed to mint presigned GET URL").WithCause(perr)
+		}
+		presignedGets[i] = agentcmd.FileUploadPresignedGet{Index: i, URL: getURL}
+	}
+
+	req := agentcmd.FileUploadApplyRequest{
+		Path:                   targetPath,
+		PresignedGets:          presignedGets,
+		PartCount:              partCount,
+		TotalSize:              totalSize,
+		SHA256:                 sha256,
+		ConfirmExecutableWrite: confirmExecutableWrite,
+		ConfirmSensitive:       confirmSensitive,
+	}
+	var resp agentcmd.FileUploadApplyResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_upload_apply", req, &resp); err != nil {
+		return ApplyUploadResult{}, mapAgentTransportErr(err, "file_upload_apply")
+	}
+	if resp.Error != nil {
+		return ApplyUploadResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return ApplyUploadResult{
+		Path:  resp.Path,
+		Size:  resp.Size,
+		Mtime: resp.Mtime,
+	}, nil
+}
+
+func (s *Service) insertUploadTransfer(ctx context.Context, tenantID, siteID, transferID uuid.UUID, relPath, objectKey string, chunkCount int, createdBy uuid.UUID, expiresAt time.Time) error {
+	return s.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		q := sqlc.New(tx)
+		return q.InsertUploadTransfer(ctx, sqlc.InsertUploadTransferParams{
+			ID:         transferID,
+			TenantID:   tenantID,
+			SiteID:     siteID,
+			RelPath:    relPath,
+			ObjectKey:  objectKey,
+			ChunkCount: int32(chunkCount),
+			CreatedBy:  createdBy,
+			ExpiresAt:  expiresAt,
+		})
+	})
 }
 
 // IsSensitivePath reports whether a given path matches the sensitive-file
@@ -509,28 +879,45 @@ func IsSensitivePath(p string) bool {
 // ---------------------------------------------------------------------------
 
 // mapAgentErrorCode maps the agent's semantic error codes to domain errors.
-// CP HTTP status mapping:
+// CP HTTP status mapping (P1 + P2):
 //
-//	sensitive_denied  → 403 Forbidden
-//	outside_root      → 400 Bad Request
-//	invalid_path      → 400 Bad Request
-//	not_found         → 404 Not Found
-//	not_readable      → 403 Forbidden (analogous to a permission deny)
-//	is_directory      → 400 Bad Request
-//	too_large         → 413 Request Entity Too Large (domain maps as Validation)
-//	<anything else>   → 502 Bad Gateway (agent returned unknown error)
+//	sensitive_denied        → 403 Forbidden
+//	executable_write_denied → 403 Forbidden
+//	protected_root          → 403 Forbidden
+//	not_readable            → 403 Forbidden
+//	outside_root            → 400 Bad Request
+//	invalid_path            → 400 Bad Request
+//	is_directory            → 400 Bad Request
+//	not_directory           → 400 Bad Request
+//	mode_denied             → 400 Bad Request
+//	too_large               → 413 (Validation in domain terms)
+//	not_found               → 404 Not Found
+//	exists                  → 409 Conflict
+//	base_unresolved         → 500 Internal (agent-side safety guard fired)
+//	write_failed            → 502 Bad Gateway (agent write/swap failed)
+//	<anything else>         → 502 Bad Gateway (agent returned unknown error)
 func mapAgentErrorCode(e *agentcmd.FileError) error {
 	switch e.Code {
 	case "sensitive_denied":
 		return domain.Forbidden("sensitive_denied", e.Message)
-	case "outside_root", "invalid_path", "is_directory":
+	case "executable_write_denied":
+		return domain.Forbidden("executable_write_denied", e.Message)
+	case "protected_root":
+		return domain.Forbidden("protected_root", e.Message)
+	case "not_readable":
+		return domain.Forbidden("not_readable", e.Message)
+	case "outside_root", "invalid_path", "is_directory", "not_directory", "mode_denied":
 		return domain.Validation(e.Code, e.Message)
 	case "not_found":
 		return domain.NotFound(e.Code, e.Message)
-	case "not_readable":
-		return domain.Forbidden("not_readable", e.Message)
+	case "exists":
+		return domain.Conflict("exists", e.Message)
 	case "too_large":
 		return domain.Validation("file_too_large", e.Message)
+	case "base_unresolved":
+		return domain.Internal("base_unresolved", e.Message)
+	case "write_failed":
+		return domain.Internal("agent_write_failed", fmt.Sprintf("agent write failed: %s", e.Message))
 	default:
 		return domain.Internal("agent_file_error", fmt.Sprintf("agent returned error %q: %s", e.Code, e.Message))
 	}

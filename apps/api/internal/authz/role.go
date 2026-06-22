@@ -150,6 +150,26 @@ const (
 	// filesystem visibility to all admin+ members of the site; it should not be
 	// delegated to operator-level principals.
 	PermSiteFilesManage Permission = "site.files.manage"
+
+	// PermSiteFilesWrite authorises write operations on the per-site File Manager
+	// (P2): file_write, file_mkdir, file_rename, file_chmod, file_upload_apply.
+	// Admin+ — same tier as PermSiteFilesRead; write is equally privileged.
+	// The per-site files_write_enabled flag must ALSO be true before the CP
+	// will sign any write command; this permission governs role access while the
+	// flag governs per-site opt-in.
+	PermSiteFilesWrite Permission = "site.files.write"
+
+	// PermSiteFilesDelete authorises the destructive file_delete operation (P2).
+	// Owner only — deletion is permanent and cannot be undone without a backup.
+	// The caller must also supply confirm="DELETE" in the request body.
+	PermSiteFilesDelete Permission = "site.files.delete"
+
+	// PermSiteFilesWriteCode authorises writes whose target path matches the
+	// executable-extension deny-list or the sensitive-file deny-list when the
+	// caller sets confirm_executable_write=true or confirm_sensitive=true (P2).
+	// Owner only — executable writes can introduce code-execution paths; this is
+	// the highest-risk write operation in the manager.
+	PermSiteFilesWriteCode Permission = "site.files.write_code"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -199,6 +219,11 @@ var minRoleFor = map[Permission]Role{
 	PermSiteFilesRead:          RoleAdmin,
 	PermSiteFilesReadSensitive: RoleOwner,
 	PermSiteFilesManage:        RoleAdmin,
+	// File Manager (P2). Write/mkdir/rename/chmod/upload: admin+; delete: owner;
+	// executable/sensitive writes (confirm_executable_write/confirm_sensitive): owner.
+	PermSiteFilesWrite:     RoleAdmin,
+	PermSiteFilesDelete:    RoleOwner,
+	PermSiteFilesWriteCode: RoleOwner,
 }
 
 // Allows reports whether role r is permitted to perform p.
