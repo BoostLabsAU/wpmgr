@@ -5327,6 +5327,219 @@ export type ApplyUploadResult = {
 };
 
 /**
+ * Request body for `POST /sites/{siteId}/files/archive`.
+ */
+export type FileArchiveCreateRequest = {
+  /**
+   * Site-relative paths to include in the archive. The agent runs each through the containment guard; at least one path is required.
+   *
+   */
+  paths: Array<string>;
+  /**
+   * Must be `true` when any path in `paths` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.read_sensitive`). A non-owner caller or a caller that omits this flag when a sensitive path is present is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Presigned download URL and transfer metadata returned by the `file_archive_create` flow.
+ *
+ */
+export type FileArchiveCreateResult = {
+  ok: boolean;
+  /**
+   * CP-assigned transfer ID (for audit correlation).
+   */
+  transfer_id: string;
+  /**
+   * Presigned GET URL for the browser to download the staged archive directly from object storage. Valid for at most 5 minutes. Never log this URL.
+   *
+   */
+  download_url: string;
+  /**
+   * Total archive size in bytes.
+   */
+  size_bytes: number;
+  /**
+   * Number of S3 parts the agent uploaded.
+   */
+  chunk_count: number;
+  /**
+   * Unix epoch seconds when the presigned GET URL expires (≤ 5 min from now).
+   */
+  expires_at: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/extract`.
+ */
+export type FileExtractRequest = {
+  /**
+   * Site-relative path to the ZIP archive to extract.
+   */
+  archive_path: string;
+  /**
+   * Site-relative destination directory. Created if absent.
+   */
+  dest_path: string;
+  /**
+   * Must be `true` when any archive entry would resolve to an executable-extension path (php, phar, htaccess, …). Requires owner permission (`site.files.write_code`). A non-owner passing this is rejected at the CP (agent never called) and the denial is audited at elevated severity.
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Must be `true` when any archive entry would resolve to a sensitive path (wp-config.php, .env*, *.pem, …). Same owner gate as `confirm_executable_write`.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/extract`.
+ */
+export type FileExtractResult = {
+  /**
+   * Resolved destination directory path (echoed).
+   */
+  dest_path: string;
+  /**
+   * Number of entries extracted from the archive.
+   */
+  extracted: number;
+};
+
+/**
+ * One result in a `file_search` response.
+ */
+export type FileSearchMatch = {
+  /**
+   * Site-relative path of the matching file or directory.
+   */
+  path: string;
+  /**
+   * Basename of the entry.
+   */
+  name: string;
+  /**
+   * File size in bytes (0 for directories).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * True when the matched entry is a directory.
+   */
+  is_dir: boolean;
+  /**
+   * Line number of the match within the file (`content` mode only; absent for `name` mode).
+   *
+   */
+  line?: number;
+  /**
+   * Surrounding text context for the match (`content` mode only; absent for `name` mode). Never contains content from sensitive paths.
+   *
+   */
+  snippet?: string;
+};
+
+/**
+ * Paginated list of search results from a `file_search` agent command.
+ *
+ */
+export type FileSearchResult = {
+  matches: Array<FileSearchMatch>;
+  /**
+   * True when more results remain beyond this page.
+   */
+  truncated: boolean;
+  /**
+   * Opaque resume cursor; present only when `truncated=true`.
+   */
+  cursor?: string;
+};
+
+/**
+ * One version entry in a file's version history.
+ */
+export type FileVersion = {
+  /**
+   * Opaque version identifier. Pass to `POST /files/versions/restore` to restore this version.
+   *
+   */
+  version_id: string;
+  /**
+   * File size in bytes at this version.
+   */
+  size: number;
+  /**
+   * Last-modified time of this version (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * When this version was created (Unix epoch seconds). May equal `mtime` when the agent derives both from the same filesystem timestamp.
+   *
+   */
+  created_at: number;
+};
+
+/**
+ * Version history for a file, ordered newest-first, from a `file_versions_list` agent command.
+ *
+ */
+export type FileVersionsResult = {
+  /**
+   * List of versions ordered newest-first. Empty when the agent has no history for the path (no version system configured or no prior writes).
+   *
+   */
+  versions: Array<FileVersion>;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/versions/restore`.
+ */
+export type FileVersionRestoreRequest = {
+  /**
+   * Site-relative path of the file to restore.
+   */
+  path: string;
+  /**
+   * Opaque version identifier returned by `GET /files/versions?path=…`. Returns `404 no_such_version` when the ID does not exist for the path.
+   *
+   */
+  version_id: string;
+  /**
+   * Must be `true` when `path` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.write_code`). A non-owner caller or a caller that omits this flag when the path is sensitive is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/versions/restore`.
+ */
+export type FileVersionRestoreResult = {
+  /**
+   * Resolved path of the restored file (echoed).
+   */
+  path: string;
+  /**
+   * Size of the restored file in bytes.
+   */
+  size: number;
+  /**
+   * Last-modified time after restore (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * The version ID that was restored (echoed for audit correlation).
+   */
+  version_id: string;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -12660,3 +12873,240 @@ export type PrepareSiteFileDownloadResponses = {
 
 export type PrepareSiteFileDownloadResponse =
   PrepareSiteFileDownloadResponses[keyof PrepareSiteFileDownloadResponses];
+
+export type CreateSiteFileArchiveData = {
+  body: FileArchiveCreateRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/archive";
+};
+
+export type CreateSiteFileArchiveErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type CreateSiteFileArchiveError =
+  CreateSiteFileArchiveErrors[keyof CreateSiteFileArchiveErrors];
+
+export type CreateSiteFileArchiveResponses = {
+  /**
+   * Archive created and presigned download URL returned
+   */
+  200: FileArchiveCreateResult;
+};
+
+export type CreateSiteFileArchiveResponse =
+  CreateSiteFileArchiveResponses[keyof CreateSiteFileArchiveResponses];
+
+export type ExtractSiteFileArchiveData = {
+  body: FileExtractRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/extract";
+};
+
+export type ExtractSiteFileArchiveErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Archive is structurally valid but contains unsafe entries (`zip_slip` — path traversal outside destination, or `zip_bomb` — exceeds uncompressed-size / entry-count guard).
+   *
+   */
+  422: Error;
+};
+
+export type ExtractSiteFileArchiveError =
+  ExtractSiteFileArchiveErrors[keyof ExtractSiteFileArchiveErrors];
+
+export type ExtractSiteFileArchiveResponses = {
+  /**
+   * Archive extracted successfully
+   */
+  200: FileExtractResult;
+};
+
+export type ExtractSiteFileArchiveResponse =
+  ExtractSiteFileArchiveResponses[keyof ExtractSiteFileArchiveResponses];
+
+export type SearchSiteFilesData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative root directory to search under.
+     */
+    path?: string;
+    /**
+     * Search term (filename substring for `name` mode; grep pattern for `content` mode).
+     */
+    q: string;
+    /**
+     * Search mode. `name` matches filenames; `content` greps file contents and returns line number + surrounding snippet.
+     *
+     */
+    mode?: "name" | "content";
+    /**
+     * Opaque resume cursor from a prior truncated response.
+     */
+    cursor?: string;
+  };
+  url: "/api/v1/sites/{siteId}/files/search";
+};
+
+export type SearchSiteFilesErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type SearchSiteFilesError =
+  SearchSiteFilesErrors[keyof SearchSiteFilesErrors];
+
+export type SearchSiteFilesResponses = {
+  /**
+   * Search results (possibly paginated)
+   */
+  200: FileSearchResult;
+};
+
+export type SearchSiteFilesResponse =
+  SearchSiteFilesResponses[keyof SearchSiteFilesResponses];
+
+export type ListSiteFileVersionsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative file path to retrieve version history for.
+     */
+    path: string;
+  };
+  url: "/api/v1/sites/{siteId}/files/versions";
+};
+
+export type ListSiteFileVersionsErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListSiteFileVersionsError =
+  ListSiteFileVersionsErrors[keyof ListSiteFileVersionsErrors];
+
+export type ListSiteFileVersionsResponses = {
+  /**
+   * Version history for the file
+   */
+  200: FileVersionsResult;
+};
+
+export type ListSiteFileVersionsResponse =
+  ListSiteFileVersionsResponses[keyof ListSiteFileVersionsResponses];
+
+export type RestoreSiteFileVersionData = {
+  body: FileVersionRestoreRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/versions/restore";
+};
+
+export type RestoreSiteFileVersionErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type RestoreSiteFileVersionError =
+  RestoreSiteFileVersionErrors[keyof RestoreSiteFileVersionErrors];
+
+export type RestoreSiteFileVersionResponses = {
+  /**
+   * File restored to the specified version
+   */
+  200: FileVersionRestoreResult;
+};
+
+export type RestoreSiteFileVersionResponse =
+  RestoreSiteFileVersionResponses[keyof RestoreSiteFileVersionResponses];

@@ -1,7 +1,9 @@
 import { useState } from "react";
 import {
+  Archive,
   FolderPlus,
   RefreshCw,
+  Search,
   ToggleLeft,
   Upload,
   X,
@@ -11,7 +13,7 @@ import { Button } from "@/components/ui/button";
 import { PageError } from "@/components/feedback";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
-import type { FileEntry } from "@wpmgr/api";
+import type { FileEntry, FileSearchMatch } from "@wpmgr/api";
 
 import { useFiles } from "./hooks/use-files";
 import { FileBreadcrumb } from "./FileBreadcrumb";
@@ -21,6 +23,8 @@ import { FilesEmptyState } from "./FilesEmptyState";
 import { FileEditDialog } from "./FileEditDialog";
 import { FileMkdirDialog } from "./FileMkdirDialog";
 import { FileUploadPane } from "./FileUploadPane";
+import { FileSearchBar } from "./FileSearchBar";
+import { FileArchiveDialog } from "./FileArchiveDialog";
 
 // FileBrowser — the enabled state of the file manager.
 //
@@ -33,22 +37,30 @@ import { FileUploadPane } from "./FileUploadPane";
 //   - Upload pane shown/hidden by a toggle button in the toolbar.
 //   - New-folder dialog.
 //
+// P3 extensions:
+//   - Search bar: toggle shows FileSearchBar above the table. While search is
+//     active the normal listing is hidden (replaced by results). Clicking a
+//     result navigates or opens the drawer. Clear returns to normal listing.
+//   - Bulk archive: selecting entries in the table shows a "Download as ZIP"
+//     bar. FileBrowserTable gains selectedPaths / onSelectionChange props.
+//     NOTE: bulk selection is managed here; the table renders checkboxes.
+//
 // Authorization:
 //   - Read (browse/preview/download): admin+ (enforced server-side).
 //   - Write (edit/upload/mkdir/rename/chmod): admin+ + write_enabled.
 //   - Delete: owner only + write_enabled.
+//   - Archive (download ZIP): admin+.
+//   - Extract: admin+ + write_enabled.
+//   - Version history: admin+.
+//   - Version restore: admin+ + write_enabled.
 
 export interface FileBrowserProps {
   siteId: string;
-  /** Whether the current user can disable/manage the file manager (admin+). */
   canManage: boolean;
-  /** Whether the current user is an owner (for exec/sensitive confirms + delete). */
   isOwner: boolean;
-  /** Whether write mode is enabled for this site. */
   writeEnabled: boolean;
   onDisable: () => void;
   isDisabling: boolean;
-  /** Called when admin wants to toggle write mode (admin+). */
   onToggleWrite: () => void;
   isTogglingWrite: boolean;
 }
@@ -72,6 +84,14 @@ export function FileBrowser({
   const [mkdirOpen, setMkdirOpen] = useState(false);
   const [uploadOpen, setUploadOpen] = useState(false);
 
+  // P3: search state
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [isSearchActive, setIsSearchActive] = useState(false);
+
+  // P3: bulk selection + archive
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
+  const [bulkArchiveOpen, setBulkArchiveOpen] = useState(false);
+
   const {
     entries,
     total,
@@ -88,17 +108,68 @@ export function FileBrowser({
   const handleNavigate = (path: string) => {
     setCurrentPath(path);
     setSelectedFile(null);
+    setSelectedPaths([]);
+    // Clear search when navigating
+    if (isSearchActive) {
+      setSearchOpen(false);
+      setIsSearchActive(false);
+    }
   };
 
   const handleFileClick = (entry: FileEntry) => {
     setSelectedFile(entry);
   };
 
+  // P3: when a search result is clicked for a file, we need to open the drawer.
+  // We construct a minimal FileEntry from the search match.
+  const handleSearchFileClick = (match: FileSearchMatch) => {
+    // Navigate to the file's parent directory and open the drawer.
+    const parts = match.path.split("/");
+    const parentDir = parts.slice(0, -1).join("/");
+    const name = parts[parts.length - 1] ?? match.path;
+    if (parentDir !== currentPath) {
+      setCurrentPath(parentDir);
+    }
+    // Build a minimal FileEntry to open the drawer.
+    const syntheticEntry: FileEntry = {
+      name,
+      size: match.size,
+      mtime: match.mtime,
+      is_dir: match.is_dir,
+      is_link: false,
+      is_writable: false,
+      mode: "",
+    };
+    setSelectedFile(syntheticEntry);
+    setSearchOpen(false);
+    setIsSearchActive(false);
+  };
+
+  const handleSearchClear = () => {
+    setSearchOpen(false);
+    setIsSearchActive(false);
+  };
+
+  const handleSearchNavigate = (path: string) => {
+    handleNavigate(path);
+    setSearchOpen(false);
+    setIsSearchActive(false);
+  };
+
+  const handleToggleSearch = () => {
+    if (searchOpen) {
+      setSearchOpen(false);
+      setIsSearchActive(false);
+    } else {
+      setSearchOpen(true);
+    }
+  };
+
   const canWrite = canManage && writeEnabled;
 
   return (
     <div className="space-y-3">
-      {/* Write-mode hint strip — shown to admins when write is off */}
+      {/* Write-mode hint strip */}
       {canManage && !writeEnabled ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] px-3 py-2">
           <p className="text-xs text-[var(--color-muted-foreground)]">
@@ -117,12 +188,12 @@ export function FileBrowser({
         </div>
       ) : null}
 
-      {/* Write-mode active strip — shown to admins when write is on */}
+      {/* Write-mode active strip */}
       {canManage && writeEnabled ? (
         <div className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-warning)]/30 bg-[var(--color-warning)]/8 px-3 py-2">
           <p className="text-xs text-[var(--color-foreground)]">
-            Write mode is on. Edits, uploads, and deletions are live on the site
-            and audited.
+            Write mode is on. Edits, uploads, and deletions are live on the
+            site and audited.
           </p>
           <Button
             type="button"
@@ -140,11 +211,17 @@ export function FileBrowser({
       {/* Toolbar: breadcrumb + count + actions */}
       <div className="flex min-h-9 items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <FileBreadcrumb path={currentPath} onNavigate={handleNavigate} />
+          {!isSearchActive ? (
+            <FileBreadcrumb path={currentPath} onNavigate={handleNavigate} />
+          ) : (
+            <span className="text-xs font-medium text-[var(--color-foreground)]">
+              Search results
+            </span>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {/* Entry count + refresh indicator */}
-          {!isPending && !isError ? (
+          {!isSearchActive && !isPending && !isError ? (
             <span className="text-xs text-[var(--color-muted-foreground)] tabular-nums">
               {total.toLocaleString()} {total === 1 ? "entry" : "entries"}
               {isFetching && !isFetchingNextPage ? (
@@ -156,8 +233,29 @@ export function FileBrowser({
             </span>
           ) : null}
 
+          {/* Search toggle (P3, admin+) */}
+          {canManage ? (
+            <Button
+              type="button"
+              variant={searchOpen ? "default" : "outline"}
+              size="sm"
+              onClick={handleToggleSearch}
+              className="gap-1.5"
+              title="Search files in this directory"
+              aria-expanded={searchOpen}
+              aria-label={searchOpen ? "Close search" : "Search files"}
+            >
+              {searchOpen ? (
+                <X aria-hidden="true" className="size-4" />
+              ) : (
+                <Search aria-hidden="true" className="size-4" />
+              )}
+              {searchOpen ? "Close" : "Search"}
+            </Button>
+          ) : null}
+
           {/* New folder (admin+, write_enabled) */}
-          {canWrite ? (
+          {canWrite && !isSearchActive ? (
             <Button
               type="button"
               variant="outline"
@@ -172,7 +270,7 @@ export function FileBrowser({
           ) : null}
 
           {/* Upload toggle (admin+, write_enabled) */}
-          {canWrite ? (
+          {canWrite && !isSearchActive ? (
             <Button
               type="button"
               variant={uploadOpen ? "default" : "outline"}
@@ -191,7 +289,7 @@ export function FileBrowser({
             </Button>
           ) : null}
 
-          {/* Disable action — only for admins, unobtrusive */}
+          {/* Disable action */}
           {canManage ? (
             <Button
               type="button"
@@ -209,8 +307,22 @@ export function FileBrowser({
         </div>
       </div>
 
+      {/* P3: Search bar — shown when searchOpen=true */}
+      {searchOpen && canManage ? (
+        <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
+          <FileSearchBar
+            siteId={siteId}
+            currentPath={currentPath}
+            isVisible={searchOpen}
+            onNavigate={handleSearchNavigate}
+            onFileClick={handleSearchFileClick}
+            onClear={handleSearchClear}
+          />
+        </div>
+      ) : null}
+
       {/* Upload pane */}
-      {uploadOpen && canWrite ? (
+      {uploadOpen && canWrite && !isSearchActive ? (
         <div className="rounded-lg border border-[var(--color-border)] bg-[var(--color-card)] p-4">
           <FileUploadPane
             siteId={siteId}
@@ -220,34 +332,48 @@ export function FileBrowser({
         </div>
       ) : null}
 
-      {/* Table / states */}
-      {isPending ? (
-        <FileBrowserSkeleton />
-      ) : isError ? (
-        <PageError
-          what="Could not load directory."
-          why={friendlyError(error)}
-          onRetry={() => void refetch()}
-          retryLabel="Reload directory"
-        />
-      ) : entries.length === 0 ? (
-        <FilesEmptyState />
-      ) : (
-        <FileBrowserTable
-          entries={entries}
-          currentPath={currentPath}
-          onNavigate={handleNavigate}
-          onFileClick={handleFileClick}
-          onEndReached={
-            hasNextPage && !isFetchingNextPage ? fetchNextPage : undefined
-          }
-          isFetchingNextPage={isFetchingNextPage}
-          siteId={siteId}
-          writeEnabled={writeEnabled}
+      {/* Bulk selection bar (P3) — shown when items are selected */}
+      {selectedPaths.length > 0 && !isSearchActive ? (
+        <BulkSelectionBar
+          count={selectedPaths.length}
           canManage={canManage}
-          isOwner={isOwner}
+          onArchive={() => setBulkArchiveOpen(true)}
+          onClearSelection={() => setSelectedPaths([])}
         />
-      )}
+      ) : null}
+
+      {/* Table / states — hidden while search is active (search bar owns results) */}
+      {!isSearchActive ? (
+        isPending ? (
+          <FileBrowserSkeleton />
+        ) : isError ? (
+          <PageError
+            what="Could not load directory."
+            why={friendlyError(error)}
+            onRetry={() => void refetch()}
+            retryLabel="Reload directory"
+          />
+        ) : entries.length === 0 ? (
+          <FilesEmptyState />
+        ) : (
+          <FileBrowserTable
+            entries={entries}
+            currentPath={currentPath}
+            onNavigate={handleNavigate}
+            onFileClick={handleFileClick}
+            onEndReached={
+              hasNextPage && !isFetchingNextPage ? fetchNextPage : undefined
+            }
+            isFetchingNextPage={isFetchingNextPage}
+            siteId={siteId}
+            writeEnabled={writeEnabled}
+            canManage={canManage}
+            isOwner={isOwner}
+            selectedPaths={selectedPaths}
+            onSelectionChange={setSelectedPaths}
+          />
+        )
+      ) : null}
 
       {/* File detail drawer */}
       <FileDetailDrawer
@@ -292,11 +418,77 @@ export function FileBrowser({
           onCreated={() => setMkdirOpen(false)}
         />
       ) : null}
+
+      {/* P3: Bulk archive dialog */}
+      {bulkArchiveOpen ? (
+        <FileArchiveDialog
+          open={bulkArchiveOpen}
+          onClose={() => {
+            setBulkArchiveOpen(false);
+            setSelectedPaths([]);
+          }}
+          siteId={siteId}
+          paths={selectedPaths}
+          isOwner={isOwner}
+        />
+      ) : null}
     </div>
   );
 }
 
-// ── Loading skeleton ──────────────────────────────────────────────────────
+// ── Bulk selection bar ────────────────────────────────────────────────────────
+
+function BulkSelectionBar({
+  count,
+  canManage,
+  onArchive,
+  onClearSelection,
+}: {
+  count: number;
+  canManage: boolean;
+  onArchive: () => void;
+  onClearSelection: () => void;
+}) {
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-center justify-between gap-3 rounded-md border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/8 px-3 py-2"
+    >
+      <span className="text-sm text-[var(--color-foreground)]">
+        <span className="font-medium tabular-nums">{count}</span>{" "}
+        {count === 1 ? "item" : "items"} selected
+      </span>
+      <div className="flex items-center gap-2">
+        {canManage ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={onArchive}
+            className="gap-1.5 text-xs"
+          >
+            <Archive aria-hidden="true" className="size-3.5" />
+            Download as ZIP
+          </Button>
+        ) : null}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          onClick={onClearSelection}
+          className="gap-1.5 text-xs text-[var(--color-muted-foreground)]"
+          aria-label="Clear selection"
+        >
+          <X aria-hidden="true" className="size-3.5" />
+          Clear
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ── Loading skeleton ──────────────────────────────────────────────────────────
 
 function FileBrowserSkeleton() {
   return (
@@ -332,7 +524,7 @@ function FileBrowserSkeleton() {
   );
 }
 
-// ── Error helpers ─────────────────────────────────────────────────────────
+// ── Error helpers ─────────────────────────────────────────────────────────────
 
 function friendlyError(err: Error | null): string {
   if (!err) return "Unknown error";

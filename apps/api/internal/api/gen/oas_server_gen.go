@@ -471,6 +471,29 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/files/mkdir
 	CreateSiteDirectory(ctx context.Context, req *FileMkdirRequest, params CreateSiteDirectoryParams) (CreateSiteDirectoryRes, error)
+	// CreateSiteFileArchive implements createSiteFileArchive operation.
+	//
+	// Issues a `file_archive_create` command to the site's agent. The agent
+	// zips the specified paths (all containment-checked within the jail) and
+	// uploads the archive directly to a CP-minted S3 staging area. The CP
+	// then mints a short-lived presigned GET URL for the browser to download
+	// the archive.
+	// This is a **read** operation — it does not require write mode.
+	// **Sensitive-path gate (F1):** If any path in `paths` matches the
+	// sensitive-file deny-list (wp-config.php, .env*, *.pem, …), the caller
+	// must set `confirm_sensitive=true` AND hold `site.files.read_sensitive`
+	// (owner). Both checks must pass — a missing flag or insufficient
+	// permission returns `403`. The denial is audited at elevated severity.
+	// The agent independently re-checks every path and returns
+	// `sensitive_denied` when the flag is absent. The CP audit carries the
+	// full path list.
+	// Returns `503 storage_not_configured` on deployments without object storage.
+	// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+	// when not opted in.
+	// Requires `site.files.read` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/archive
+	CreateSiteFileArchive(ctx context.Context, req *FileArchiveCreateRequest, params CreateSiteFileArchiveParams) (CreateSiteFileArchiveRes, error)
 	// CreateSiteShare implements createSiteShare operation.
 	//
 	// Grant site access to an email (admin+; org-scope only). If the email
@@ -675,6 +698,31 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/log/export
 	ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (ExportSiteEmailLogRes, error)
+	// ExtractSiteFileArchive implements extractSiteFileArchive operation.
+	//
+	// Issues a `file_extract` command to the site's agent. The agent opens
+	// the archive at `archive_path`, validates every entry against the
+	// containment guard (zip-slip / zip-bomb / symlink / absolute-path
+	// guards all enforced agent-side), and extracts into `dest_path`.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+	// `true`. Returns `403 files_write_not_enabled` when write mode is off.
+	// **Zip-slip / zip-bomb (422):** If any archive entry would resolve
+	// outside `dest_path` or the archive exceeds the uncompressed-size /
+	// entry-count guard, the agent returns `zip_slip` or `zip_bomb`
+	// respectively. The CP maps these to `422 Unprocessable Entity`.
+	// **Bad/unknown archive (400):** `bad_archive` (file is corrupted) and
+	// `not_archive` (path is not a recognised archive) map to `400`.
+	// **Executable/sensitive gate (T1/T6):** When `confirm_executable_write`
+	// or `confirm_sensitive` is set in the request body:
+	// - The caller must additionally hold `site.files.write_code` (owner).
+	// - A non-owner caller is rejected at the CP handler — the agent is
+	// **never called** — and the denial is audited at elevated severity.
+	// - The agent independently enforces its executable deny-list and
+	// sensitive-path deny-list regardless of the confirm flags.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/extract
+	ExtractSiteFileArchive(ctx context.Context, req *FileExtractRequest, params ExtractSiteFileArchiveParams) (ExtractSiteFileArchiveRes, error)
 	// FlushObjectCache implements flushObjectCache operation.
 	//
 	// Flushes the Redis/cache store for this site. The `scope` field
@@ -1402,6 +1450,28 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/email/suppression
 	ListSiteEmailSuppression(ctx context.Context, params ListSiteEmailSuppressionParams) (ListSiteEmailSuppressionRes, error)
+	// ListSiteFileVersions implements listSiteFileVersions operation.
+	//
+	// Issues a `file_versions_list` command to the site's agent. Returns the
+	// version history for a single file, ordered newest-first. Each version
+	// carries an opaque `version_id` that can be passed to
+	// `POST /files/versions/restore` to restore that version.
+	// **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+	// deny-list (wp-config.php, .env*, *.pem, …), the caller must hold
+	// `site.files.read_sensitive` (owner). A non-owner is denied `403` and
+	// the denial is audited at elevated severity. This prevents leaking that
+	// sensitive backups exist to non-owner collaborators.
+	// Version history availability depends on the agent-side implementation
+	// (e.g. the host's filesystem snapshot, the pre-write backup mechanism,
+	// or WP's own revision system). When no history is available for a path,
+	// the agent returns an empty `versions` list.
+	// This is a **read** operation.
+	// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+	// when not opted in.
+	// Requires `site.files.read` permission (admin+).
+	//
+	// GET /api/v1/sites/{siteId}/files/versions
+	ListSiteFileVersions(ctx context.Context, params ListSiteFileVersionsParams) (ListSiteFileVersionsRes, error)
 	// ListSiteFiles implements listSiteFiles operation.
 	//
 	// Issues a `file_list` command to the site's agent and returns one page
@@ -1867,6 +1937,28 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/restore
 	RestoreSite(ctx context.Context, params RestoreSiteParams) (RestoreSiteRes, error)
+	// RestoreSiteFileVersion implements restoreSiteFileVersion operation.
+	//
+	// Issues a `file_version_restore` command to the site's agent, which
+	// overwrites the file at `path` with the content of the specified
+	// `version_id`. The version identifier is opaque — retrieve valid IDs
+	// from `GET /files/versions?path=…`.
+	// Returns `404 no_such_version` when the version ID does not exist for
+	// the given path.
+	// **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+	// `true`. Returns `403 files_write_not_enabled` when write mode is off.
+	// **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+	// deny-list (wp-config.php, .env*, *.pem, …), the caller must set
+	// `confirm_sensitive=true` AND hold `site.files.write_code` (owner).
+	// Both checks must pass — a missing flag or insufficient permission
+	// returns `403`. The denial is audited at elevated severity. The agent
+	// independently re-checks and returns `sensitive_denied` when the flag
+	// is absent.
+	// Every restore is audited with the full `path` and `version_id`.
+	// Requires `site.files.write` permission (admin+).
+	//
+	// POST /api/v1/sites/{siteId}/files/versions/restore
+	RestoreSiteFileVersion(ctx context.Context, req *FileVersionRestoreRequest, params RestoreSiteFileVersionParams) (RestoreSiteFileVersionRes, error)
 	// RevertDbSnapshot implements revertDbSnapshot operation.
 	//
 	// Replaces the entire live database with the SQL captured in a local
@@ -1936,6 +2028,21 @@ type Handler interface {
 	//
 	// GET /api/v1/sites/{siteId}/media/clean/scan
 	ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (*MediaCleanScanResult, error)
+	// SearchSiteFiles implements searchSiteFiles operation.
+	//
+	// Issues a `file_search` command to the site's agent. Supports two modes:
+	// - `name` — match filenames against the query string.
+	// - `content` — grep file contents for the query string (line + snippet returned).
+	// Results are cursor-paginated: when `truncated=true` the response carries
+	// an opaque `cursor` for the next page.
+	// This is a **read** operation. The agent never exposes the content of
+	// sensitive paths (wp-config.php, .env*, *.pem, …) in search snippets.
+	// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+	// when not opted in.
+	// Requires `site.files.read` permission (admin+).
+	//
+	// GET /api/v1/sites/{siteId}/files/search
+	SearchSiteFiles(ctx context.Context, params SearchSiteFilesParams) (SearchSiteFilesRes, error)
 	// SendTestEmail implements sendTestEmail operation.
 	//
 	// Dispatches the signed `send_test_email` command to the site's agent.

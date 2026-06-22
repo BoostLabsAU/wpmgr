@@ -30,14 +30,19 @@ use WPMgr\Agent\Commands\MetadataCommand;
 use WPMgr\Agent\Commands\RefreshInventoryCommand;
 use WPMgr\Agent\Commands\RestoreCommand;
 use WPMgr\Agent\Commands\RollbackCommand;
+use WPMgr\Agent\Commands\FileArchiveCreateCommand;
 use WPMgr\Agent\Commands\FileChmodCommand;
 use WPMgr\Agent\Commands\FileDeleteCommand;
 use WPMgr\Agent\Commands\FileDownloadPrepareCommand;
+use WPMgr\Agent\Commands\FileExtractCommand;
 use WPMgr\Agent\Commands\FileListCommand;
 use WPMgr\Agent\Commands\FileMkdirCommand;
 use WPMgr\Agent\Commands\FileReadCommand;
 use WPMgr\Agent\Commands\FileRenameCommand;
+use WPMgr\Agent\Commands\FileSearchCommand;
 use WPMgr\Agent\Commands\FileUploadApplyCommand;
+use WPMgr\Agent\Commands\FileVersionRestoreCommand;
+use WPMgr\Agent\Commands\FileVersionsListCommand;
 use WPMgr\Agent\Commands\FileWriteCommand;
 use WPMgr\Agent\Commands\GetFileCommand;
 use WPMgr\Agent\Commands\ScanCommand;
@@ -1456,6 +1461,19 @@ final class Plugin
             new FileDeleteCommand(),
             new FileChmodCommand(),
             new FileUploadApplyCommand(),
+            // P3 advanced file operations (v1.2).
+            //   file_archive_create  -> zip one or more jailed paths and stage to S3
+            //   file_extract         -> extract a jailed .zip into a jailed destination
+            //                          (zip-slip + zip-bomb + exec + sensitive guards;
+            //                           quarantine → validate → atomic-swap pattern)
+            //   file_search          -> recursive literal-substring search within jail
+            //   file_versions_list   -> list pre-write staged backups for a jailed path
+            //   file_version_restore -> atomic restore of a staged version (pre-restore backup first)
+            new FileArchiveCreateCommand(),
+            new FileExtractCommand(),
+            new FileSearchCommand(),
+            new FileVersionsListCommand(),
+            new FileVersionRestoreCommand(),
         ];
     }
 

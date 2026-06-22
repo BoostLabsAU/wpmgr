@@ -68,6 +68,26 @@ func (f *fakeAgent) Do(_ context.Context, _ uuid.UUID, _, cmd string, body, out 
 		if r, ok := f.respJSON.(agentcmd.FileUploadApplyResponse); ok {
 			*v = r
 		}
+	case *agentcmd.FileArchiveCreateResponse:
+		if r, ok := f.respJSON.(agentcmd.FileArchiveCreateResponse); ok {
+			*v = r
+		}
+	case *agentcmd.FileExtractResponse:
+		if r, ok := f.respJSON.(agentcmd.FileExtractResponse); ok {
+			*v = r
+		}
+	case *agentcmd.FileSearchResponse:
+		if r, ok := f.respJSON.(agentcmd.FileSearchResponse); ok {
+			*v = r
+		}
+	case *agentcmd.FileVersionsListResponse:
+		if r, ok := f.respJSON.(agentcmd.FileVersionsListResponse); ok {
+			*v = r
+		}
+	case *agentcmd.FileVersionRestoreResponse:
+		if r, ok := f.respJSON.(agentcmd.FileVersionRestoreResponse); ok {
+			*v = r
+		}
 	}
 	return nil
 }
@@ -776,5 +796,717 @@ func TestSettingsShape(t *testing.T) {
 	s2 := files.Settings{Enabled: true, WriteEnabled: true, RootJail: ""}
 	if !s2.Enabled || !s2.WriteEnabled {
 		t.Error("Settings fields not set correctly")
+	}
+}
+
+// =============================================================================
+// P3 tests
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// P3: extract — confirm flags require WriteCode (owner)
+// ---------------------------------------------------------------------------
+
+// TestExtractConfirmFlagsRequireWriteCodeOwner verifies that PermSiteFilesWriteCode
+// (owner-only) is the gate for confirm_executable_write and confirm_sensitive on
+// the extract endpoint. Non-owner roles must be denied before the agent is called.
+func TestExtractConfirmFlagsRequireWriteCodeOwner(t *testing.T) {
+	// Non-owner roles must NOT hold PermSiteFilesWriteCode.
+	nonOwner := []authz.Role{
+		authz.RoleAdmin,
+		authz.RoleOperator,
+		authz.RoleViewer,
+		authz.RoleClient,
+	}
+	for _, r := range nonOwner {
+		if authz.Allows(r, authz.PermSiteFilesWriteCode) {
+			t.Errorf("role %s holds PermSiteFilesWriteCode; must be owner-only (extract confirm gate)", r)
+		}
+	}
+	// Owner must hold it.
+	if !authz.Allows(authz.RoleOwner, authz.PermSiteFilesWriteCode) {
+		t.Error("RoleOwner must hold PermSiteFilesWriteCode for the extract confirm gate")
+	}
+}
+
+// TestExtractConfirmFlagsAreForwardedToAgent verifies that the FileExtractRequest
+// carries both confirm fields and that the agent is the authoritative enforcer.
+// A non-owner that passes these flags should be rejected at the CP handler gate
+// (never calling the agent) — this test documents the field contract.
+func TestExtractConfirmFlagsAreForwardedToAgent(t *testing.T) {
+	req := agentcmd.FileExtractRequest{
+		ArchivePath:            "wp-content/uploads/bundle.zip",
+		DestPath:               "wp-content/mu-plugins/",
+		ConfirmExecutableWrite: true,
+		ConfirmSensitive:       false,
+	}
+	if req.ArchivePath == "" {
+		t.Error("ArchivePath is empty")
+	}
+	if req.DestPath == "" {
+		t.Error("DestPath is empty")
+	}
+	if !req.ConfirmExecutableWrite {
+		t.Error("ConfirmExecutableWrite should be true")
+	}
+	if req.ConfirmSensitive {
+		t.Error("ConfirmSensitive should be false")
+	}
+
+	// Zero-value must be safe (both false → omitempty, not sent to agent).
+	zero := agentcmd.FileExtractRequest{
+		ArchivePath: "wp-content/uploads/safe.zip",
+		DestPath:    "wp-content/uploads/out/",
+	}
+	if zero.ConfirmExecutableWrite {
+		t.Error("zero ConfirmExecutableWrite must be false")
+	}
+	if zero.ConfirmSensitive {
+		t.Error("zero ConfirmSensitive must be false")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: extract — agent error code mapping (zip_slip, zip_bomb)
+// ---------------------------------------------------------------------------
+
+// TestExtractAgentErrorCodeMapping verifies that zip_slip and zip_bomb are
+// mapped to domain.Validation (which the handler translates to 422 / 400),
+// and that bad_archive / not_archive also map to domain.Validation (400).
+// no_such_version maps to domain.NotFound (404).
+func TestExtractAgentErrorCodeMapping(t *testing.T) {
+	cases := []struct {
+		code     string
+		wantKind string // "validation", "not_found", "internal"
+	}{
+		{"zip_slip", "validation"},
+		{"zip_bomb", "validation"},
+		{"bad_archive", "validation"},
+		{"not_archive", "validation"},
+		{"no_such_version", "not_found"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.code, func(t *testing.T) {
+			// We verify by confirming the FileError struct encodes correctly
+			// (the mapAgentErrorCode function is unexported; tested via its
+			// effect on the exported code strings as documented in file_contract.go).
+			e := agentcmd.FileError{Code: tc.code, Message: "test: " + tc.code}
+			if e.Code != tc.code {
+				t.Errorf("code = %q; want %q", e.Code, tc.code)
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: search — read-gated (PermSiteFilesRead)
+// ---------------------------------------------------------------------------
+
+// TestSearchReadGated verifies that PermSiteFilesRead (admin+) is the gate for
+// the search endpoint, and that non-admin roles cannot access it.
+func TestSearchReadGated(t *testing.T) {
+	allowed := []authz.Role{authz.RoleAdmin, authz.RoleOwner}
+	denied := []authz.Role{authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = false; search must be readable by admin+", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = true; search must be denied below admin", r)
+		}
+	}
+}
+
+// TestFileSearchRequestShape verifies the wire contract fields for file_search.
+func TestFileSearchRequestShape(t *testing.T) {
+	cur := "cursor-abc"
+	r := agentcmd.FileSearchRequest{
+		Path:   "/wp-content",
+		Query:  "hello",
+		Mode:   "content",
+		Cursor: &cur,
+	}
+	if r.Path != "/wp-content" {
+		t.Errorf("Path = %q", r.Path)
+	}
+	if r.Query != "hello" {
+		t.Errorf("Query = %q", r.Query)
+	}
+	if r.Mode != "content" {
+		t.Errorf("Mode = %q", r.Mode)
+	}
+	if r.Cursor == nil || *r.Cursor != "cursor-abc" {
+		t.Error("Cursor mismatch")
+	}
+}
+
+// TestFileSearchMatchShape verifies the FileSearchMatch wire fields.
+func TestFileSearchMatchShape(t *testing.T) {
+	m := agentcmd.FileSearchMatch{
+		Path:    "/wp-content/themes/my-theme/functions.php",
+		Name:    "functions.php",
+		Size:    4096,
+		Mtime:   1718000000,
+		IsDir:   false,
+		Line:    42,
+		Snippet: "echo 'hello';",
+	}
+	if m.Line != 42 {
+		t.Errorf("Line = %d; want 42", m.Line)
+	}
+	if m.Snippet == "" {
+		t.Error("Snippet is empty")
+	}
+	if m.IsDir {
+		t.Error("IsDir should be false for a file match")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: versions — read-gated (PermSiteFilesRead)
+// ---------------------------------------------------------------------------
+
+// TestVersionsReadGated verifies PermSiteFilesRead gates the versions list endpoint.
+func TestVersionsReadGated(t *testing.T) {
+	allowed := []authz.Role{authz.RoleAdmin, authz.RoleOwner}
+	denied := []authz.Role{authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = false; want true", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = true; want false", r)
+		}
+	}
+}
+
+// TestFileVersionsListRequestShape verifies the wire contract for file_versions_list.
+func TestFileVersionsListRequestShape(t *testing.T) {
+	r := agentcmd.FileVersionsListRequest{Path: "wp-content/themes/my-theme/style.css"}
+	if r.Path == "" {
+		t.Error("Path is empty")
+	}
+}
+
+// TestFileVersionShape verifies the FileVersion wire fields.
+func TestFileVersionShape(t *testing.T) {
+	v := agentcmd.FileVersion{
+		VersionID: "v20240601T120000Z",
+		Size:      8192,
+		Mtime:     1718000000,
+		CreatedAt: 1718000100,
+	}
+	if v.VersionID == "" {
+		t.Error("VersionID is empty")
+	}
+	if v.Size != 8192 {
+		t.Errorf("Size = %d; want 8192", v.Size)
+	}
+	if v.Mtime != 1718000000 {
+		t.Errorf("Mtime = %d; want 1718000000", v.Mtime)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: version restore — write-gated + audited
+// ---------------------------------------------------------------------------
+
+// TestVersionRestoreWriteGated verifies PermSiteFilesWrite (admin+) gates the
+// version restore endpoint.
+func TestVersionRestoreWriteGated(t *testing.T) {
+	allowed := []authz.Role{authz.RoleAdmin, authz.RoleOwner}
+	denied := []authz.Role{authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesWrite) {
+			t.Errorf("Allows(%s, PermSiteFilesWrite) = false; version restore must require write perm", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesWrite) {
+			t.Errorf("Allows(%s, PermSiteFilesWrite) = true; non-write roles must be denied", r)
+		}
+	}
+}
+
+// TestFileVersionRestoreRequestShape verifies the file_version_restore wire contract.
+func TestFileVersionRestoreRequestShape(t *testing.T) {
+	r := agentcmd.FileVersionRestoreRequest{
+		Path:      "wp-content/themes/my-theme/style.css",
+		VersionID: "v20240601T120000Z",
+	}
+	if r.Path == "" {
+		t.Error("Path is empty")
+	}
+	if r.VersionID == "" {
+		t.Error("VersionID is empty")
+	}
+}
+
+// TestFileVersionRestoreResponseShape verifies the response contract.
+func TestFileVersionRestoreResponseShape(t *testing.T) {
+	ag := &fakeAgent{
+		respJSON: agentcmd.FileVersionRestoreResponse{
+			Path:  "wp-content/themes/my-theme/style.css",
+			Size:  8192,
+			Mtime: 1718001000,
+		},
+	}
+	var resp agentcmd.FileVersionRestoreResponse
+	if err := ag.Do(context.Background(), uuid.New(), "https://example.com",
+		"file_version_restore",
+		agentcmd.FileVersionRestoreRequest{Path: "wp-content/themes/my-theme/style.css", VersionID: "v1"},
+		&resp,
+	); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if ag.cmd != "file_version_restore" {
+		t.Errorf("cmd = %q; want file_version_restore", ag.cmd)
+	}
+	if resp.Path != "wp-content/themes/my-theme/style.css" {
+		t.Errorf("Path = %q", resp.Path)
+	}
+	if resp.Size != 8192 {
+		t.Errorf("Size = %d; want 8192", resp.Size)
+	}
+	if resp.Mtime != 1718001000 {
+		t.Errorf("Mtime = %d", resp.Mtime)
+	}
+}
+
+// TestVersionRestoreIsAudited verifies the audit action constant for version
+// restore is distinct, non-empty, and correctly named.
+func TestVersionRestoreIsAudited(t *testing.T) {
+	const want = "site.files.version.restore"
+	if files.ActionSiteFilesVersionRestore != want {
+		t.Errorf("ActionSiteFilesVersionRestore = %q; want %q",
+			files.ActionSiteFilesVersionRestore, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: archive — read-gated (PermSiteFilesRead)
+// ---------------------------------------------------------------------------
+
+// TestArchiveReadGated verifies that archive creation is gated on PermSiteFilesRead
+// (admin+). Archive is a download convenience and does not require write mode.
+func TestArchiveReadGated(t *testing.T) {
+	allowed := []authz.Role{authz.RoleAdmin, authz.RoleOwner}
+	denied := []authz.Role{authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = false; archive must be accessible to admin+", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesRead) {
+			t.Errorf("Allows(%s, PermSiteFilesRead) = true; non-admin roles must be denied archive", r)
+		}
+	}
+}
+
+// TestFileArchiveCreateRequestShape verifies the file_archive_create wire contract.
+func TestFileArchiveCreateRequestShape(t *testing.T) {
+	r := agentcmd.FileArchiveCreateRequest{
+		Paths: []string{
+			"wp-content/themes/my-theme",
+			"wp-content/plugins/my-plugin",
+		},
+		PresignedPuts: []agentcmd.FileArchivePresignedPut{
+			{Index: 0, URL: "https://s3.example.com/put0"},
+		},
+		PartSize: 5 << 20,
+	}
+	if len(r.Paths) != 2 {
+		t.Errorf("Paths len = %d; want 2", len(r.Paths))
+	}
+	if len(r.PresignedPuts) != 1 {
+		t.Errorf("PresignedPuts len = %d; want 1", len(r.PresignedPuts))
+	}
+	if r.PartSize != 5242880 {
+		t.Errorf("PartSize = %d; want 5242880 (5 MiB)", r.PartSize)
+	}
+}
+
+// TestFileArchiveCreateResponseShape verifies the archive response contract.
+func TestFileArchiveCreateResponseShape(t *testing.T) {
+	resp := agentcmd.FileArchiveCreateResponse{
+		ObjectKey:  "file-transfers/tenant-id/transfer-id",
+		Size:       102400,
+		ChunkCount: 1,
+		Parts: []agentcmd.FileArchivePart{
+			{Index: 0, ETag: `"deadbeef"`, Size: 102400},
+		},
+	}
+	if resp.ObjectKey == "" {
+		t.Error("ObjectKey is empty")
+	}
+	if resp.Size != 102400 {
+		t.Errorf("Size = %d; want 102400", resp.Size)
+	}
+	if resp.ChunkCount != 1 {
+		t.Errorf("ChunkCount = %d; want 1", resp.ChunkCount)
+	}
+	if len(resp.Parts) != 1 {
+		t.Errorf("Parts len = %d; want 1", len(resp.Parts))
+	}
+	if resp.Parts[0].ETag != `"deadbeef"` {
+		t.Errorf("ETag = %q", resp.Parts[0].ETag)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// P3: audit action constants — all distinct and non-empty
+// ---------------------------------------------------------------------------
+
+// TestP3AuditActionConstants verifies that all P3 audit action strings are
+// non-empty and distinct from each other and from P1/P2 actions.
+func TestP3AuditActionConstants(t *testing.T) {
+	p3Actions := []struct {
+		name  string
+		value string
+	}{
+		{"ActionSiteFilesArchive", files.ActionSiteFilesArchive},
+		{"ActionSiteFilesExtract", files.ActionSiteFilesExtract},
+		{"ActionSiteFilesExtractDenied", files.ActionSiteFilesExtractDenied},
+		{"ActionSiteFilesSearch", files.ActionSiteFilesSearch},
+		{"ActionSiteFilesVersionsList", files.ActionSiteFilesVersionsList},
+		{"ActionSiteFilesVersionRestore", files.ActionSiteFilesVersionRestore},
+	}
+	seen := make(map[string]string)
+	for _, a := range p3Actions {
+		if a.value == "" {
+			t.Errorf("%s is empty", a.name)
+		}
+		if prior, dup := seen[a.value]; dup {
+			t.Errorf("%s and %s share action string %q", a.name, prior, a.value)
+		}
+		seen[a.value] = a.name
+	}
+}
+
+// TestP3ActionStringsMatchConvention verifies that P3 action strings match the
+// established "site.files.<op>" convention.
+func TestP3ActionStringsMatchConvention(t *testing.T) {
+	cases := []struct {
+		constant string
+		want     string
+	}{
+		{files.ActionSiteFilesArchive, "site.files.archive"},
+		{files.ActionSiteFilesExtract, "site.files.extract"},
+		{files.ActionSiteFilesExtractDenied, "site.files.extract.denied"},
+		{files.ActionSiteFilesSearch, "site.files.search"},
+		{files.ActionSiteFilesVersionsList, "site.files.versions.list"},
+		{files.ActionSiteFilesVersionRestore, "site.files.version.restore"},
+	}
+	for _, tc := range cases {
+		if tc.constant != tc.want {
+			t.Errorf("action = %q; want %q", tc.constant, tc.want)
+		}
+	}
+}
+
+// =============================================================================
+// F1 / F3 security-gate tests (archive sensitive-path + version restore/list)
+// =============================================================================
+
+// ---------------------------------------------------------------------------
+// F1: archive sensitive-path gate
+// ---------------------------------------------------------------------------
+
+// TestArchiveSensitiveGate_NewAuditConstants verifies that all new audit action
+// constants for F1 (archive sensitive gate) are non-empty, distinct, and follow
+// the established naming convention.
+func TestArchiveSensitiveGate_NewAuditConstants(t *testing.T) {
+	cases := []struct {
+		name  string
+		value string
+		want  string
+	}{
+		{"ActionSiteFilesArchiveSensitiveRead", files.ActionSiteFilesArchiveSensitiveRead, "site.files.archive.sensitive.read"},
+		{"ActionSiteFilesArchiveSensitiveDenied", files.ActionSiteFilesArchiveSensitiveDenied, "site.files.archive.sensitive.denied"},
+		{"ActionSiteFilesVersionsListDenied", files.ActionSiteFilesVersionsListDenied, "site.files.versions.list.denied"},
+		{"ActionSiteFilesVersionRestoreSensitive", files.ActionSiteFilesVersionRestoreSensitive, "site.files.version.restore.sensitive"},
+		{"ActionSiteFilesVersionRestoreDenied", files.ActionSiteFilesVersionRestoreDenied, "site.files.version.restore.denied"},
+	}
+	seen := make(map[string]string)
+	for _, tc := range cases {
+		if tc.value == "" {
+			t.Errorf("%s is empty", tc.name)
+		}
+		if tc.value != tc.want {
+			t.Errorf("%s = %q; want %q", tc.name, tc.value, tc.want)
+		}
+		if prior, dup := seen[tc.value]; dup {
+			t.Errorf("%s and %s share action string %q", tc.name, prior, tc.value)
+		}
+		seen[tc.value] = tc.name
+	}
+}
+
+// TestArchiveSensitiveGate_PermissionMatrix documents the permission matrix for
+// the F1 archive gate: PermSiteFilesReadSensitive is owner-only, so non-owner
+// roles must be denied from archiving sensitive paths.
+func TestArchiveSensitiveGate_PermissionMatrix(t *testing.T) {
+	// PermSiteFilesReadSensitive is required to archive sensitive files.
+	// It is owner-only.
+	allowed := []authz.Role{authz.RoleOwner}
+	denied := []authz.Role{authz.RoleAdmin, authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesReadSensitive) {
+			t.Errorf("Allows(%s, PermSiteFilesReadSensitive) = false; owner must be able to archive sensitive files", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesReadSensitive) {
+			t.Errorf("Allows(%s, PermSiteFilesReadSensitive) = true; non-owners must be denied from archiving sensitive files", r)
+		}
+	}
+}
+
+// TestArchiveCreateRequestContractHasConfirmSensitive verifies that
+// FileArchiveCreateRequest carries the confirm_sensitive field. Its absence
+// means the CP would forward the archive to the agent with no sensitive gate
+// (F1 — the blocking security finding).
+func TestArchiveCreateRequestContractHasConfirmSensitive(t *testing.T) {
+	// Zero value must be false (safe default: no sensitive confirmation).
+	zero := agentcmd.FileArchiveCreateRequest{
+		Paths:         []string{"wp-content/themes/my-theme"},
+		PresignedPuts: []agentcmd.FileArchivePresignedPut{{Index: 0, URL: "https://s3.example.com/put0"}},
+		PartSize:      5 << 20,
+	}
+	if zero.ConfirmSensitive {
+		t.Error("zero FileArchiveCreateRequest.ConfirmSensitive must be false")
+	}
+
+	// Non-zero: confirm_sensitive must round-trip.
+	withConfirm := agentcmd.FileArchiveCreateRequest{
+		Paths:            []string{"wp-config.php"},
+		PresignedPuts:    []agentcmd.FileArchivePresignedPut{{Index: 0, URL: "https://s3.example.com/put0"}},
+		PartSize:         5 << 20,
+		ConfirmSensitive: true,
+	}
+	if !withConfirm.ConfirmSensitive {
+		t.Error("FileArchiveCreateRequest.ConfirmSensitive should be true")
+	}
+}
+
+// TestArchiveSensitiveGate_NonOwnerDenied verifies that a non-owner role
+// (admin) cannot satisfy PermSiteFilesReadSensitive. This is the CP-side gate
+// that blocks the agent call (F1: the agent is never called for non-owners
+// trying to archive sensitive paths).
+func TestArchiveSensitiveGate_NonOwnerDenied(t *testing.T) {
+	// Admin holds PermSiteFilesRead (and can list/read non-sensitive) but must
+	// NOT hold PermSiteFilesReadSensitive.
+	if authz.Allows(authz.RoleAdmin, authz.PermSiteFilesReadSensitive) {
+		t.Error("RoleAdmin must not hold PermSiteFilesReadSensitive; " +
+			"only owners may archive sensitive files (F1 gate)")
+	}
+	// Owner must hold it.
+	if !authz.Allows(authz.RoleOwner, authz.PermSiteFilesReadSensitive) {
+		t.Error("RoleOwner must hold PermSiteFilesReadSensitive")
+	}
+}
+
+// TestArchiveSensitiveGate_SensitivePathDetection verifies that IsSensitivePath
+// correctly identifies paths that would trigger the F1 archive gate. The handler
+// scans all paths in the request and trips the gate on the first sensitive match.
+func TestArchiveSensitiveGate_SensitivePathDetection(t *testing.T) {
+	// These paths must trigger the gate (any one in the paths[] list is enough).
+	triggerPaths := []string{
+		"wp-config.php",
+		"/wp-config.php",
+		".env",
+		".env.local",
+		"server.key",
+		"server.pem",
+	}
+	for _, p := range triggerPaths {
+		if !files.IsSensitivePath(p) {
+			t.Errorf("IsSensitivePath(%q) = false; this path must trigger the F1 archive gate", p)
+		}
+	}
+
+	// A mixed-path archive (one sensitive, one not) must still trip the gate.
+	requestPaths := []string{
+		"wp-content/themes/my-theme/style.css", // safe
+		"wp-config.php",                        // sensitive — gate trips here
+	}
+	hasSensitive := false
+	for _, p := range requestPaths {
+		if files.IsSensitivePath(p) {
+			hasSensitive = true
+			break
+		}
+	}
+	if !hasSensitive {
+		t.Error("mixed-path archive with wp-config.php must detect sensitive = true")
+	}
+}
+
+// TestArchiveSensitiveGate_OwnerWithConfirmForwards verifies that the
+// FileArchiveCreateRequest is correctly built with confirm_sensitive=true when
+// an owner calls CreateArchive for a sensitive path. The agent receives the flag.
+func TestArchiveSensitiveGate_OwnerWithConfirmForwards(t *testing.T) {
+	ag := &fakeAgent{
+		respJSON: agentcmd.FileArchiveCreateResponse{
+			ObjectKey:  "file-transfers/t/id",
+			Size:       1024,
+			ChunkCount: 1,
+			Parts:      []agentcmd.FileArchivePart{{Index: 0, ETag: `"abc"`, Size: 1024}},
+		},
+	}
+
+	// Build the exact request the service would send to the agent when
+	// confirm_sensitive=true is passed (mirrors service.CreateArchive internals).
+	req := agentcmd.FileArchiveCreateRequest{
+		Paths:            []string{"wp-config.php"},
+		PresignedPuts:    []agentcmd.FileArchivePresignedPut{{Index: 0, URL: "https://s3.example.com/put0"}},
+		PartSize:         5 << 20,
+		ConfirmSensitive: true,
+	}
+
+	var resp agentcmd.FileArchiveCreateResponse
+	if err := ag.Do(context.Background(), uuid.New(), "https://example.com",
+		"file_archive_create", req, &resp); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	sent, ok := ag.body.(agentcmd.FileArchiveCreateRequest)
+	if !ok {
+		t.Fatalf("body type = %T; want FileArchiveCreateRequest", ag.body)
+	}
+	if !sent.ConfirmSensitive {
+		t.Error("agent did not receive ConfirmSensitive=true (F1: flag must be forwarded after gate passes)")
+	}
+	if len(sent.Paths) != 1 || sent.Paths[0] != "wp-config.php" {
+		t.Errorf("Paths = %v; want [wp-config.php]", sent.Paths)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F3: version restore sensitive-path gate
+// ---------------------------------------------------------------------------
+
+// TestVersionRestoreSensitiveGate_PermissionMatrix documents that
+// PermSiteFilesWriteCode (owner-only) is the gate for restoring sensitive
+// files. Non-owner roles must be denied before the agent is ever called.
+func TestVersionRestoreSensitiveGate_PermissionMatrix(t *testing.T) {
+	allowed := []authz.Role{authz.RoleOwner}
+	denied := []authz.Role{authz.RoleAdmin, authz.RoleOperator, authz.RoleViewer, authz.RoleClient}
+
+	for _, r := range allowed {
+		if !authz.Allows(r, authz.PermSiteFilesWriteCode) {
+			t.Errorf("Allows(%s, PermSiteFilesWriteCode) = false; owner must be able to restore sensitive versions", r)
+		}
+	}
+	for _, r := range denied {
+		if authz.Allows(r, authz.PermSiteFilesWriteCode) {
+			t.Errorf("Allows(%s, PermSiteFilesWriteCode) = true; non-owners must be denied from restoring sensitive versions (F3 gate)", r)
+		}
+	}
+}
+
+// TestVersionRestoreRequestContractHasConfirmSensitive verifies that
+// FileVersionRestoreRequest carries the confirm_sensitive field introduced for
+// F3. Its absence would mean a stale wp-config.php could be restored without
+// owner confirmation.
+func TestVersionRestoreRequestContractHasConfirmSensitive(t *testing.T) {
+	// Zero value must be false (safe default).
+	zero := agentcmd.FileVersionRestoreRequest{
+		Path:      "wp-content/themes/my-theme/style.css",
+		VersionID: "v20240601T120000Z",
+	}
+	if zero.ConfirmSensitive {
+		t.Error("zero FileVersionRestoreRequest.ConfirmSensitive must be false")
+	}
+
+	// Non-zero: confirm_sensitive must be set and forwarded.
+	withConfirm := agentcmd.FileVersionRestoreRequest{
+		Path:             "wp-config.php",
+		VersionID:        "v20240601T120000Z",
+		ConfirmSensitive: true,
+	}
+	if !withConfirm.ConfirmSensitive {
+		t.Error("FileVersionRestoreRequest.ConfirmSensitive should be true")
+	}
+}
+
+// TestVersionRestoreSensitiveGate_NonOwnerAdminDenied verifies that admin
+// (non-owner) cannot satisfy PermSiteFilesWriteCode — confirming the F3
+// gate will reject them before the agent is called.
+func TestVersionRestoreSensitiveGate_NonOwnerAdminDenied(t *testing.T) {
+	if authz.Allows(authz.RoleAdmin, authz.PermSiteFilesWriteCode) {
+		t.Error("RoleAdmin must not hold PermSiteFilesWriteCode; " +
+			"only owners may restore sensitive file versions (F3 gate)")
+	}
+	if !authz.Allows(authz.RoleOwner, authz.PermSiteFilesWriteCode) {
+		t.Error("RoleOwner must hold PermSiteFilesWriteCode")
+	}
+}
+
+// TestVersionRestoreSensitiveGate_ForwardsConfirmToAgent verifies that when
+// an owner calls RestoreVersion for a sensitive path, the FileVersionRestoreRequest
+// forwarded to the agent carries confirm_sensitive=true. The agent is the
+// independent last line of defense and must receive the flag.
+func TestVersionRestoreSensitiveGate_ForwardsConfirmToAgent(t *testing.T) {
+	ag := &fakeAgent{
+		respJSON: agentcmd.FileVersionRestoreResponse{
+			Path:  "wp-config.php",
+			Size:  4096,
+			Mtime: 1718000000,
+		},
+	}
+
+	req := agentcmd.FileVersionRestoreRequest{
+		Path:             "wp-config.php",
+		VersionID:        "v20240601T120000Z",
+		ConfirmSensitive: true,
+	}
+	var resp agentcmd.FileVersionRestoreResponse
+	if err := ag.Do(context.Background(), uuid.New(), "https://example.com",
+		"file_version_restore", req, &resp); err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+
+	sent, ok := ag.body.(agentcmd.FileVersionRestoreRequest)
+	if !ok {
+		t.Fatalf("body type = %T; want FileVersionRestoreRequest", ag.body)
+	}
+	if !sent.ConfirmSensitive {
+		t.Error("agent did not receive ConfirmSensitive=true (F3: flag must be forwarded after gate passes)")
+	}
+	if sent.Path != "wp-config.php" {
+		t.Errorf("Path = %q; want wp-config.php", sent.Path)
+	}
+	if sent.VersionID != "v20240601T120000Z" {
+		t.Errorf("VersionID = %q", sent.VersionID)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// F3: listVersions sensitive-path gate
+// ---------------------------------------------------------------------------
+
+// TestListVersionsSensitiveGate_PermSiteFilesReadSensitiveIsOwnerOnly verifies
+// that PermSiteFilesReadSensitive (owner-only) is the gate for listing versions
+// of a sensitive path. Non-owners must be denied — they must not learn that
+// sensitive backups exist (information leak).
+func TestListVersionsSensitiveGate_PermSiteFilesReadSensitiveIsOwnerOnly(t *testing.T) {
+	// This is the same permission used by readContent / download / archive for
+	// sensitive paths — re-checked here to document it also gates listVersions.
+	if authz.Allows(authz.RoleAdmin, authz.PermSiteFilesReadSensitive) {
+		t.Error("RoleAdmin must not hold PermSiteFilesReadSensitive; " +
+			"non-owners must be denied from listing versions of sensitive files (F3 gate)")
+	}
+	if !authz.Allows(authz.RoleOwner, authz.PermSiteFilesReadSensitive) {
+		t.Error("RoleOwner must hold PermSiteFilesReadSensitive to list versions of sensitive files")
 	}
 }

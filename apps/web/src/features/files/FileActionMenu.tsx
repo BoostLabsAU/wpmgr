@@ -1,8 +1,11 @@
 import { useState } from "react";
 import {
+  Archive,
   Download,
   Edit3,
   FolderOpen,
+  FolderUp,
+  History,
   Lock,
   MoreHorizontal,
   Pencil,
@@ -23,36 +26,46 @@ import { useFileDownload } from "./hooks/use-file-download";
 import { FileDeleteDialog } from "./FileDeleteDialog";
 import { FileRenameDialog } from "./FileRenameDialog";
 import { FileChmodDialog } from "./FileChmodDialog";
+import { FileArchiveDialog } from "./FileArchiveDialog";
+import { FileExtractDialog } from "./FileExtractDialog";
+import { FileVersionHistoryDialog } from "./FileVersionHistoryDialog";
 
-// FileActionMenu — per-row dropdown for file actions.
+// FileActionMenu — per-row dropdown for file actions (P1 + P2 + P3).
+//
+// P3 additions:
+//   - Download as ZIP (archive): all files and dirs, admin+.
+//     Sensitive confirm for owner; hard block for non-owner.
+//   - Extract here (only for .zip files): admin+, write_enabled.
+//     Full security error flow (zip_slip/zip_bomb/exec/sensitive).
+//   - Version history: all files, admin+.
+//     Restore: admin+, write_enabled. Sensitive confirm for owner.
 //
 // Actions and their permission gates:
 //   - Open (dir) / Edit (file): admin+, write_enabled for Edit
 //   - Download (file only): admin+
+//   - Download as ZIP: admin+
+//   - Extract (zip only): admin+, write_enabled
 //   - Rename: admin+, write_enabled
-//   - chmod: admin+, write_enabled
+//   - Permissions (chmod): admin+, write_enabled
+//   - Version history: admin+, file only
 //   - Delete: owner only
-//
-// The Edit action (open FileEditDialog) is handled by the parent (the drawer
-// already does it); we emit `onEdit` so FileBrowser can open the edit dialog.
 
 export interface FileActionMenuProps {
   siteId: string;
   entry: FileEntry;
   currentDirPath: string;
   entryPath: string;
-  /** Whether write mode is on (write_enabled=true in settings). */
   writeEnabled: boolean;
-  /** Whether the user is admin+ (can manage). */
   canManage: boolean;
-  /** Whether the user is owner. */
   isOwner: boolean;
-  /** Called when the user clicks "Edit" for a file. */
   onEdit?: () => void;
-  /** Called when the user clicks "Open" for a directory. */
   onOpen?: () => void;
-  /** Called after a successful destructive action (delete). */
   onDeleted?: () => void;
+}
+
+/** Check if a filename has a .zip extension (case-insensitive). */
+function isZipFile(name: string): boolean {
+  return /\.zip$/i.test(name);
 }
 
 export function FileActionMenu({
@@ -70,13 +83,20 @@ export function FileActionMenu({
   const [renameOpen, setRenameOpen] = useState(false);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [chmodOpen, setChmodOpen] = useState(false);
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [extractOpen, setExtractOpen] = useState(false);
+  const [versionsOpen, setVersionsOpen] = useState(false);
 
   const download = useFileDownload(siteId);
 
   const canWrite = canManage && writeEnabled;
   const canDelete = isOwner && writeEnabled;
+  const canExtract = canWrite && !entry.is_dir && isZipFile(entry.name);
+  const canVersions = canManage && !entry.is_dir;
 
-  const hasAnyAction = entry.is_dir || (!entry.is_dir && (canManage || canWrite || canDelete));
+  const hasAnyAction =
+    entry.is_dir ||
+    (!entry.is_dir && (canManage || canWrite || canDelete));
 
   if (!hasAnyAction && !canManage) return null;
 
@@ -98,10 +118,7 @@ export function FileActionMenu({
         <DropdownMenuContent align="end" onClick={(e) => e.stopPropagation()}>
           {/* Open directory */}
           {entry.is_dir ? (
-            <DropdownMenuItem
-              onSelect={() => onOpen?.()}
-              className="gap-2"
-            >
+            <DropdownMenuItem onSelect={() => onOpen?.()} className="gap-2">
               <FolderOpen aria-hidden="true" className="size-4" />
               Open
             </DropdownMenuItem>
@@ -109,16 +126,13 @@ export function FileActionMenu({
 
           {/* Edit file */}
           {!entry.is_dir && canWrite ? (
-            <DropdownMenuItem
-              onSelect={() => onEdit?.()}
-              className="gap-2"
-            >
+            <DropdownMenuItem onSelect={() => onEdit?.()} className="gap-2">
               <Edit3 aria-hidden="true" className="size-4" />
               Edit
             </DropdownMenuItem>
           ) : null}
 
-          {/* Download (files only) */}
+          {/* Download (single file) */}
           {!entry.is_dir && canManage ? (
             <DropdownMenuItem
               onSelect={() =>
@@ -129,6 +143,28 @@ export function FileActionMenu({
             >
               <Download aria-hidden="true" className="size-4" />
               Download
+            </DropdownMenuItem>
+          ) : null}
+
+          {/* Download as ZIP (P3) */}
+          {canManage ? (
+            <DropdownMenuItem
+              onSelect={() => setArchiveOpen(true)}
+              className="gap-2"
+            >
+              <Archive aria-hidden="true" className="size-4" />
+              Download as ZIP
+            </DropdownMenuItem>
+          ) : null}
+
+          {/* Extract (P3 — .zip files only) */}
+          {canExtract ? (
+            <DropdownMenuItem
+              onSelect={() => setExtractOpen(true)}
+              className="gap-2"
+            >
+              <FolderUp aria-hidden="true" className="size-4" />
+              Extract here
             </DropdownMenuItem>
           ) : null}
 
@@ -157,6 +193,20 @@ export function FileActionMenu({
             </DropdownMenuItem>
           ) : null}
 
+          {/* Version history (P3) */}
+          {canVersions ? (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                onSelect={() => setVersionsOpen(true)}
+                className="gap-2"
+              >
+                <History aria-hidden="true" className="size-4" />
+                Version history
+              </DropdownMenuItem>
+            </>
+          ) : null}
+
           {/* Delete (owner only) */}
           {canDelete ? (
             <>
@@ -173,7 +223,7 @@ export function FileActionMenu({
         </DropdownMenuContent>
       </DropdownMenu>
 
-      {/* Dialogs — rendered outside the menu to avoid portal conflicts */}
+      {/* Dialogs */}
       {renameOpen ? (
         <FileRenameDialog
           open={renameOpen}
@@ -211,6 +261,41 @@ export function FileActionMenu({
           isDir={entry.is_dir}
           currentMode={entry.mode ?? "0644"}
           onChanged={() => setChmodOpen(false)}
+        />
+      ) : null}
+
+      {/* P3 dialogs */}
+      {archiveOpen ? (
+        <FileArchiveDialog
+          open={archiveOpen}
+          onClose={() => setArchiveOpen(false)}
+          siteId={siteId}
+          paths={[entryPath]}
+          isOwner={isOwner}
+        />
+      ) : null}
+
+      {extractOpen ? (
+        <FileExtractDialog
+          open={extractOpen}
+          onClose={() => setExtractOpen(false)}
+          siteId={siteId}
+          archivePath={entryPath}
+          currentDirPath={currentDirPath}
+          isOwner={isOwner}
+          onExtracted={() => setExtractOpen(false)}
+        />
+      ) : null}
+
+      {versionsOpen ? (
+        <FileVersionHistoryDialog
+          open={versionsOpen}
+          onClose={() => setVersionsOpen(false)}
+          siteId={siteId}
+          filePath={entryPath}
+          currentDirPath={currentDirPath}
+          isOwner={isOwner}
+          writeEnabled={writeEnabled}
         />
       ) : null}
     </>

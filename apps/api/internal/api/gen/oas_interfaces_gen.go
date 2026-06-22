@@ -149,6 +149,10 @@ type CreateSiteDirectoryRes interface {
 	createSiteDirectoryRes()
 }
 
+type CreateSiteFileArchiveRes interface {
+	createSiteFileArchiveRes()
+}
+
 type CreateSiteRes interface {
 	createSiteRes()
 }
@@ -223,6 +227,10 @@ type EnrollRes interface {
 
 type ExportSiteEmailLogRes interface {
 	exportSiteEmailLogRes()
+}
+
+type ExtractSiteFileArchiveRes interface {
+	extractSiteFileArchiveRes()
 }
 
 type GenerateClientReportRes interface {
@@ -453,6 +461,10 @@ type ListSiteEmailSuppressionRes interface {
 	listSiteEmailSuppressionRes()
 }
 
+type ListSiteFileVersionsRes interface {
+	listSiteFileVersionsRes()
+}
+
 type ListSiteFilesRes interface {
 	listSiteFilesRes()
 }
@@ -601,6 +613,10 @@ type ResetPasswordRes interface {
 	resetPasswordRes()
 }
 
+type RestoreSiteFileVersionRes interface {
+	restoreSiteFileVersionRes()
+}
+
 type RestoreSiteRes interface {
 	restoreSiteRes()
 }
@@ -615,6 +631,10 @@ type RevokeClientInvitationRes interface {
 
 type RevokeSiteRes interface {
 	revokeSiteRes()
+}
+
+type SearchSiteFilesRes interface {
+	searchSiteFilesRes()
 }
 
 type SendTestEmailRes interface {

@@ -798,6 +798,273 @@ func (s *Service) insertUploadTransfer(ctx context.Context, tenantID, siteID, tr
 	})
 }
 
+// ---------------------------------------------------------------------------
+// P3 advanced ops
+// ---------------------------------------------------------------------------
+
+// ArchiveResult is returned by CreateArchive.
+type ArchiveResult struct {
+	TransferID  uuid.UUID
+	DownloadURL string // presigned GET URL for the browser
+	ObjectKey   string
+	SizeBytes   int64
+	ChunkCount  int
+	ExpiresAt   time.Time
+}
+
+// CreateArchive stages an archive (ZIP) of the given paths for browser download:
+//  1. Mints presigned PUT URLs (CP-owned object storage staging area).
+//  2. Issues file_archive_create to the agent, which zips the paths and uploads
+//     the archive in chunks.
+//  3. Mints a presigned GET URL for the browser (short-TTL ≤ 5 min).
+//  4. Persists a file_transfers row (direction=download, bookkeeping + GC).
+//
+// Returns ErrFilesNotEnabled when the site has not opted in. Returns
+// domain.ServiceUnavailable when the presigner is not configured.
+//
+// confirmSensitive must be true when any path in paths matches IsSensitivePath.
+// The caller (handler) must have already verified PermSiteFilesReadSensitive
+// (owner) before passing confirmSensitive=true — the service never weakens that gate.
+func (s *Service) CreateArchive(ctx context.Context, tenantID, siteID uuid.UUID, paths []string, createdBy uuid.UUID, confirmSensitive bool) (ArchiveResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return ArchiveResult{}, err
+	}
+	if len(paths) == 0 {
+		return ArchiveResult{}, domain.Validation("missing_paths", "at least one path is required")
+	}
+	if s.presigner == nil {
+		return ArchiveResult{}, domain.ServiceUnavailable("storage_not_configured",
+			"object storage is not configured; file archive downloads are unavailable")
+	}
+
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ArchiveResult{}, err
+	}
+
+	transferID := uuid.New()
+	objectKey := fileTransferS3Key(tenantID, transferID)
+
+	const maxParts = 32
+	presignedPuts := make([]agentcmd.FileArchivePresignedPut, maxParts)
+	for i := 0; i < maxParts; i++ {
+		partKey := fmt.Sprintf("%s/part%04d", objectKey, i)
+		putURL, perr := s.presigner.PresignPut(ctx, partKey, downloadPresignTTL)
+		if perr != nil {
+			return ArchiveResult{}, domain.Internal("presign_put_failed",
+				"failed to mint presigned PUT URL").WithCause(perr)
+		}
+		presignedPuts[i] = agentcmd.FileArchivePresignedPut{Index: i, URL: putURL}
+	}
+
+	req := agentcmd.FileArchiveCreateRequest{
+		Paths:            paths,
+		PresignedPuts:    presignedPuts,
+		PartSize:         downloadPartSize,
+		ConfirmSensitive: confirmSensitive,
+	}
+	var resp agentcmd.FileArchiveCreateResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_archive_create", req, &resp); err != nil {
+		return ArchiveResult{}, mapAgentTransportErr(err, "file_archive_create")
+	}
+	if resp.Error != nil {
+		return ArchiveResult{}, mapAgentErrorCode(resp.Error)
+	}
+
+	// Mint the presigned GET URL for the browser (first part for the assembled archive).
+	getKey := fmt.Sprintf("%s/part0000", objectKey)
+	expiresAt := time.Now().Add(downloadPresignTTL)
+	downloadURL, perr := s.presigner.PresignGet(ctx, getKey, downloadPresignTTL)
+	if perr != nil {
+		return ArchiveResult{}, domain.Internal("presign_get_failed",
+			"failed to mint presigned GET URL").WithCause(perr)
+	}
+
+	// Use the archive filename as the rel_path in the transfer row for auditability.
+	archiveRelPath := path.Join("archive", strings.Join(paths, ","))
+	if len(archiveRelPath) > 512 {
+		// Truncate for very long multi-path lists so the DB column stays bounded.
+		archiveRelPath = archiveRelPath[:512]
+	}
+	if err := s.insertTransfer(ctx, tenantID, siteID, transferID, archiveRelPath, objectKey, resp.Size, resp.ChunkCount, createdBy, expiresAt); err != nil {
+		slog.Error("file_transfer archive bookkeeping insert failed",
+			"tenant_id", tenantID, "site_id", siteID,
+			"transfer_id", transferID, "object_key", objectKey, "error", err)
+	}
+
+	return ArchiveResult{
+		TransferID:  transferID,
+		DownloadURL: downloadURL,
+		ObjectKey:   objectKey,
+		SizeBytes:   resp.Size,
+		ChunkCount:  resp.ChunkCount,
+		ExpiresAt:   expiresAt,
+	}, nil
+}
+
+// ExtractResult is returned by Extract.
+type ExtractResult struct {
+	DestPath  string
+	Extracted int
+}
+
+// Extract issues a file_extract command to the agent (atomic quarantine-expand
+// → validate → move). Returns ErrFilesWriteNotEnabled when write mode is off.
+// The handler must have already verified PermSiteFilesWriteCode (owner) when
+// confirmExecutableWrite or confirmSensitive is true.
+func (s *Service) Extract(ctx context.Context, tenantID, siteID uuid.UUID, archivePath, destPath string, confirmExecutableWrite, confirmSensitive bool) (ExtractResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return ExtractResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return ExtractResult{}, err
+	}
+
+	req := agentcmd.FileExtractRequest{
+		ArchivePath:            archivePath,
+		DestPath:               destPath,
+		ConfirmExecutableWrite: confirmExecutableWrite,
+		ConfirmSensitive:       confirmSensitive,
+	}
+	var resp agentcmd.FileExtractResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_extract", req, &resp); err != nil {
+		return ExtractResult{}, mapAgentTransportErr(err, "file_extract")
+	}
+	if resp.Error != nil {
+		return ExtractResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return ExtractResult{
+		DestPath:  resp.DestPath,
+		Extracted: resp.Extracted,
+	}, nil
+}
+
+// SearchResult is returned by Search.
+type SearchResult struct {
+	Matches   []agentcmd.FileSearchMatch
+	Truncated bool
+	Cursor    *string
+}
+
+// Search issues a file_search command to the agent. Mode must be "name" or
+// "content". Returns ErrFilesNotEnabled when the site has not opted in.
+func (s *Service) Search(ctx context.Context, tenantID, siteID uuid.UUID, searchPath, query, mode string, cursor *string) (SearchResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return SearchResult{}, err
+	}
+	if query == "" {
+		return SearchResult{}, domain.Validation("missing_query", "q query parameter is required")
+	}
+	if mode != "name" && mode != "content" {
+		return SearchResult{}, domain.Validation("invalid_mode", `mode must be "name" or "content"`)
+	}
+
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return SearchResult{}, err
+	}
+
+	req := agentcmd.FileSearchRequest{
+		Path:   searchPath,
+		Query:  query,
+		Mode:   mode,
+		Cursor: cursor,
+	}
+	var resp agentcmd.FileSearchResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_search", req, &resp); err != nil {
+		return SearchResult{}, mapAgentTransportErr(err, "file_search")
+	}
+	if resp.Error != nil {
+		return SearchResult{}, mapAgentErrorCode(resp.Error)
+	}
+	if resp.Matches == nil {
+		resp.Matches = []agentcmd.FileSearchMatch{}
+	}
+	return SearchResult{
+		Matches:   resp.Matches,
+		Truncated: resp.Truncated,
+		Cursor:    resp.Cursor,
+	}, nil
+}
+
+// VersionsResult is returned by ListVersions.
+type VersionsResult struct {
+	Versions []agentcmd.FileVersion
+}
+
+// ListVersions issues a file_versions_list command to the agent.
+// Returns ErrFilesNotEnabled when the site has not opted in.
+//
+// When filePath is a sensitive path, the handler must have already verified
+// PermSiteFilesReadSensitive (owner) before calling this method — the service
+// does not re-check the permission gate here (belt-and-braces at handler layer).
+// The filePath and confirmSensitive parameters are threaded to the agent so the
+// agent can enforce its own independent sensitive-path deny-list.
+// NOTE: the file_versions_list agent command does not currently accept
+// confirm_sensitive; this parameter is reserved for forward compatibility and
+// is not forwarded in v1 (the path itself is the agent's gate key).
+func (s *Service) ListVersions(ctx context.Context, tenantID, siteID uuid.UUID, filePath string) (VersionsResult, error) {
+	if err := s.requireEnabled(ctx, tenantID, siteID); err != nil {
+		return VersionsResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return VersionsResult{}, err
+	}
+
+	req := agentcmd.FileVersionsListRequest{Path: filePath}
+	var resp agentcmd.FileVersionsListResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_versions_list", req, &resp); err != nil {
+		return VersionsResult{}, mapAgentTransportErr(err, "file_versions_list")
+	}
+	if resp.Error != nil {
+		return VersionsResult{}, mapAgentErrorCode(resp.Error)
+	}
+	if resp.Versions == nil {
+		resp.Versions = []agentcmd.FileVersion{}
+	}
+	return VersionsResult{Versions: resp.Versions}, nil
+}
+
+// VersionRestoreResult is returned by RestoreVersion.
+type VersionRestoreResult struct {
+	Path  string
+	Size  int64
+	Mtime int64
+}
+
+// RestoreVersion issues a file_version_restore command to the agent.
+// Returns ErrFilesWriteNotEnabled when write mode is off.
+//
+// When filePath is a sensitive path, the handler must have already verified
+// PermSiteFilesWriteCode (owner) AND confirmSensitive=true before calling this
+// method — the service never weakens the gate. confirmSensitive is forwarded
+// to the agent so it can independently enforce its sensitive-path deny-list.
+func (s *Service) RestoreVersion(ctx context.Context, tenantID, siteID uuid.UUID, filePath, versionID string, confirmSensitive bool) (VersionRestoreResult, error) {
+	if err := s.requireWriteEnabled(ctx, tenantID, siteID); err != nil {
+		return VersionRestoreResult{}, err
+	}
+	siteURL, err := s.siteURL(ctx, tenantID, siteID)
+	if err != nil {
+		return VersionRestoreResult{}, err
+	}
+
+	req := agentcmd.FileVersionRestoreRequest{Path: filePath, VersionID: versionID, ConfirmSensitive: confirmSensitive}
+	var resp agentcmd.FileVersionRestoreResponse
+	if err := s.agent.Do(ctx, siteID, siteURL, "file_version_restore", req, &resp); err != nil {
+		return VersionRestoreResult{}, mapAgentTransportErr(err, "file_version_restore")
+	}
+	if resp.Error != nil {
+		return VersionRestoreResult{}, mapAgentErrorCode(resp.Error)
+	}
+	return VersionRestoreResult{
+		Path:  resp.Path,
+		Size:  resp.Size,
+		Mtime: resp.Mtime,
+	}, nil
+}
+
 // IsSensitivePath reports whether a given path matches the sensitive-file
 // deny-list. This list is enforced identically by the PHP agent's isSensitive
 // function — both sides must agree or one enforcer becomes a bypass.
@@ -918,6 +1185,16 @@ func mapAgentErrorCode(e *agentcmd.FileError) error {
 		return domain.Internal("base_unresolved", e.Message)
 	case "write_failed":
 		return domain.Internal("agent_write_failed", fmt.Sprintf("agent write failed: %s", e.Message))
+	// P3 archive/extract/search/versions codes.
+	case "zip_slip", "zip_bomb":
+		// 422 Unprocessable Entity: the archive is valid but its contents are
+		// malicious (zip-slip path traversal or zip-bomb resource exhaustion).
+		return domain.Validation(e.Code, e.Message)
+	case "bad_archive", "not_archive":
+		// 400 Bad Request: the path is not a usable archive.
+		return domain.Validation(e.Code, e.Message)
+	case "no_such_version":
+		return domain.NotFound(e.Code, e.Message)
 	default:
 		return domain.Internal("agent_file_error", fmt.Sprintf("agent returned error %q: %s", e.Code, e.Message))
 	}

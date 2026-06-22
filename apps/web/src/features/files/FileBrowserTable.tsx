@@ -1,6 +1,8 @@
 import {
   forwardRef,
   memo,
+  useEffect,
+  useRef,
   useMemo,
   type CSSProperties,
   type HTMLAttributes,
@@ -16,6 +18,7 @@ import {
 } from "@tanstack/react-table";
 import { TableVirtuoso, type TableComponents } from "react-virtuoso";
 
+import { Checkbox } from "@/components/ui/checkbox";
 import { cn, formatBytes, relativeTime } from "@/lib/utils";
 import type { FileEntry } from "@wpmgr/api";
 
@@ -23,38 +26,30 @@ import { FileActionMenu } from "./FileActionMenu";
 
 // FileBrowserTable — virtualized directory listing.
 //
-// Mirrors AssetsTable.tsx: TanStack Table v8 owns column defs + row model;
-// react-virtuoso's <TableVirtuoso> handles the scroll container, sticky
-// header, and row virtualization. The table uses role="grid" semantics.
+// P3 additions:
+//   - Checkbox column for bulk selection (leftmost). Checkboxes only shown to
+//     admin+ users (canManage=true). A header checkbox selects/deselects all.
+//   - selectedPaths / onSelectionChange props for bulk archive.
 //
-// P2 additions:
-//   - Actions column: per-row FileActionMenu (open/download/rename/chmod/delete).
-//   - The "Edit" action is intentionally omitted from the row menu: the user
-//     opens the file (clicks the row) to get the detail drawer, then clicks
-//     "Edit" in the drawer where the content is already loaded. This avoids
-//     loading file content for every visible table row.
-//
-// Columns: icon+name, size, modified, mode, actions.
-// Directories sort first (done in use-files.ts, not here).
+// Columns (P3): checkbox | icon+name | size | modified | mode | actions.
 
 export interface FileBrowserTableProps {
   entries: FileEntry[];
   currentPath: string;
-  /** Called when a folder row is clicked — navigates into it. */
   onNavigate: (path: string) => void;
-  /** Called when a file row is clicked — opens the detail drawer. */
   onFileClick: (entry: FileEntry) => void;
-  /** Called when the user scrolls near the bottom — triggers fetchNextPage. */
   onEndReached?: () => void;
   isFetchingNextPage?: boolean;
-  // P2 props
   siteId: string;
   writeEnabled: boolean;
   canManage: boolean;
   isOwner: boolean;
+  // P3: bulk selection
+  selectedPaths: string[];
+  onSelectionChange: (paths: string[]) => void;
 }
 
-// Stable per-row context so selection + click handlers don't change row identity.
+// Stable per-row context.
 interface RowContext {
   currentPath: string;
   onNavigate: (path: string) => void;
@@ -64,20 +59,29 @@ interface RowContext {
   writeEnabled: boolean;
   canManage: boolean;
   isOwner: boolean;
+  selectedPaths: string[];
+  onSelectionChange: (paths: string[]) => void;
 }
 
+const COL_CHECK_PX = 40;
 const COL_SIZE_PX = 90;
 const COL_MODIFIED_PX = 110;
 const COL_MODE_PX = 100;
 const COL_ACTIONS_PX = 48;
 
-// Determine an entry's full relative path by combining the current dir path.
 function entryPath(currentPath: string, name: string): string {
   return currentPath ? `${currentPath}/${name}` : name;
 }
 
 function buildColumns(): ColumnDef<FileEntry>[] {
   return [
+    {
+      id: "select",
+      header: "",
+      enableSorting: false,
+      size: COL_CHECK_PX,
+      cell: () => null, // rendered in BodyCells via context
+    },
     {
       id: "name",
       header: "Name",
@@ -158,7 +162,6 @@ function buildColumns(): ColumnDef<FileEntry>[] {
       header: "",
       enableSorting: false,
       size: COL_ACTIONS_PX,
-      // Rendered in BodyCells where context is accessible.
       cell: () => null,
     },
   ];
@@ -166,7 +169,6 @@ function buildColumns(): ColumnDef<FileEntry>[] {
 
 const FILE_COLUMNS: ColumnDef<FileEntry>[] = buildColumns();
 
-// ── Entry icon — memoized so SSE patches / parent re-renders don't re-create it.
 const EntryIcon = memo(function EntryIcon({ entry }: { entry: FileEntry }) {
   if (entry.is_dir) {
     return (
@@ -184,7 +186,7 @@ const EntryIcon = memo(function EntryIcon({ entry }: { entry: FileEntry }) {
   );
 });
 
-// ── Virtuoso slots — hoisted so Virtuoso keeps stable component identity ────
+// ── Virtuoso slots ────────────────────────────────────────────────────────────
 
 const VirtuosoScroller = forwardRef<
   HTMLDivElement,
@@ -208,7 +210,7 @@ function VirtuosoTable({
       {...rest}
       role="grid"
       aria-label="File browser"
-      style={{ ...style, width: "100%", minWidth: "560px", tableLayout: "fixed" }}
+      style={{ ...style, width: "100%", minWidth: "600px", tableLayout: "fixed" }}
       className="border-collapse"
     />
   );
@@ -230,6 +232,8 @@ const VirtuosoTableHead = forwardRef<
   );
 });
 
+// ── Main component ────────────────────────────────────────────────────────────
+
 export function FileBrowserTable({
   entries,
   currentPath,
@@ -241,6 +245,8 @@ export function FileBrowserTable({
   writeEnabled,
   canManage,
   isOwner,
+  selectedPaths,
+  onSelectionChange,
 }: FileBrowserTableProps) {
   const table = useReactTable({
     data: entries,
@@ -251,7 +257,28 @@ export function FileBrowserTable({
 
   const rows = table.getRowModel().rows;
 
-  // STABLE component identity — deps [] — selection/click flow through context.
+  const allEntryPaths = useMemo(
+    () => entries.map((e) => entryPath(currentPath, e.name)),
+    [entries, currentPath],
+  );
+  const allSelected =
+    allEntryPaths.length > 0 &&
+    allEntryPaths.every((p) => selectedPaths.includes(p));
+  const someSelected =
+    !allSelected && allEntryPaths.some((p) => selectedPaths.includes(p));
+
+  const handleToggleAll = (checked: boolean) => {
+    if (checked) {
+      onSelectionChange([
+        ...new Set([...selectedPaths, ...allEntryPaths]),
+      ]);
+    } else {
+      onSelectionChange(
+        selectedPaths.filter((p) => !allEntryPaths.includes(p)),
+      );
+    }
+  };
+
   const components = useMemo<TableComponents<Row<FileEntry>, RowContext>>(
     () => ({
       Scroller: VirtuosoScroller,
@@ -260,11 +287,13 @@ export function FileBrowserTable({
       TableRow: ({ item, style, context, ...rest }) => {
         const entry = item.original;
         const ep = entryPath(context?.currentPath ?? "", entry.name);
+        const isSelected = context?.selectedPaths.includes(ep) ?? false;
         return (
           <tr
             {...rest}
             style={style}
             role="row"
+            aria-selected={isSelected}
             aria-label={
               entry.is_dir
                 ? `Directory: ${entry.name}`
@@ -292,6 +321,7 @@ export function FileBrowserTable({
             }}
             className={cn(
               "h-10 cursor-pointer border-b border-[var(--color-border)] transition-colors duration-[80ms]",
+              isSelected && "bg-[var(--color-primary)]/8",
               "hover:bg-[var(--color-muted)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-inset",
             )}
           />
@@ -301,7 +331,7 @@ export function FileBrowserTable({
         context?.isFetchingNextPage ? (
           <tr>
             <td
-              colSpan={5}
+              colSpan={6}
               className="border-t border-[var(--color-border)] px-4 py-3 text-center text-xs text-[var(--color-muted-foreground)]"
               aria-live="polite"
               aria-label="Loading more entries"
@@ -327,6 +357,8 @@ export function FileBrowserTable({
       writeEnabled,
       canManage,
       isOwner,
+      selectedPaths,
+      onSelectionChange,
     }),
     [
       currentPath,
@@ -337,6 +369,8 @@ export function FileBrowserTable({
       writeEnabled,
       canManage,
       isOwner,
+      selectedPaths,
+      onSelectionChange,
     ],
   );
 
@@ -350,25 +384,68 @@ export function FileBrowserTable({
         computeItemKey={(_, row) => row.id}
         endReached={onEndReached}
         fixedHeaderContent={() => (
-          <HeaderRow headerGroups={table.getHeaderGroups()} />
+          <HeaderRow
+            headerGroups={table.getHeaderGroups()}
+            canManage={canManage}
+            allSelected={allSelected}
+            someSelected={someSelected}
+            onToggleAll={handleToggleAll}
+          />
         )}
         itemContent={(_, row) => (
-          <BodyCells
-            row={row}
-            context={rowContext}
-          />
+          <BodyCells row={row} context={rowContext} />
         )}
       />
     </div>
   );
 }
 
+// ── Header row ────────────────────────────────────────────────────────────────
+
+// ── Indeterminate checkbox ────────────────────────────────────────────────────
+
+function IndeterminateCheckbox({
+  checked,
+  indeterminate,
+  onChange,
+  "aria-label": ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
+  "aria-label": string;
+}) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.indeterminate = indeterminate;
+    }
+  }, [indeterminate]);
+
+  return (
+    <Checkbox
+      ref={ref}
+      checked={checked}
+      onChange={onChange}
+      aria-label={ariaLabel}
+    />
+  );
+}
+
 function HeaderRow({
   headerGroups,
+  canManage,
+  allSelected,
+  someSelected,
+  onToggleAll,
 }: {
   headerGroups: ReturnType<
     ReturnType<typeof useReactTable<FileEntry>>["getHeaderGroups"]
   >;
+  canManage: boolean;
+  allSelected: boolean;
+  someSelected: boolean;
+  onToggleAll: (checked: boolean) => void;
 }) {
   return (
     <>
@@ -378,6 +455,27 @@ function HeaderRow({
           className="h-9 border-b border-[var(--color-border)] bg-[var(--color-background)]"
         >
           {hg.headers.map((header) => {
+            if (header.column.id === "select") {
+              return (
+                <th
+                  key={header.id}
+                  scope="col"
+                  style={{ width: COL_CHECK_PX, minWidth: COL_CHECK_PX }}
+                  className="px-3 align-middle"
+                >
+                  {canManage ? (
+                    <IndeterminateCheckbox
+                      checked={allSelected}
+                      indeterminate={someSelected}
+                      onChange={(e) => onToggleAll(e.target.checked)}
+                      aria-label={
+                        allSelected ? "Deselect all" : "Select all"
+                      }
+                    />
+                  ) : null}
+                </th>
+              );
+            }
             const width = (header.column.columnDef.size ?? 0) || undefined;
             const style: CSSProperties = width
               ? { width, minWidth: width }
@@ -411,6 +509,8 @@ function HeaderRow({
   );
 }
 
+// ── Body cells ────────────────────────────────────────────────────────────────
+
 function BodyCells({
   row,
   context,
@@ -420,16 +520,45 @@ function BodyCells({
 }) {
   const entry = row.original;
   const ep = entryPath(context.currentPath, entry.name);
+  const isSelected = context.selectedPaths.includes(ep);
+
+  const handleToggle = (e: React.ChangeEvent<HTMLInputElement>) => {
+    e.stopPropagation();
+    if (e.target.checked) {
+      context.onSelectionChange([...context.selectedPaths, ep]);
+    } else {
+      context.onSelectionChange(
+        context.selectedPaths.filter((p) => p !== ep),
+      );
+    }
+  };
 
   return (
     <>
       {row.getVisibleCells().map((cell) => {
+        if (cell.column.id === "select") {
+          return (
+            <td
+              key={cell.id}
+              style={{ width: COL_CHECK_PX, minWidth: COL_CHECK_PX }}
+              className="border-b border-[var(--color-border)] px-3 align-middle"
+              onClick={(e) => e.stopPropagation()}
+            >
+              {context.canManage ? (
+                <Checkbox
+                  checked={isSelected}
+                  onChange={handleToggle}
+                  aria-label={`Select ${entry.name}`}
+                />
+              ) : null}
+            </td>
+          );
+        }
         if (cell.column.id === "actions") {
           return (
             <td
               key={cell.id}
               className="border-b border-[var(--color-border)] pr-2 align-middle"
-              // Stop the row click handler from also firing when clicking the menu.
               onClick={(e) => e.stopPropagation()}
             >
               <FileActionMenu
@@ -441,8 +570,6 @@ function BodyCells({
                 canManage={context.canManage}
                 isOwner={context.isOwner}
                 onOpen={() => context.onNavigate(ep)}
-                // Edit is handled via the detail drawer (click row → open drawer → Edit)
-                // to avoid loading content for every visible row.
               />
             </td>
           );

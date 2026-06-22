@@ -59,6 +59,18 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 	// P2: Upload — two-step: prepare (mints presigned PUTs) + apply (agent fetches + swaps)
 	g.POST("/files/upload", authz.RequirePermission(authz.PermSiteFilesWrite), h.prepareUpload)
 	g.POST("/files/upload/apply", authz.RequirePermission(authz.PermSiteFilesWrite), h.applyUpload)
+
+	// P3: Advanced ops
+	// archive: read-gated (creates a ZIP of listed paths → presigned GET to download)
+	g.POST("/files/archive", authz.RequirePermission(authz.PermSiteFilesRead), h.createArchive)
+	// extract: write-gated + files_write_enabled (ZIP → dest_path; confirm flags require WriteCode/owner)
+	g.POST("/files/extract", authz.RequirePermission(authz.PermSiteFilesWrite), h.extract)
+	// search: read-gated (?path=&q=&mode=name|content&cursor=)
+	g.GET("/files/search", authz.RequirePermission(authz.PermSiteFilesRead), h.search)
+	// version history: read-gated (?path=)
+	g.GET("/files/versions", authz.RequirePermission(authz.PermSiteFilesRead), h.listVersions)
+	// version restore: write-gated + files_write_enabled
+	g.POST("/files/versions/restore", authz.RequirePermission(authz.PermSiteFilesWrite), h.restoreVersion)
 }
 
 // ---------------------------------------------------------------------------
@@ -886,6 +898,454 @@ func (h *Handler) applyUpload(c *gin.Context) {
 		"path":  result.Path,
 		"size":  result.Size,
 		"mtime": result.Mtime,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3: POST /sites/:siteId/files/archive
+// ---------------------------------------------------------------------------
+
+// archiveBody is the request body for POST /files/archive.
+type archiveBody struct {
+	// Paths is the list of site-relative paths to include in the archive
+	// (required; at least one path).
+	Paths []string `json:"paths"`
+	// ConfirmSensitive must be true when any path in Paths matches the
+	// sensitive-file deny-list (wp-config.php, .env*, *.pem, …).
+	// Also requires PermSiteFilesReadSensitive (owner); a non-owner or a caller
+	// that omits this flag is rejected at the CP (agent never called) and the
+	// denial is audited at elevated severity (T9).
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// createArchive zips the requested paths on the agent, stages the archive in
+// object storage, and returns a short-TTL presigned GET URL for the browser.
+// Gate: PermSiteFilesRead + files_enabled (read-only operation; archive is a
+// download convenience, not a write).
+//
+// Sensitive-path gate (F1 — CRITICAL): if any path in Paths is sensitive,
+// the caller must hold PermSiteFilesReadSensitive (owner) AND set
+// confirm_sensitive=true. Both checks must pass; a partial match is denied.
+// The denial is audited at elevated severity regardless of whether it was a
+// permission failure or a missing flag.
+func (h *Handler) createArchive(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body archiveBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if len(body.Paths) == 0 {
+		httpx.Error(c, domain.Validation("missing_paths", "at least one path is required"))
+		return
+	}
+
+	// Sensitive-path gate: scan all paths in the request.
+	hasSensitive := false
+	for _, p2 := range body.Paths {
+		if IsSensitivePath(p2) {
+			hasSensitive = true
+			break
+		}
+	}
+
+	if hasSensitive {
+		if !body.ConfirmSensitive {
+			h.record(c, p, ActionSiteFilesArchiveSensitiveDenied, siteID, map[string]any{
+				"op":     "archive",
+				"paths":  body.Paths,
+				"reason": "confirm_sensitive_missing",
+			})
+			httpx.Error(c, domain.Forbidden("confirm_sensitive_required",
+				"one or more paths are sensitive files; set confirm_sensitive=true to confirm you intend to archive them"))
+			return
+		}
+		if !h.allows(c, authz.PermSiteFilesReadSensitive) {
+			h.record(c, p, ActionSiteFilesArchiveSensitiveDenied, siteID, map[string]any{
+				"op":     "archive",
+				"paths":  body.Paths,
+				"reason": "insufficient_permission",
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"archiving sensitive files requires owner-level permission"))
+			return
+		}
+	}
+
+	createdBy := p.GetUserID()
+	result, err := h.svc.CreateArchive(c.Request.Context(), p.TenantID, siteID, body.Paths, createdBy, body.ConfirmSensitive)
+	if err != nil {
+		if hasSensitive {
+			h.record(c, p, ActionSiteFilesArchiveSensitiveDenied, siteID, map[string]any{
+				"op":     "archive",
+				"paths":  body.Paths,
+				"reason": err.Error(),
+			})
+		}
+		httpx.Error(c, err)
+		return
+	}
+
+	// Elevated audit for sensitive archives (T6); standard audit otherwise.
+	if hasSensitive {
+		h.record(c, p, ActionSiteFilesArchiveSensitiveRead, siteID, map[string]any{
+			"paths":       body.Paths,
+			"transfer_id": result.TransferID.String(),
+			"size_bytes":  result.SizeBytes,
+			"chunk_count": result.ChunkCount,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesArchive, siteID, map[string]any{
+			"paths":       body.Paths,
+			"transfer_id": result.TransferID.String(),
+			"size_bytes":  result.SizeBytes,
+			"chunk_count": result.ChunkCount,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"ok":           true,
+		"transfer_id":  result.TransferID.String(),
+		"download_url": result.DownloadURL,
+		"size_bytes":   result.SizeBytes,
+		"chunk_count":  result.ChunkCount,
+		"expires_at":   result.ExpiresAt.UTC().Unix(),
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3: POST /sites/:siteId/files/extract
+// ---------------------------------------------------------------------------
+
+// extractBody is the request body for POST /files/extract.
+type extractBody struct {
+	// ArchivePath is the site-relative path to the ZIP archive (required).
+	ArchivePath string `json:"archive_path"`
+	// DestPath is the site-relative directory to extract into (required).
+	DestPath string `json:"dest_path"`
+	// ConfirmExecutableWrite must be true when any archive entry would land in
+	// an executable-extension path. Requires PermSiteFilesWriteCode (owner).
+	// A non-owner passing this is rejected at the handler with an elevated-
+	// severity denial audit entry — the agent is never called.
+	ConfirmExecutableWrite bool `json:"confirm_executable_write"`
+	// ConfirmSensitive must be true when any archive entry would land in a
+	// sensitive path. Same owner gate as ConfirmExecutableWrite.
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// extract issues a file_extract command after gating on write mode and the
+// elevated-permission check for the confirm flags.
+//
+// Security: zip_slip / zip_bomb map to 422 (the archive is structurally valid
+// but malicious); bad_archive / not_archive map to 400. The agent is the
+// authoritative enforcer of the zip-slip/zip-bomb guard; the CP propagates the
+// confirm flags after verifying the owner gate — never before.
+func (h *Handler) extract(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body extractBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.ArchivePath == "" {
+		httpx.Error(c, domain.Validation("missing_archive_path", "archive_path is required"))
+		return
+	}
+	if body.DestPath == "" {
+		httpx.Error(c, domain.Validation("missing_dest_path", "dest_path is required"))
+		return
+	}
+
+	// Elevated-permission gate: confirm flags require owner (PermSiteFilesWriteCode).
+	// A non-owner passing either flag is DENIED before the agent is called and the
+	// denial is audited at elevated severity (T9). This is the same gate as
+	// writeContent / rename — extract is a de-facto multi-file write.
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			reason := "executable"
+			if body.ConfirmSensitive {
+				reason = "sensitive"
+			}
+			h.record(c, p, ActionSiteFilesExtractDenied, siteID, map[string]any{
+				"archive_path": body.ArchivePath,
+				"dest_path":    body.DestPath,
+				"reason":       reason + "_requires_owner",
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"extracting to an executable or sensitive path requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.Extract(c.Request.Context(), p.TenantID, siteID, body.ArchivePath, body.DestPath, body.ConfirmExecutableWrite, body.ConfirmSensitive)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	// Record elevated audit when confirm flags were set (mirrors writeContent).
+	if body.ConfirmExecutableWrite || body.ConfirmSensitive {
+		reason := "executable"
+		if body.ConfirmSensitive {
+			reason = "sensitive"
+		}
+		h.record(c, p, ActionSiteFilesExtract, siteID, map[string]any{
+			"archive_path": body.ArchivePath,
+			"dest_path":    result.DestPath,
+			"extracted":    result.Extracted,
+			"elevated":     reason,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesExtract, siteID, map[string]any{
+			"archive_path": body.ArchivePath,
+			"dest_path":    result.DestPath,
+			"extracted":    result.Extracted,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"dest_path": result.DestPath,
+		"extracted": result.Extracted,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3: GET /sites/:siteId/files/search
+// ---------------------------------------------------------------------------
+
+// search issues a file_search command to the agent.
+// Query params:
+//
+//	path   — site-relative root to search under (default "/")
+//	q      — search term (required)
+//	mode   — "name" or "content" (default "name")
+//	cursor — opaque resume cursor from a prior truncated response
+func (h *Handler) search(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	searchPath := c.Query("path")
+	if searchPath == "" {
+		searchPath = "/"
+	}
+	query := c.Query("q")
+	if query == "" {
+		httpx.Error(c, domain.Validation("missing_query", "q query parameter is required"))
+		return
+	}
+	mode := c.Query("mode")
+	if mode == "" {
+		mode = "name"
+	}
+	var cursor *string
+	if raw := c.Query("cursor"); raw != "" {
+		cursor = &raw
+	}
+
+	result, err := h.svc.Search(c.Request.Context(), p.TenantID, siteID, searchPath, query, mode, cursor)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	h.record(c, p, ActionSiteFilesSearch, siteID, map[string]any{
+		"path":        searchPath,
+		"query":       query,
+		"mode":        mode,
+		"match_count": len(result.Matches),
+		"truncated":   result.Truncated,
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"matches":   result.Matches,
+		"truncated": result.Truncated,
+		"cursor":    result.Cursor,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3: GET /sites/:siteId/files/versions
+// ---------------------------------------------------------------------------
+
+// listVersions returns the version history for a single file.
+// Query params:
+//
+//	path — site-relative file path (required)
+//
+// Sensitive-path gate (F3 — HIGH): if path is a sensitive file, the caller must
+// hold PermSiteFilesReadSensitive (owner) to list its version history. A
+// non-owner is denied (403) and the denial is audited at elevated severity. The
+// gate prevents leaking that sensitive backups exist to non-owners.
+func (h *Handler) listVersions(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	filePath := c.Query("path")
+	if filePath == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path query parameter is required"))
+		return
+	}
+
+	// Sensitive-path gate: listing versions of a sensitive file reveals that
+	// backups exist (information leak to non-owners — deny at the CP layer).
+	if IsSensitivePath(filePath) {
+		if !h.allows(c, authz.PermSiteFilesReadSensitive) {
+			h.record(c, p, ActionSiteFilesVersionsListDenied, siteID, map[string]any{
+				"op":     "versions_list",
+				"path":   filePath,
+				"reason": "insufficient_permission",
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"listing version history for sensitive files requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.ListVersions(c.Request.Context(), p.TenantID, siteID, filePath)
+	if err != nil {
+		httpx.Error(c, err)
+		return
+	}
+
+	h.record(c, p, ActionSiteFilesVersionsList, siteID, map[string]any{
+		"path":          filePath,
+		"version_count": len(result.Versions),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"versions": result.Versions,
+	})
+}
+
+// ---------------------------------------------------------------------------
+// P3: POST /sites/:siteId/files/versions/restore
+// ---------------------------------------------------------------------------
+
+// restoreVersionBody is the request body for POST /files/versions/restore.
+type restoreVersionBody struct {
+	// Path is the site-relative path of the file to restore (required).
+	Path string `json:"path"`
+	// VersionID is the opaque version identifier returned by listVersions (required).
+	VersionID string `json:"version_id"`
+	// ConfirmSensitive must be true when Path matches the sensitive-file
+	// deny-list (wp-config.php, .env*, *.pem, …). Also requires
+	// PermSiteFilesWriteCode (owner); a non-owner or a caller that omits this
+	// flag is rejected at the CP (agent never called) and the denial is
+	// audited at elevated severity (T9).
+	ConfirmSensitive bool `json:"confirm_sensitive"`
+}
+
+// restoreVersion restores a file to a prior version issued by file_version_restore.
+// Gate: PermSiteFilesWrite + files_write_enabled (same as mkdir/rename/chmod).
+// Audited with path + version_id on both success and any failure that reaches
+// the agent (transport errors are logged by the service-level error mapper).
+//
+// Sensitive-path gate (F3 — HIGH): if Path is a sensitive file, the caller must
+// additionally hold PermSiteFilesWriteCode (owner) AND set confirm_sensitive=true.
+// Both checks must pass. The denial is audited at elevated severity (T9). The
+// agent receives confirm_sensitive only after the gate passes, and independently
+// re-checks the path — the agent is the last line of defense.
+func (h *Handler) restoreVersion(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+
+	var body restoreVersionBody
+	if err := bindJSON(c, &body); err != nil {
+		httpx.Error(c, err)
+		return
+	}
+	if body.Path == "" {
+		httpx.Error(c, domain.Validation("missing_path", "path is required"))
+		return
+	}
+	if body.VersionID == "" {
+		httpx.Error(c, domain.Validation("missing_version_id", "version_id is required"))
+		return
+	}
+
+	// Sensitive-path gate: restoring wp-config.php or any sensitive file from a
+	// stale version is a high-risk operation — require owner + explicit confirm.
+	isSensitive := IsSensitivePath(body.Path)
+	if isSensitive {
+		if !body.ConfirmSensitive {
+			h.record(c, p, ActionSiteFilesVersionRestoreDenied, siteID, map[string]any{
+				"op":         "version_restore",
+				"path":       body.Path,
+				"version_id": body.VersionID,
+				"reason":     "confirm_sensitive_missing",
+			})
+			httpx.Error(c, domain.Forbidden("confirm_sensitive_required",
+				"this file is sensitive; set confirm_sensitive=true to confirm you intend to restore it"))
+			return
+		}
+		if !h.allows(c, authz.PermSiteFilesWriteCode) {
+			h.record(c, p, ActionSiteFilesVersionRestoreDenied, siteID, map[string]any{
+				"op":         "version_restore",
+				"path":       body.Path,
+				"version_id": body.VersionID,
+				"reason":     "insufficient_permission",
+			})
+			httpx.Error(c, domain.Forbidden("insufficient_permission",
+				"restoring sensitive files requires owner-level permission"))
+			return
+		}
+	}
+
+	result, err := h.svc.RestoreVersion(c.Request.Context(), p.TenantID, siteID, body.Path, body.VersionID, body.ConfirmSensitive)
+	if err != nil {
+		if isSensitive {
+			h.record(c, p, ActionSiteFilesVersionRestoreDenied, siteID, map[string]any{
+				"op":         "version_restore",
+				"path":       body.Path,
+				"version_id": body.VersionID,
+				"reason":     err.Error(),
+			})
+		}
+		httpx.Error(c, err)
+		return
+	}
+
+	// Elevated audit for sensitive version restores (T6); standard audit otherwise.
+	if isSensitive {
+		h.record(c, p, ActionSiteFilesVersionRestoreSensitive, siteID, map[string]any{
+			"path":       result.Path,
+			"version_id": body.VersionID,
+			"size":       result.Size,
+			"mtime":      result.Mtime,
+		})
+	} else {
+		h.record(c, p, ActionSiteFilesVersionRestore, siteID, map[string]any{
+			"path":       result.Path,
+			"version_id": body.VersionID,
+			"size":       result.Size,
+			"mtime":      result.Mtime,
+		})
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"path":       result.Path,
+		"size":       result.Size,
+		"mtime":      result.Mtime,
+		"version_id": body.VersionID,
 	})
 }
 

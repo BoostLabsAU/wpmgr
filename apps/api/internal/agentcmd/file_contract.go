@@ -412,6 +412,220 @@ type FileUploadApplyResponse struct {
 }
 
 // ---------------------------------------------------------------------------
+// file_archive_create  (P3)
+// ---------------------------------------------------------------------------
+
+// FileArchivePresignedPut is one presigned PUT slot the CP has minted for the
+// agent to upload a chunk of the archive it creates.
+//
+// Identical shape to FileDownloadPresignedPut — reused so the agent can use the
+// same multipart-upload helper for both commands.
+type FileArchivePresignedPut struct {
+	Index int    `json:"index"`
+	URL   string `json:"url"`
+}
+
+// FileArchiveCreateRequest is the POST body for the `file_archive_create` command.
+//
+// The agent zips the listed paths into a temporary archive, uploads it in
+// chunks to the CP-minted presigned PUT URLs, then removes the temp archive.
+// The CP assembles the parts and mints a presigned GET for the browser.
+//
+//	paths             — slice of site-relative paths to include in the archive.
+//	                    The agent runs each through the containment guard; paths
+//	                    that escape the jail are skipped (or cause an error, per
+//	                    the agent's mode).
+//	presigned_puts    — CP-minted presigned PUT slots for each chunk (same shape as
+//	                    FileDownloadPrepareRequest.presigned_puts).
+//	part_size         — expected chunk size in bytes (matches the CP's S3 multipart config).
+//	confirm_sensitive — must be true when any path in `paths` matches the sensitive-file
+//	                    deny-list (wp-config.php, .env*, *.pem, …). The CP verifies
+//	                    PermSiteFilesReadSensitive (owner) AND the request flag before
+//	                    issuing this command; the agent independently re-checks and
+//	                    returns "sensitive_denied" when absent / false.
+type FileArchiveCreateRequest struct {
+	Paths            []string                 `json:"paths"`
+	PresignedPuts    []FileArchivePresignedPut `json:"presigned_puts"`
+	PartSize         int                      `json:"part_size"`
+	ConfirmSensitive bool                     `json:"confirm_sensitive,omitempty"`
+}
+
+// FileArchivePart is the completion record for one uploaded archive chunk.
+type FileArchivePart struct {
+	Index int    `json:"index"`
+	ETag  string `json:"etag"`
+	Size  int64  `json:"size"`
+}
+
+// FileArchiveCreateResponse is the agent's response to `file_archive_create`.
+//
+//	object_key  — the S3 key prefix the agent wrote to (derived from the CP-minted
+//	              presigned URLs; echoed for cross-check).
+//	size        — total archive bytes staged.
+//	chunk_count — number of parts uploaded.
+//	parts       — per-part completion records for S3 multipart completion.
+//	error       — agent error struct present when an error occurred.
+type FileArchiveCreateResponse struct {
+	ObjectKey  string            `json:"object_key"`
+	Size       int64             `json:"size"`
+	ChunkCount int               `json:"chunk_count"`
+	Parts      []FileArchivePart `json:"parts"`
+	Error      *FileError        `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_extract  (P3)
+// ---------------------------------------------------------------------------
+
+// FileExtractRequest is the POST body for the `file_extract` command.
+//
+// The agent opens the archive at archive_path (within the jail), validates each
+// entry (reject zip-slip, zip-bomb, absolute paths, symlinks, device files),
+// extracts into dest_path, and removes the archive on success.
+//
+//	archive_path            — site-relative path to the ZIP archive to extract.
+//	dest_path               — site-relative destination directory. Created if absent.
+//	confirm_executable_write — must be true if any archive entry resolves to an
+//	                           executable-extension path. Absent / false → the
+//	                           agent returns "executable_write_denied". The CP
+//	                           must also verify PermSiteFilesWriteCode (owner).
+//	confirm_sensitive       — must be true if any archive entry resolves to a
+//	                           sensitive path. Absent / false → "sensitive_denied".
+//	                           The CP must also verify PermSiteFilesWriteCode.
+type FileExtractRequest struct {
+	ArchivePath            string `json:"archive_path"`
+	DestPath               string `json:"dest_path"`
+	ConfirmExecutableWrite bool   `json:"confirm_executable_write,omitempty"`
+	ConfirmSensitive       bool   `json:"confirm_sensitive,omitempty"`
+}
+
+// FileExtractResponse is the agent's response to `file_extract`.
+//
+//	dest_path  — echoed (or resolved) destination directory.
+//	extracted  — count of entries extracted.
+//	error      — agent error struct on failure.
+type FileExtractResponse struct {
+	DestPath  string     `json:"dest_path"`
+	Extracted int        `json:"extracted"`
+	Error     *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_search  (P3)
+// ---------------------------------------------------------------------------
+
+// FileSearchRequest is the POST body for the `file_search` command.
+//
+//	path   — site-relative directory to search under (recursive).
+//	query  — search term.
+//	mode   — "name" (match filenames) or "content" (grep file contents).
+//	cursor — opaque resume cursor from a prior truncated response.
+type FileSearchRequest struct {
+	Path   string  `json:"path"`
+	Query  string  `json:"query"`
+	Mode   string  `json:"mode"`
+	Cursor *string `json:"cursor,omitempty"`
+}
+
+// FileSearchMatch is one result in a file_search response.
+//
+//	path    — site-relative path of the matching file or directory.
+//	name    — basename of the entry.
+//	size    — file size in bytes (0 for directories).
+//	mtime   — last-modified time as Unix epoch seconds.
+//	is_dir  — true when the entry is a directory.
+//	line    — line number of the match (content mode only; 0 for name mode).
+//	snippet — surrounding text context (content mode only; empty for name mode).
+type FileSearchMatch struct {
+	Path    string `json:"path"`
+	Name    string `json:"name"`
+	Size    int64  `json:"size"`
+	Mtime   int64  `json:"mtime"`
+	IsDir   bool   `json:"is_dir"`
+	Line    int    `json:"line,omitempty"`
+	Snippet string `json:"snippet,omitempty"`
+}
+
+// FileSearchResponse is the agent's response to `file_search`.
+//
+//	matches   — the current page of search results.
+//	truncated — true when more results remain beyond this page.
+//	cursor    — opaque resume cursor; present only when truncated=true.
+//	error     — agent error struct on failure.
+type FileSearchResponse struct {
+	Matches   []FileSearchMatch `json:"matches"`
+	Truncated bool              `json:"truncated"`
+	Cursor    *string           `json:"cursor,omitempty"`
+	Error     *FileError        `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_versions_list  (P3)
+// ---------------------------------------------------------------------------
+
+// FileVersionsListRequest is the POST body for the `file_versions_list` command.
+//
+//	path — site-relative path to the file whose version history to retrieve.
+type FileVersionsListRequest struct {
+	Path string `json:"path"`
+}
+
+// FileVersion is one version entry in the version history of a file.
+//
+//	version_id  — opaque identifier for this version (e.g. a timestamp string or hash).
+//	             Pass to file_version_restore to restore this version.
+//	size        — file size in bytes at this version.
+//	mtime       — last-modified time of this version (Unix epoch seconds).
+//	created_at  — when this version was created (Unix epoch seconds; may equal mtime).
+type FileVersion struct {
+	VersionID string `json:"version_id"`
+	Size      int64  `json:"size"`
+	Mtime     int64  `json:"mtime"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+// FileVersionsListResponse is the agent's response to `file_versions_list`.
+//
+//	versions — list of versions ordered newest-first.
+//	error    — agent error struct on failure.
+type FileVersionsListResponse struct {
+	Versions []FileVersion `json:"versions"`
+	Error    *FileError    `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
+// file_version_restore  (P3)
+// ---------------------------------------------------------------------------
+
+// FileVersionRestoreRequest is the POST body for the `file_version_restore` command.
+//
+//	path              — site-relative path of the file to restore.
+//	version_id        — the version identifier returned by file_versions_list.
+//	confirm_sensitive — must be true when `path` matches the sensitive-file deny-list
+//	                    (wp-config.php, .env*, *.pem, …). The CP verifies
+//	                    PermSiteFilesWriteCode (owner) AND the request flag before
+//	                    issuing this command; the agent independently re-checks and
+//	                    returns "sensitive_denied" when absent / false.
+type FileVersionRestoreRequest struct {
+	Path             string `json:"path"`
+	VersionID        string `json:"version_id"`
+	ConfirmSensitive bool   `json:"confirm_sensitive,omitempty"`
+}
+
+// FileVersionRestoreResponse is the agent's response to `file_version_restore`.
+//
+//	path  — echoed resolved path.
+//	size  — size of the restored file in bytes.
+//	mtime — last-modified time after restore (Unix epoch seconds).
+//	error — agent error struct on failure.
+type FileVersionRestoreResponse struct {
+	Path  string     `json:"path"`
+	Size  int64      `json:"size"`
+	Mtime int64      `json:"mtime"`
+	Error *FileError `json:"error,omitempty"`
+}
+
+// ---------------------------------------------------------------------------
 // Agent error envelope
 // ---------------------------------------------------------------------------
 
@@ -453,6 +667,19 @@ type FileUploadApplyResponse struct {
 //	                          path (empty-base guard, T3).  CP maps to 500.
 //	write_failed            — the atomic-write / swap failed (temp-write error,
 //	                          SHA-256 mismatch, disk full).  CP maps to 502.
+//
+// P3 (archive/extract/search/versions) codes:
+//
+//	zip_slip        — a zip entry resolves outside the extraction destination
+//	                  (directory traversal via archive).  CP maps to 422.
+//	zip_bomb        — the archive exceeds the uncompressed-size or entry-count
+//	                  guard (DoS protection).  CP maps to 422.
+//	bad_archive     — the file exists but cannot be opened as a valid archive
+//	                  (corrupted or unsupported format).  CP maps to 400.
+//	not_archive     — the path does not point to a file with a recognised
+//	                  archive extension or magic bytes.  CP maps to 400.
+//	no_such_version — the version_id passed to file_version_restore does not
+//	                  exist for the given path.  CP maps to 404.
 type FileError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`

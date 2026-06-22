@@ -46,6 +46,7 @@ declare(strict_types=1);
 
 namespace WPMgr\Agent\Commands;
 
+use WPMgr\Agent\Keystore;
 use WPMgr\Agent\Support\StoragePaths;
 
 if ( ! defined( 'ABSPATH' ) ) {
@@ -220,9 +221,16 @@ final class FileWriteCommand implements CommandInterface {
 	// ------------------------------------------------------------------
 
 	/**
-	 * Copy the existing target file to the staging area before overwriting it.
-	 * Errors are silenced — failure here does NOT block the write; the backup
-	 * is best-effort so a later "restore previous version" is possible.
+	 * Copy the existing target file to the staging area before overwriting it,
+	 * AES-256-GCM-encrypting the backup content at rest.
+	 *
+	 * F4: Backups are stored as ciphertext (Keystore AES-256-GCM envelope) so that
+	 * even if the .htaccess deny rule is removed, the raw file bytes on disk are
+	 * unreadable without the agent's master key. The key is derived from wp-config
+	 * salts (or a site-specific file), same as all other Keystore-protected data.
+	 *
+	 * Errors are silenced — failure here does NOT block the write; the backup is
+	 * best-effort so that a later "restore previous version" is possible.
 	 *
 	 * @param string $absPath     Absolute path to the current target file.
 	 * @param string $resolvedRel Site-relative path of the target.
@@ -243,9 +251,24 @@ final class FileWriteCommand implements CommandInterface {
 			wp_mkdir_p( $backupDir );
 		}
 
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- headless agent; WP_Filesystem never initialized; reading source file for encrypted backup
+		$plaintext = @file_get_contents( $absPath );
+		if ( $plaintext === false ) {
+			return; // Unreadable source — skip silently.
+		}
+
+		// F4: Encrypt the backup bytes with the existing Keystore AES-256-GCM cipher.
+		// No new dependency — the Keystore is already vendored for the key/credential store.
+		try {
+			$keystore   = new Keystore();
+			$ciphertext = $keystore->encrypt( $plaintext );
+		} catch ( \Throwable $e ) {
+			return; // Encryption failed — skip backup rather than writing plaintext.
+		}
+
 		$backupFile = $backupDir . '/' . time() . '-' . bin2hex( random_bytes( 4 ) ) . '.bak';
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_copy -- headless agent; WP_Filesystem never initialized; best-effort pre-write backup
-		@copy( $absPath, $backupFile );
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- headless agent; WP_Filesystem never initialized; writing AES-256-GCM-encrypted backup file
+		@file_put_contents( $backupFile, $ciphertext, LOCK_EX );
 	}
 
 	// ------------------------------------------------------------------

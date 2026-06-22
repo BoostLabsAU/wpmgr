@@ -9625,6 +9625,281 @@ export const ApplyUploadResultSchema = {
   },
 } as const;
 
+export const FileArchiveCreateRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/archive`.",
+  required: ["paths"],
+  properties: {
+    paths: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      minItems: 1,
+      description:
+        "Site-relative paths to include in the archive. The agent runs each through the containment guard; at least one path is required.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any path in `paths` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.read_sensitive`). A non-owner caller or a caller that omits this flag when a sensitive path is present is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.\n",
+    },
+  },
+} as const;
+
+export const FileArchiveCreateResultSchema = {
+  type: "object",
+  description:
+    "Presigned download URL and transfer metadata returned by the `file_archive_create` flow.\n",
+  required: [
+    "ok",
+    "transfer_id",
+    "download_url",
+    "size_bytes",
+    "chunk_count",
+    "expires_at",
+  ],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    transfer_id: {
+      type: "string",
+      format: "uuid",
+      description: "CP-assigned transfer ID (for audit correlation).",
+    },
+    download_url: {
+      type: "string",
+      format: "uri",
+      description:
+        "Presigned GET URL for the browser to download the staged archive directly from object storage. Valid for at most 5 minutes. Never log this URL.\n",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Total archive size in bytes.",
+    },
+    chunk_count: {
+      type: "integer",
+      description: "Number of S3 parts the agent uploaded.",
+    },
+    expires_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Unix epoch seconds when the presigned GET URL expires (≤ 5 min from now).",
+    },
+  },
+} as const;
+
+export const FileExtractRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/extract`.",
+  required: ["archive_path", "dest_path"],
+  properties: {
+    archive_path: {
+      type: "string",
+      description: "Site-relative path to the ZIP archive to extract.",
+    },
+    dest_path: {
+      type: "string",
+      description: "Site-relative destination directory. Created if absent.",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any archive entry would resolve to an executable-extension path (php, phar, htaccess, …). Requires owner permission (`site.files.write_code`). A non-owner passing this is rejected at the CP (agent never called) and the denial is audited at elevated severity.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any archive entry would resolve to a sensitive path (wp-config.php, .env*, *.pem, …). Same owner gate as `confirm_executable_write`.\n",
+    },
+  },
+} as const;
+
+export const FileExtractResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/extract`.",
+  required: ["dest_path", "extracted"],
+  properties: {
+    dest_path: {
+      type: "string",
+      description: "Resolved destination directory path (echoed).",
+    },
+    extracted: {
+      type: "integer",
+      description: "Number of entries extracted from the archive.",
+    },
+  },
+} as const;
+
+export const FileSearchMatchSchema = {
+  type: "object",
+  description: "One result in a `file_search` response.",
+  required: ["path", "name", "size", "mtime", "is_dir"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path of the matching file or directory.",
+    },
+    name: {
+      type: "string",
+      description: "Basename of the entry.",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes (0 for directories).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    is_dir: {
+      type: "boolean",
+      description: "True when the matched entry is a directory.",
+    },
+    line: {
+      type: "integer",
+      description:
+        "Line number of the match within the file (`content` mode only; absent for `name` mode).\n",
+    },
+    snippet: {
+      type: "string",
+      description:
+        "Surrounding text context for the match (`content` mode only; absent for `name` mode). Never contains content from sensitive paths.\n",
+    },
+  },
+} as const;
+
+export const FileSearchResultSchema = {
+  type: "object",
+  description:
+    "Paginated list of search results from a `file_search` agent command.\n",
+  required: ["matches", "truncated"],
+  properties: {
+    matches: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileSearchMatch",
+      },
+    },
+    truncated: {
+      type: "boolean",
+      description: "True when more results remain beyond this page.",
+    },
+    cursor: {
+      type: "string",
+      nullable: true,
+      description: "Opaque resume cursor; present only when `truncated=true`.",
+    },
+  },
+} as const;
+
+export const FileVersionSchema = {
+  type: "object",
+  description: "One version entry in a file's version history.",
+  required: ["version_id", "size", "mtime", "created_at"],
+  properties: {
+    version_id: {
+      type: "string",
+      description:
+        "Opaque version identifier. Pass to `POST /files/versions/restore` to restore this version.\n",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes at this version.",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time of this version (Unix epoch seconds).",
+    },
+    created_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "When this version was created (Unix epoch seconds). May equal `mtime` when the agent derives both from the same filesystem timestamp.\n",
+    },
+  },
+} as const;
+
+export const FileVersionsResultSchema = {
+  type: "object",
+  description:
+    "Version history for a file, ordered newest-first, from a `file_versions_list` agent command.\n",
+  required: ["versions"],
+  properties: {
+    versions: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileVersion",
+      },
+      description:
+        "List of versions ordered newest-first. Empty when the agent has no history for the path (no version system configured or no prior writes).\n",
+    },
+  },
+} as const;
+
+export const FileVersionRestoreRequestSchema = {
+  type: "object",
+  description:
+    "Request body for `POST /sites/{siteId}/files/versions/restore`.",
+  required: ["path", "version_id"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path of the file to restore.",
+    },
+    version_id: {
+      type: "string",
+      description:
+        "Opaque version identifier returned by `GET /files/versions?path=…`. Returns `404 no_such_version` when the ID does not exist for the path.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when `path` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.write_code`). A non-owner caller or a caller that omits this flag when the path is sensitive is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.\n",
+    },
+  },
+} as const;
+
+export const FileVersionRestoreResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/versions/restore`.",
+  required: ["path", "size", "mtime", "version_id"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Resolved path of the restored file (echoed).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Size of the restored file in bytes.",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time after restore (Unix epoch seconds).",
+    },
+    version_id: {
+      type: "string",
+      description:
+        "The version ID that was restored (echoed for audit correlation).",
+    },
+  },
+} as const;
+
 export const PerfConfigWritableSchema = {
   type: "object",
   description:

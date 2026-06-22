@@ -215,6 +215,12 @@ export {
   chmodSiteFile,
   prepareSiteFileUpload,
   applySiteFileUpload,
+  // file manager (P3 advanced ops)
+  createSiteFileArchive,
+  extractSiteFileArchive,
+  searchSiteFiles,
+  listSiteFileVersions,
+  restoreSiteFileVersion,
 } from "./generated/sdk.gen";
 
 // --- Domain + request/response types ----------------------------------------
@@ -761,4 +767,25 @@ export type {
   PrepareSiteFileUploadResponse,
   ApplySiteFileUploadData,
   ApplySiteFileUploadResponse,
+  // file manager (P3 advanced ops)
+  FileArchiveCreateRequest,
+  FileArchiveCreateResult,
+  FileExtractRequest,
+  FileExtractResult,
+  FileSearchMatch,
+  FileSearchResult,
+  FileVersion,
+  FileVersionsResult,
+  FileVersionRestoreRequest,
+  FileVersionRestoreResult,
+  CreateSiteFileArchiveData,
+  CreateSiteFileArchiveResponse,
+  ExtractSiteFileArchiveData,
+  ExtractSiteFileArchiveResponse,
+  SearchSiteFilesData,
+  SearchSiteFilesResponse,
+  ListSiteFileVersionsData,
+  ListSiteFileVersionsResponse,
+  RestoreSiteFileVersionData,
+  RestoreSiteFileVersionResponse,
 } from "./generated/types.gen";

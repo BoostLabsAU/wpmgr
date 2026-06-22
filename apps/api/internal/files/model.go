@@ -79,4 +79,63 @@ const (
 	// PermSiteFilesWriteCode (owner). Metadata: path, op, reason. T9: always log
 	// denials, especially for elevated-risk operations.
 	ActionSiteFilesWriteCodeDenied = "site.files.write_code.denied"
+
+	// ---------------------------------------------------------------------------
+	// P3 advanced ops actions
+	// ---------------------------------------------------------------------------
+
+	// ActionSiteFilesArchive is recorded on a successful archive creation
+	// (file_archive_create command). Metadata: paths ([]string), size_bytes,
+	// chunk_count, transfer_id, object_key.
+	ActionSiteFilesArchive = "site.files.archive"
+
+	// ActionSiteFilesArchiveSensitiveRead is recorded when a successful archive
+	// creation includes at least one sensitive path (wp-config.php, .env*, …).
+	// Elevated-severity entry — mirrors ActionSiteFilesSensitiveRead (T6).
+	// Metadata: paths ([]string), size_bytes, chunk_count, transfer_id.
+	ActionSiteFilesArchiveSensitiveRead = "site.files.archive.sensitive.read"
+
+	// ActionSiteFilesArchiveSensitiveDenied is recorded on every denied attempt
+	// to archive a sensitive path (missing confirm_sensitive or insufficient
+	// permission). Metadata: paths ([]string), reason. T9: log denials.
+	ActionSiteFilesArchiveSensitiveDenied = "site.files.archive.sensitive.denied"
+
+	// ActionSiteFilesExtract is recorded on a successful archive extraction
+	// (file_extract command). Metadata: archive_path, dest_path, extracted (count).
+	ActionSiteFilesExtract = "site.files.extract"
+
+	// ActionSiteFilesExtractDenied is recorded when an extract is rejected at the
+	// CP gate (missing WriteCode owner permission for confirm_executable_write or
+	// confirm_sensitive). Metadata: archive_path, reason. T9: log denials at
+	// elevated severity for this high-risk surface.
+	ActionSiteFilesExtractDenied = "site.files.extract.denied"
+
+	// ActionSiteFilesSearch is recorded on a successful search
+	// (file_search command). Metadata: path, query, mode, match_count, truncated.
+	// Search is a read op — audited so bulk content-search of the FS is traceable.
+	ActionSiteFilesSearch = "site.files.search"
+
+	// ActionSiteFilesVersionsList is recorded on a successful version history
+	// listing (file_versions_list command). Metadata: path, version_count.
+	ActionSiteFilesVersionsList = "site.files.versions.list"
+
+	// ActionSiteFilesVersionsListDenied is recorded when a non-owner caller
+	// attempts to list versions for a sensitive path without holding
+	// PermSiteFilesReadSensitive. Metadata: path, reason. T9: log denials.
+	ActionSiteFilesVersionsListDenied = "site.files.versions.list.denied"
+
+	// ActionSiteFilesVersionRestore is recorded on a successful version restore
+	// (file_version_restore command). Metadata: path, version_id, size, mtime.
+	// This is a write operation and is always audited with the full version_id.
+	ActionSiteFilesVersionRestore = "site.files.version.restore"
+
+	// ActionSiteFilesVersionRestoreSensitive is recorded when a successful version
+	// restore targets a sensitive path. Elevated-severity entry (T6).
+	// Metadata: path, version_id, size, mtime.
+	ActionSiteFilesVersionRestoreSensitive = "site.files.version.restore.sensitive"
+
+	// ActionSiteFilesVersionRestoreDenied is recorded when a version restore is
+	// denied because the path is sensitive and the caller lacks PermSiteFilesWriteCode
+	// or the confirm_sensitive flag was not set. Metadata: path, reason. T9.
+	ActionSiteFilesVersionRestoreDenied = "site.files.version.restore.denied"
 )

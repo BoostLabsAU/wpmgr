@@ -570,6 +570,20 @@ func encodeCreateSiteDirectoryRequest(
 	return nil
 }
 
+func encodeCreateSiteFileArchiveRequest(
+	req *FileArchiveCreateRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
 func encodeCreateSiteShareRequest(
 	req *CreateSiteShareRequest,
 	r *http.Request,
@@ -662,6 +676,20 @@ func encodeDeleteSiteFileRequest(
 
 func encodeEnrollRequest(
 	req *EnrollRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeExtractSiteFileArchiveRequest(
+	req *FileExtractRequest,
 	r *http.Request,
 ) error {
 	const contentType = "application/json"
@@ -1154,6 +1182,20 @@ func encodeRestoreMediaRequest(
 		if req.Set {
 			req.Encode(e)
 		}
+	}
+	encoded := e.Bytes()
+	ht.SetBody(r, bytes.NewReader(encoded), contentType)
+	return nil
+}
+
+func encodeRestoreSiteFileVersionRequest(
+	req *FileVersionRestoreRequest,
+	r *http.Request,
+) error {
+	const contentType = "application/json"
+	e := new(jx.Encoder)
+	{
+		req.Encode(e)
 	}
 	encoded := e.Bytes()
 	ht.SetBody(r, bytes.NewReader(encoded), contentType)

@@ -83,10 +83,30 @@ func (s *ClientReportSectionFlags) setDefaults() {
 }
 
 // setDefaults set default value of fields.
+func (s *FileArchiveCreateRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
 func (s *FileDeleteRequest) setDefaults() {
 	{
 		val := bool(false)
 		s.Recursive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *FileExtractRequest) setDefaults() {
+	{
+		val := bool(false)
+		s.ConfirmExecutableWrite.SetTo(val)
+	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
 	}
 }
 
@@ -96,6 +116,14 @@ func (s *FileRenameRequest) setDefaults() {
 		val := bool(false)
 		s.ConfirmExecutableWrite.SetTo(val)
 	}
+	{
+		val := bool(false)
+		s.ConfirmSensitive.SetTo(val)
+	}
+}
+
+// setDefaults set default value of fields.
+func (s *FileVersionRestoreRequest) setDefaults() {
 	{
 		val := bool(false)
 		s.ConfirmSensitive.SetTo(val)

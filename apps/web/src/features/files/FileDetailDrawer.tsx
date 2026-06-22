@@ -6,6 +6,7 @@ import {
   Download,
   Edit3,
   FileX,
+  History,
   Lock,
   ShieldAlert,
   X,
@@ -30,6 +31,7 @@ import {
   FileTooLargeError,
 } from "./hooks/use-file-content";
 import { useFileDownload } from "./hooks/use-file-download";
+import { FileVersionHistoryDialog } from "./FileVersionHistoryDialog";
 
 // FileDetailDrawer — opens on a file row click. Shows:
 //  - File metadata (path, size, mtime, mode)
@@ -96,6 +98,8 @@ export function FileDetailDrawer({
 }: FileDetailDrawerProps) {
   // Track whether the owner has confirmed reading a sensitive file.
   const [confirmedSensitive, setConfirmedSensitive] = useState(false);
+  // P3: version history dialog
+  const [versionsOpen, setVersionsOpen] = useState(false);
   // Reset confirmation when the selected file changes.
   const filePath = entry
     ? currentPath
@@ -114,6 +118,7 @@ export function FileDetailDrawer({
   // Reset sensitive confirmation when drawer opens a new file.
   const handleClose = () => {
     setConfirmedSensitive(false);
+    setVersionsOpen(false);
     onClose();
   };
 
@@ -204,6 +209,7 @@ export function FileDetailDrawer({
     !isSensitiveError;
 
   return (
+    <>
     <Dialog open={true} onClose={handleClose}>
       <DialogContent
         ariaLabelledBy="file-detail-title"
@@ -301,6 +307,18 @@ export function FileDetailDrawer({
           <Button type="button" variant="ghost" onClick={handleClose}>
             Close
           </Button>
+          {/* Version history (P3): admin+, files only */}
+          {canManage && !entry.is_dir ? (
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setVersionsOpen(true)}
+              className="gap-1.5"
+            >
+              <History aria-hidden="true" className="size-4" />
+              History
+            </Button>
+          ) : null}
           {/* Edit button: P2, admin+, write_enabled, text file only */}
           {canEdit ? (
             <Button
@@ -310,9 +328,7 @@ export function FileDetailDrawer({
                 if (decodedText !== null) onEdit?.(decodedText);
                 handleClose();
               }}
-              className={cn(
-                "gap-1.5",
-              )}
+              className="gap-1.5"
             >
               <Edit3 aria-hidden="true" className="size-4" />
               Edit
@@ -337,6 +353,21 @@ export function FileDetailDrawer({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {/* P3: Version history dialog — rendered outside the drawer dialog to avoid
+        portal stacking conflicts. It is only mounted when versionsOpen=true. */}
+    {versionsOpen && filePath ? (
+      <FileVersionHistoryDialog
+        open={versionsOpen}
+        onClose={() => setVersionsOpen(false)}
+        siteId={siteId}
+        filePath={filePath}
+        currentDirPath={currentPath}
+        isOwner={isOwner}
+        writeEnabled={writeEnabled}
+      />
+    ) : null}
+    </>
   );
 }
 
