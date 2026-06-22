@@ -96,6 +96,40 @@ func TestLoadRiverMediaSchemaEnv(t *testing.T) {
 	}
 }
 
+// TestValidateRiverMediaSchema verifies that an invalid WPMGR_RIVER_MEDIA_SCHEMA
+// surfaces as a config Issue (so the server parks in readyz-degraded) while
+// empty, public, and valid identifiers are accepted.
+func TestValidateRiverMediaSchema(t *testing.T) {
+	base := Config{Auth: AuthConfig{SessionSecret: strings.Repeat("a", 32)}}
+	tests := []struct {
+		name      string
+		schema    string
+		wantIssue bool
+	}{
+		{"empty default", "", false},
+		{"public", "public", false},
+		{"valid identifier", "media_encoder", false},
+		{"hyphen rejected", "media-encoder", true},
+		{"dotted rejected", "public.river", true},
+		{"leading digit rejected", "1schema", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			cfg.River = RiverConfig{MediaSchema: tt.schema}
+			gotIssue := false
+			for _, is := range Validate(cfg) {
+				if is.Name == "WPMGR_RIVER_MEDIA_SCHEMA" {
+					gotIssue = true
+				}
+			}
+			if gotIssue != tt.wantIssue {
+				t.Fatalf("Validate() river schema issue = %v, want %v", gotIssue, tt.wantIssue)
+			}
+		})
+	}
+}
+
 // TestOIDCEnabled verifies the OIDC provider is enabled only when an issuer
 // URL is configured.
 func TestOIDCEnabled(t *testing.T) {

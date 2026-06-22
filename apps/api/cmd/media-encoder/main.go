@@ -76,6 +76,14 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	// Log the resolved media River schema. The encoder polls this schema while
+	// the API inserts into it; a mismatch silently strands jobs, so emitting it
+	// on each process makes an operator eyeball-diff trivial.
+	mediaSchemaLog := mediaSchema
+	if riverutil.IsDefaultSchema(mediaSchema) {
+		mediaSchemaLog = "public"
+	}
+	logger.Info("media River schema resolved", slog.String("media_river_schema", mediaSchemaLog))
 
 	if !cfg.S3.Enabled() {
 		return errEnv("WPMGR_S3_BUCKET is required: the media-encoder transfers bytes via presigned object storage")

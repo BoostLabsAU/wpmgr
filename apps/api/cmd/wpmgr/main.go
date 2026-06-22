@@ -49,6 +49,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	"github.com/mosamlife/wpmgr/apps/api/internal/mailer"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media"
+	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
 	mediamodel "github.com/mosamlife/wpmgr/apps/api/internal/media/model"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
@@ -152,6 +153,14 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	// Log the resolved media River schema. A mismatch between this value and the
+	// media-encoder's silently strands media/screenshot jobs, so emitting it on
+	// each process makes an operator eyeball-diff trivial.
+	mediaSchemaLog := mediaRiverSchema
+	if riverutil.IsDefaultSchema(mediaRiverSchema) {
+		mediaSchemaLog = "public"
+	}
+	logger.Info("media River schema resolved", slog.String("media_river_schema", mediaSchemaLog))
 
 	// Migrations run with the owner/superuser DSN (creates the app role +
 	// privileged DDL); the application connects with the unprivileged app DSN.
@@ -1363,7 +1372,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// instance alive until the media_encode queue drains. WPMGR_MEDIA_ENCODER_URL
 	// is the encoder's Cloud Run URL; unset on self-host (the always-on `media`
 	// compose profile), where the waker disables itself.
-	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger, mediaRiverSchema, mediamodel.MediaEncodeQueue, screenshot.ScreenshotQueue)
+	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger, mediaRiverSchema, mediamodel.MediaEncodeQueue, screenshot.ScreenshotQueue, mediafont.FontTranscodeQueue)
 	mediaSvc.SetWaker(mediaWaker)
 	// M72: wire the same waker into the screenshot service so enqueuing a capture
 	// also cold-starts the scale-to-zero encoder (it runs both media_encode and

@@ -165,8 +165,11 @@ func TestRiverWiringAndHealthJob(t *testing.T) {
 	}
 }
 
-// TestRiverDualSchemaIsolation verifies that API-owned and encoder-owned River
-// jobs land in separate schemas when media isolation is configured.
+// TestRiverDualSchemaIsolation verifies job ROUTING when media isolation is
+// configured: encoder-owned jobs (media_encode, site_screenshot_capture) are
+// inserted into the media schema while API-owned jobs (site_health_check) stay
+// in public. The clients here are insert-only and never started, so this asserts
+// where jobs land, not River leader election.
 func TestRiverDualSchemaIsolation(t *testing.T) {
 	pool := startPostgres(t)
 	ctx := context.Background()
