@@ -1,0 +1,77 @@
+---
+title: "WordPress Restore in Practice: From Backup to Live Site"
+description: "Step-by-step walkthrough of restoring a WordPress site from a backup, including database-only restores, full site restores, and staging-first testing."
+category: "wordpress-backups"
+date: "2026-06-16"
+author: "WPMgr Team"
+tags: ["backups", "restore", "disaster-recovery"]
+featureSlug: "backups"
+solutionSlug: "wordpress-backups"
+---
+
+Most WordPress site owners have a backup somewhere. Far fewer have confirmed that the backup actually restores to a working site. This guide walks through the restore process: from choosing which backup to use, to confirming the site is back to normal.
+
+## Before you restore: identify the problem
+
+A restore replaces what is on the server with what was in the backup. Before you start, you need to know:
+
+**What broke?** A broken plugin update might require only restoring the database to the state before the update, or just deactivating the plugin. A full server compromise requires a complete restore and a security audit. Matching the restore scope to the problem avoids unnecessary data loss.
+
+**When did it break?** You want to restore to the last backup before the problem occurred. If a post was accidentally deleted on Tuesday afternoon, you want the backup from Tuesday morning or earlier, not Monday.
+
+**What data will be lost?** Any content created or changed between the backup time and now will be lost in the restore. For content sites, this might be a few posts. For e-commerce, it could be orders. Quantify this before starting.
+
+## Types of restore
+
+**Database-only restore.** Replaces the MySQL database with the backup version. Fastest option. Preserves any file changes made after the backup (uploaded files, plugin updates). Use this when the problem is data-related (deleted content, corrupted database, bad plugin settings).
+
+**Files-only restore.** Replaces the file system with the backup version. Preserves database changes. Use this when the problem is file-related (a broken theme update, a corrupted plugin file, malware injected into files).
+
+**Full restore.** Replaces both the database and the file system. Use this for a complete recovery from a major incident (server compromise, catastrophic failure, or restoring to a new server).
+
+## Step-by-step: full restore with WPMgr
+
+1. **Select the backup.** In the WPMgr dashboard, open the site's Backups tab. The list shows all available backups with timestamps, sizes, and types. Select the backup you want to restore.
+
+2. **Choose restore scope.** Confirm whether you want to restore the database only, files only, or both.
+
+3. **Confirm.** WPMgr requires explicit confirmation before overwriting live data. The confirmation screen shows what will be replaced and when the selected backup was taken.
+
+4. **Monitor progress.** The restore job runs asynchronously. The dashboard shows progress and notifies you when the restore is complete or if an error occurs.
+
+5. **Verify.** After the restore completes, visit the site and verify that it is functioning correctly. Check content dates, plugin settings, and any functionality that was working before the incident.
+
+## Testing a restore on staging first
+
+For critical sites or major restores, test the restore on a staging environment before touching production. The process is the same, but the destination is the staging server instead of the production server.
+
+Testing on staging lets you:
+
+- Confirm the backup is valid and the restore succeeds
+- Verify that the site looks and functions correctly after restore
+- Check that the specific data you need (the deleted content, the correct settings) is present
+- Estimate how long the restore takes so you can plan maintenance windows
+
+WPMgr can restore a backup to any site in your fleet, not just the origin site. Use this to restore a production backup to a staging server for testing.
+
+## After a security incident
+
+If you are restoring after a compromise, a standard restore is not sufficient. The backup may itself contain the malicious code if the compromise predates the backup. After restoring, you also need to:
+
+1. Change all WordPress admin passwords and revoke all application passwords
+2. Change the database password and update `wp-config.php`
+3. Rotate API keys for any services connected to the site
+4. Run a file integrity scan on the restored site
+5. Run a vulnerability scan to identify what the attacker may have exploited
+6. Apply any available security patches for plugins, themes, and core
+7. Review server access logs to understand the attack vector
+
+WPMgr's file integrity monitoring and vulnerability scanner (via the Wordfence Intelligence feed) are available from the Security tab on each site.
+
+## Pre-update snapshots and rollback
+
+WPMgr takes automatic snapshots before updates. These are full backups created immediately before a plugin, theme, or core update runs. If the update breaks the site, you can roll back to the pre-update state in one click.
+
+This is the most common restore scenario in practice: a plugin update breaks the site, and the fix is to restore the pre-update snapshot. WPMgr's update flow automates the snapshot so there is no risk of running an update without a recovery option.
+
+For the full backup feature documentation, see the [Backups and restore feature page](/features/backups/). For a strategic view of WordPress backup planning, see the [WordPress backups solution guide](/solutions/wordpress-backups/).

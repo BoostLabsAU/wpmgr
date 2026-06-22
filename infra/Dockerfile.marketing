@@ -1,0 +1,73 @@
+# syntax=docker/dockerfile:1
+
+# ---- build stage ----
+# Build the @wpmgr/marketing Next.js App Router app with Node 22 + pnpm.
+# Build context is the repo root (pnpm workspace).
+#
+# outputFileTracingRoot is set to the repo root in next.config.ts (CRITICAL for
+# monorepo standalone output — without it the trace roots at apps/marketing and
+# drops hoisted workspace dependencies).
+FROM node:22-alpine AS build
+
+# Enable the pinned pnpm via corepack.
+RUN corepack enable
+
+WORKDIR /repo
+
+# Copy workspace manifests first for better layer caching.
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
+COPY apps/marketing/package.json ./apps/marketing/
+COPY packages ./packages
+
+# Fetch the lockfile-resolved store, then install. Use a cache mount so the
+# dependency download layer is cached independent of source changes.
+RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
+    pnpm install --frozen-lockfile --filter @wpmgr/marketing...
+
+# Copy the marketing app source and build.
+COPY apps/marketing ./apps/marketing
+
+RUN pnpm --filter @wpmgr/marketing build
+
+# ---- runner stage ----
+# Next standalone output contains a self-contained server.js with its own
+# node_modules copy. Because outputFileTracingRoot is the repo root, the
+# standalone tree nests the app under apps/marketing/:
+#   .next/standalone/
+#     node_modules/          (hoisted workspace deps traced by Next)
+#     apps/marketing/
+#       node_modules/        (app-level deps)
+#       package.json
+#       server.js            <- entrypoint
+#
+# The standalone server does NOT bundle .next/static or public/ — they must be
+# copied in explicitly or static assets (JS chunks, CSS, images) 404 at runtime.
+FROM node:22-alpine AS runner
+
+# Create a non-root user to match distroless/nonroot convention.
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+WORKDIR /app
+
+# Copy the entire standalone output (includes hoisted node_modules at root and
+# the nested apps/marketing/ subtree with its own node_modules + server.js).
+COPY --from=build --chown=nextjs:nodejs /repo/apps/marketing/.next/standalone ./
+
+# Copy static assets that standalone omits:
+#   .next/static  -> apps/marketing/.next/static  (JS chunks, CSS, _next paths)
+#   public/       -> apps/marketing/public/        (robots, sitemap fallback, icons)
+COPY --from=build --chown=nextjs:nodejs /repo/apps/marketing/.next/static ./apps/marketing/.next/static
+COPY --from=build --chown=nextjs:nodejs /repo/apps/marketing/public ./apps/marketing/public
+
+USER nextjs
+
+EXPOSE 8080
+
+# PORT and HOSTNAME are read by Next's standalone server.js at startup.
+# Cloud Run injects PORT=8080; HOSTNAME=0.0.0.0 makes it bind all interfaces.
+ENV PORT=8080
+ENV HOSTNAME=0.0.0.0
+
+# server.js path matches the standalone nesting: standalone/apps/marketing/server.js
+CMD ["node", "apps/marketing/server.js"]

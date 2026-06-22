@@ -1,0 +1,69 @@
+---
+title: "White-Label WordPress Maintenance Reports: What to Include and How to Automate Them"
+description: "Maintenance reports communicate your value to clients. Learn what to include, how to automate generation, and how to brand them so clients see your agency, not your tools."
+category: "agency-operations"
+date: "2026-06-20"
+author: "WPMgr Team"
+tags: ["agency", "reports", "white-label", "client-management"]
+featureSlug: "client-reports"
+solutionSlug: "agencies"
+---
+
+Clients often do not know what you do for their sites. They see a monthly invoice and a site that keeps running. A well-structured maintenance report turns the invisible into visible, justifies your retainer, and reduces churn.
+
+## Why maintenance reports matter
+
+Without a report, the client's mental model is "I pay for maintenance and nothing breaks." With a report, the mental model becomes "my agency ran 47 updates this month, caught a vulnerability before it was exploited, and my site had 99.9% uptime." The second mental model supports a much healthier client relationship.
+
+Reports also create a paper trail. When a client questions a charge or asks what you have done for them in the last six months, you have a factual record instead of a reconstruction from memory.
+
+## What belongs in a WordPress maintenance report
+
+**Updates applied.** Plugins, themes, and core updates run this period, with before and after versions. Clients understand "we kept your software up to date." You do not need to explain CVEs unless there is a security highlight worth noting.
+
+**Backup summary.** Confirmation that backups ran, when the last successful backup was, and where it is stored. "Your site is backed up daily to encrypted offsite storage" is reassuring even to non-technical clients.
+
+**Uptime and performance.** Uptime percentage for the period (99.9% vs 98% means very different things), average response time, and any incidents. If there was downtime, include when it occurred and how it was resolved.
+
+**Security highlights.** Any vulnerabilities found and patched, security settings changed, or suspicious activity detected. This is the section that most clearly justifies ongoing maintenance to security-conscious clients.
+
+**Tasks completed.** Any manual work done outside the automated maintenance: content updates, plugin configuration, support requests. This section is manually added to each report since it varies by client.
+
+## What to leave out
+
+Do not include technical details that will not be understood or that create anxiety. "We patched a SQL injection vulnerability in the Foo plugin" might alarm a non-technical client. "We applied a critical security update to keep your site safe" communicates the same thing more effectively.
+
+Do not include data that you cannot verify. If you are not sure whether a backup succeeded, do not claim it did.
+
+## Automating report generation
+
+Manual report generation is a significant time cost at scale. Every minute you spend assembling data for a report is a minute you are not spending on work that requires your expertise.
+
+The prerequisite for automation is capturing the data systematically. If your tool records every update, every backup, and every uptime check with timestamps and outcomes, generating a report is a query against that record. If the data exists only in your memory or in ad-hoc notes, automation is not possible.
+
+WPMgr records all maintenance actions in an audit log per site. White-label reports pull from this log and generate a branded PDF or email summary on a schedule. You set the schedule (monthly, quarterly), the delivery method (email to client, PDF download, both), and the report template once per client. The report generates and sends without any manual work.
+
+## Branding your reports
+
+A white-label report shows your agency name and logo, not the name of the underlying tool. To clients, this looks like a proprietary system you built for them.
+
+Elements to brand:
+
+- Agency name and logo in the header
+- Agency contact information in the footer
+- Color scheme matching your agency brand
+- Report title ("Monthly Website Maintenance Report" under your agency name)
+
+What not to include: any mention of the underlying management platform. The point of white-labeling is that the client's relationship is with your agency.
+
+## Frequency and delivery
+
+Monthly reports work for most maintenance retainers. Quarterly works for lighter engagements. Weekly reports are generally too frequent unless the client is paying for a very active service.
+
+Email delivery (a summary email with the full report attached or linked) gets higher open rates than a portal the client has to remember to check. If you use a portal, send an email notification when a new report is ready.
+
+## The report as a retention tool
+
+A client who reads a detailed monthly report showing consistent work, zero security incidents, and 99.9% uptime is a client who understands the value of their retainer. Churn on maintenance retainers often happens when the client feels the cost is invisible. Reports make the cost visible by making the value visible.
+
+For the report configuration and white-label settings, see the [white-label reports feature page](/features/client-reports/). For the full agency toolset, see the [for agencies solution guide](/solutions/agencies/).

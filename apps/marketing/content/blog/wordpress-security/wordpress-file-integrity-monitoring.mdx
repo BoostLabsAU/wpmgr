@@ -1,0 +1,69 @@
+---
+title: "WordPress File Integrity Monitoring: Detect Unauthorized Changes"
+description: "File integrity monitoring compares your WordPress install against known-good checksums to catch modified or injected files. Here is how it works and when it matters."
+category: "wordpress-security"
+date: "2026-06-20"
+author: "WPMgr Team"
+tags: ["security", "file-integrity", "malware"]
+featureSlug: "security"
+solutionSlug: "wordpress-security"
+---
+
+When an attacker gains access to a WordPress site, the first thing they typically do is modify files: injecting backdoors into plugin code, changing theme files to serve spam, or dropping web shells in the uploads directory. File integrity monitoring is what catches this.
+
+## What file integrity monitoring does
+
+File integrity monitoring (FIM) computes cryptographic hashes of files in your WordPress install and compares them against a known-good baseline. Any change to a file changes its hash. If the hash no longer matches, the file has been modified.
+
+For WordPress core and plugins hosted on WordPress.org, the "known good" state is the published checksum list at the WordPress.org API. For custom code and anything not on WordPress.org, the known-good state is the baseline WPMgr captured during the last clean scan.
+
+## Three scan modes
+
+WPMgr supports three scan scopes:
+
+**Core files only.** The fastest option. Checks WordPress core files against WordPress.org checksums. Catches a WordPress core compromise but misses plugin and theme modifications.
+
+**wp-content only.** Skips core (where unauthorized changes are rarer) and focuses on plugins, themes, and uploads, where most injections happen.
+
+**Full install.** Comprehensive but slowest. Covers both core and wp-content. Useful for a periodic deep check or after a suspected incident.
+
+## The baseline problem
+
+For files that are not on WordPress.org (custom plugins, themes, uploaded files), there is no external reference. FIM uses a per-site baseline: a snapshot of file hashes taken during a clean scan. Subsequent scans compare against this baseline.
+
+The key design decision is whether the baseline can advance automatically. WPMgr's stance is that it cannot. A flagged file stays flagged until an operator reviews it and explicitly accepts it. The baseline never silently advances past an unreviewed change. This prevents an attacker from injecting a file, waiting for the baseline to update, and then appearing clean.
+
+## Reading scan results
+
+A scan result categorises every finding:
+
+- **Changed.** A file that existed in the last baseline now has a different hash. For core or wp.org files, "changed" means "no longer matches the published checksum."
+- **Added.** A file is present that was not in the baseline.
+- **Removed.** A file in the baseline is no longer on disk.
+
+Added files in the uploads directory are common and usually benign (user uploads). Added files in plugin or theme directories are suspicious and warrant investigation. Modified core files are almost always a sign of tampering.
+
+## What to do when something is flagged
+
+Finding a modified file does not mean you have been compromised. Plugin auto-updates, migration tools, and maintenance scripts can all legitimately change files. The first step is to understand whether the change is expected.
+
+If the change is expected, review it in the dashboard and accept it to update the baseline for that file. If the change is unexpected, the right response is:
+
+1. Take the site offline or put it in maintenance mode
+2. Take a backup of the current state for forensics
+3. Restore from the most recent clean backup
+4. Investigate how the change happened (check access logs, plugin change history)
+5. Patch the entry point before bringing the site back online
+
+WPMgr's backup and restore flow is integrated with the Security tab so you can go from "flagged file" to "clean restore" without leaving the dashboard.
+
+## Combining FIM with other controls
+
+File integrity monitoring is most effective as one layer in a defence-in-depth posture:
+
+- Vulnerability scanning finds known-vulnerable plugins before they are exploited
+- FIM detects exploitation after it happens
+- Two-factor authentication on the dashboard prevents attackers from using the dashboard itself to deploy changes
+- Backups ensure you can recover regardless
+
+See the [Security suite feature page](/features/security/) and the [WordPress security solution](/solutions/wordpress-security/) for the full picture.
