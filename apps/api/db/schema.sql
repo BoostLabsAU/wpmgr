@@ -145,6 +145,28 @@ CREATE POLICY sites_agent ON sites
     USING (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
 
+-- M19 site-scope gate: when app.site_scope is 'on' (InScopedTenantTx), only
+-- rows whose id is in app.allowed_site_ids are visible. RESTRICTIVE so every
+-- permissive sites policy is AND-gated by this allowlist.
+CREATE POLICY sites_site_scope ON sites
+    AS RESTRICTIVE FOR ALL
+    USING (
+        coalesce(current_setting('app.site_scope', true), '') <> 'on'
+        OR id = ANY (
+            string_to_array(
+                nullif(current_setting('app.allowed_site_ids', true), ''), ','
+            )::uuid[]
+        )
+    )
+    WITH CHECK (
+        coalesce(current_setting('app.site_scope', true), '') <> 'on'
+        OR id = ANY (
+            string_to_array(
+                nullif(current_setting('app.allowed_site_ids', true), ''), ','
+            )::uuid[]
+        )
+    );
+
 -- M22 shared-read: a site-scoped collaborator (no membership in the owning org)
 -- may READ the metadata of sites shared with them, for the "Shared with me"
 -- surface. Self-read style, keyed on app.user_id via a non-expired site_shares

@@ -12,6 +12,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ### Fixed
 
+- Portal site lists now fail closed to each client member's allowed sites, preventing site metadata and metrics enrichment from including other clients' sites in the tenant.
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
 
 ## [0.57.0] - 2026-06-21

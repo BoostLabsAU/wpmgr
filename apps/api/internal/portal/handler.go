@@ -734,6 +734,21 @@ func (h *Handler) listSites(c *gin.Context) {
 		return
 	}
 
+	// Defense in depth: AllowedSiteIDs is the final gate before DTO assembly and
+	// metrics enrichment. The metrics store bypasses RLS, so an over-broad repo
+	// result must not reach QueryAggregate/QueryLatest.
+	allowed := make(map[uuid.UUID]struct{}, len(p.AllowedSiteIDs))
+	for _, id := range p.AllowedSiteIDs {
+		allowed[id] = struct{}{}
+	}
+	filtered := make([]site.Site, 0, len(sites))
+	for _, s := range sites {
+		if _, ok := allowed[s.ID]; ok {
+			filtered = append(filtered, s)
+		}
+	}
+	sites = filtered
+
 	items := make([]portalSiteDTO, 0, len(sites))
 	for _, s := range sites {
 		d := portalSiteDTO{
@@ -747,8 +762,8 @@ func (h *Handler) listSites(c *gin.Context) {
 			d.LastBackupAt = &v
 		}
 		// Fill uptime_30d_pct and tls_expires_at from the metrics store.
-		// The metrics store runs InAgentTx (RLS-bypassing) but IDs come only
-		// from the already-RLS-scoped site list, satisfying the security contract.
+		// The metrics store runs InAgentTx (RLS-bypassing); IDs come only from
+		// the AllowedSiteIDs filter above, not directly from the repo list.
 		if h.metricsStore != nil {
 			agg, aerr := h.metricsStore.QueryAggregate(c.Request.Context(), p.TenantID, s.ID, 30*24*time.Hour)
 			if aerr == nil && agg.Checks > 0 {
