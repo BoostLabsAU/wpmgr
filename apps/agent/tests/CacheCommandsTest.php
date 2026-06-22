@@ -153,6 +153,43 @@ final class CacheCommandsTest extends TestCase
         $this->assertSame(['geo'], $stored['include_cookies']);
     }
 
+    public function test_perf_config_update_persists_unprefixed_cache_variant_keys(): void
+    {
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], [
+            'bypass_urls'      => ['/cart', '/checkout'],
+            'bypass_cookies'   => ['my_session'],
+            'include_queries'  => ['sort_dir'],
+            'include_cookies'  => ['geo'],
+        ]);
+        $this->assertTrue($res['ok']);
+
+        $stored = $this->optionStore[CacheManager::OPTION_CONFIG] ?? [];
+        $this->assertSame(['/cart', '/checkout'], $stored['bypass_urls']);
+        $this->assertSame(['my_session'], $stored['bypass_cookies']);
+        $this->assertSame(['sort_dir'], $stored['include_queries']);
+        $this->assertSame(['geo'], $stored['include_cookies']);
+    }
+
+    public function test_perf_config_update_ignores_prefixed_cache_variant_aliases(): void
+    {
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], [
+            'cache_bypass_urls'     => ['/cart'],
+            'cache_bypass_cookies'  => ['my_session'],
+            'cache_include_queries' => ['sort_dir'],
+            'cache_include_cookies' => ['geo'],
+        ]);
+        $this->assertFalse($res['ok']);
+        $this->assertStringContainsString('recognised', $res['detail']);
+
+        $stored = $this->optionStore[CacheManager::OPTION_CONFIG] ?? [];
+        $this->assertArrayNotHasKey('bypass_urls', $stored);
+        $this->assertArrayNotHasKey('bypass_cookies', $stored);
+        $this->assertArrayNotHasKey('include_queries', $stored);
+        $this->assertArrayNotHasKey('include_cookies', $stored);
+    }
+
     public function test_perf_config_update_clamps_absurd_refresh_interval(): void
     {
         $cmd = new PerfConfigUpdateCommand($this->manager());

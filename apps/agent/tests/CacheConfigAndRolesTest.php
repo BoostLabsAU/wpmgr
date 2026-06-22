@@ -71,7 +71,15 @@ final class CacheConfigAndRolesTest extends TestCase
         $this->assertContains('gclid', $arr['ignore_queries']);
         // The lean drop-in array must NOT carry server-only keys.
         $this->assertArrayNotHasKey('enabled', $arr);
-        $this->assertArrayNotHasKey('bypass_urls', $arr);
+    }
+
+    public function test_dropin_array_carries_bypass_urls_for_fast_path(): void
+    {
+        $c   = new CacheConfig(['bypass_urls' => ['/cart', '/checkout']]);
+        $arr = $c->toDropinArray();
+
+        $this->assertArrayHasKey('bypass_urls', $arr);
+        $this->assertSame(['/cart', '/checkout'], $arr['bypass_urls']);
     }
 
     /**
