@@ -1,0 +1,9 @@
+{
+  "name": "@wpmgr/tokens",
+  "version": "0.1.0",
+  "private": true,
+  "exports": {
+    "./globals.css": "./globals.css"
+  },
+  "files": ["globals.css"]
+}

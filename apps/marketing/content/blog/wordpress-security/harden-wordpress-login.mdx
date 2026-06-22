@@ -1,0 +1,64 @@
+---
+title: "How to Harden Your WordPress Login Page"
+description: "Practical steps to reduce automated login attacks on WordPress: limit attempts, change the login URL, enforce strong passwords, and add a second factor."
+category: "wordpress-security"
+date: "2026-06-15"
+author: "WPMgr Team"
+tags: ["security", "login", "2fa"]
+featureSlug: "security"
+solutionSlug: "wordpress-security"
+---
+
+Automated login attacks are one of the most common threats to WordPress sites. Bots scan for `wp-login.php` around the clock, testing credential lists against every site they find. A stock WordPress install gives attackers an unlimited runway.
+
+Hardening your login page is one of the highest-return security investments you can make because it cuts off a whole class of attacks before they reach the application layer.
+
+## Why the default login page is a target
+
+WordPress advertises its login URL in the page source (`/wp-login.php`), in its XML-RPC endpoint, and through user enumeration via author archive URLs. Bots fingerprint WordPress installs automatically and queue them for credential stuffing.
+
+The consequences of a successful login attack go beyond account compromise. High-volume attempts degrade server performance, inflate hosting bills, and generate noise that masks real security events in your logs.
+
+## Step 1: Limit login attempts
+
+WordPress allows unlimited login attempts by default. Restricting failed attempts to three to five per IP address per hour stops most credential stuffing with no user impact.
+
+WPMgr enforces this at the server layer through the agent, so limits apply even if PHP returns a 500 error during the login request. The control plane also tracks failed-attempt counts across your fleet so you can spot a targeted attack on a specific site.
+
+## Step 2: Block XML-RPC when you do not need it
+
+XML-RPC is a legacy remote-procedure protocol that WordPress still exposes. It has a `system.multicall` method that lets attackers test hundreds of credential pairs in a single HTTP request, which makes rate limiting on the login form irrelevant if XML-RPC is open.
+
+If you do not use XML-RPC (Jetpack and older mobile apps need it; most modern setups do not), disable it entirely. WPMgr lets you toggle this per site from the Security tab. The "pingbacks only" option keeps comment pingbacks working while closing the multicall exploit surface.
+
+## Step 3: Restrict the REST API
+
+WordPress exposes a REST API at `/wp-json/`. Unauthenticated access is needed for some themes and plugins, but several endpoints leak user data (the `/users` route, for example, returns display names, slugs, and IDs that attackers use for targeted credential attacks).
+
+You can restrict the REST API to authenticated requests only, or allow public access only to specific namespaces. WPMgr's Security tab gives you this toggle without writing code.
+
+## Step 4: Move or obfuscate the login URL
+
+Moving `wp-login.php` to a custom address removes it from automated scanners. This is a deterrent, not a defence, because a determined attacker can still find the page, but it eliminates the majority of low-effort automated traffic.
+
+WPMgr's "Hide login" feature sets a custom login path per site. The control plane continues to work normally because it accesses sites through a signed token path, not the login form.
+
+## Step 5: Force unique display names
+
+WordPress defaults to showing usernames as display names. If your display name matches your username, you have handed attackers half of the credential pair. Forcing unique display names that differ from login usernames closes this gap.
+
+## Step 6: Enable two-factor authentication
+
+A strong password plus a second factor is the most reliable protection against credential-based attacks. Even if an attacker obtains a user's password through a data breach, they cannot log in without the second factor.
+
+WPMgr lets operators require 2FA for any user role on a per-site basis. Supported methods include authenticator apps (TOTP) and email one-time codes. A configurable grace period lets existing users enroll before the policy is enforced.
+
+## Step 7: Block author archive enumeration
+
+WordPress creates archive URLs at `/?author=1`, `/?author=2`, and so on that redirect to user profile pages and expose usernames. Blocking these redirects removes one of the most reliable username enumeration vectors.
+
+## Putting it together
+
+None of these steps is complicated in isolation. The challenge is applying them consistently across a fleet of sites without missing one. WPMgr's Security tab pushes all of these controls from the control plane to the agent, so you can harden fifty sites in the same time it would take to do one manually.
+
+For more on WordPress security hardening, see the [Security suite feature page](/features/security/) or the [WordPress security solution guide](/solutions/wordpress-security/).

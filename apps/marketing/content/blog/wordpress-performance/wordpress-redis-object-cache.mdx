@@ -1,0 +1,61 @@
+---
+title: "Redis Object Cache for WordPress: When It Helps and When It Does Not"
+description: "Redis object cache stores the results of expensive database queries so WordPress does not repeat them. Here is when it makes a real difference and how to measure it."
+category: "wordpress-performance"
+date: "2026-06-19"
+author: "WPMgr Team"
+tags: ["performance", "redis", "object-cache", "caching"]
+featureSlug: "object-cache"
+solutionSlug: "wordpress-performance"
+---
+
+Redis object cache is one of the most effective WordPress performance tools available, but it is also one of the most misunderstood. It is not a substitute for full-page caching and it will not help every site equally. Understanding when it helps lets you deploy it where it delivers real value.
+
+## What the WordPress object cache does
+
+WordPress has a built-in object cache API. During a page load, WordPress checks the object cache before running a database query. If the result is already in the cache, it uses that result instead of querying the database.
+
+By default, the object cache is in-memory and per-request: it stores results only for the duration of the current PHP request. When the request ends, the cache is cleared.
+
+Redis (or Memcached) extends the object cache to be persistent: cached results survive across requests. The next visitor to trigger the same database query gets the result from Redis instead of from the database.
+
+## When Redis object cache makes a difference
+
+The object cache is most effective for:
+
+**Sites with high database query overhead.** WooCommerce stores, membership sites, and heavily customised WordPress installs often run dozens of database queries per page load. If those queries hit the same data repeatedly, caching them in Redis has a compounding effect.
+
+**High-traffic sites where the same queries are hit frequently.** The benefit of persistent object caching scales with traffic. A site with 100 requests per hour has little benefit from a cross-request cache. A site with 10,000 requests per hour benefits a lot.
+
+**Sites where full-page caching cannot be used.** WooCommerce cart pages, membership-gated content, and pages that vary by user cannot be served from a full-page cache. Redis can still cache the database queries that generate those personalised responses.
+
+## When Redis object cache does not help much
+
+**Static sites or sites with heavy full-page caching.** If most of your traffic is served from a full-page cache (HTML cached at the server), WordPress PHP does not run at all for those requests. The object cache is never consulted. Adding Redis to a well-cached static site adds complexity without benefit.
+
+**Sites with very low traffic.** The cross-request benefit requires that the same query be hit multiple times across requests. Low-traffic sites may never see the same query twice before the cached result expires.
+
+**Sites with queries that always return different results.** If every visitor triggers queries that return unique results (for example, a personalised feed with no shared data), caching the responses is not useful.
+
+## Understanding hit ratio
+
+The hit ratio is the percentage of object cache lookups that return a cached result rather than falling through to the database. A hit ratio below 70% suggests the cache is not warm, the TTL (time to live) settings are too short, or the site's query patterns do not benefit from caching.
+
+WPMgr tracks the Redis hit ratio, memory usage, and latency per site and shows them in the dashboard. A rising hit ratio after enabling Redis is confirmation that it is working. A persistently low hit ratio may mean you should investigate query patterns before concluding Redis is the right tool.
+
+## Eviction policy matters
+
+Redis has a fixed memory allocation. When that allocation fills, it must evict existing entries to make room for new ones. The eviction policy determines which entries are removed.
+
+For a WordPress object cache, `allkeys-lru` (evict the least recently used key regardless of whether it has an expiry) is a sensible default. It ensures that the most-accessed data stays in the cache under memory pressure. Without the right policy, a full cache might evict frequently-used entries in favour of entries that will never be read again.
+
+## Combining Redis with full-page caching
+
+The most effective WordPress performance configuration layers both:
+
+- Full-page caching serves anonymous traffic without running PHP
+- Redis object cache serves authenticated or uncacheable requests with minimal database overhead
+
+WPMgr supports both on the same site. Full-page caching is configured through the Performance settings; Redis object cache is a separate per-site toggle that connects to a Redis instance and installs the object-cache drop-in automatically.
+
+For the complete performance picture, see the [Redis Object Cache feature page](/features/object-cache/) and the [speed up WordPress solution guide](/solutions/wordpress-performance/).

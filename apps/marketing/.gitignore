@@ -1,0 +1,27 @@
+# dependencies
+/node_modules
+
+# next.js build output
+/.next/
+/out/
+/build
+
+# generated types
+next-env.d.ts
+*.tsbuildinfo
+
+# generated API-reference artifacts (rebuilt by scripts/sync-openapi.mjs at build time)
+/public/openapi.json
+/public/docs-assets/
+
+# misc
+*.pem
+.DS_Store
+
+# debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# local env files
+.env*.local

@@ -1,0 +1,248 @@
+---
+title: "Core Web Vitals for WordPress: The Complete Optimization Guide"
+description: "A complete guide to improving LCP, CLS, and INP on WordPress sites: measurement, root causes, and fixes with real techniques and measurable results."
+date: "2026-06-21"
+author: "WPMgr Team"
+featureSlug: "real-user-monitoring"
+solutionSlug: "wordpress-performance"
+---
+
+Core Web Vitals are Google's three performance metrics that measure what a real user experiences when visiting your site: how fast it loads, how stable it is, and how quickly it responds to input. They are a ranking factor in Google Search and a reliable proxy for user experience quality.
+
+WordPress sites have a characteristic set of Core Web Vitals challenges. This guide covers all three metrics in depth: what they measure, why WordPress sites tend to underperform on them, and the specific interventions that move the needle.
+
+## Understanding the three metrics
+
+### LCP: Largest Contentful Paint
+
+LCP measures when the largest visible content element renders on screen. For most sites, this is the hero image or the page's main heading. Google's thresholds:
+
+- Good: under 2.5 seconds
+- Needs improvement: 2.5 to 4 seconds
+- Poor: above 4 seconds
+
+LCP is the metric most directly tied to perceived load speed. A slow LCP means the user is staring at an empty or partial page while waiting for the main content to appear.
+
+### CLS: Cumulative Layout Shift
+
+CLS measures visual stability during load. Every time an element shifts its position on screen after the initial render, the shift is scored based on how much of the screen moved and how far it moved. Google's thresholds:
+
+- Good: under 0.1
+- Needs improvement: 0.1 to 0.25
+- Poor: above 0.25
+
+A high CLS score means content is jumping around as the page loads, causing users to click the wrong thing or lose their reading position. Layout shifts also make a site feel unfinished and unpolished.
+
+### INP: Interaction to Next Paint
+
+INP measures the delay between a user interaction (click, tap, or keystroke) and the next visual update. It replaced FID as a Core Web Vitals metric in March 2024. Google's thresholds:
+
+- Good: under 200ms
+- Needs improvement: 200 to 500ms
+- Poor: above 500ms
+
+INP reflects how responsive the page feels during use. A high INP means the page feels sluggish when users click buttons, submit forms, or navigate.
+
+## Measuring Core Web Vitals correctly
+
+### Lab vs field data
+
+Lab data (Lighthouse, PageSpeed Insights lab report) simulates a page load under controlled conditions: a specific device emulation, a specific network throttling profile, a specific time. It is useful for debugging but does not represent your actual visitor population.
+
+Field data (also called real-user monitoring or RUM) collects metrics from actual visitors on their actual devices, networks, and conditions. Google Search Console's Core Web Vitals report shows field data aggregated from the Chrome User Experience Report (CrUX). This is the data Google uses for ranking.
+
+Always base your optimisation work on field data. Lab data can show improvements that do not appear in the field data if the lab conditions do not match your actual traffic.
+
+### The p75 target
+
+Google evaluates Core Web Vitals at the 75th percentile: the metric value that 75% of page views fall below. Optimising the median experience is not enough. If your fastest 75% of page loads have an LCP under 2.5 seconds but your slowest 25% exceed it, you do not pass.
+
+This matters for WordPress sites where traffic comes from a mix of fast and slow connections, powerful and constrained devices. Optimising for the median means ignoring the experience of a significant portion of your visitors.
+
+WPMgr's Real User Monitoring reports at the p75 level per page, so you can see exactly which pages are passing and which are not.
+
+## Part 1: LCP Optimisation
+
+### Identify your LCP element
+
+Before optimising, confirm what your LCP element is. Use the Performance tab in Chrome DevTools (record a page load and look for the "LCP" marker in the timeline) or the PageSpeed Insights report.
+
+Common LCP elements:
+
+- Hero images
+- Above-the-fold headings (when there is no large image)
+- Video poster images
+
+### Eliminate slow server response (TTFB)
+
+Time to First Byte (TTFB) is the time from the user's request to the first byte of the HTML response. A slow TTFB delays everything downstream, including LCP.
+
+For WordPress, a TTFB above 600ms usually means PHP is executing on every request without full-page caching. Every database query, every plugin hook, and every conditional check adds to TTFB.
+
+Full-page caching stores the rendered HTML output and serves it directly on subsequent requests, bypassing PHP entirely. A cached response can have a TTFB under 50ms. This is almost always the largest single LCP improvement available for a WordPress site.
+
+WPMgr's page caching configures full-page caching at the server level (nginx or Apache), separate from WordPress itself, so cached pages are served even if WordPress would otherwise not function.
+
+### Serve images in modern formats
+
+An unoptimised JPEG at 2MB is a 2MB download before any processing. The same image in AVIF might be 400KB. The same in WebP might be 700KB.
+
+For the LCP element:
+
+1. Convert it to AVIF (primary) and WebP (fallback)
+2. Serve it with a `<picture>` element so browsers that support AVIF get the smallest version
+3. Add explicit `width` and `height` attributes so the browser reserves space before the image loads
+4. Add `fetchpriority="high"` to the LCP image tag to signal to the browser that it should be fetched early
+5. Do not use `loading="lazy"` on the LCP image
+
+WPMgr's Media Optimizer converts images to AVIF and WebP in bulk and on upload. WordPress serves the appropriate format to each browser automatically.
+
+### Preload the LCP image
+
+If the LCP image is set via CSS background-image (common with hero sections in page builders), the browser does not discover it until the CSS is parsed, which is late. Add a `<link rel="preload">` hint in the document head to start loading it earlier.
+
+```html
+<link rel="preload" as="image" href="/hero.avif" type="image/avif" />
+```
+
+### Eliminate render-blocking resources
+
+CSS and JavaScript files that block rendering delay the time before any content can paint. Use browser developer tools to identify render-blocking resources.
+
+For CSS: inline critical CSS (the styles needed to render the above-the-fold content) and defer non-critical styles. Most page builders offer a "critical CSS" option. WPMgr's performance tooling generates critical CSS per page.
+
+For JavaScript: defer all non-critical JavaScript with `defer` or `async`. Any script that must run before first paint is a candidate for careful inlining or removal.
+
+### Optimise web font loading
+
+Web fonts from external CDNs (including Google Fonts) require a DNS lookup, a connection, and a download before text can render in the specified font. This adds to LCP if your LCP element is a heading.
+
+Options in order of effectiveness:
+
+1. Self-host fonts so they are served from the same origin, eliminating the extra connection
+2. Add `<link rel="preconnect">` hints for external font CDNs
+3. Use `font-display: swap` to allow text to render immediately in a fallback font while the web font loads (reduces LCP but adds a CLS risk on font swap)
+
+WPMgr converts uploaded font files to WOFF2 format (the most compressed web font format) and serves them from the same origin.
+
+## Part 2: CLS Optimisation
+
+### Reserve space for images
+
+The most common CLS cause is images without explicit dimensions. When the browser encounters an `<img>` tag without `width` and `height` attributes, it renders a 0-height placeholder until the image downloads. Then the image loads and pushes content below it down, causing a layout shift.
+
+Always set `width` and `height` on every `<img>` tag. WordPress does this automatically for images inserted through the media library. Check your theme's header image, hero images, and any images inserted by page builders.
+
+If the image dimensions are not known at build time (user-generated content, dynamic images), set a CSS `aspect-ratio` on the container:
+
+```css
+.hero-image {
+  aspect-ratio: 16 / 9;
+  width: 100%;
+}
+```
+
+### Handle web font CLS
+
+If you use `font-display: swap` for web font loading, text will render in a fallback font and then shift when the web font loads. This shift contributes to CLS.
+
+To minimise this:
+
+- Choose a fallback font that closely matches the metrics (advance width, line height, x-height) of your web font
+- Use the `size-adjust` CSS property to match the fallback font metrics precisely
+- Prefer self-hosted fonts with `font-display: optional` for a slight delay but zero CLS
+
+### Avoid late-loading ads and embeds
+
+Third-party embeds (advertising, social media widgets, chat bubbles) that load after the initial render and push content down cause CLS. Reserve space for them:
+
+- Give ad containers an explicit minimum height
+- Use a placeholder element the same size as the ad until the ad loads
+- Consider loading ads only below the fold where the shift is less likely to be caught by the CLS measurement window
+
+### Use transform-only animations
+
+CSS animations that change `width`, `height`, `top`, `left`, or `margin` trigger layout recalculations and contribute to CLS. Animations that use only `transform` and `opacity` run on the GPU compositor thread and have no CLS impact.
+
+Instead of:
+```css
+/* This causes CLS */
+.reveal { animation: slide-up 0.3s; }
+@keyframes slide-up { from { margin-top: 40px; } to { margin-top: 0; } }
+```
+
+Use:
+```css
+/* This does not cause CLS */
+.reveal { animation: slide-up 0.3s; }
+@keyframes slide-up { from { transform: translateY(40px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+```
+
+### Sticky headers and fixed position elements
+
+Sticky headers that appear on scroll can push content down if the page does not account for their height. Use CSS `scroll-padding-top` or `scroll-margin-top` on anchor targets so they scroll into view without being obscured by the sticky header.
+
+## Part 3: INP Optimisation
+
+INP is the most technically complex of the three metrics to diagnose and fix because it requires understanding what JavaScript is executing during user interactions.
+
+### Profile interactions in Chrome DevTools
+
+Use the Performance tab in Chrome DevTools with the "Interactions" track enabled to identify what runs during a slow interaction. Look for:
+
+- Long-running JavaScript tasks (tasks over 50ms are "long tasks")
+- Forced synchronous layouts (JavaScript reading layout properties after modifying the DOM)
+- Expensive event handlers
+
+The Long Tasks API (available in the performance timeline) marks tasks that block the main thread for over 50ms.
+
+### Break up long tasks
+
+A single JavaScript task that takes 500ms blocks the main thread for 500ms. Any interaction during that time will be queued and experience high INP.
+
+Use `setTimeout(fn, 0)` or `scheduler.postTask()` to yield to the browser between chunks of work. This allows the browser to process input events between tasks, reducing INP.
+
+### Defer non-critical scripts
+
+JavaScript that does not need to run during the initial load (analytics, marketing tags, chat widgets) adds to the main thread work budget. Every millisecond of unnecessary JavaScript execution is a millisecond less available for responding to user input.
+
+Use `defer` or `async` on non-critical scripts. For marketing tags, use a tag manager with a strategy for loading tags after user interaction (click tagging, scroll tagging) rather than on page load.
+
+WPMgr's unused CSS removal also removes JavaScript that was bundled with CSS in some WordPress plugins, reducing the main thread work.
+
+### Reduce input handler complexity
+
+Event handlers on frequently-triggered events (scroll, mousemove, resize) should be throttled or debounced. A handler that runs on every scroll event at 60fps can consume significant main thread time.
+
+For click handlers, minimise the work done synchronously. Move expensive operations (DOM queries, network requests) asynchronously where possible.
+
+### WooCommerce and page builders
+
+WooCommerce and most page builders ship with significant JavaScript payloads. On checkout and cart pages specifically, the JavaScript complexity can make INP a challenge even with a well-optimised setup.
+
+Specific recommendations:
+
+- Remove page builder scripts on pages where the builder output is not interactive
+- Use WooCommerce's built-in performance settings to disable features you are not using
+- Test INP specifically on your checkout flow, as this is where users interact most with forms and dynamic elements
+
+## Measuring the impact of your changes
+
+After each optimisation, wait for new field data to accumulate before evaluating the impact. Google Search Console's Core Web Vitals report updates weekly. WPMgr's RUM data is available within 24 hours of traffic.
+
+Measure at the p75 level, not the median. An improvement that only shows up in the median may not move the p75 if the slow tail of experiences remains unchanged.
+
+Compare before-and-after on the same URL, not across different URLs. Different pages have different performance characteristics.
+
+## Building a continuous improvement practice
+
+Core Web Vitals are not a one-time optimisation target. Your scores will change as you add new plugins, change themes, publish new content, or acquire new types of visitors.
+
+A sustainable practice:
+
+- Review Core Web Vitals in Google Search Console monthly
+- Set up RUM to track trends and catch regressions
+- Run PageSpeed Insights on new page templates before publishing
+- Test performance on the device types and network speeds that represent your actual visitors, not just on a fast development machine
+
+For Real User Monitoring configuration and fleet-wide CWV tracking, see the [Real User Monitoring feature page](/features/real-user-monitoring/). For the performance toolset including caching, image optimisation, and unused CSS removal, see the [Performance and page caching feature page](/features/performance/) and the [speed up WordPress solution guide](/solutions/wordpress-performance/).

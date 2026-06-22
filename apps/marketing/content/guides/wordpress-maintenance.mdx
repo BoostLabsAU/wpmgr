@@ -1,0 +1,241 @@
+---
+title: "The Complete WordPress Maintenance Guide"
+description: "A comprehensive guide to WordPress maintenance: updates, backups, security, performance, and monitoring. Build a system that keeps every site healthy."
+date: "2026-06-21"
+author: "WPMgr Team"
+featureSlug: "backups"
+solutionSlug: "manage-multiple-sites"
+---
+
+WordPress maintenance is not a single task. It is an ongoing operational practice that keeps sites secure, fast, and available. This guide covers every dimension of maintenance from daily monitoring to quarterly audits, grounded in what actually happens when sites are neglected versus when they are maintained well.
+
+## Why maintenance matters
+
+WordPress powers a large share of the public web. That ubiquity makes it a target. The WordPress plugin ecosystem is the largest attack surface: thousands of third-party plugins, themes, and integrations, each with their own release cadence and security posture. A vulnerability published on Tuesday can be actively exploited by Thursday if sites are not updated.
+
+Beyond security, WordPress maintenance affects performance and availability. A database that has not been cleaned in two years can be three times the size it needs to be. A site running PHP 7.4 on a host that has moved to PHP 8.3 may see performance improvements of 30% or more just from the runtime upgrade.
+
+The cost of neglect is not always visible immediately. It accumulates and then manifests suddenly: a compromised site, a failed update that took down a client's checkout flow, a corrupt database with no recent backup.
+
+## Part 1: Updates
+
+### Plugin and theme updates
+
+Plugin and theme updates are the most frequent maintenance task. The WordPress.org ecosystem ships hundreds of updates per week. Most are routine compatibility fixes or minor feature additions. Some are critical security patches.
+
+**Update cadence.** For most sites, checking for updates weekly is a good cadence. Plugins with a known active vulnerability should be updated immediately regardless of the schedule.
+
+**Safe update workflow:**
+
+1. Check the plugin changelog before updating. Major version bumps warrant more caution than patch releases.
+2. Take a backup immediately before updating. This is non-negotiable.
+3. Update in a staging environment if the site has one and the update is high-risk.
+4. Apply the update to production and monitor for 30 to 60 minutes.
+5. Check the site's key functionality (checkout flow, forms, custom features) after updating.
+
+**Batch updates vs individual updates.** Updating all plugins at once is faster but harder to diagnose if something breaks (which plugin caused the issue?). Updating plugins in small batches makes diagnosis easier. For a fleet of sites, the practical answer is to update individually on high-risk sites and in batches on lower-risk sites.
+
+### Core WordPress updates
+
+Core updates are less frequent than plugin updates but carry higher risk and higher reward. Minor releases (5.9.1, 5.9.2) are generally safe to apply immediately. Major releases (5.9, 6.0) warrant testing on a staging site first.
+
+WordPress has supported automatic background updates for minor releases since version 3.7. Enable this on all sites. For major releases, review the release notes for breaking changes before updating.
+
+### PHP version updates
+
+PHP version determines WordPress performance and security more than almost any other factor. PHP 7.4 reached end of life in November 2022. Running an end-of-life PHP version means no security patches for the language runtime itself.
+
+Current PHP release schedule:
+- PHP 8.1: active support through November 2025
+- PHP 8.2: active support through November 2026
+- PHP 8.3: active support through November 2027
+
+Aim to run PHP 8.2 or 8.3 on all sites. Test plugin compatibility on a staging server before upgrading PHP on production.
+
+## Part 2: Backups
+
+### What to back up
+
+A complete WordPress backup has two components:
+
+**The database** contains all WordPress content: posts, pages, comments, user data, plugin settings, WooCommerce orders, and custom post types. It is the most critical component for recovery and is typically a few megabytes to a few hundred megabytes.
+
+**The uploads directory** (`wp-content/uploads`) contains user-uploaded media. It cannot be recovered from anywhere else. It is typically the largest component and grows over time.
+
+WordPress core files and most plugins are reproducible (re-downloadable from WordPress.org) and are lower priority for backup. Including them makes restoration faster but is not strictly necessary.
+
+### Backup frequency
+
+Match backup frequency to how much data you can afford to lose:
+
+- **Content sites** (blogs, brochure sites): daily backups retained for 30 days
+- **E-commerce sites**: hourly or at minimum every 6 hours for the database; daily for files
+- **Membership or subscription sites**: every 6 hours for the database; daily for files
+- **High-traffic sites with frequent content changes**: hourly database backups
+
+### Offsite storage
+
+A backup stored on the same server as the site it backs up provides no protection against server failure. Always store backups in a separate location:
+
+- A cloud storage service (S3, Backblaze B2, Cloudflare R2)
+- A different server at a different provider
+- A local NAS at a physical location
+
+The storage cost of backups is small compared to the cost of not having them when you need them. S3 Standard storage costs approximately $0.023 per gigabyte per month. A 10GB backup retained for 30 days costs around $7 per year.
+
+### Testing restores
+
+A backup you have never tested is not a backup. Run a restore test quarterly:
+
+1. Select a recent backup
+2. Restore to a staging environment
+3. Walk through the site to confirm it is functional
+4. Note how long the restore took
+
+This test confirms both that the backup is valid and that you know the restore process when you need it in an emergency.
+
+## Part 3: Security
+
+### Security baseline
+
+Every WordPress site should have a minimum security baseline:
+
+- Strong, unique passwords for all admin accounts
+- Two-factor authentication on admin accounts
+- Login attempt limiting (three to five attempts per IP per hour)
+- XML-RPC disabled (unless required by Jetpack or a mobile app)
+- File editing disabled in the WordPress admin (`DISALLOW_FILE_EDIT`)
+- Directory listing disabled via `.htaccess`
+
+This baseline takes about 30 minutes to configure once and requires no ongoing attention.
+
+### Plugin and theme audits
+
+Audit installed plugins and themes on a quarterly basis:
+
+- Remove plugins that are no longer used
+- Replace plugins that have not been updated in over 12 months with actively maintained alternatives
+- Check whether installed plugins have known vulnerabilities via the Wordfence Intelligence feed
+
+Fewer plugins means a smaller attack surface, fewer updates to manage, and usually better performance.
+
+### Vulnerability scanning
+
+Automated vulnerability scanning compares your installed plugin and theme versions against a database of known vulnerabilities and flags anything that needs patching. This catches the cases where a vulnerability was published but the plugin has not yet been updated in your dashboard.
+
+WPMgr scans every managed site against the Wordfence Intelligence feed automatically. New vulnerability findings surface on the site's Security tab and in the fleet-wide Vulnerabilities view.
+
+### File integrity monitoring
+
+File integrity monitoring detects changes to files in your WordPress install that you did not make. A modified plugin file or an unexpected file in the uploads directory is often the first sign of a compromise.
+
+Run file integrity scans monthly at minimum. After any security incident, run a full scan to assess the extent of any modifications.
+
+### User account audits
+
+Review WordPress user accounts quarterly:
+
+- Remove accounts that belong to former employees, contractors, or clients
+- Downgrade admin accounts to editor or contributor if full admin access is not needed
+- Confirm that every admin account belongs to a person you know
+
+Orphaned admin accounts with guessable passwords are a common entry point for attackers.
+
+## Part 4: Performance
+
+### Core Web Vitals targets
+
+Google's Core Web Vitals are the primary performance targets for content on the web:
+
+- **LCP** (Largest Contentful Paint): under 2.5 seconds for "good"
+- **CLS** (Cumulative Layout Shift): under 0.1 for "good"
+- **INP** (Interaction to Next Paint): under 200ms for "good"
+
+Check Core Web Vitals quarterly using Google Search Console (which shows real-user data for your site's actual traffic) or PageSpeed Insights.
+
+### Full-page caching
+
+Full-page caching is the most impactful performance optimisation for most WordPress sites. A cached page is served as static HTML without running PHP or querying the database. This reduces server response time from hundreds of milliseconds to single-digit milliseconds.
+
+Enable full-page caching on every site that does not have pages that vary by user. Configure appropriate cache exclusions for WooCommerce cart and checkout pages, logged-in users, and pages with personalised content.
+
+### Image optimisation
+
+Images are the largest contributor to page weight on most WordPress sites. Converting images to AVIF or WebP reduces file size by 30 to 50% at equivalent quality.
+
+Audit the 20 largest images on your site quarterly using browser developer tools. Every large image not yet in a modern format is a quick win.
+
+### Database maintenance
+
+WordPress databases accumulate overhead over time: post revisions, spam comments, transient options, and orphaned metadata. A cluttered database is slower to query and larger to back up.
+
+Run database cleanup quarterly. Safe items to clean:
+
+- Post revisions (keep the last 5 to 10 per post)
+- Spam and trashed comments
+- Expired transients
+- Orphaned post metadata
+
+Always take a backup before running database cleanup.
+
+## Part 5: Monitoring
+
+### Uptime monitoring
+
+Uptime monitoring confirms that your site is responding. External monitoring checks your site from outside your network on a regular interval (typically 1 to 5 minutes) and alerts you if the site does not respond.
+
+For each site, configure:
+
+- The primary URL to check (the homepage at minimum)
+- An alert threshold (one failure vs three consecutive failures, to avoid false alarms)
+- Alert delivery (email, Slack, PagerDuty)
+
+WPMgr monitors every connected site every minute and alerts on failures. The fleet status matrix shows the uptime state of all sites in one view.
+
+### SSL certificate monitoring
+
+SSL certificates expire. An expired certificate causes browsers to show a warning that drives visitors away. Modern certificate authorities (Let's Encrypt, ZeroSSL) issue 90-day certificates that auto-renew, but the auto-renewal can fail.
+
+Monitor SSL expiry for every site. Alert at 30 days before expiry, again at 14 days, and again at 7 days. This gives enough time to renew manually if auto-renewal has failed.
+
+### PHP error monitoring
+
+PHP errors in WordPress are usually hidden from visitors (displayed only in the debug log), but they indicate problems. An increase in PHP error rate after an update is an early warning that something is broken before users start reporting issues.
+
+Review PHP error logs weekly on high-traffic or e-commerce sites. For content sites, monthly is usually sufficient.
+
+## Part 6: A monthly maintenance checklist
+
+Use this checklist as the foundation for a repeatable monthly maintenance process:
+
+**Weekly:**
+- Check for plugin and theme updates; apply with pre-update snapshot
+- Review uptime monitoring alerts and resolve any incidents
+- Confirm the last backup completed successfully for all sites
+
+**Monthly:**
+- Apply core WordPress updates (minor releases)
+- Audit new vulnerability findings from the scanner
+- Review PHP error logs
+- Generate and deliver client maintenance reports
+
+**Quarterly:**
+- Review and audit user accounts (remove orphaned accounts)
+- Test backup restores on a staging environment
+- Run database cleanup
+- Audit installed plugins (remove unused, replace abandoned)
+- Check Core Web Vitals in Google Search Console
+- Review PHP version currency
+
+**Annually:**
+- Review and update the security baseline on all sites
+- Audit hosting providers and server configurations
+- Review and update SSL certificate automation
+
+## Scaling maintenance with tooling
+
+Manual maintenance at 1 to 5 sites is feasible. At 10 to 20 sites, the repetition becomes time-consuming. At 50 or more sites, it requires dedicated staff unless you have automation.
+
+A fleet management tool centralises the operations that would otherwise require logging into each site individually: bulk updates with pre-update snapshots, fleet-wide backup status, centralised vulnerability findings, and automated reporting. The fixed cost of the tooling is paid back quickly in time saved.
+
+WPMgr connects to every WordPress site through a lightweight signed agent and provides a single control plane for all maintenance operations. For more detail on any part of this stack, see the feature pages for [Backups](/features/backups/), [Security suite](/features/security/), [Performance](/features/performance/), and [Uptime monitoring](/features/uptime-monitoring/).

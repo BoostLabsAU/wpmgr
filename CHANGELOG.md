@@ -6,6 +6,10 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ## [Unreleased]
 
+### Changed
+
+- **New marketing website.** The public site at wpmgr.app is now a multipage Next.js application with server-side rendering and static generation for SEO, replacing the previous single-page site. It adds a dedicated page for every feature, solution pages by audience and by job, pricing, a searchable changelog, a resources area with guides and articles, a desktop megamenu plus a mobile drawer, and a self-hosted API reference at /docs generated from the OpenAPI spec with no external network at runtime. Faster, fully crawlable, and easier to extend.
+
 ## [0.57.0] - 2026-06-21
 
 ### Added
