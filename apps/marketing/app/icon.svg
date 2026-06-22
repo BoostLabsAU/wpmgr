@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" fill="none">
+  <style>
+    :root { --fh: #1791A6; }
+    @media (prefers-color-scheme: dark) { :root { --fh: #2CB6CC; } }
+    .fh { fill: var(--fh); }
+    .fh-stroke { stroke: var(--fh); fill: none; }
+  </style>
+  <!-- Center node: the dashboard -->
+  <rect class="fh" x="11.5" y="11.5" width="9" height="9" rx="2.5"/>
+  <!-- Four satellite nodes: solid dots so the shape survives at 16px -->
+  <circle class="fh" cx="6.5" cy="6.5" r="2.6"/>
+  <circle class="fh" cx="25.5" cy="6.5" r="2.6"/>
+  <circle class="fh" cx="6.5" cy="25.5" r="2.6"/>
+  <circle class="fh" cx="25.5" cy="25.5" r="2.6"/>
+  <!-- Spokes connecting satellites to center -->
+  <line class="fh-stroke" stroke-width="2" stroke-linecap="round" x1="9" y1="9" x2="11.6" y2="11.6"/>
+  <line class="fh-stroke" stroke-width="2" stroke-linecap="round" x1="23" y1="9" x2="20.4" y2="11.6"/>
+  <line class="fh-stroke" stroke-width="2" stroke-linecap="round" x1="9" y1="23" x2="11.6" y2="20.4"/>
+  <line class="fh-stroke" stroke-width="2" stroke-linecap="round" x1="23" y1="23" x2="20.4" y2="20.4"/>
+</svg>

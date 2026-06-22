@@ -1,0 +1,208 @@
+/* ==========================================================================
+ * @wpmgr/tokens — single source of truth for brand design tokens.
+ * OKLCH hue 195 (teal), IBM Plex Sans + Mono, radius 0.5rem.
+ * Shared across apps/web, apps/landing, apps/marketing.
+ * DO NOT add app-specific overrides here; extend in each app's globals.css.
+ * ========================================================================== */
+
+@custom-variant dark (&:is(.dark *));
+
+/* ------------------------------------------------------------------ *
+ * Semantic color vars. OKLCH single brand hue 195 (teal).             *
+ * Light defaults in :root, dark overrides in .dark.                   *
+ * ------------------------------------------------------------------ */
+:root {
+  --background:         oklch(99%   0.004 195);
+  --foreground:         oklch(18%   0.012 195);
+  --card:               oklch(100%  0     0);
+  --card-foreground:    oklch(18%   0.012 195);
+  --muted:              oklch(96%   0.006 195);
+  --muted-foreground:   oklch(48%   0.012 195);
+  --accent:             oklch(94%   0.012 195);
+  --accent-foreground:  oklch(22%   0.012 195);
+  --border:             oklch(91%   0.008 195);
+  --ring:               oklch(58%   0.12  195);
+
+  --primary:            oklch(58%   0.12  195);
+  --primary-foreground: oklch(99%   0.004 195);
+  --primary-hover:      oklch(53%   0.13  195);
+  --primary-pressed:    oklch(48%   0.14  195);
+  /* Teal-hued subtle fill for icon chips (replaces blue info-subtle, which
+     clashed with the teal icon). Darker teal for small text (eyebrows) so
+     it clears 4.5:1 without touching the shared --primary. */
+  --primary-subtle:     oklch(95%   0.025 195);
+  --eyebrow:            oklch(50%   0.13  195);
+
+  /* Subtle semantic families: success (155), warning (75), info (235). */
+  --success:            oklch(58% 0.14  155);
+  --success-subtle:     oklch(95% 0.025 155);
+  --success-subtle-fg:  oklch(32% 0.10  155);
+
+  --warning-subtle:     oklch(95% 0.04   75);
+  --warning-subtle-fg:  oklch(38% 0.10   75);
+
+  --info:               oklch(58% 0.10  235);
+  --info-subtle:        oklch(95% 0.02  235);
+  --info-subtle-fg:     oklch(35% 0.10  235);
+
+  /* Base radius. Derived variants computed in @theme inline. */
+  --radius: 0.5rem;
+}
+
+.dark {
+  --background:         oklch(15%   0.012 195);
+  --foreground:         oklch(94%   0.008 195);
+  --card:               oklch(19%   0.014 195);
+  --card-foreground:    oklch(94%   0.008 195);
+  --muted:              oklch(22%   0.012 195);
+  --muted-foreground:   oklch(65%   0.014 195);
+  --accent:             oklch(26%   0.018 195);
+  --accent-foreground:  oklch(94%   0.008 195);
+  --border:             oklch(28%   0.014 195);
+  --ring:               oklch(68%   0.14  195);
+
+  --primary:            oklch(68%   0.14  195);
+  --primary-foreground: oklch(15%   0.012 195);
+  --primary-hover:      oklch(73%   0.14  195);
+  --primary-pressed:    oklch(78%   0.13  195);
+  /* Dark already passes for teal text; subtle chip fill stays flat, glow-free. */
+  --primary-subtle:     oklch(28%   0.07  195);
+  --eyebrow:            var(--primary);
+
+  --success:            oklch(68% 0.16  155);
+  --success-subtle:     oklch(28% 0.08  155);
+  --success-subtle-fg:  oklch(85% 0.10  155);
+
+  --warning-subtle:     oklch(32% 0.08   75);
+  --warning-subtle-fg:  oklch(86% 0.12   75);
+
+  --info:               oklch(68% 0.12  235);
+  --info-subtle:        oklch(28% 0.06  235);
+  --info-subtle-fg:     oklch(86% 0.08  235);
+}
+
+/* ------------------------------------------------------------------ *
+ * Tailwind v4 @theme inline map.                                      *
+ * Surface all semantic vars as Tailwind utility tokens.               *
+ * ------------------------------------------------------------------ */
+@theme inline {
+  /* Typography */
+  --font-sans: "IBM Plex Sans", ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Type scale with paired line-heights */
+  --text-2xs:  0.6875rem; --text-2xs--line-height: 1rem;
+  --text-xs:   0.75rem;   --text-xs--line-height:  1.125rem;
+  --text-sm:   0.875rem;  --text-sm--line-height:  1.25rem;
+  --text-base: 1rem;      --text-base--line-height: 1.6rem;
+  --text-lg:   1.125rem;  --text-lg--line-height:  1.75rem;
+  --text-xl:   1.375rem;  --text-xl--line-height:  1.85rem;
+  --text-2xl:  1.75rem;   --text-2xl--line-height: 2.125rem;
+  --text-3xl:  2.25rem;   --text-3xl--line-height: 2.5rem;
+  --text-4xl:  2.875rem;  --text-4xl--line-height: 3.1rem;
+  --text-5xl:  3.5rem;    --text-5xl--line-height: 3.7rem;
+
+  /* Color tokens */
+  --color-background:        var(--background);
+  --color-foreground:        var(--foreground);
+  --color-card:              var(--card);
+  --color-card-foreground:   var(--card-foreground);
+  --color-primary:           var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-subtle:    var(--primary-subtle);
+  --color-eyebrow:           var(--eyebrow);
+  --color-muted:             var(--muted);
+  --color-muted-foreground:  var(--muted-foreground);
+  --color-accent:            var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-border:            var(--border);
+  --color-ring:              var(--ring);
+  --color-success:           var(--success);
+  --color-success-subtle:    var(--success-subtle);
+  --color-success-subtle-fg: var(--success-subtle-fg);
+  --color-warning-subtle:    var(--warning-subtle);
+  --color-warning-subtle-fg: var(--warning-subtle-fg);
+  --color-info:              var(--info);
+  --color-info-subtle:       var(--info-subtle);
+  --color-info-subtle-fg:    var(--info-subtle-fg);
+
+  /* Radius scale */
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 12px);
+
+  /* Shadow scale: low-opacity neutral, NO glow. */
+  --shadow-sm: 0 1px 2px 0 oklch(0% 0 0 / 0.05);
+  --shadow-md: 0 4px 12px -2px oklch(0% 0 0 / 0.08), 0 2px 4px -2px oklch(0% 0 0 / 0.04);
+  --shadow-lg: 0 12px 24px -8px oklch(0% 0 0 / 0.12), 0 4px 8px -4px oklch(0% 0 0 / 0.06);
+  --shadow-xl: 0 24px 48px -12px oklch(0% 0 0 / 0.16), 0 8px 16px -8px oklch(0% 0 0 / 0.08);
+
+  /* Motion vars */
+  --duration-fast:  180ms;
+  --duration-base:  240ms;
+  --duration-slow:  340ms;
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out-expo:  cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ------------------------------------------------------------------ *
+ * Base layer: sensible element defaults.                              *
+ * ------------------------------------------------------------------ */
+@layer base {
+  * { border-color: var(--border); }
+
+  html {
+    font-family: var(--font-sans);
+    scroll-behavior: smooth;
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-feature-settings: "cv11", "ss01", "ss03";
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  code, kbd, pre, samp { font-family: var(--font-mono); }
+
+  ::selection {
+    background: var(--primary);
+    color: var(--primary-foreground);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  h1, h2, h3 {
+    text-wrap: balance;
+    letter-spacing: -0.018em;
+  }
+  p { text-wrap: pretty; }
+
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * Signature texture. Flat, very low contrast dot grid. No glow, no   *
+ * gradient text, no neon.                                             *
+ * ------------------------------------------------------------------ */
+.dot-field {
+  background-image: radial-gradient(var(--border) 1px, transparent 1px);
+  background-size: 22px 22px;
+  background-position: -11px -11px;
+  -webkit-mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 78%);
+          mask-image: radial-gradient(ellipse 80% 60% at 50% 30%, #000 40%, transparent 78%);
+}

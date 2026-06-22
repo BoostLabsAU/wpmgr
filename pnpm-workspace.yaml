@@ -1,6 +1,7 @@
 packages:
   - "apps/web"
   - "apps/tracker"
+  - "apps/marketing"
   - "packages/*"
 allowBuilds:
   esbuild: true
@@ -9,3 +10,5 @@ allowBuilds:
   # uses static analysis, not screenshots. Flip to `true` if a future phase
   # needs a real browser (live preview iteration, visual diffs, etc.).
   puppeteer: false
+  sharp: true
+  vue-demi: false

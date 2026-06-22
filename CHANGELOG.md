@@ -10,6 +10,10 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
 
+### Changed
+
+- **New marketing website.** The public site at wpmgr.app is now a multipage Next.js application with server-side rendering and static generation for SEO, replacing the previous single-page site. It adds a dedicated page for every feature, solution pages by audience and by job, pricing, a searchable changelog, a resources area with guides and articles, a desktop megamenu plus a mobile drawer, and a self-hosted API reference at /docs generated from the OpenAPI spec with no external network at runtime. Faster, fully crawlable, and easier to extend.
+
 ### Fixed
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.

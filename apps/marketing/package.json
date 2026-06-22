@@ -1,0 +1,44 @@
+{
+  "name": "@wpmgr/marketing",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "node scripts/sync-openapi.mjs && node scripts/check-copy.mjs && next build",
+    "start": "next start",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "check-copy": "node scripts/check-copy.mjs",
+    "impeccable": "impeccable detect"
+  },
+  "dependencies": {
+    "@mdx-js/loader": "^3.1.1",
+    "@mdx-js/react": "^3.1.1",
+    "@next/mdx": "^16.2.9",
+    "@wpmgr/tokens": "workspace:*",
+    "clsx": "^2.1.1",
+    "gray-matter": "^4.0.3",
+    "lucide-react": "^0.475.0",
+    "motion": "^12.40.0",
+    "next": "16.2.9",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remark-gfm": "^4.0.1",
+    "schema-dts": "^1.1.2",
+    "tailwind-merge": "^2.6.0"
+  },
+  "devDependencies": {
+    "@scalar/api-reference": "1.57.5",
+    "@tailwindcss/postcss": "^4.3.0",
+    "@types/mdx": "^2.0.14",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@wpmgr/eslint-config": "workspace:*",
+    "@wpmgr/tsconfig": "workspace:*",
+    "impeccable": "^2.1.9",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^5.7.0",
+    "yaml": "^2.7.1"
+  }
+}

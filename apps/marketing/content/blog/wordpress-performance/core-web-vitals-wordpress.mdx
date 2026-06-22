@@ -1,0 +1,78 @@
+---
+title: "Core Web Vitals for WordPress: LCP, CLS, and INP Explained"
+description: "Understand the three Core Web Vitals metrics, what causes poor scores on WordPress sites, and practical fixes for each."
+category: "wordpress-performance"
+date: "2026-06-14"
+author: "WPMgr Team"
+tags: ["performance", "core-web-vitals", "lcp", "cls", "inp"]
+featureSlug: "real-user-monitoring"
+solutionSlug: "wordpress-performance"
+---
+
+Google uses Core Web Vitals as a ranking signal. They are also the most user-facing performance metrics available: they measure how fast a page loads, how stable it is while loading, and how quickly it responds to user input. A site that scores well on all three delivers a genuinely good experience.
+
+WordPress sites have a specific profile of Core Web Vitals challenges. Understanding them lets you fix the right things.
+
+## LCP: Largest Contentful Paint
+
+LCP measures how long it takes for the largest visible content element (usually the hero image or headline) to render on screen. Google's threshold for "good" is under 2.5 seconds.
+
+**Common WordPress LCP killers:**
+
+- Unoptimised hero images (full-size JPEG or PNG served without compression or next-gen format)
+- Images loaded lazily when they should be prioritised (do not `loading="lazy"` on the hero image)
+- Slow server response time (TTFB above 600ms, often a sign that full-page caching is not working)
+- Large JavaScript bundles blocking the render path
+- Fonts loaded from a remote CDN with no `preconnect` hint
+
+**WordPress-specific fixes:**
+
+Full-page caching is the single largest LCP win for most WordPress sites. Serving a prebuilt HTML response instead of running PHP eliminates the application-layer latency. WPMgr's page caching feature handles this at the server level.
+
+Convert your hero image to AVIF or WebP. Both formats are 30 to 50% smaller than JPEG at equivalent quality. WPMgr's Media Optimizer converts your entire media library automatically; new uploads are converted on the way in.
+
+Use a `<link rel="preload">` hint for the hero image so the browser starts fetching it before the main image tag is parsed.
+
+## CLS: Cumulative Layout Shift
+
+CLS measures visual stability: how much the page layout shifts during load. Google's threshold for "good" is a CLS score below 0.1.
+
+**Common WordPress CLS killers:**
+
+- Images without explicit `width` and `height` attributes: the browser does not know the image dimensions until it downloads the image, so it cannot reserve the right amount of space
+- Web fonts causing layout shifts when they load (FOUT: flash of unstyled text)
+- Late-loading ads or embeds that push content down
+- Animations that change `width`, `height`, or `top`/`left` properties (these trigger layout recalculations)
+
+**WordPress-specific fixes:**
+
+Always set `width` and `height` on `<img>` tags. WordPress does this automatically for images inserted through the media library, but page builders and some themes bypass this.
+
+Self-host web fonts instead of loading them from Google Fonts or other CDNs. Self-hosted fonts can include `font-display: optional` or be preloaded to avoid FOUT.
+
+For animations, use `transform` and `opacity` exclusively. These do not trigger layout recalculations and have no CLS impact.
+
+## INP: Interaction to Next Paint
+
+INP replaced FID (First Input Delay) as a Core Web Vitals metric in March 2024. It measures the delay between a user action (click, tap, keystroke) and the next paint that shows a response. Google's threshold for "good" is under 200ms.
+
+**Common WordPress INP killers:**
+
+- Large JavaScript bundles executing on the main thread during interactions
+- Heavy WooCommerce cart or checkout JavaScript
+- Page builders that ship multi-hundred-kilobyte JavaScript payloads
+- Analytics and marketing scripts with synchronous execution
+
+**WordPress-specific fixes:**
+
+Defer or remove non-essential JavaScript. Every script that runs during an interaction adds to INP.
+
+Remove unused CSS. Large CSS stylesheets force the browser to compute styles for every interaction. WPMgr's unused CSS removal strips per-page CSS to only the rules actually used.
+
+## Measuring with real user data
+
+Lab tools (Lighthouse, PageSpeed Insights) simulate a single visit under controlled conditions. They are useful for debugging but do not represent your actual visitor population.
+
+Real User Monitoring (RUM) collects CWV metrics from actual visitors on their actual devices and network connections. WPMgr RUM aggregates these at the p75 level (the 75th-percentile user experience) across 28-day windows, so you can see trends and compare before-and-after for any optimisation you make.
+
+For a deep dive into the tooling, see the [Real User Monitoring feature page](/features/real-user-monitoring/) and the [speed up WordPress solution guide](/solutions/wordpress-performance/).

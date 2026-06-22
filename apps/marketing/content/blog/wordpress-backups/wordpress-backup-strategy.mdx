@@ -1,0 +1,74 @@
+---
+title: "WordPress Backup Strategy: How Often, What to Include, and Where to Store It"
+description: "A practical guide to building a WordPress backup strategy: backup frequency, what to include, offsite storage, and testing your restores."
+category: "wordpress-backups"
+date: "2026-06-13"
+author: "WPMgr Team"
+tags: ["backups", "disaster-recovery", "storage"]
+featureSlug: "backups"
+solutionSlug: "wordpress-backups"
+---
+
+A backup you have never tested is not a backup. It is a compressed hope. The goal of a backup strategy is not to have files somewhere. It is to be able to restore a site to a known good state within a predictable time frame, with confidence that the restore will work.
+
+## What to include in a WordPress backup
+
+A complete WordPress backup has two components:
+
+**The database.** WordPress stores all of its content in MySQL: posts, pages, comments, user accounts, plugin settings, and widget configurations. A database backup can be as small as a few megabytes for a new site or hundreds of megabytes for a large content site. It backs up fast and restores fast.
+
+**The file system.** The WordPress file system includes core files, plugins, themes, and the uploads directory (`wp-content/uploads`). Core files and plugins are reproducible (you can reinstall them), but the uploads directory contains user-uploaded media that exists only on that server. The uploads directory is the critical file-system component.
+
+For most sites, the optimal backup includes the full database plus the uploads directory. Core and plugin files are omitted because they can be re-downloaded and are identical across all sites running the same version.
+
+## Backup frequency: matching risk to cost
+
+The right backup frequency depends on how much data you can afford to lose.
+
+If your site publishes new content or receives new orders once a week, a daily backup means you lose at most one day of content in the worst case. That may be acceptable.
+
+If your site receives orders continuously, a daily backup means you could lose a day of orders in the worst case. That is probably not acceptable. You need hourly or continuous backups, or a transactional replication strategy for the database.
+
+Common frequency patterns:
+
+- **Daily backups** retained for 30 days: suitable for content sites, blogs, and most small business sites
+- **Hourly backups** retained for 7 days plus daily backups retained for 30 days: suitable for e-commerce and membership sites
+- **Continuous replication** for the database plus daily file backups: for high-stakes or regulated data
+
+## Incremental backups: why they matter at scale
+
+A full backup copies every file and every database row on every run. For a large site, this is slow and consumes a lot of storage.
+
+An incremental backup copies only what changed since the last backup. For the database, this means binary log shipping. For the file system, this means tracking which files changed by comparing timestamps or content hashes.
+
+WPMgr uses content-addressed chunk storage: file content is split into chunks by hash, and each chunk is stored once. Two versions of a file that share 90% of their content share 90% of their storage. This makes the storage cost of daily backups close to the cost of storing the delta, not the full content.
+
+## Offsite storage: the non-negotiable requirement
+
+A backup stored on the same server as the site it backs up is not a real backup. If the server fails, is compromised, or is deleted, the backup goes with it.
+
+Offsite storage means a different location: a different server, a different cloud provider, or a physical location. For most WordPress sites, the practical options are S3-compatible object storage (AWS S3, Cloudflare R2, Backblaze B2, MinIO), a local NAS, or a remote SFTP server.
+
+WPMgr supports S3-compatible destinations and local storage. You configure a destination once at the control-plane level; all sites in your fleet can use it. Backups are encrypted before they leave the server and stored with credentials managed by the control plane.
+
+## Testing your restores
+
+A backup strategy without a restore test is not complete. You need to know that the restore works before you need it in an emergency.
+
+A minimal restore test:
+
+1. Create a staging environment (a second server, a local Docker container, or a subdomain)
+2. Restore a recent backup to the staging environment
+3. Walk through the site and verify that content, settings, and functionality are intact
+
+Run this test quarterly at minimum, and after any major change to your backup configuration.
+
+WPMgr supports point-in-time restore from any stored backup, and the restore flow is the same whether you are recovering from a disaster or testing a restore on a staging server.
+
+## Pre-update snapshots: backups as a safety net
+
+The highest-risk moment for a WordPress site is immediately after a plugin or core update. A pre-update snapshot is a backup taken automatically before any update runs. If the update breaks something, you restore from the snapshot.
+
+WPMgr takes a pre-update snapshot automatically before every update. The snapshot is retained for a configurable window (default 14 days). If the update causes a regression, you restore with one click.
+
+For more detail on the backup system, see the [Backups and restore feature page](/features/backups/). For the complete picture of WordPress backup tools, see the [WordPress backups solution guide](/solutions/wordpress-backups/).
