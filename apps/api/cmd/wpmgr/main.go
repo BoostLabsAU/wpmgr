@@ -48,6 +48,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/email"
+	"github.com/mosamlife/wpmgr/apps/api/internal/files"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
 	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
@@ -425,6 +426,16 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	updateHub := update.NewHub()
 	updateRepo := update.NewRepo(pool)
 	sitesLookup := newSiteLookup(siteSvc)
+
+	// P1 File Manager (read-only). Dedicated signed agent client (same pattern as
+	// the other domains). The download presigner is wired from the blobstore in
+	// the backup block below; it stays nil (download degrades to not-configured)
+	// when object storage is off.
+	filesSvc := files.NewService(pool)
+	if cmdSigner != nil {
+		filesSvc.SetAgentClient(agentcmd.NewClient(ssrfClient, cmdSigner), newPerfSiteAdapter(siteSvc))
+	}
+
 	updateWorker := update.NewWorker(updateRepo, sitesLookup, commander, prober, updateHub, auditRec, logger, cfg.Update.PerTenantParallelism)
 	// Updates feature (Track B): the refresh-inventory worker dispatches signed
 	// CP->agent commands to re-pull a site's inventory. It satisfies River's
@@ -485,6 +496,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if berr := store.EnsureBucket(ctx); berr != nil {
 			return fmt.Errorf("blobstore ensure bucket: %w", berr)
 		}
+
+		// File Manager download path stages bytes through the same blobstore.
+		filesSvc.SetPresigner(store)
+
 		var backupCmd backup.Commander
 		if cfg.Agent.SigningPrivateKey != "" {
 			signer, _ := agentcmd.NewSigner(cfg.Agent.SigningPrivateKey)
@@ -1788,6 +1803,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	authH := auth.NewHandler(authSvc, sessions, oidcProvider, newTenant)
 	authH.SetSecureCookies(cfg.IsProduction())
 
+	filesH := files.NewHandler(filesSvc, auditRec)
+
 	srv := server.New(server.Deps{
 		Config:          cfg,
 		Logger:          logger,
@@ -1801,6 +1818,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		TenantH:         tenant.NewHandler(tenantSvc, auditRec),
 		SiteH:           siteH,
 		SiteEventsH:     siteEventsH,
+		FilesH:          filesH,
 		UpdateH:         updateH,
 		BackupH:         backupH,
 		BackupAgentH:    backupAgentH,
