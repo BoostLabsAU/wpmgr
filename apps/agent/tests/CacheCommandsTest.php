@@ -153,6 +153,10 @@ final class CacheCommandsTest extends TestCase
         $this->assertSame(['geo'], $stored['include_cookies']);
     }
 
+    /**
+     * The command stores the four page-cache variant lists under their
+     * unprefixed keys when the control plane sends them on the wire.
+     */
     public function test_perf_config_update_persists_unprefixed_cache_variant_keys(): void
     {
         $cmd = new PerfConfigUpdateCommand($this->manager());
@@ -171,6 +175,11 @@ final class CacheCommandsTest extends TestCase
         $this->assertSame(['geo'], $stored['include_cookies']);
     }
 
+    /**
+     * Prefixed cache_* names are not in the command whitelist, so a payload
+     * using them is rejected and nothing is persisted. Guards against silently
+     * accepting the old wire names again.
+     */
     public function test_perf_config_update_ignores_prefixed_cache_variant_aliases(): void
     {
         $cmd = new PerfConfigUpdateCommand($this->manager());

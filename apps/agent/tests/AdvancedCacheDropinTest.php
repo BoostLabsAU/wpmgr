@@ -32,6 +32,9 @@ final class AdvancedCacheDropinTest extends TestCase
     /** @var string */
     private string $tempDir;
 
+    /**
+     * Create an isolated temporary wp-content cache tree for each test.
+     */
     protected function set_up(): void
     {
         parent::set_up();
@@ -40,6 +43,9 @@ final class AdvancedCacheDropinTest extends TestCase
         @mkdir($this->tempDir . '/cache/wpmgr', 0o777, true);
     }
 
+    /**
+     * Remove the temporary tree created in set_up().
+     */
     protected function tear_down(): void
     {
         $this->rmdirRecursive($this->tempDir);
