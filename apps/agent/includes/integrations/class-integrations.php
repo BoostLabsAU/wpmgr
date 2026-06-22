@@ -43,6 +43,7 @@ final class Integrations
      * @var list<class-string>
      */
     private const INTEGRATIONS = [
+        CloudPanel::class,
         Varnish::class,
         Cloudflare::class,
         Kinsta::class,

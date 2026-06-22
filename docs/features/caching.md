@@ -168,6 +168,24 @@ the [audit log](../security.md). When a CDN is configured the purge also signals
 the edge (best-effort, tag-based where supported); a CDN failure never fails the
 local origin purge.
 
+### CloudPanel Varnish
+
+WPMgr page cache can run alongside CloudPanel Varnish. Operators do not need to
+disable WPMgr page cache just because Varnish is enabled in CloudPanel.
+
+When the agent detects CloudPanel Varnish from
+`~/.varnish-cache/settings.json`, WPMgr cache purges also clear the CloudPanel
+Varnish layer. The optional CloudPanel WordPress plugin is not required.
+
+Full-site purge sends two requests to the CloudPanel Varnish server from the
+settings file: a host-scoped `PURGE` and a cache-tag `PURGE`. URL purge sends a
+`PURGE` for each URL, preserving the URL path and query string and using that
+URL's host as the `Host` header.
+
+PageSpeed cleanup is full-purge only. If the host cache exists under the
+CloudPanel PageSpeed cache tree, WPMgr removes that host's cached PageSpeed
+contents. Per-URL purges do not wipe PageSpeed files.
+
 **Auto-purge.** When caching is enabled the agent hooks WordPress content-change
 events and purges the affected URLs automatically (a published or edited post,
 its archives, and the home page), then queues them for re-warm.
