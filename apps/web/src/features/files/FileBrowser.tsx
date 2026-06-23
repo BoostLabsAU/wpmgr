@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   Archive,
   FolderPlus,
+  History,
   RefreshCw,
   Search,
   ToggleLeft,
@@ -13,6 +14,7 @@ import { Button } from "@/components/ui/button";
 import { PageError } from "@/components/feedback";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { Link } from "@tanstack/react-router";
 import type { FileEntry, FileSearchMatch } from "@wpmgr/api";
 
 import { useFiles } from "./hooks/use-files";
@@ -231,6 +233,25 @@ export function FileBrowser({
                 />
               ) : null}
             </span>
+          ) : null}
+
+          {/* View activity deep-link: jumps to the audit log pre-filtered to
+              file-manager events for this site. */}
+          {canManage ? (
+            <Link
+              to="/audit"
+              search={{ action: "site.files.", site_id: siteId }}
+              className={cn(
+                "inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium",
+                "text-[var(--color-muted-foreground)] transition-colors",
+                "hover:bg-[var(--color-muted)] hover:text-[var(--color-foreground)]",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)] focus-visible:ring-offset-1",
+              )}
+              title="View file manager audit log for this site"
+            >
+              <History aria-hidden="true" className="size-3.5" />
+              View activity
+            </Link>
           ) : null}
 
           {/* Search toggle (P3, admin+) */}

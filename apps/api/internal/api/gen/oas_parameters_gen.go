@@ -7570,6 +7570,15 @@ func decodeListApiKeysParams(args [0]string, argsEscaped bool, r *http.Request) 
 type ListAuditParams struct {
 	Limit  OptInt32 `json:",omitempty,omitzero"`
 	Offset OptInt32 `json:",omitempty,omitzero"`
+	// Prefix-match filter on the `action` field. Passing `site.files.` returns every file-manager event;
+	// passing an exact action string (e.g. `site.files.delete`) also works because it is a prefix of
+	// itself. Omit to return all actions.
+	Action OptString `json:",omitempty,omitzero"`
+	// UUID of a specific site. When set, only entries whose `target_type` is `"site"` and `target_id`
+	// matches this UUID are returned. All per-site actions (file-manager, perf, backup, cache, security,
+	// …) write the site UUID as `target_id` with `target_type="site"`, so this filter produces a
+	// complete per-site timeline. Omit to return entries for all sites.
+	SiteID OptUUID `json:",omitempty,omitzero"`
 }
 
 func unpackListAuditParams(packed middleware.Parameters) (params ListAuditParams) {
@@ -7589,6 +7598,24 @@ func unpackListAuditParams(packed middleware.Parameters) (params ListAuditParams
 		}
 		if v, ok := packed[key]; ok {
 			params.Offset = v.(OptInt32)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "action",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.Action = v.(OptString)
+		}
+	}
+	{
+		key := middleware.ParameterKey{
+			Name: "site_id",
+			In:   "query",
+		}
+		if v, ok := packed[key]; ok {
+			params.SiteID = v.(OptUUID)
 		}
 	}
 	return params
@@ -7734,6 +7761,88 @@ func decodeListAuditParams(args [0]string, argsEscaped bool, r *http.Request) (p
 	}(); err != nil {
 		return params, &ogenerrors.DecodeParamError{
 			Name: "offset",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Decode query: action.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "action",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotActionVal string
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToString(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotActionVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.Action.SetTo(paramsDotActionVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "action",
+			In:   "query",
+			Err:  err,
+		}
+	}
+	// Decode query: site_id.
+	if err := func() error {
+		cfg := uri.QueryParameterDecodingConfig{
+			Name:    "site_id",
+			Style:   uri.QueryStyleForm,
+			Explode: true,
+		}
+
+		if err := q.HasParam(cfg); err == nil {
+			if err := q.DecodeParam(cfg, func(d uri.Decoder) error {
+				var paramsDotSiteIDVal uuid.UUID
+				if err := func() error {
+					val, err := d.DecodeValue()
+					if err != nil {
+						return err
+					}
+
+					c, err := conv.ToUUID(val)
+					if err != nil {
+						return err
+					}
+
+					paramsDotSiteIDVal = c
+					return nil
+				}(); err != nil {
+					return err
+				}
+				params.SiteID.SetTo(paramsDotSiteIDVal)
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}(); err != nil {
+		return params, &ogenerrors.DecodeParamError{
+			Name: "site_id",
 			In:   "query",
 			Err:  err,
 		}

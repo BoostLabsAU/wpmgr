@@ -435,6 +435,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if cmdSigner != nil {
 		filesSvc.SetAgentClient(agentcmd.NewClient(ssrfClient, cmdSigner), newPerfSiteAdapter(siteSvc))
 	}
+	// File-transfers GC worker. The ObjectDeleter is wired from the blobstore
+	// alongside filesSvc.SetPresigner (below). It stays nil when object storage
+	// is not configured — in that case only DB rows are pruned.
+	fileTransfersGCWorker := files.NewFileTransfersGCWorker(pool, nil, logger) // deleter wired below if S3 enabled
 
 	updateWorker := update.NewWorker(updateRepo, sitesLookup, commander, prober, updateHub, auditRec, logger, cfg.Update.PerTenantParallelism)
 	// Updates feature (Track B): the refresh-inventory worker dispatches signed
@@ -499,6 +503,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 		// File Manager download path stages bytes through the same blobstore.
 		filesSvc.SetPresigner(store)
+		// Wire the deleter for the file-transfers GC (same Store satisfies the
+		// files.ObjectDeleter interface via its Delete method).
+		fileTransfersGCWorker = files.NewFileTransfersGCWorker(pool, store, logger)
 
 		var backupCmd backup.Commander
 		if cfg.Agent.SigningPrivateKey != "" {
@@ -1261,6 +1268,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// when WPMGR_WORDFENCE_API_KEY is unset).
 		vulnFeedWorker:   vulnFeedWorker,
 		vulnRescanWorker: vulnRescanWorker,
+		// m82 — file-transfers GC (always non-nil; object deletion is a no-op
+		// when S3 is not configured).
+		fileTransfersGCWorker: fileTransfersGCWorker,
 	})
 	if err != nil {
 		return err
@@ -2231,6 +2241,10 @@ type riverDeps struct {
 	// WPMGR_WORDFENCE_API_KEY is not set.
 	vulnFeedWorker   *vuln.FeedWorker
 	vulnRescanWorker *vuln.RescanSiteWorker
+	// m82 — File-transfers GC: deletes stale file_transfers rows (and best-effort
+	// deletes their staged objects) once per day. Always wired; object deletion is
+	// a no-op when the object store is not configured.
+	fileTransfersGCWorker *files.FileTransfersGCWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2636,6 +2650,19 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 	if d.vulnRescanWorker != nil {
 		river.AddWorker(workers, d.vulnRescanWorker)
 		queues[vuln.RescanSiteQueue] = river.QueueConfig{MaxWorkers: 8}
+	}
+
+	// m82 — file-transfers GC: prunes stale file_transfers rows (and their
+	// staged objects) once per day. Always wired; the worker no-ops cleanly
+	// when the deleter is nil (no object storage). RunOnStart: false — tables
+	// are small on a fresh deploy.
+	if d.fileTransfersGCWorker != nil {
+		river.AddWorker(workers, d.fileTransfersGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return files.FileTransfersGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

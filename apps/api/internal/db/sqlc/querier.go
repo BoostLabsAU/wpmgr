@@ -228,6 +228,9 @@ type Querier interface {
 	DeleteEmailSuppression(ctx context.Context, arg DeleteEmailSuppressionParams) error
 	// Periodic GC: purge all expired registration sessions.
 	DeleteExpiredWebAuthnRegistrationSessions(ctx context.Context) error
+	// Deletes a single file_transfers row by id (InAgentTx). Used by the GC worker
+	// after the staged object has been deleted from object storage.
+	DeleteFileTransfer(ctx context.Context, id uuid.UUID) error
 	DeleteMembership(ctx context.Context, arg DeleteMembershipParams) (int64, error)
 	// Prunes daily rollup rows older than @since_day across ALL tenants.
 	DeleteOldRumDailyRollups(ctx context.Context, sinceDay pgtype.Date) (int64, error)
@@ -833,6 +836,11 @@ type Querier interface {
 	// `, id` tiebreaker follows the project ORDER BY convention.
 	ListAppliedTasksForSites(ctx context.Context, arg ListAppliedTasksForSitesParams) ([]ListAppliedTasksForSitesRow, error)
 	ListAuditEntries(ctx context.Context, arg ListAuditEntriesParams) ([]AuditLog, error)
+	// Optional filters: action prefix (LIKE 'prefix%'), site_id (target_type='site'
+	// AND target_id = site_id::text). Passing an empty string for action_prefix or
+	// a zero UUID for site_id disables those filters respectively. RLS is still the
+	// primary tenant-isolation gate; the explicit tenant_id is defense-in-depth.
+	ListAuditEntriesFiltered(ctx context.Context, arg ListAuditEntriesFilteredParams) ([]AuditLog, error)
 	ListAuditEntriesForVerify(ctx context.Context, tenantID uuid.UUID) ([]AuditLog, error)
 	// Returns the tenant's already-stored chunks among the given hashes (dedup: the
 	// agent only uploads hashes NOT returned here).
@@ -1030,6 +1038,11 @@ type Querier interface {
 	// url is included so the active-verify sweeper can dial the agent without a
 	// secondary tenant-scoped lookup.
 	ListSitesToDisconnect(ctx context.Context, lastSeenAt pgtype.Timestamptz) ([]ListSitesToDisconnectRow, error)
+	// Returns stale file_transfer rows (created_at < cutoff) for GC.
+	// The GC worker iterates these to delete the staged object (if any) before
+	// deleting the row. Cross-tenant read path (InAgentTx / app.agent GUC).
+	// Capped at 500 rows per sweep to keep the pass short and idempotent.
+	ListStaleFileTransfers(ctx context.Context, cutoff time.Time) ([]ListStaleFileTransfersRow, error)
 	// Watchdog feeder: a running snapshot whose latest progress is older than the
 	// stall threshold (or whose runner never reported any progress despite being
 	// running for longer than the threshold). The new index

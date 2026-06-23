@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-faster/jx"
+	"github.com/google/uuid"
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/api/gen"
 	"github.com/mosamlife/wpmgr/apps/api/internal/authz"
@@ -33,7 +34,34 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 func (h *Handler) list(c *gin.Context) {
 	p, _ := domain.PrincipalFromContext(c.Request.Context())
-	entries, err := h.rec.List(c.Request.Context(), p.TenantID, parseInt32(c.Query("limit"), 50), parseInt32(c.Query("offset"), 0))
+	limit := parseInt32(c.Query("limit"), 50)
+	offset := parseInt32(c.Query("offset"), 0)
+
+	// Optional filters: action prefix and/or site_id. When both are absent we
+	// fall back to the simpler unfiltered query (no behavioural difference; the
+	// filtered path is correct but carries slightly more query overhead).
+	actionPrefix := c.Query("action")
+	rawSiteID := c.Query("site_id")
+
+	var entries []Entry
+	var err error
+
+	if actionPrefix != "" || rawSiteID != "" {
+		f := Filter{ActionPrefix: actionPrefix}
+		if rawSiteID != "" {
+			if id, perr := uuid.Parse(rawSiteID); perr == nil {
+				f.SiteID = &id
+			}
+			// A non-UUID site_id silently ignores the filter (same as an invalid
+			// limit falling back to the default) rather than returning a 400, so
+			// callers with a bad UUID get an empty-site-filtered unfiltered list
+			// rather than an error that might break existing integrations.
+		}
+		entries, err = h.rec.ListFiltered(c.Request.Context(), p.TenantID, f, limit, offset)
+	} else {
+		entries, err = h.rec.List(c.Request.Context(), p.TenantID, limit, offset)
+	}
+
 	if err != nil {
 		httpx.Error(c, err)
 		return

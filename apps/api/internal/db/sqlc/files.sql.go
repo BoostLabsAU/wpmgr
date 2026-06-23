@@ -12,6 +12,17 @@ import (
 	"github.com/google/uuid"
 )
 
+const deleteFileTransfer = `-- name: DeleteFileTransfer :exec
+DELETE FROM file_transfers WHERE id = $1
+`
+
+// Deletes a single file_transfers row by id (InAgentTx). Used by the GC worker
+// after the staged object has been deleted from object storage.
+func (q *Queries) DeleteFileTransfer(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteFileTransfer, id)
+	return err
+}
+
 const getSiteFileManager = `-- name: GetSiteFileManager :one
 
 
@@ -176,6 +187,42 @@ func (q *Queries) ListFileTransfers(ctx context.Context, arg ListFileTransfersPa
 			&i.CreatedAt,
 			&i.ExpiresAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listStaleFileTransfers = `-- name: ListStaleFileTransfers :many
+SELECT id, object_key FROM file_transfers
+WHERE created_at < $1
+ORDER BY created_at ASC, id ASC
+LIMIT 500
+`
+
+type ListStaleFileTransfersRow struct {
+	ID        uuid.UUID `json:"id"`
+	ObjectKey string    `json:"object_key"`
+}
+
+// Returns stale file_transfer rows (created_at < cutoff) for GC.
+// The GC worker iterates these to delete the staged object (if any) before
+// deleting the row. Cross-tenant read path (InAgentTx / app.agent GUC).
+// Capped at 500 rows per sweep to keep the pass short and idempotent.
+func (q *Queries) ListStaleFileTransfers(ctx context.Context, cutoff time.Time) ([]ListStaleFileTransfersRow, error) {
+	rows, err := q.db.Query(ctx, listStaleFileTransfers, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListStaleFileTransfersRow
+	for rows.Next() {
+		var i ListStaleFileTransfersRow
+		if err := rows.Scan(&i.ID, &i.ObjectKey); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

@@ -43,6 +43,23 @@ if (!function_exists('wp_parse_url')) {
 // Filesystem helpers
 // ---------------------------------------------------------------------------
 
+if (!function_exists('get_temp_dir')) {
+    /**
+     * Returns the directory WordPress uses for temporary files.
+     * Mirrors the real WP implementation: honours WP_TEMP_DIR when defined,
+     * then falls back to sys_get_temp_dir() with a trailing slash.
+     *
+     * @return string Absolute path with trailing slash.
+     */
+    function get_temp_dir(): string
+    {
+        if (defined('WP_TEMP_DIR') && is_string(WP_TEMP_DIR) && WP_TEMP_DIR !== '') {
+            return rtrim((string) WP_TEMP_DIR, '/\\') . '/';
+        }
+        return rtrim(sys_get_temp_dir(), '/\\') . '/';
+    }
+}
+
 if (!function_exists('wp_mkdir_p')) {
     /**
      * Recursively creates directories — mirrors the real WP implementation.

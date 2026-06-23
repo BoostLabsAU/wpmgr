@@ -48,9 +48,13 @@
  *   - Content sniff (<?php / <?=) is applied to the EXTRACTED BYTES of each entry.
  *
  * ATOMIC QUARANTINE PATTERN:
- *   1. Create a fresh quarantine temp dir OUTSIDE the jail/web root (under the
- *      hardened staging area, never under ABSPATH). This prevents any extracted
- *      .php file from being web-accessible during the extract window.
+ *   1. Create a fresh quarantine temp dir under the system temp dir returned by
+ *      get_temp_dir() (which falls back to sys_get_temp_dir()). The system temp
+ *      dir is not served by the web server on any standard Linux/Apache/nginx
+ *      stack, so extracted .php files are inaccessible during the extract window.
+ *      If get_temp_dir() resolves to a path under ABSPATH (unusual mis-configured
+ *      installs), we fall back to the hardened staging area under uploads/ with
+ *      .htaccess + index.php guards already in place.
  *   2. Validate EVERY entry (slip + bomb + exec + sensitive) BEFORE writing any byte.
  *   3. Extract into the quarantine dir.
  *   4. Atomically move (rename) the quarantine tree into dest_path on success.
@@ -240,35 +244,27 @@ final class FileExtractCommand implements CommandInterface {
 		}
 
 		// ------------------------------------------------------------------
-		// 6. Extract into a quarantine temp dir OUTSIDE the jail/web root.
-		//    F5: The quarantine lives in the hardened staging area (not under
-		//    ABSPATH/the web root) so extracted .php files cannot be served
-		//    by the web server during the extraction window. A crash or mid-
-		//    extract failure is handled in the finally block below.
+		// 6. Extract into a quarantine temp dir under the system temp dir.
+		//
+		//    NEW-2: We resolve the quarantine location via get_temp_dir() (which
+		//    returns WP_TEMP_DIR when defined, then falls back to sys_get_temp_dir()).
+		//    The system temp dir is never web-served on standard Linux installs so
+		//    extracted .php files cannot be reached by the web server during the
+		//    sub-second extract window — stronger than the prior .htaccess guard.
+		//
+		//    Fallback: if get_temp_dir() resolves under ABSPATH (rare mis-configured
+		//    install), we fall back to the hardened staging area (uploads/wpmgr-file-
+		//    extract-tmp), which carries .htaccess + index.php guards. The fallback
+		//    is only taken when the system temp dir is not trustworthy; it is not the
+		//    primary path.
+		//
+		//    A crash or mid-extract failure is always handled by the finally block.
 		// ------------------------------------------------------------------
-		$quarantineBase = StoragePaths::ensureHardened( 'file-extract-tmp' );
-		if ( $quarantineBase === '' ) {
+		$quarantineDir = $this->resolveQuarantineDir( $jailRoot );
+		if ( $quarantineDir === '' ) {
 			$zip->close();
-			return $this->error( 'write_failed', 'quarantine staging area could not be resolved' );
+			return $this->error( 'write_failed', 'quarantine directory could not be resolved or created' );
 		}
-
-		$quarantineDir = $quarantineBase . '/extract-' . bin2hex( random_bytes( 8 ) );
-
-		if ( ! wp_mkdir_p( $quarantineDir ) ) {
-			$zip->close();
-			return $this->error( 'write_failed', 'could not create quarantine directory' );
-		}
-
-		// Set restrictive permissions on the quarantine dir.
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- headless agent; WP_Filesystem never initialized; chmod needed on quarantine dir
-		@chmod( $quarantineDir, 0700 );
-
-		// F5: Drop guard files immediately so the quarantine is hardened even if
-		// the extraction crashes and the cleanup finally-block cannot reach it.
-		// StoragePaths::ensureHardened() already placed these on $quarantineBase;
-		// we add a per-job index.php so each job slot is also guarded.
-		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- headless agent; WP_Filesystem never initialized; direct write of a static guard file
-		@file_put_contents( $quarantineDir . '/index.php', "<?php\n// Silence is golden.\n", LOCK_EX );
 
 		try {
 			$extractResult = $this->extractEntries( $zip, $quarantineDir, $destReal, $confirmExecWrite, $confirmSensitive );
@@ -690,6 +686,85 @@ final class FileExtractCommand implements CommandInterface {
 	// ------------------------------------------------------------------
 	// Utilities
 	// ------------------------------------------------------------------
+
+	/**
+	 * Resolve and create a per-job quarantine directory under the system temp dir.
+	 *
+	 * NEW-2: Uses get_temp_dir() (which honours WP_TEMP_DIR, then sys_get_temp_dir())
+	 * rather than the uploads staging area. The system temp dir is never served by
+	 * the web server on standard Linux stacks, eliminating the sub-second web-exec
+	 * window that existed when the quarantine was under uploads/.
+	 *
+	 * Fallback: if get_temp_dir() returns a path that resolves under ABSPATH (unusual
+	 * mis-configured installs where /tmp is inside the web root), we fall back to the
+	 * hardened uploads staging area which carries .htaccess + index.php guards.
+	 *
+	 * @param string $jailRoot Canonicalized ABSPATH jail root (used for fallback check).
+	 * @return string Absolute path to the per-job quarantine dir, '' on failure.
+	 */
+	private function resolveQuarantineDir( string $jailRoot ): string {
+		// Prefer the system temp dir (not web-served on any standard Linux install).
+		$tmpBase = function_exists( 'get_temp_dir' ) ? rtrim( (string) get_temp_dir(), '/\\' ) : '';
+		if ( $tmpBase === '' ) {
+			$tmpBase = rtrim( sys_get_temp_dir(), '/\\' );
+		}
+
+		// Safety: confirm the temp base is writable and not under the web root.
+		$tmpBaseReal = $tmpBase !== '' ? @realpath( $tmpBase ) : false;
+		$underAbspath = $tmpBaseReal !== false
+			&& $jailRoot !== ''
+			&& strncmp(
+				str_replace( '\\', '/', (string) $tmpBaseReal ),
+				$jailRoot . '/',
+				strlen( $jailRoot ) + 1
+			) === 0;
+
+		$useSystemTmp = $tmpBaseReal !== false
+			&& ! $underAbspath
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_is_writable -- headless agent; WP_Filesystem never initialized; direct writability probe
+			&& is_writable( $tmpBaseReal );
+
+		if ( $useSystemTmp ) {
+			// Create a per-job subdirectory with restrictive permissions.
+			$quarantineDir = (string) $tmpBaseReal . '/wpmgr-extract-' . bin2hex( random_bytes( 8 ) );
+			// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_mkdir -- explicit 0700 perms; wp_mkdir_p uses 0755 which is too wide for a temp dir holding decrypted bytes
+			if ( ! @mkdir( $quarantineDir, 0700, true ) && ! is_dir( $quarantineDir ) ) {
+				// mkdir failed — fall through to the uploads fallback below.
+				$useSystemTmp = false;
+			}
+		}
+
+		if ( $useSystemTmp ) {
+			// System temp dir quarantine is ready. No .htaccess guard needed — the
+			// directory is not under the web root. The 0700 permission ensures only
+			// the web-server user (www-data) can read the per-job dir.
+			return $quarantineDir;
+		}
+
+		// Fallback: hardened uploads staging area (carries .htaccess + index.php).
+		// This path is taken only when the system temp dir is under ABSPATH or
+		// is not writable (unusual but defensively handled).
+		$stagingBase = StoragePaths::ensureHardened( 'file-extract-tmp' );
+		if ( $stagingBase === '' ) {
+			return '';
+		}
+
+		$quarantineDir = $stagingBase . '/extract-' . bin2hex( random_bytes( 8 ) );
+
+		if ( ! wp_mkdir_p( $quarantineDir ) ) {
+			return '';
+		}
+
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_chmod -- headless agent; WP_Filesystem never initialized; restricting quarantine dir permissions
+		@chmod( $quarantineDir, 0700 );
+
+		// Drop an index.php so the per-job slot is hardened independently of the
+		// base dir (the base already has .htaccess + index.php from ensureHardened).
+		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_put_contents -- headless agent; WP_Filesystem never initialized; static guard file write
+		@file_put_contents( $quarantineDir . '/index.php', "<?php\n// Silence is golden.\n", LOCK_EX );
+
+		return $quarantineDir;
+	}
 
 	/**
 	 * Check that the file is actually a .zip (extension + PK magic bytes).

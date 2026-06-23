@@ -17,7 +17,7 @@
  * Errors:
  *   { "error": { "code": <string>, "message": <string> } }
  *   Codes: invalid_path, outside_root, not_found, no_such_version,
- *          write_failed, base_unresolved, sensitive_denied.
+ *          write_failed, base_unresolved, sensitive_denied, bad_backup.
  *
  * F3: Restoring a sensitive file (wp-config.php, .env, key files, etc.) requires
  * confirm_sensitive=true (CP owner-gates it). This prevents a read/write-role
@@ -35,6 +35,9 @@
  *   - The restored path is re-jailed (realpath + strncmp) after staging the backup.
  *   - Symlinks at the destination are rejected (same guard as file_write).
  *   - The parent directory is re-jailed before rename (TOCTOU guard).
+ *   - Only Keystore AES-256-GCM envelopes are accepted (NEW-1): a .bak that does
+ *     not base64-decode to ≥ 28 bytes or whose GCM tag fails is rejected with
+ *     bad_backup. No plaintext fallback exists on 0.60+ installs.
  *
  * @package WPMgr\Agent\Commands
  */
@@ -170,12 +173,23 @@ final class FileVersionRestoreCommand implements CommandInterface {
 		// ------------------------------------------------------------------
 		// 6. Atomic restore: decrypt backup → write to temp file → rename atomically.
 		//
-		// F4: Backups written by stageBackup/stageCurrentFile are AES-256-GCM-
-		// encrypted (Keystore envelope). We decrypt here before writing to the
-		// temp file. If the file was written by an older version of the agent
-		// (pre-F4) it will NOT decode as a valid base64 Keystore envelope, in
-		// which case we fall back to treating the file content as raw plaintext
-		// so that existing unencrypted backups remain restorable.
+		// NEW-1: Strict envelope enforcement — only AES-256-GCM Keystore envelopes
+		// are accepted. The plaintext fallback that existed in earlier code has been
+		// removed. On a fresh 0.60+ install no pre-encryption .bak file can
+		// legitimately exist (every .bak is written encrypted by stageBackup /
+		// stageCurrentFile), so the fallback was dead weight that could have allowed
+		// a planted plaintext .bak to be restored.
+		//
+		// Implementation: the Keystore envelope is base64(iv[12]||tag[16]||ciphertext),
+		// so the minimum raw length after base64-decode is 28 bytes. Any .bak that
+		// does not base64-decode to ≥ 28 bytes is structurally not an envelope and is
+		// rejected before attempting decryption. A valid-looking envelope whose GCM
+		// tag does not verify is also rejected (Keystore::decrypt() throws). In both
+		// cases the error code is 'bad_backup' so the CP can surface a clear message.
+		//
+		// Trade-off: pre-0.60 plaintext .bak files are not restorable via this
+		// command. This is acceptable: .bak files are transient version history (not
+		// long-term archives), and a fresh 0.60+ install never has any plaintext .bak.
 		// ------------------------------------------------------------------
 
 		// Re-verify the target is not a symlink before write.
@@ -193,24 +207,28 @@ final class FileVersionRestoreCommand implements CommandInterface {
 			return $this->error( 'outside_root', 'write denied: parent directory is outside the jail root' );
 		}
 
-		// Read the backup file — it is AES-256-GCM-encrypted (F4).
+		// Read the backup file — it must be a Keystore AES-256-GCM envelope (NEW-1).
 		// phpcs:ignore WordPress.WP.AlternativeFunctions.file_system_operations_file_get_contents -- headless agent; WP_Filesystem never initialized; reading encrypted backup file for restore
 		$backupBytes = @file_get_contents( $realBackupFile );
 		if ( $backupBytes === false ) {
 			return $this->error( 'write_failed', 'could not read backup file for restore' );
 		}
 
-		// F4: Decrypt the Keystore envelope. Fall back to raw bytes for backward
-		// compatibility with backups created before encryption was introduced.
-		$restoreContent = $backupBytes;
-		if ( $backupBytes !== '' ) {
-			try {
-				$keystore       = new Keystore();
-				$restoreContent = $keystore->decrypt( $backupBytes );
-			} catch ( \Throwable $e ) {
-				// Not a valid ciphertext envelope (legacy plaintext backup).
-				$restoreContent = $backupBytes;
-			}
+		// NEW-1: Structural pre-check — base64-decode and verify minimum envelope length
+		// (iv[12] + tag[16] = 28 bytes minimum) before handing to Keystore::decrypt().
+		// This rejects plaintext files and truncated data with a clear error before
+		// any decryption attempt.
+		$rawCheck = base64_decode( $backupBytes, true );
+		if ( $rawCheck === false || strlen( $rawCheck ) < 28 ) {
+			return $this->error( 'bad_backup', 'backup file is not a valid encrypted envelope; only encrypted backups are restorable' );
+		}
+
+		// Decrypt the Keystore envelope. Throws on GCM tag mismatch (tampered / wrong key).
+		try {
+			$keystore       = new Keystore();
+			$restoreContent = $keystore->decrypt( $backupBytes );
+		} catch ( \Throwable $e ) {
+			return $this->error( 'bad_backup', 'backup decryption failed; the file may be tampered or the key has changed' );
 		}
 
 		$tmpPath = $parentReal . '/.wpmgr-tmp-' . bin2hex( random_bytes( 6 ) );

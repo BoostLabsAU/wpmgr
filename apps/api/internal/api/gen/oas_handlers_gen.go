@@ -19440,6 +19440,14 @@ func (s *Server) handleListAuditRequest(args [0]string, argsEscaped bool, w http
 					Name: "offset",
 					In:   "query",
 				}: params.Offset,
+				{
+					Name: "action",
+					In:   "query",
+				}: params.Action,
+				{
+					Name: "site_id",
+					In:   "query",
+				}: params.SiteID,
 			},
 			Raw: r,
 		}

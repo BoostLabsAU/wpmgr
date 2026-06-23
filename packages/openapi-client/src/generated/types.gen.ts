@@ -6677,6 +6677,16 @@ export type ListAuditData = {
   query?: {
     limit?: number;
     offset?: number;
+    /**
+     * Prefix-match filter on the `action` field. Passing `site.files.` returns every file-manager event; passing an exact action string (e.g. `site.files.delete`) also works because it is a prefix of itself. Omit to return all actions.
+     *
+     */
+    action?: string;
+    /**
+     * UUID of a specific site. When set, only entries whose `target_type` is `"site"` and `target_id` matches this UUID are returned. All per-site actions (file-manager, perf, backup, cache, security, …) write the site UUID as `target_id` with `target_type="site"`, so this filter produces a complete per-site timeline. Omit to return entries for all sites.
+     *
+     */
+    site_id?: string;
   };
   url: "/api/v1/audit";
 };

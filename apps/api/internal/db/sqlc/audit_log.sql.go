@@ -122,6 +122,66 @@ func (q *Queries) ListAuditEntries(ctx context.Context, arg ListAuditEntriesPara
 	return items, nil
 }
 
+const listAuditEntriesFiltered = `-- name: ListAuditEntriesFiltered :many
+SELECT id, tenant_id, actor_type, actor_id, action, target_type, target_id, metadata, prev_hash, hash, created_at FROM audit_log
+WHERE tenant_id = $1
+  AND ($2 = '' OR action LIKE $2 || '%')
+  AND ($3::text = '00000000-0000-0000-0000-000000000000' OR (target_type = 'site' AND target_id = $3::text))
+ORDER BY created_at ASC, id ASC
+LIMIT  $5
+OFFSET $4
+`
+
+type ListAuditEntriesFilteredParams struct {
+	TenantID     uuid.UUID   `json:"tenant_id"`
+	ActionPrefix interface{} `json:"action_prefix"`
+	SiteID       string      `json:"site_id"`
+	RowOffset    int32       `json:"row_offset"`
+	RowLimit     int32       `json:"row_limit"`
+}
+
+// Optional filters: action prefix (LIKE 'prefix%'), site_id (target_type='site'
+// AND target_id = site_id::text). Passing an empty string for action_prefix or
+// a zero UUID for site_id disables those filters respectively. RLS is still the
+// primary tenant-isolation gate; the explicit tenant_id is defense-in-depth.
+func (q *Queries) ListAuditEntriesFiltered(ctx context.Context, arg ListAuditEntriesFilteredParams) ([]AuditLog, error) {
+	rows, err := q.db.Query(ctx, listAuditEntriesFiltered,
+		arg.TenantID,
+		arg.ActionPrefix,
+		arg.SiteID,
+		arg.RowOffset,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AuditLog
+	for rows.Next() {
+		var i AuditLog
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.ActorType,
+			&i.ActorID,
+			&i.Action,
+			&i.TargetType,
+			&i.TargetID,
+			&i.Metadata,
+			&i.PrevHash,
+			&i.Hash,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listAuditEntriesForVerify = `-- name: ListAuditEntriesForVerify :many
 SELECT id, tenant_id, actor_type, actor_id, action, target_type, target_id, metadata, prev_hash, hash, created_at FROM audit_log
 WHERE tenant_id = $1

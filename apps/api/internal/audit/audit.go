@@ -401,6 +401,53 @@ func (r *Recorder) List(ctx context.Context, tenantID uuid.UUID, limit, offset i
 	return out, err
 }
 
+// Filter holds the optional narrowing criteria for ListFiltered. Zero values
+// disable the respective filter: empty ActionPrefix matches all actions; a nil
+// SiteID matches all target sites.
+type Filter struct {
+	// ActionPrefix, when non-empty, restricts results to entries whose action
+	// starts with this string (prefix match). An exact action string also works
+	// because it is a prefix of itself.
+	ActionPrefix string
+	// SiteID, when non-nil, restricts results to entries whose target_type is
+	// "site" and target_id equals this UUID (string form). All file-manager,
+	// perf, backup, and other per-site actions write their siteID as target_id
+	// with target_type="site", so this filter correctly captures the full
+	// per-site timeline without a schema change to audit_log.
+	SiteID *uuid.UUID
+}
+
+// ListFiltered returns a page of a tenant's audit entries with optional
+// action-prefix and site-id filters applied. RLS is the primary tenancy gate;
+// the explicit tenantID in the query is defense-in-depth. The hash/prev_hash
+// fields are included so the integrity badge on the web layer keeps working.
+func (r *Recorder) ListFiltered(ctx context.Context, tenantID uuid.UUID, f Filter, limit, offset int32) ([]Entry, error) {
+	// Sentinel zero UUID disables the site_id filter in the SQL (see query).
+	siteIDStr := "00000000-0000-0000-0000-000000000000"
+	if f.SiteID != nil {
+		siteIDStr = f.SiteID.String()
+	}
+	var out []Entry
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).ListAuditEntriesFiltered(ctx, sqlc.ListAuditEntriesFilteredParams{
+			TenantID:     tenantID,
+			ActionPrefix: f.ActionPrefix,
+			SiteID:       siteIDStr,
+			RowOffset:    offset,
+			RowLimit:     limit,
+		})
+		if err != nil {
+			return domain.Internal("audit_list_failed", "failed to list audit entries").WithCause(err)
+		}
+		out = make([]Entry, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, rowToEntry(row))
+		}
+		return nil
+	})
+	return out, err
+}
+
 // Verify recomputes the hash chain for a tenant and reports the first broken
 // link, if any. ok is true when the entire chain is intact.
 func (r *Recorder) Verify(ctx context.Context, tenantID uuid.UUID) (ok bool, brokenAt uuid.UUID, err error) {

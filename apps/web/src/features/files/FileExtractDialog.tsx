@@ -37,8 +37,13 @@ import {
 //   zip_bomb (422)  — "Archive exceeds size limit" (decompression bomb guard).
 //   bad_archive     — "The archive is corrupted or unreadable."
 //   not_archive     — "This file is not a recognised archive format."
-//   executable_write_denied (403) — owner gets explicit confirm; non-owner blocked.
-//   sensitive_denied (403)        — owner gets explicit confirm; non-owner blocked.
+//   executable_write_denied (403) — owner gets a combined explicit confirm; non-owner blocked.
+//   sensitive_denied (403)        — owner gets a combined explicit confirm; non-owner blocked.
+//
+// Combined confirm: when both executable and sensitive gates trigger (either
+// sequentially or simultaneously), they are coalesced into a single warning
+// block with one confirm button that sends BOTH flags. This eliminates the
+// two-round-trip confirm sequence.
 //
 // The destination path defaults to a sibling folder named after the archive
 // (e.g., "archive.zip" -> "archive"). The user can edit it before confirming.
@@ -67,6 +72,11 @@ function defaultDestPath(archivePath: string): string {
 }
 
 // Security error states tracked in the dialog.
+//
+// "combined" represents both executable AND sensitive gates firing together
+// (accumulated from two sequential denials). Hard-blocked states (zip_slip,
+// zip_bomb, bad_archive, not_archive) never get an override; non-owner
+// executable/sensitive blocks are separate.
 type BlockReason =
   | "zip_slip"
   | "zip_bomb"
@@ -74,6 +84,7 @@ type BlockReason =
   | "not_archive"
   | "executable"
   | "sensitive"
+  | "combined"      // both executable + sensitive
   | null;
 
 export function FileExtractDialog({
@@ -90,8 +101,11 @@ export function FileExtractDialog({
 
   const [destPath, setDestPath] = useState(() => defaultDestPath(archivePath));
   const [blockReason, setBlockReason] = useState<BlockReason>(null);
-  const [confirmExec, setConfirmExec] = useState(false);
-  const [confirmSens, setConfirmSens] = useState(false);
+
+  // Track which confirm flags have been accumulated from sequential denials.
+  // These are ONLY set when the user deliberately chooses to override.
+  const [pendingExec, setPendingExec] = useState(false);
+  const [pendingSens, setPendingSens] = useState(false);
 
   const extract = useExtractFileArchive(siteId, currentDirPath);
 
@@ -102,23 +116,23 @@ export function FileExtractDialog({
     if (open) {
       setDestPath(defaultDestPath(archivePath));
       setBlockReason(null);
-      setConfirmExec(false);
-      setConfirmSens(false);
+      setPendingExec(false);
+      setPendingSens(false);
       extract.reset();
     }
   }
 
-  const handleExtract = (opts?: {
-    confirmExecutableWrite?: boolean;
-    confirmSensitive?: boolean;
+  const doExtract = (opts: {
+    confirmExecutableWrite: boolean;
+    confirmSensitive: boolean;
   }) => {
     setBlockReason(null);
     extract.mutate(
       {
         archivePath,
         destPath: destPath.trim() || defaultDestPath(archivePath),
-        confirmExecutableWrite: opts?.confirmExecutableWrite ?? confirmExec,
-        confirmSensitive: opts?.confirmSensitive ?? confirmSens,
+        confirmExecutableWrite: opts.confirmExecutableWrite,
+        confirmSensitive: opts.confirmSensitive,
       },
       {
         onSuccess: () => {
@@ -135,45 +149,68 @@ export function FileExtractDialog({
           } else if (err instanceof NotArchiveError) {
             setBlockReason("not_archive");
           } else if (err instanceof ArchiveExecutableError) {
-            setBlockReason("executable");
+            // If we already had a sensitive block pending, coalesce into combined.
+            if (pendingSens) {
+              setBlockReason("combined");
+            } else {
+              setBlockReason("executable");
+            }
           } else if (err instanceof ArchiveSensitiveError) {
-            setBlockReason("sensitive");
+            // If we already had an executable block pending, coalesce into combined.
+            if (pendingExec) {
+              setBlockReason("combined");
+            } else {
+              setBlockReason("sensitive");
+            }
           }
         },
       },
     );
   };
 
-  const handleConfirmExec = () => {
-    setBlockReason(null);
-    setConfirmExec(true);
-    handleExtract({ confirmExecutableWrite: true, confirmSensitive: confirmSens });
+  const handleInitialExtract = () => {
+    doExtract({ confirmExecutableWrite: false, confirmSensitive: false });
   };
 
-  const handleConfirmSens = () => {
+  // Owner confirms the executable gate alone; immediately re-tries with that
+  // flag set. If the server then returns a sensitive denial too, the next
+  // onError coalesces into "combined".
+  const handleConfirmExec = () => {
+    setPendingExec(true);
     setBlockReason(null);
-    setConfirmSens(true);
-    handleExtract({ confirmExecutableWrite: confirmExec, confirmSensitive: true });
+    doExtract({ confirmExecutableWrite: true, confirmSensitive: pendingSens });
+  };
+
+  // Owner confirms the sensitive gate alone.
+  const handleConfirmSens = () => {
+    setPendingSens(true);
+    setBlockReason(null);
+    doExtract({ confirmExecutableWrite: pendingExec, confirmSensitive: true });
+  };
+
+  // Owner confirms BOTH gates at once (combined block, or the user just hits
+  // the combined confirm button after seeing either block first).
+  const handleConfirmBoth = () => {
+    setPendingExec(true);
+    setPendingSens(true);
+    setBlockReason(null);
+    doExtract({ confirmExecutableWrite: true, confirmSensitive: true });
   };
 
   const isBusy = extract.isPending;
-  const isSecurityBlocked =
+
+  const isHardBlocked =
     blockReason === "zip_slip" ||
     blockReason === "zip_bomb" ||
-    blockReason === "executable" ||
-    blockReason === "sensitive";
-  const isFormatError =
-    blockReason === "bad_archive" || blockReason === "not_archive";
-  const hasGenericError =
-    extract.isError &&
-    !isSecurityBlocked &&
-    !isFormatError;
+    blockReason === "bad_archive" ||
+    blockReason === "not_archive" ||
+    ((blockReason === "executable" ||
+      blockReason === "sensitive" ||
+      blockReason === "combined") &&
+      !isOwner);
 
-  // Disable extract button when a hard block is showing (zip_slip, zip_bomb,
-  // format errors, or non-owner security block).
-  const isHardBlocked =
-    (blockReason === "zip_slip" || blockReason === "zip_bomb" || isFormatError) ||
-    ((blockReason === "executable" || blockReason === "sensitive") && !isOwner);
+  const hasGenericError =
+    extract.isError && blockReason === null;
 
   return (
     <Dialog open={open} onClose={isBusy ? () => {} : onClose}>
@@ -218,6 +255,7 @@ export function FileExtractDialog({
               isBusy={isBusy}
               onConfirmExec={handleConfirmExec}
               onConfirmSens={handleConfirmSens}
+              onConfirmBoth={handleConfirmBoth}
               archivePath={archivePath}
             />
           ) : null}
@@ -245,7 +283,7 @@ export function FileExtractDialog({
           <Button
             type="button"
             disabled={isBusy || isHardBlocked}
-            onClick={() => handleExtract()}
+            onClick={handleInitialExtract}
             className="gap-1.5"
           >
             {isBusy ? (
@@ -274,6 +312,7 @@ function ExtractErrorBlock({
   isBusy,
   onConfirmExec,
   onConfirmSens,
+  onConfirmBoth,
   archivePath,
 }: {
   reason: BlockReason;
@@ -281,6 +320,7 @@ function ExtractErrorBlock({
   isBusy: boolean;
   onConfirmExec: () => void;
   onConfirmSens: () => void;
+  onConfirmBoth: () => void;
   archivePath: string;
 }) {
   // Hard blocks — no action possible.
@@ -392,31 +432,69 @@ function ExtractErrorBlock({
     );
   }
 
-  // Owner confirm flows.
-  if (reason === "executable") {
+  // ── Combined block (both executable + sensitive) ───────────────────────────
+  //
+  // Shown when both gates fired during this session (either together or
+  // sequentially). A single confirm sends both flags in one call.
+  if (reason === "combined") {
     if (!isOwner) {
       return (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-3"
-        >
-          <Lock
+        <NonOwnerBlock label="Executable and sensitive files require owner permission" />
+      );
+    }
+    return (
+      <div
+        role="alert"
+        className="flex flex-col gap-3 rounded-md border border-[var(--color-warning)]/40 bg-[var(--color-warning)]/10 p-3"
+      >
+        <div className="flex items-start gap-2">
+          <ShieldAlert
             aria-hidden="true"
-            className="mt-0.5 size-4 shrink-0 text-[var(--color-muted-foreground)]"
+            className="mt-0.5 size-4 shrink-0 text-[var(--color-warning)]"
           />
-          <div className="space-y-1">
+          <div className="space-y-1.5">
             <p className="text-sm font-medium text-[var(--color-foreground)]">
-              Executable files require owner permission
+              Archive contains executable and sensitive files
             </p>
+            <ul className="space-y-1 text-xs text-[var(--color-muted-foreground)]">
+              <li>
+                Executable files with extensions such as PHP scripts or server
+                configuration files are present. Extracting them can affect site
+                security.
+              </li>
+              <li>
+                Sensitive files such as wp-config.php, .env, or private keys
+                will be overwritten. This can alter database credentials and
+                site configuration.
+              </li>
+            </ul>
             <p className="text-xs text-[var(--color-muted-foreground)]">
-              This archive contains files with executable extensions (PHP,
-              scripts, etc.). Only a site owner may extract executable content.
+              This action will be audited.
             </p>
           </div>
         </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={isBusy}
+          onClick={onConfirmBoth}
+          className="self-start gap-1.5"
+        >
+          <ShieldAlert aria-hidden="true" className="size-4" />
+          I understand, extract anyway
+        </Button>
+      </div>
+    );
+  }
+
+  // ── Single executable block ────────────────────────────────────────────────
+  if (reason === "executable") {
+    if (!isOwner) {
+      return (
+        <NonOwnerBlock label="Executable files require owner permission" />
       );
     }
-
     return (
       <div
         role="alert"
@@ -453,30 +531,13 @@ function ExtractErrorBlock({
     );
   }
 
+  // ── Single sensitive block ─────────────────────────────────────────────────
   if (reason === "sensitive") {
     if (!isOwner) {
       return (
-        <div
-          role="alert"
-          className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-3"
-        >
-          <Lock
-            aria-hidden="true"
-            className="mt-0.5 size-4 shrink-0 text-[var(--color-muted-foreground)]"
-          />
-          <div className="space-y-1">
-            <p className="text-sm font-medium text-[var(--color-foreground)]">
-              Sensitive files require owner permission
-            </p>
-            <p className="text-xs text-[var(--color-muted-foreground)]">
-              This archive would overwrite sensitive files (wp-config.php, .env,
-              private keys). Only a site owner may perform this extraction.
-            </p>
-          </div>
-        </div>
+        <NonOwnerBlock label="Sensitive files require owner permission" />
       );
     }
-
     return (
       <div
         role="alert"
@@ -514,4 +575,28 @@ function ExtractErrorBlock({
   }
 
   return null;
+}
+
+// ── Shared non-owner block ─────────────────────────────────────────────────────
+
+function NonOwnerBlock({ label }: { label: string }) {
+  return (
+    <div
+      role="alert"
+      className="flex items-start gap-2 rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-3"
+    >
+      <Lock
+        aria-hidden="true"
+        className="mt-0.5 size-4 shrink-0 text-[var(--color-muted-foreground)]"
+      />
+      <div className="space-y-1">
+        <p className="text-sm font-medium text-[var(--color-foreground)]">
+          {label}
+        </p>
+        <p className="text-xs text-[var(--color-muted-foreground)]">
+          Only a site owner may perform this extraction.
+        </p>
+      </div>
+    </div>
+  );
 }

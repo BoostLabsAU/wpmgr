@@ -73,3 +73,18 @@ WHERE tenant_id = @tenant_id
 ORDER BY created_at DESC, id DESC
 LIMIT  @row_limit
 OFFSET @row_offset;
+
+-- name: ListStaleFileTransfers :many
+-- Returns stale file_transfer rows (created_at < cutoff) for GC.
+-- The GC worker iterates these to delete the staged object (if any) before
+-- deleting the row. Cross-tenant read path (InAgentTx / app.agent GUC).
+-- Capped at 500 rows per sweep to keep the pass short and idempotent.
+SELECT id, object_key FROM file_transfers
+WHERE created_at < @cutoff
+ORDER BY created_at ASC, id ASC
+LIMIT 500;
+
+-- name: DeleteFileTransfer :exec
+-- Deletes a single file_transfers row by id (InAgentTx). Used by the GC worker
+-- after the staged object has been deleted from object storage.
+DELETE FROM file_transfers WHERE id = @id;
