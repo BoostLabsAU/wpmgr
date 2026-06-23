@@ -32,6 +32,7 @@ type Config struct {
 	ClickHouse ClickHouseConfig `koanf:"clickhouse"`
 	SMTP       SMTPConfig       `koanf:"smtp"`
 	Uptime     UptimeConfig     `koanf:"uptime"`
+	River      RiverConfig      `koanf:"river"`
 	Autologin  AutologinConfig  `koanf:"autologin"`
 	Conn       ConnConfig       `koanf:"conn"`
 }
@@ -111,6 +112,14 @@ type SMTPConfig struct {
 
 // Enabled reports whether SMTP is configured for email alerts.
 func (s SMTPConfig) Enabled() bool { return s.Host != "" }
+
+// RiverConfig holds River queue/storage settings shared by API and worker
+// binaries.
+type RiverConfig struct {
+	// MediaSchema optionally moves media-encoder-owned jobs into a dedicated
+	// Postgres schema. Empty keeps the existing default-schema behavior.
+	MediaSchema string `koanf:"media_schema"`
+}
 
 // UptimeConfig tunes the M5 uptime monitoring: the probe cadence, the per-probe
 // HTTP timeout, the alert-evaluation cadence, and the consecutive-down threshold
@@ -378,22 +387,22 @@ func (c Config) ValidateAgentSigningKey() error {
 
 func defaults() map[string]any {
 	return map[string]any{
-		"env":                           "development",
-		"http_addr":                     ":8080",
-		"log_level":                     "info",
-		"db.host":                       "localhost",
-		"db.port":                       5432,
-		"db.user":                       "wpmgr",
-		"db.password":                   "wpmgr",
-		"db.name":                       "wpmgr",
-		"db.sslmode":                    "disable",
-		"db.migration_dsn":              "",
-		"db.allow_rls_bypass_role":      false,
-		"redis.addr":                    "localhost:6379",
-		"redis.password":                "",
-		"auth.session_secret":           "",
-		"auth.idle_timeout":             "168h", // 7 days idle
-		"auth.absolute_expiry":          "720h", // 30 days hard cap
+		"env":                      "development",
+		"http_addr":                ":8080",
+		"log_level":                "info",
+		"db.host":                  "localhost",
+		"db.port":                  5432,
+		"db.user":                  "wpmgr",
+		"db.password":              "wpmgr",
+		"db.name":                  "wpmgr",
+		"db.sslmode":               "disable",
+		"db.migration_dsn":         "",
+		"db.allow_rls_bypass_role": false,
+		"redis.addr":               "localhost:6379",
+		"redis.password":           "",
+		"auth.session_secret":      "",
+		"auth.idle_timeout":        "168h", // 7 days idle
+		"auth.absolute_expiry":     "720h", // 30 days hard cap
 		// ADR-056: WebAuthn relying party defaults (hosted instance).
 		// Self-hosted operators override via WPMGR_AUTH_WEBAUTHN_RPID etc.
 		"auth.webauthn_rpid":            "manage.wpmgr.app",
@@ -445,13 +454,14 @@ func defaults() map[string]any {
 		"uptime.cron_kick_interval":     "5m",
 		"uptime.cron_kick_timeout":      "5s",
 		"uptime.cron_kick_concurrency":  10,
-		"autologin.require_2fa_step_up":    false,
-		"conn.degrade_after":                "300s",
-		"conn.degrade_miss_threshold":       3,
-		"conn.disconnect_after":             "900s",
-		"conn.active_verify":                true,
-		"conn.verify_timeout":               "8s",
-		"conn.verify_concurrency":           8,
+		"river.media_schema":            "",
+		"autologin.require_2fa_step_up": false,
+		"conn.degrade_after":            "300s",
+		"conn.degrade_miss_threshold":   3,
+		"conn.disconnect_after":         "900s",
+		"conn.active_verify":            true,
+		"conn.verify_timeout":           "8s",
+		"conn.verify_concurrency":       8,
 	}
 }
 
@@ -530,6 +540,8 @@ func mapEnvKey(k string) string {
 		return "smtp." + strings.TrimPrefix(k, "smtp_")
 	case strings.HasPrefix(k, "uptime_"):
 		return "uptime." + strings.TrimPrefix(k, "uptime_")
+	case strings.HasPrefix(k, "river_"):
+		return "river." + strings.TrimPrefix(k, "river_")
 	case strings.HasPrefix(k, "autologin_"):
 		return "autologin." + strings.TrimPrefix(k, "autologin_")
 	case strings.HasPrefix(k, "conn_"):

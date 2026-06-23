@@ -60,6 +60,10 @@ final class CacheConfigAndRolesTest extends TestCase
         $this->assertSame(['/cart'], $out['bypass_urls']);
     }
 
+    /**
+     * The lean drop-in array carries the runtime ignore list and operator
+     * include-cookies, but omits server-only keys such as enabled.
+     */
     public function test_dropin_array_carries_ignore_list(): void
     {
         $c = new CacheConfig(['cache_mobile' => true, 'include_cookies' => ['geo']]);
@@ -71,7 +75,19 @@ final class CacheConfigAndRolesTest extends TestCase
         $this->assertContains('gclid', $arr['ignore_queries']);
         // The lean drop-in array must NOT carry server-only keys.
         $this->assertArrayNotHasKey('enabled', $arr);
-        $this->assertArrayNotHasKey('bypass_urls', $arr);
+    }
+
+    /**
+     * The drop-in array exposes bypass_urls so the pre-WP fast path can skip
+     * serving a warmed cache file for URLs the operator marked non-cacheable.
+     */
+    public function test_dropin_array_carries_bypass_urls_for_fast_path(): void
+    {
+        $c   = new CacheConfig(['bypass_urls' => ['/cart', '/checkout']]);
+        $arr = $c->toDropinArray();
+
+        $this->assertArrayHasKey('bypass_urls', $arr);
+        $this->assertSame(['/cart', '/checkout'], $arr['bypass_urls']);
     }
 
     /**

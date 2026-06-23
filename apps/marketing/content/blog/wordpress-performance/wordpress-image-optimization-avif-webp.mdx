@@ -1,0 +1,66 @@
+---
+title: "WordPress Image Optimization: AVIF and WebP in Practice"
+description: "AVIF and WebP reduce image file size by 30 to 60% compared to JPEG. Learn how they differ, which browsers support them, and how to convert your WordPress media library."
+category: "wordpress-performance"
+date: "2026-06-17"
+author: "WPMgr Team"
+tags: ["performance", "images", "avif", "webp"]
+featureSlug: "media-optimizer"
+solutionSlug: "wordpress-performance"
+---
+
+Images account for the largest share of page weight on most WordPress sites. The average WordPress page loads several megabytes of images. Switching to modern formats is one of the highest-leverage optimisations you can make because it requires no change to your design, content, or workflow.
+
+## AVIF vs WebP: what is the difference
+
+Both AVIF and WebP are modern image formats designed for the web. Both outperform JPEG and PNG at the same visual quality.
+
+**WebP** was developed by Google and is now supported by every major browser. At the same quality setting, WebP is typically 25 to 35% smaller than JPEG. For images with transparency (previously PNG territory), WebP is often 50 to 70% smaller than PNG.
+
+**AVIF** is derived from the AV1 video codec. It achieves better compression than WebP at the same visual quality, typically 30 to 50% smaller than JPEG. It also handles high dynamic range images better than WebP. Browser support is now near-universal: Chrome, Firefox, Safari, and Edge all support AVIF.
+
+The practical difference: AVIF gives you smaller files, but encoding is slower and requires more CPU than WebP. For a media library with thousands of images, this matters for the conversion time. For individual images, the quality improvement is usually worth it.
+
+## How WordPress serves next-gen images
+
+WordPress itself does not convert images to AVIF or WebP. The conversion has to happen through a plugin, a build step, or a CDN.
+
+The correct pattern is to serve the most efficient format the browser supports, with a fallback chain. This is done with the `<picture>` element:
+
+```html
+<picture>
+  <source type="image/avif" srcset="photo.avif" />
+  <source type="image/webp" srcset="photo.webp" />
+  <img src="photo.jpg" alt="Description" width="800" height="600" />
+</picture>
+```
+
+Browsers that support AVIF fetch `photo.avif`. Browsers that support only WebP fetch `photo.webp`. Older browsers fall back to the JPEG.
+
+## Converting an existing media library
+
+The challenge with an existing site is that you may have hundreds or thousands of images that need conversion. Options:
+
+**CDN-based conversion.** Some CDNs convert images on the fly when a browser requests a WebP or AVIF version. This works but adds latency on the first request for each image and depends on the CDN staying in front of your images.
+
+**Server-side conversion at upload time.** The cleanest approach for new images: convert JPEG/PNG to WebP or AVIF as soon as a file is uploaded to WordPress, store the converted version alongside the original, and serve it from WordPress's standard media URL. No CDN dependency.
+
+**Batch conversion of the existing library.** For the backlog of existing images, a one-time batch job runs through the media library and converts each file.
+
+WPMgr's Media Optimizer handles all three for images served from WordPress: new uploads are converted on the way in, and a batch job processes the existing library. The originals are preserved, and the conversion is fully reversible: you can restore the original file for any image at any time.
+
+## What to keep in JPEG or PNG
+
+Not every image benefits from conversion. Exceptions:
+
+- Very small images (icons under 1KB) where format overhead matters
+- Images that are already highly optimised (the gain may be under 5%)
+- SVG files, which are already vector-based and should stay as SVG
+
+## Verifying the improvement
+
+After converting your media library, verify the results with the Network tab in browser developer tools. Sort by size and confirm that image requests are serving AVIF or WebP (check the Content-Type response header). Also run a before-and-after with Google PageSpeed Insights to see the LCP impact.
+
+WPMgr's Real User Monitoring shows LCP trends from real visitors, so you can see whether the media conversion improved the 75th-percentile LCP across your actual audience.
+
+For more on the Media Optimizer, see the [Media Optimizer feature page](/features/media-optimizer/). For the full performance picture, see [how to speed up WordPress](/solutions/wordpress-performance/).

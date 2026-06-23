@@ -172,6 +172,10 @@ final class CacheConfig
             // three Woo cart/session patterns are moved to the ignore set so they
             // neither bypass nor key the cache.
             'bypass_cookies'        => Cacheability::effectiveBypassCookies($this->bypassCookies, $wooActive),
+            // URL substrings that bypass the cache. Inlined into the drop-in so the
+            // pre-WP fast path can reject already-warmed cache files for URLs the
+            // operator marked as non-cacheable.
+            'bypass_urls'           => $this->bypassUrls,
             'woo_ignore_cookies'    => $wooActive ? Cacheability::WOO_SESSION_COOKIES : [],
             'ignore_queries'        => MarketingParams::ignoreList(),
             'woo_cacheable_session' => $this->wooCacheableSession,

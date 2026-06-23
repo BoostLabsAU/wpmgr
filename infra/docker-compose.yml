@@ -180,6 +180,7 @@ services:
       WPMGR_S3_ACCESS_KEY: ${WPMGR_S3_ACCESS_KEY:-wpmgr}
       WPMGR_S3_SECRET_KEY: ${WPMGR_S3_SECRET_KEY:-wpmgr-dev-secret}
       WPMGR_S3_FORCE_PATH_STYLE: "true"
+      WPMGR_RIVER_MEDIA_SCHEMA: ${WPMGR_RIVER_MEDIA_SCHEMA:-media_encoder}
       WPMGR_CLICKHOUSE_ADDR: clickhouse:9000
       WPMGR_CLICKHOUSE_DB: ${WPMGR_CLICKHOUSE_DB:-wpmgr_metrics}
       WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT: ${WPMGR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-lgtm:4318}
@@ -216,9 +217,8 @@ services:
   #
   # It connects to the SAME Postgres + object storage as the api (it runs under
   # the app.agent RLS GUC and moves bytes via presigned URLs — no extra grants).
-  # It registers a River worker on the bounded `media_encode` queue; the api
-  # registers that same queue with ZERO workers (insert-only), so encode jobs
-  # the api enqueues are only ever executed here.
+  # It registers River workers for encoder-owned queues; the api only inserts
+  # those jobs, so media work is only ever executed here.
   media-encoder:
     build:
       context: ..
@@ -237,6 +237,7 @@ services:
       WPMGR_DB_PASSWORD: ${WPMGR_DB_APP_PASSWORD:-wpmgr-app-dev-secret}
       WPMGR_DB_NAME: ${WPMGR_DB_NAME:-wpmgr}
       WPMGR_DB_SSLMODE: ${WPMGR_DB_SSLMODE:-disable}
+      WPMGR_DB_MIGRATION_DSN: postgres://${WPMGR_DB_OWNER_USER:-wpmgr}:${WPMGR_DB_OWNER_PASSWORD:-wpmgr}@postgres:5432/${WPMGR_DB_NAME:-wpmgr}?sslmode=${WPMGR_DB_SSLMODE:-disable}
       WPMGR_ALLOW_RLS_BYPASS_ROLE: "false"
       # Object storage — identical to the api. Presigned URLs the encoder mints
       # must be reachable from the agent on the WP host (override via .env when
@@ -247,6 +248,7 @@ services:
       WPMGR_S3_ACCESS_KEY: ${WPMGR_S3_ACCESS_KEY:-wpmgr}
       WPMGR_S3_SECRET_KEY: ${WPMGR_S3_SECRET_KEY:-wpmgr-dev-secret}
       WPMGR_S3_FORCE_PATH_STYLE: "true"
+      WPMGR_RIVER_MEDIA_SCHEMA: ${WPMGR_RIVER_MEDIA_SCHEMA:-media_encoder}
       # CP signing key: required to dispatch the signed media_apply command back
       # to the agent. Share the same key the api uses (.env override in prod).
       WPMGR_AGENT_SIGNING_PRIVATE_KEY: ${WPMGR_AGENT_SIGNING_PRIVATE_KEY:-}
