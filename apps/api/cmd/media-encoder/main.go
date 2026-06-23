@@ -33,12 +33,13 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
-	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/encoder"
+	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
 	mediaworker "github.com/mosamlife/wpmgr/apps/api/internal/media/worker"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot/capture"
 	siteevents "github.com/mosamlife/wpmgr/apps/api/internal/site/events"
@@ -58,6 +59,8 @@ func main() {
 	}
 }
 
+// run boots the media-encoder: loads config, ensures the isolated River schema
+// when configured, wires workers, and starts the health/drain server.
 func run() error {
 	cfg, err := config.Load(os.Getenv("WPMGR_CONFIG_FILE"))
 	if err != nil {
@@ -68,6 +71,19 @@ func run() error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	mediaSchema, err := riverutil.NormalizeSchema(cfg.River.MediaSchema)
+	if err != nil {
+		return err
+	}
+	// Log the resolved media River schema. The encoder polls this schema while
+	// the API inserts into it; a mismatch silently strands jobs, so emitting it
+	// on each process makes an operator eyeball-diff trivial.
+	mediaSchemaLog := mediaSchema
+	if riverutil.IsDefaultSchema(mediaSchema) {
+		mediaSchemaLog = "public"
+	}
+	logger.Info("media River schema resolved", slog.String("media_river_schema", mediaSchemaLog))
 
 	if !cfg.S3.Enabled() {
 		return errEnv("WPMGR_S3_BUCKET is required: the media-encoder transfers bytes via presigned object storage")
@@ -82,6 +98,17 @@ func run() error {
 	defer pool.Close()
 	if err := pool.EnforceRLSRole(ctx, logger, cfg.DB.AllowRLSBypassRole); err != nil {
 		return err
+	}
+	if !riverutil.IsDefaultSchema(mediaSchema) {
+		migPool, err := db.Connect(ctx, cfg.DB.MigrateDSN())
+		if err != nil {
+			return err
+		}
+		if err := riverutil.EnsureSchema(ctx, migPool.Pool, mediaSchema, cfg.DB.User); err != nil {
+			migPool.Close()
+			return err
+		}
+		migPool.Close()
 	}
 
 	// Object storage (presigned URLs only — never a live GetObject).
@@ -190,6 +217,7 @@ func run() error {
 
 	client, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
 		Logger: logger,
+		Schema: mediaSchema,
 		Queues: map[string]river.QueueConfig{
 			model.MediaEncodeQueue:       {MaxWorkers: workers},
 			mediafont.FontTranscodeQueue: {MaxWorkers: workers * 2}, // pure-Go, more concurrency is fine
@@ -234,10 +262,9 @@ func run() error {
 	// open there to keep this cold-started instance alive until the media_encode
 	// queue drains. Self-hosters running this via docker-compose (the `media`
 	// profile) run it always-on and never call /internal/drain.
-	// Pass both queues to the drain handler so it counts live screenshot capture
-	// jobs alongside media_encode jobs. The encoder must stay warm while either queue
-	// has pending work.
-	healthSrv := startHealthServer(logger, pool, model.MediaEncodeQueue, screenshot.ScreenshotQueue)
+	// Pass encoder-owned queues to the drain handler. The encoder must stay warm
+	// while any queue it processes has pending work.
+	healthSrv := startHealthServer(logger, pool, mediaSchema, model.MediaEncodeQueue, screenshot.ScreenshotQueue, mediafont.FontTranscodeQueue)
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received, draining encode queue")
@@ -292,7 +319,7 @@ type drainConfig struct {
 // serves the Cloud Run startup/liveness probe (200 on every other path) and the
 // /internal/drain wake endpoint. Runs in a goroutine so it never blocks the
 // queue. pool/queues drive the drain handler's live-job count.
-func startHealthServer(logger *slog.Logger, pool *db.Pool, queues ...string) *http.Server {
+func startHealthServer(logger *slog.Logger, pool *db.Pool, mediaSchema string, queues ...string) *http.Server {
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -302,7 +329,7 @@ func startHealthServer(logger *slog.Logger, pool *db.Pool, queues ...string) *ht
 		poll:    drainPollInterval,
 		quiet:   drainQuietPeriod,
 		maxHold: drainMaxHold,
-		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, queues...) },
+		count:   func(ctx context.Context) (int, error) { return liveEncodeJobs(ctx, pool, mediaSchema, queues...) },
 		logger:  logger,
 		sem:     make(chan struct{}, maxConcurrentDrains),
 	}))
@@ -405,14 +432,29 @@ func holdUntilDrained(ctx context.Context, cfg drainConfig) (bool, string) {
 
 // liveEncodeJobs counts jobs in any of the given queues that need an awake encoder:
 // available, running, or retryable. Mirrors the CP waker's query so both sides agree.
-// Accepts multiple queues so both media_encode and site_screenshot are counted together.
-func liveEncodeJobs(ctx context.Context, pool *db.Pool, queues ...string) (int, error) {
-	const q = `SELECT count(*) FROM river_job WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+// Accepts multiple queues so every encoder-owned queue can keep the process alive.
+func liveEncodeJobs(ctx context.Context, pool *db.Pool, mediaSchema string, queues ...string) (int, error) {
+	q, err := liveEncodeJobsQuery(mediaSchema)
+	if err != nil {
+		return 0, err
+	}
 	var n int
 	if err := pool.QueryRow(ctx, q, queues).Scan(&n); err != nil {
 		return 0, err
 	}
 	return n, nil
+}
+
+// liveEncodeJobsQuery builds the schema-aware drain query used by the encoder
+// health endpoint. It counts available, running, and retryable jobs across the
+// encoder-owned queues so /internal/drain keeps the instance alive until the
+// work actually finishes.
+func liveEncodeJobsQuery(mediaSchema string) (string, error) {
+	table, err := riverutil.QualifiedTable(mediaSchema, "river_job")
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf(`SELECT count(*) FROM %s WHERE queue = ANY($1) AND state IN ('available','running','retryable')`, table), nil
 }
 
 // writeDrainResult writes the small JSON drain summary (best-effort).
@@ -422,6 +464,9 @@ func writeDrainResult(w http.ResponseWriter, drained bool, reason string) {
 	_, _ = fmt.Fprintf(w, `{"drained":%t,"reason":%q}`, drained, reason)
 }
 
+// encodeWorkerCount returns the configured media_encode concurrency, bounded
+// between 1 and twice the CPU count. The default is tuned for multi-vCPU
+// encoder instances where throughput comes from parallel workers.
 func encodeWorkerCount() int {
 	if s := os.Getenv("WPMGR_MEDIA_ENCODE_WORKERS"); s != "" {
 		if v := atoiClamp(s, 1, runtime.NumCPU()*2); v > 0 {
@@ -431,6 +476,8 @@ func encodeWorkerCount() int {
 	return defaultEncodeWorkers
 }
 
+// atoiClamp parses a non-negative integer and clamps it to [lo, hi]. It
+// returns 0 for non-numeric input so callers can fall back to a default.
 func atoiClamp(s string, lo, hi int) int {
 	n := 0
 	for _, c := range s {
@@ -455,14 +502,20 @@ func (disabledApply) MediaApply(_ context.Context, _ uuid.UUID, _ string, _ agen
 	return agentcmd.MediaApplyResponse{}, errEnv("media_apply disabled: no CP signing key configured")
 }
 
+// newLogger builds a JSON logger at the configured level for production encoder
+// output.
 func newLogger(cfg config.Config) *slog.Logger {
 	level := slog.LevelInfo
 	_ = level.UnmarshalText([]byte(cfg.LogLevel))
 	return slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level}))
 }
 
+// envError is a typed configuration error so missing/invalid environment values
+// are distinguishable from runtime failures.
 type envError string
 
 func (e envError) Error() string { return string(e) }
 
+// errEnv wraps a message in envError so boot can report a clear fatal config
+// problem.
 func errEnv(msg string) error { return envError(msg) }

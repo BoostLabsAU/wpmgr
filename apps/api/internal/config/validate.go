@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"strings"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
 )
 
 // validateWebAuthnOrigins checks that every WPMGR_AUTH_WEBAUTHN_RPORIGINS entry
@@ -128,6 +130,16 @@ func Validate(cfg Config) []Issue {
 		if issue := validateWebAuthnOrigins(cfg.Auth.WebAuthnRPOrigins); issue != nil {
 			issues = append(issues, *issue)
 		}
+	}
+
+	// 5. River media schema must be a simple Postgres identifier when set.
+	// Reported here so an invalid value parks in readyz-degraded alongside the
+	// other config problems, rather than crash-looping later at River bootstrap.
+	if _, err := riverutil.NormalizeSchema(cfg.River.MediaSchema); err != nil {
+		issues = append(issues, Issue{
+			Name:   "WPMGR_RIVER_MEDIA_SCHEMA",
+			Reason: "must be a simple Postgres identifier: letters, digits, and underscores, not starting with a digit",
+		})
 	}
 
 	return issues
