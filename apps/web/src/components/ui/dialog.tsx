@@ -11,18 +11,24 @@ import { dur, ease, fade, scaleIn } from "@/lib/motion-presets";
 // scroll but the content panel overflowed a viewport-tall dialog past the
 // top and bottom with no way to reach clipped content. Radix provides
 // scroll-lock, focus-trap, ESC handling, and ARIA semantics; we add
-// scrollable content and keep the framer-motion enter/exit animations via
-// `forceMount` + `AnimatePresence`.
+// scrollable content and keep the motion enter/exit animations via
+// `AnimatePresence`.
 //
 // Public API — identical to the previous implementation so all 24 call
 // sites compile without changes.
 //
-// Exit animation: Radix unmounts Portal content immediately when `open`
-// becomes false. To preserve the exit animation, `Dialog` passes `open`
-// into a context; `DialogContent` reads it, wraps its tree in
-// `AnimatePresence`, and gates on the boolean. When `open` is false the
-// exit variants animate out and then `AnimatePresence` removes the subtree
-// from the DOM at the end of the transition.
+// Exit animation fix (overlay-leak bug #99): the previous implementation used
+// `forceMount` on the Portal so it remained in the DOM permanently. Radix
+// Dialog v1.1+ removes the body scroll-lock and pointer-events guard when
+// `open` goes false — but with `forceMount` the Portal element stays in the
+// DOM, and on some code-paths Radix keeps the lock because it still sees a
+// mounted Portal. The fix is three-part:
+//   1. Remove `forceMount` from the Portal so Radix fully unmounts it (and
+//      cleans up its body guards) once the exit animation finishes.
+//   2. Move `AnimatePresence` OUTSIDE the Portal so the exit animation can
+//      play while the Portal (and its Radix state) is still alive.
+//   3. Add a mount-time effect to defensively clear any residual body styles
+//      so a component that unmounts mid-close can never leave the page broken.
 //
 // Scroll fix: the content panel is capped at `max-h-[calc(100dvh-2rem)]`
 // and scrolls internally with `overflow-y-auto overscroll-contain`. `dvh`
@@ -36,6 +42,24 @@ import { dur, ease, fade, scaleIn } from "@/lib/motion-presets";
 // ---------------------------------------------------------------------------
 
 const DialogOpenContext = React.createContext<boolean>(false);
+
+// ---------------------------------------------------------------------------
+// Defensive cleanup — clears Radix's residual body pointer-events / overflow
+// styles if a dialog unmounts without completing its close sequence (e.g.
+// the parent conditionally removes the Dialog element before the exit
+// animation finishes). Called on unmount of DialogContent.
+// ---------------------------------------------------------------------------
+
+function clearBodyLock() {
+  // Radix Dialog sets pointer-events: none and overflow: hidden on document.body.
+  // Clear both so a prematurely-unmounted dialog can never leave the page frozen.
+  if (typeof document === "undefined") return;
+  document.body.style.removeProperty("pointer-events");
+  document.body.style.removeProperty("overflow");
+  // Radix also adds a data attribute it uses to track open dialogs.
+  // Remove it so the lock counter is consistent.
+  document.body.removeAttribute("data-scroll-locked");
+}
 
 // ---------------------------------------------------------------------------
 // Dialog — controlled root
@@ -82,22 +106,30 @@ export function DialogContent({
   className,
   children,
 }: DialogContentProps) {
-  // Read `open` from the context set by <Dialog> so AnimatePresence can key
-  // on it and the exit animation plays before the Portal removes the subtree.
+  // Read `open` from the context set by <Dialog>.
   const open = React.useContext(DialogOpenContext);
 
+  // Defensive cleanup on unmount: if the component tree is torn down before
+  // the exit animation completes (e.g. a route navigation while a dialog is
+  // open), Radix may leave pointer-events:none on the body. Clear it.
+  React.useEffect(() => {
+    return () => {
+      clearBodyLock();
+    };
+  }, []);
+
   return (
-    // forceMount: the Portal stays in the DOM at all times so AnimatePresence
-    // can run the exit animation before Radix clears the content. When the
-    // AnimatePresence exit finishes, the motion elements are removed and the
-    // Portal is empty (but still mounted as a zero-content div).
-    <RadixDialog.Portal forceMount>
-      <AnimatePresence>
-        {open ? (
-          // Overlay: the fixed centering container + scrim backdrop.
-          // RadixDialog.Overlay's `asChild` forwards Radix's data-state to
-          // the motion.div while framer-motion drives the opacity transition.
-          <RadixDialog.Overlay asChild forceMount>
+    // AnimatePresence is OUTSIDE the Portal so the exit animation plays while
+    // the Portal (and Radix's open-state bookkeeping) is still alive. When
+    // `open` is false, AnimatePresence runs the exit variant; once finished,
+    // the Portal unmounts and Radix cleanly releases its body guards.
+    <AnimatePresence>
+      {open ? (
+        <RadixDialog.Portal key="dialog-portal">
+          {/* Overlay: the fixed centering container + scrim backdrop.
+              RadixDialog.Overlay's `asChild` forwards Radix's data-state to
+              the motion.div while framer-motion drives the opacity transition. */}
+          <RadixDialog.Overlay asChild>
             <motion.div
               key="dialog-overlay"
               variants={fade}
@@ -114,7 +146,6 @@ export function DialogContent({
                   motion.div so ARIA attributes land on the visible element. */}
               <RadixDialog.Content
                 asChild
-                forceMount
                 aria-labelledby={ariaLabelledBy}
                 aria-describedby={ariaDescribedBy}
                 // Stop panel clicks from bubbling to the overlay and
@@ -152,9 +183,9 @@ export function DialogContent({
               </RadixDialog.Content>
             </motion.div>
           </RadixDialog.Overlay>
-        ) : null}
-      </AnimatePresence>
-    </RadixDialog.Portal>
+        </RadixDialog.Portal>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

@@ -20,8 +20,11 @@ package backup
 // All tests use in-memory fakes and a deterministic fakeClock; no database.
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -625,5 +628,97 @@ func TestScheduler_24hSimulation_ExactlyOnePerDay(t *testing.T) {
 	repo.mu.Unlock()
 	if advCount != 1 {
 		t.Errorf("24h simulation: schedule advanced %d times, want 1", advCount)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: Site lookup error is logged and schedule is not claimed (#96)
+// ---------------------------------------------------------------------------
+
+// fakeSitesError is a SiteLookup that always returns an error from
+// GetBackupSiteInfo. Used to simulate a site that cannot be resolved during
+// the scheduler's nextAt pre-computation pass.
+type fakeSitesError struct{ err error }
+
+func (s fakeSitesError) GetBackupSiteInfo(_ context.Context, _, _ uuid.UUID) (SiteInfo, error) {
+	return SiteInfo{}, s.err
+}
+func (s fakeSitesError) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+	return nil, nil
+}
+
+// TestClaimDueSchedules_SiteLookupError_LoggedAndSkipped verifies that when
+// GetBackupSiteInfo returns an error for a due schedule:
+//  1. ClaimDueSchedules does NOT return an error (the failure is per-schedule
+//     so the scheduler tick continues).
+//  2. The schedule is not claimed (returned slice is empty) — it stays due for
+//     the next tick.
+//  3. A warning is emitted to the slog logger so the failure is never silent.
+//
+// This is the regression test for GitHub issue #96: the original code had a
+// bare `continue` with no log, making site-lookup failures invisible in prod.
+func TestClaimDueSchedules_SiteLookupError_LoggedAndSkipped(t *testing.T) {
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+	tenantID, siteID := uuid.New(), uuid.New()
+	schedID := uuid.New()
+
+	repo := newSchedulerTestRepo()
+	repo.addSchedule(Schedule{
+		ID:        schedID,
+		TenantID:  tenantID,
+		SiteID:    siteID,
+		Cadence:   CadenceDaily,
+		RunHour:   11,
+		RunMinute: 59,
+		Enabled:   true,
+		NextRunAt: now.Add(-time.Minute), // due
+	})
+
+	lookupErr := fmt.Errorf("site not found in DB")
+
+	// Redirect the default slog logger to an in-memory buffer so we can verify
+	// the warning is emitted.
+	var logBuf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{
+		Level: slog.LevelWarn,
+	})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	svc := &Service{
+		repo:  repo,
+		sites: fakeSitesError{err: lookupErr},
+		clock: fakeClock{t: now},
+	}
+
+	claimed, err := svc.ClaimDueSchedules(context.Background())
+
+	// 1. ClaimDueSchedules must not return an error — site lookup failure is
+	//    per-schedule; the tick itself succeeds (skips the unresolvable schedule).
+	if err != nil {
+		t.Fatalf("ClaimDueSchedules must not return an error on site lookup failure, got: %v", err)
+	}
+
+	// 2. No schedules are claimed — the one due schedule has no nextAt entry so
+	//    ClaimAndAdvanceDueSchedules skips it.
+	if len(claimed) != 0 {
+		t.Errorf("claimed = %d schedules, want 0 (unresolvable site must be skipped)", len(claimed))
+	}
+
+	repo.mu.Lock()
+	adv := repo.claimedCount[schedID]
+	repo.mu.Unlock()
+	if adv != 0 {
+		t.Errorf("schedule advanced %d times, want 0", adv)
+	}
+
+	// 3. A warning must be present in the log output.
+	logStr := logBuf.String()
+	if !strings.Contains(logStr, "backup_scheduler") {
+		t.Errorf("expected 'backup_scheduler' warning in log output, got: %q", logStr)
+	}
+	if !strings.Contains(logStr, schedID.String()) {
+		t.Errorf("expected schedule_id %s in log output, got: %q", schedID, logStr)
 	}
 }

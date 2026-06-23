@@ -21,6 +21,10 @@ type Repo interface {
 	CreateRunWithTasks(ctx context.Context, in CreateRunInput, tasks []NewTask) (Run, []Task, error)
 	GetRun(ctx context.Context, tenantID, runID uuid.UUID) (Run, error)
 	ListRuns(ctx context.Context, tenantID uuid.UUID, limit, offset int32) ([]Run, error)
+	// ListRunSummaries returns runs with pre-computed task aggregate counts
+	// (task_count, succeeded_count, failed_count, site_count) in a single query.
+	// Used by the list endpoint to avoid N+1 per-run task fetches.
+	ListRunSummaries(ctx context.Context, tenantID uuid.UUID, limit, offset int32) ([]RunSummary, error)
 	ListTasks(ctx context.Context, tenantID, runID uuid.UUID) ([]Task, error)
 	GetTask(ctx context.Context, tenantID, taskID uuid.UUID) (Task, error)
 
@@ -136,6 +140,56 @@ func (r *pgRepo) ListRuns(ctx context.Context, tenantID uuid.UUID, limit, offset
 		return nil
 	})
 	return out, err
+}
+
+func (r *pgRepo) ListRunSummaries(ctx context.Context, tenantID uuid.UUID, limit, offset int32) ([]RunSummary, error) {
+	var out []RunSummary
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).ListUpdateRunsWithCounts(ctx, sqlc.ListUpdateRunsWithCountsParams{
+			TenantID:  tenantID,
+			RowLimit:  limit,
+			RowOffset: offset,
+		})
+		if err != nil {
+			return domain.Internal("update_run_list_failed", "failed to list update runs with counts").WithCause(err)
+		}
+		out = make([]RunSummary, 0, len(rows))
+		for _, row := range rows {
+			s := RunSummary{
+				Run:            toRunFromCounts(row),
+				TaskCount:      row.TaskCount,
+				SucceededCount: row.SucceededCount,
+				FailedCount:    row.FailedCount,
+				SiteCount:      row.SiteCount,
+			}
+			out = append(out, s)
+		}
+		return nil
+	})
+	return out, err
+}
+
+// toRunFromCounts converts a ListUpdateRunsWithCountsRow (flat struct with run
+// fields + aggregate counts) to a Run. The count fields are handled separately
+// by the caller.
+func toRunFromCounts(r sqlc.ListUpdateRunsWithCountsRow) Run {
+	out := Run{
+		ID:        r.ID,
+		TenantID:  r.TenantID,
+		Status:    r.Status,
+		DryRun:    r.DryRun,
+		CreatedAt: r.CreatedAt,
+		UpdatedAt: r.UpdatedAt,
+	}
+	if r.CreatedBy.Valid {
+		id := uuid.UUID(r.CreatedBy.Bytes)
+		out.CreatedBy = &id
+	}
+	if r.ScheduledAt.Valid {
+		t := r.ScheduledAt.Time
+		out.ScheduledAt = &t
+	}
+	return out
 }
 
 func (r *pgRepo) ListTasks(ctx context.Context, tenantID, runID uuid.UUID) ([]Task, error) {

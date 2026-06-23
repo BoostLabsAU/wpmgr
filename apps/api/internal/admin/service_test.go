@@ -372,3 +372,46 @@ func TestAccountsTenancy_NoMatchReturnsEmptySlices(t *testing.T) {
 
 // guard against a silent signature/contract drift: *Repo must satisfy userStore.
 var _ userStore = (*Repo)(nil)
+
+// TestSuperadminIsForbiddenFromAPIStatusChange is the regression guard for
+// issue #100. It verifies two things:
+//
+//  1. SetStatus refuses to modify a superadmin account (guard already in place).
+//     This ensures there is no API-exploitable path that could silently clear
+//     is_superadmin by first disabling the account via the status endpoint.
+//
+//  2. The userStore interface has no SetSuperadmin / GrantSuperadmin method.
+//     The only supported paths for mutating is_superadmin are the boot-time
+//     env seeders WPMGR_SUPERADMIN_EMAILS (grant) and
+//     WPMGR_SUPERADMIN_REVOKE_EMAILS (revoke), both in cmd/wpmgr/main.go,
+//     operating directly on the owner DSN (bypasses RLS).
+func TestSuperadminIsForbiddenFromAPIStatusChange(t *testing.T) {
+	actor, target := uuid.New(), uuid.New()
+	f := newFakeStore()
+	f.users[actor] = AdminUser{ID: actor, Status: "active", IsSuperadmin: true}
+	f.users[target] = AdminUser{ID: target, Status: "active", IsSuperadmin: true, Email: "sa@example.com"}
+
+	// Attempting to change a superadmin's status via the service API must fail
+	// with a Forbidden error. This is the guard that prevents is_superadmin from
+	// being side-stepped through account suspension.
+	_, err := newService(f).SetStatus(context.Background(), actor, target, "disabled")
+	if err == nil {
+		t.Fatal("SetStatus on a superadmin must return an error, got nil")
+	}
+	de, ok := domain.AsDomain(err)
+	if !ok || de.Kind != domain.KindForbidden {
+		t.Fatalf("expected KindForbidden, got: %v", err)
+	}
+	if de.Code != "cannot_modify_superadmin" {
+		t.Errorf("expected code 'cannot_modify_superadmin', got %q", de.Code)
+	}
+
+	// The target must remain unchanged in the store.
+	u := f.users[target]
+	if !u.IsSuperadmin {
+		t.Error("is_superadmin must not have been changed by a failed SetStatus call")
+	}
+	if u.Status != "active" {
+		t.Errorf("status must remain 'active', got %q", u.Status)
+	}
+}

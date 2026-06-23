@@ -16,8 +16,20 @@ import { buttonVariants } from "./button";
 // API mirrors the Dialog component for consistency: controlled via `open`
 // + `onOpenChange`. Sub-components exported individually so callers can
 // assemble the confirm/cancel button pair with their own copy.
+//
+// Overlay-leak fix (#99): same three-part fix as Dialog —
+//   1. No `forceMount` on the Portal.
+//   2. `AnimatePresence` outside the Portal.
+//   3. Defensive body-lock cleanup on unmount.
 
 const AlertDialogOpenContext = React.createContext<boolean>(false);
+
+function clearBodyLock() {
+  if (typeof document === "undefined") return;
+  document.body.style.removeProperty("pointer-events");
+  document.body.style.removeProperty("overflow");
+  document.body.removeAttribute("data-scroll-locked");
+}
 
 // ---------------------------------------------------------------------------
 // Root
@@ -51,11 +63,17 @@ export interface AlertDialogContentProps {
 export function AlertDialogContent({ className, children }: AlertDialogContentProps) {
   const open = React.useContext(AlertDialogOpenContext);
 
+  React.useEffect(() => {
+    return () => {
+      clearBodyLock();
+    };
+  }, []);
+
   return (
-    <RadixAlertDialog.Portal forceMount>
-      <AnimatePresence>
-        {open ? (
-          <RadixAlertDialog.Overlay asChild forceMount>
+    <AnimatePresence>
+      {open ? (
+        <RadixAlertDialog.Portal key="alert-dialog-portal">
+          <RadixAlertDialog.Overlay asChild>
             <motion.div
               key="alert-dialog-overlay"
               variants={fade}
@@ -66,7 +84,6 @@ export function AlertDialogContent({ className, children }: AlertDialogContentPr
             >
               <RadixAlertDialog.Content
                 asChild
-                forceMount
                 onClick={(e) => e.stopPropagation()}
               >
                 <motion.div
@@ -89,9 +106,9 @@ export function AlertDialogContent({ className, children }: AlertDialogContentPr
               </RadixAlertDialog.Content>
             </motion.div>
           </RadixAlertDialog.Overlay>
-        ) : null}
-      </AnimatePresence>
-    </RadixAlertDialog.Portal>
+        </RadixAlertDialog.Portal>
+      ) : null}
+    </AnimatePresence>
   );
 }
 

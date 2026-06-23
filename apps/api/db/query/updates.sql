@@ -26,6 +26,34 @@ WHERE tenant_id = $1
 ORDER BY created_at DESC
 LIMIT $2 OFFSET $3;
 
+-- name: ListUpdateRunsWithCounts :many
+-- List runs with per-run task aggregate counts in a single query.
+-- task_count: all tasks for the run.
+-- succeeded_count: tasks with status='succeeded'.
+-- failed_count: tasks with status IN ('failed','rolled_back').
+-- site_count: distinct site_id values across all tasks.
+-- `, id` tiebreaker follows the project ORDER BY convention.
+SELECT
+    r.*,
+    coalesce(agg.task_count, 0)      AS task_count,
+    coalesce(agg.succeeded_count, 0) AS succeeded_count,
+    coalesce(agg.failed_count, 0)    AS failed_count,
+    coalesce(agg.site_count, 0)      AS site_count
+FROM update_runs r
+LEFT JOIN LATERAL (
+    SELECT
+        count(*)                                          AS task_count,
+        count(*) FILTER (WHERE status = 'succeeded')     AS succeeded_count,
+        count(*) FILTER (WHERE status IN ('failed', 'rolled_back'))
+                                                          AS failed_count,
+        count(DISTINCT site_id)                           AS site_count
+    FROM update_tasks t
+    WHERE t.run_id = r.id AND t.tenant_id = r.tenant_id
+) agg ON true
+WHERE r.tenant_id = @tenant_id
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT @row_limit OFFSET @row_offset;
+
 -- name: ListUpdateTasksForRun :many
 SELECT * FROM update_tasks
 WHERE run_id = $1 AND tenant_id = $2

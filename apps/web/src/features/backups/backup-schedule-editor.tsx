@@ -151,6 +151,16 @@ export type ScheduleCardValues = {
   incremental_enabled: boolean;
 };
 
+// Coerce-nullable helper: HTML <select> emits string values; these three
+// conditional fields need to be numbers (or null when the field is absent
+// because a different cadence is selected). `z.coerce.number()` converts
+// the string option values (e.g. "0", "1") to numbers, while `.nullable()`
+// allows the null default when the field is not shown.
+const coerceNullableInt = z.preprocess(
+  (v) => (v === null || v === "" || v === undefined ? null : Number(v)),
+  z.number().nullable(),
+);
+
 const scheduleCardSchema = z
   .object({
     enabled: z.boolean(),
@@ -161,9 +171,22 @@ const scheduleCardSchema = z
     keep_last: z.coerce.number().int().min(0).max(9999),
     run_hour: z.coerce.number().int().min(0).max(23),
     run_minute: z.coerce.number().int().min(0).max(59),
-    day_of_week: z.number().int().min(0).max(6).nullable(),
-    day_of_month: z.number().int().min(1).max(28).nullable(),
-    frequency_hours: z.number().int().min(1).max(24).nullable(),
+    // These three fields are driven by <select> elements which emit string
+    // values. coerceNullableInt handles the string→number coercion so "0"
+    // (Sunday) is accepted as a valid day_of_week, and null remains valid
+    // when the field is not shown for the chosen cadence.
+    day_of_week: coerceNullableInt.refine(
+      (v) => v === null || (Number.isInteger(v) && v >= 0 && v <= 6),
+      { message: "Day of week must be between 0 and 6." },
+    ),
+    day_of_month: coerceNullableInt.refine(
+      (v) => v === null || (Number.isInteger(v) && v >= 1 && v <= 28),
+      { message: "Day of month must be between 1 and 28." },
+    ),
+    frequency_hours: coerceNullableInt.refine(
+      (v) => v === null || (Number.isInteger(v) && v >= 1 && v <= 24),
+      { message: "Frequency must be between 1 and 24 hours." },
+    ),
     incremental_enabled: z.boolean(),
   })
   .superRefine((val, ctx) => {
@@ -199,9 +222,13 @@ const SCHEDULE_DEFAULTS: ScheduleCardValues = {
   keep_last: 7,
   run_hour: 2,
   run_minute: 0,
-  day_of_week: null,
-  day_of_month: null,
-  frequency_hours: null,
+  // Sensible non-null defaults so <select> elements always reflect the form
+  // value on first render. The cadence-specific superRefine only rejects null
+  // when the cadence requires the field; with these defaults, selecting a
+  // cadence and saving immediately is always valid.
+  day_of_week: 0,
+  day_of_month: 1,
+  frequency_hours: 6,
   incremental_enabled: false,
 };
 
@@ -251,9 +278,13 @@ function ScheduleCard({ siteId, schedule }: ScheduleCardProps) {
       keep_last: schedule.keep_last,
       run_hour: schedule.run_hour,
       run_minute: schedule.run_minute,
-      day_of_week: schedule.day_of_week ?? null,
-      day_of_month: schedule.day_of_month ?? null,
-      frequency_hours: schedule.frequency_hours ?? null,
+      // Fall back to the SCHEDULE_DEFAULTS so <select> elements always have a
+      // non-null value to display. The superRefine only rejects null when the
+      // field's cadence is active, so a non-null default on a different cadence
+      // is harmless — the value is excluded from the PUT body when not relevant.
+      day_of_week: schedule.day_of_week ?? SCHEDULE_DEFAULTS.day_of_week,
+      day_of_month: schedule.day_of_month ?? SCHEDULE_DEFAULTS.day_of_month,
+      frequency_hours: schedule.frequency_hours ?? SCHEDULE_DEFAULTS.frequency_hours,
       incremental_enabled: schedule.incremental_enabled ?? false,
     });
   }, [schedule, reset]);

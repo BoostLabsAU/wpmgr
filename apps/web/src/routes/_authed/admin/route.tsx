@@ -1,5 +1,6 @@
+import { Component, type ErrorInfo, type ReactNode } from "react";
 import { createFileRoute, Link, Outlet, redirect, useLocation } from "@tanstack/react-router";
-import { ShieldCheck, Users, type LucideIcon } from "lucide-react";
+import { ArrowLeft, ShieldCheck, Users, type LucideIcon } from "lucide-react";
 
 import { ensureMe, isSuperadmin } from "@/features/auth/use-auth";
 import { cn } from "@/lib/utils";
@@ -21,6 +22,74 @@ export const Route = createFileRoute("/_authed/admin")({
   },
   component: AdminLayout,
 });
+
+// ---------------------------------------------------------------------------
+// Error boundary — wraps the admin Outlet so a failed admin chunk or
+// render error never propagates up to the tenant app (/sites etc).
+// This is a class component because React error boundaries must be class-based.
+// ---------------------------------------------------------------------------
+
+interface AdminErrorBoundaryState {
+  hasError: boolean;
+  errorMessage: string;
+}
+
+class AdminErrorBoundary extends Component<
+  { children: ReactNode },
+  AdminErrorBoundaryState
+> {
+  constructor(props: { children: ReactNode }) {
+    super(props);
+    this.state = { hasError: false, errorMessage: "" };
+  }
+
+  static getDerivedStateFromError(err: unknown): AdminErrorBoundaryState {
+    const msg =
+      err instanceof Error
+        ? err.message
+        : "An unexpected error occurred in the admin panel.";
+    return { hasError: true, errorMessage: msg };
+  }
+
+  override componentDidCatch(err: Error, info: ErrorInfo) {
+    // Log for visibility in production monitoring.
+    console.error("[admin] Caught error:", err, info);
+  }
+
+  override render() {
+    if (this.state.hasError) {
+      return (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-6 space-y-4">
+          <p className="text-sm font-medium text-destructive">
+            The admin panel failed to load.
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {this.state.errorMessage}
+          </p>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              className="text-xs text-primary underline-offset-2 hover:underline"
+              onClick={() =>
+                this.setState({ hasError: false, errorMessage: "" })
+              }
+            >
+              Try again
+            </button>
+            <span className="text-xs text-muted-foreground">or</span>
+            <Link
+              to="/sites"
+              className="text-xs text-primary underline-offset-2 hover:underline"
+            >
+              Back to Sites
+            </Link>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Nav item definitions — add new admin sections here only.
@@ -94,11 +163,32 @@ function AdminLayout() {
               </Link>
             );
           })}
+
+          {/* App-switcher: back to the tenant app. Superadmins can access
+              /sites directly when they have an org — this provides a quick
+              return path when navigating out of the admin area. */}
+          <div className="mt-2 hidden border-t border-border pt-2 md:block">
+            <Link
+              to="/sites"
+              className={cn(
+                "flex min-w-max items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+                "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50",
+                "md:w-full md:min-w-0",
+              )}
+            >
+              <ArrowLeft aria-hidden="true" className="size-4 shrink-0" />
+              <span className="truncate">Back to Sites</span>
+            </Link>
+          </div>
         </nav>
 
-        {/* Page content */}
+        {/* Page content — wrapped in an error boundary so a failed admin
+            chunk import never propagates up to the tenant app routes. */}
         <main className="min-w-0 flex-1">
-          <Outlet />
+          <AdminErrorBoundary>
+            <Outlet />
+          </AdminErrorBoundary>
         </main>
       </div>
     </div>

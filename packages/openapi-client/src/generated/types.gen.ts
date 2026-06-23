@@ -889,6 +889,22 @@ export type UpdateRun = {
   scheduled_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks array is returned instead).
+   */
+  task_count?: number;
+  /**
+   * Number of tasks that reached `succeeded` status.
+   */
+  succeeded_count?: number;
+  /**
+   * Number of tasks that reached `failed` or `rolled_back` status.
+   */
+  failed_count?: number;
+  /**
+   * Number of distinct sites targeted by this run.
+   */
+  site_count?: number;
   tasks?: Array<UpdateTask>;
 };
 

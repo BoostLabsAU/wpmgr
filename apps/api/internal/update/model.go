@@ -54,6 +54,16 @@ type Run struct {
 	UpdatedAt   time.Time
 }
 
+// RunSummary is a Run with pre-computed task aggregate counts, returned by
+// the list endpoint so callers do not need a separate per-run tasks fetch.
+type RunSummary struct {
+	Run
+	TaskCount      int64
+	SucceededCount int64
+	FailedCount    int64
+	SiteCount      int64
+}
+
 // Task is one unit of work: apply one item on one site.
 type Task struct {
 	ID             uuid.UUID

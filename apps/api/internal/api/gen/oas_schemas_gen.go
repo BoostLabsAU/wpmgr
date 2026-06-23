@@ -33221,7 +33221,16 @@ type UpdateRun struct {
 	ScheduledAt OptDateTime     `json:"scheduled_at"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
-	Tasks       []UpdateTask    `json:"tasks"`
+	// Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks
+	// array is returned instead).
+	TaskCount OptInt64 `json:"task_count"`
+	// Number of tasks that reached `succeeded` status.
+	SucceededCount OptInt64 `json:"succeeded_count"`
+	// Number of tasks that reached `failed` or `rolled_back` status.
+	FailedCount OptInt64 `json:"failed_count"`
+	// Number of distinct sites targeted by this run.
+	SiteCount OptInt64     `json:"site_count"`
+	Tasks     []UpdateTask `json:"tasks"`
 }
 
 // GetID returns the value of ID.
@@ -33262,6 +33271,26 @@ func (s *UpdateRun) GetCreatedAt() time.Time {
 // GetUpdatedAt returns the value of UpdatedAt.
 func (s *UpdateRun) GetUpdatedAt() time.Time {
 	return s.UpdatedAt
+}
+
+// GetTaskCount returns the value of TaskCount.
+func (s *UpdateRun) GetTaskCount() OptInt64 {
+	return s.TaskCount
+}
+
+// GetSucceededCount returns the value of SucceededCount.
+func (s *UpdateRun) GetSucceededCount() OptInt64 {
+	return s.SucceededCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *UpdateRun) GetFailedCount() OptInt64 {
+	return s.FailedCount
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *UpdateRun) GetSiteCount() OptInt64 {
+	return s.SiteCount
 }
 
 // GetTasks returns the value of Tasks.
@@ -33307,6 +33336,26 @@ func (s *UpdateRun) SetCreatedAt(val time.Time) {
 // SetUpdatedAt sets the value of UpdatedAt.
 func (s *UpdateRun) SetUpdatedAt(val time.Time) {
 	s.UpdatedAt = val
+}
+
+// SetTaskCount sets the value of TaskCount.
+func (s *UpdateRun) SetTaskCount(val OptInt64) {
+	s.TaskCount = val
+}
+
+// SetSucceededCount sets the value of SucceededCount.
+func (s *UpdateRun) SetSucceededCount(val OptInt64) {
+	s.SucceededCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *UpdateRun) SetFailedCount(val OptInt64) {
+	s.FailedCount = val
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *UpdateRun) SetSiteCount(val OptInt64) {
+	s.SiteCount = val
 }
 
 // SetTasks sets the value of Tasks.

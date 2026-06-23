@@ -74078,6 +74078,30 @@ func (s *UpdateRun) encodeFields(e *jx.Encoder) {
 		json.EncodeDateTime(e, s.UpdatedAt)
 	}
 	{
+		if s.TaskCount.Set {
+			e.FieldStart("task_count")
+			s.TaskCount.Encode(e)
+		}
+	}
+	{
+		if s.SucceededCount.Set {
+			e.FieldStart("succeeded_count")
+			s.SucceededCount.Encode(e)
+		}
+	}
+	{
+		if s.FailedCount.Set {
+			e.FieldStart("failed_count")
+			s.FailedCount.Encode(e)
+		}
+	}
+	{
+		if s.SiteCount.Set {
+			e.FieldStart("site_count")
+			s.SiteCount.Encode(e)
+		}
+	}
+	{
 		if s.Tasks != nil {
 			e.FieldStart("tasks")
 			e.ArrStart()
@@ -74089,16 +74113,20 @@ func (s *UpdateRun) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfUpdateRun = [9]string{
-	0: "id",
-	1: "tenant_id",
-	2: "created_by",
-	3: "status",
-	4: "dry_run",
-	5: "scheduled_at",
-	6: "created_at",
-	7: "updated_at",
-	8: "tasks",
+var jsonFieldsNameOfUpdateRun = [13]string{
+	0:  "id",
+	1:  "tenant_id",
+	2:  "created_by",
+	3:  "status",
+	4:  "dry_run",
+	5:  "scheduled_at",
+	6:  "created_at",
+	7:  "updated_at",
+	8:  "task_count",
+	9:  "succeeded_count",
+	10: "failed_count",
+	11: "site_count",
+	12: "tasks",
 }
 
 // Decode decodes UpdateRun from json.
@@ -74199,6 +74227,46 @@ func (s *UpdateRun) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"updated_at\"")
+			}
+		case "task_count":
+			if err := func() error {
+				s.TaskCount.Reset()
+				if err := s.TaskCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"task_count\"")
+			}
+		case "succeeded_count":
+			if err := func() error {
+				s.SucceededCount.Reset()
+				if err := s.SucceededCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"succeeded_count\"")
+			}
+		case "failed_count":
+			if err := func() error {
+				s.FailedCount.Reset()
+				if err := s.FailedCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"failed_count\"")
+			}
+		case "site_count":
+			if err := func() error {
+				s.SiteCount.Reset()
+				if err := s.SiteCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"site_count\"")
 			}
 		case "tasks":
 			if err := func() error {

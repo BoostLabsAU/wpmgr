@@ -1062,10 +1062,19 @@ type Querier interface {
 	// All active trusted devices for the Security settings UI.
 	// Ordered by created_at DESC, id DESC.
 	ListTrustedDevicesForUser(ctx context.Context, userID uuid.UUID) ([]TrustedDevice, error)
-	// Runs that have not yet fired: status 'scheduled' or 'queued', scheduled_for
-	// in the future. Used for the UI upcoming preview (typically 1–3 rows).
+	// Non-terminal runs for the UI upcoming panel. 'running' rows are always
+	// included (the backup is executing now, regardless of scheduled_for);
+	// 'scheduled'/'queued' rows are included only when scheduled_for is in the
+	// future (they represent fires that have not yet dispatched).
 	ListUpcomingScheduleRuns(ctx context.Context, arg ListUpcomingScheduleRunsParams) ([]BackupScheduleRun, error)
 	ListUpdateRuns(ctx context.Context, arg ListUpdateRunsParams) ([]UpdateRun, error)
+	// List runs with per-run task aggregate counts in a single query.
+	// task_count: all tasks for the run.
+	// succeeded_count: tasks with status='succeeded'.
+	// failed_count: tasks with status IN ('failed','rolled_back').
+	// site_count: distinct site_id values across all tasks.
+	// `, id` tiebreaker follows the project ORDER BY convention.
+	ListUpdateRunsWithCounts(ctx context.Context, arg ListUpdateRunsWithCountsParams) ([]ListUpdateRunsWithCountsRow, error)
 	ListUpdateTasksForRun(ctx context.Context, arg ListUpdateTasksForRunParams) ([]UpdateTask, error)
 	// All registered credentials for a user (for the Security settings list).
 	// Ordered by created_at DESC, id DESC.

@@ -1807,6 +1807,28 @@ export const UpdateRunSchema = {
       type: "string",
       format: "date-time",
     },
+    task_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks array is returned instead).",
+    },
+    succeeded_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of tasks that reached `succeeded` status.",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of tasks that reached `failed` or `rolled_back` status.",
+    },
+    site_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of distinct sites targeted by this run.",
+    },
     tasks: {
       type: "array",
       items: {

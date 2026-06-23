@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -404,6 +405,89 @@ func (q *Queries) ListUpdateRuns(ctx context.Context, arg ListUpdateRunsParams) 
 			&i.ScheduledAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUpdateRunsWithCounts = `-- name: ListUpdateRunsWithCounts :many
+SELECT
+    r.id, r.tenant_id, r.created_by, r.status, r.dry_run, r.scheduled_at, r.created_at, r.updated_at,
+    coalesce(agg.task_count, 0)      AS task_count,
+    coalesce(agg.succeeded_count, 0) AS succeeded_count,
+    coalesce(agg.failed_count, 0)    AS failed_count,
+    coalesce(agg.site_count, 0)      AS site_count
+FROM update_runs r
+LEFT JOIN LATERAL (
+    SELECT
+        count(*)                                          AS task_count,
+        count(*) FILTER (WHERE status = 'succeeded')     AS succeeded_count,
+        count(*) FILTER (WHERE status IN ('failed', 'rolled_back'))
+                                                          AS failed_count,
+        count(DISTINCT site_id)                           AS site_count
+    FROM update_tasks t
+    WHERE t.run_id = r.id AND t.tenant_id = r.tenant_id
+) agg ON true
+WHERE r.tenant_id = $1
+ORDER BY r.created_at DESC, r.id DESC
+LIMIT $3 OFFSET $2
+`
+
+type ListUpdateRunsWithCountsParams struct {
+	TenantID  uuid.UUID `json:"tenant_id"`
+	RowOffset int32     `json:"row_offset"`
+	RowLimit  int32     `json:"row_limit"`
+}
+
+type ListUpdateRunsWithCountsRow struct {
+	ID             uuid.UUID          `json:"id"`
+	TenantID       uuid.UUID          `json:"tenant_id"`
+	CreatedBy      pgtype.UUID        `json:"created_by"`
+	Status         string             `json:"status"`
+	DryRun         bool               `json:"dry_run"`
+	ScheduledAt    pgtype.Timestamptz `json:"scheduled_at"`
+	CreatedAt      time.Time          `json:"created_at"`
+	UpdatedAt      time.Time          `json:"updated_at"`
+	TaskCount      int64              `json:"task_count"`
+	SucceededCount int64              `json:"succeeded_count"`
+	FailedCount    int64              `json:"failed_count"`
+	SiteCount      int64              `json:"site_count"`
+}
+
+// List runs with per-run task aggregate counts in a single query.
+// task_count: all tasks for the run.
+// succeeded_count: tasks with status='succeeded'.
+// failed_count: tasks with status IN ('failed','rolled_back').
+// site_count: distinct site_id values across all tasks.
+// `, id` tiebreaker follows the project ORDER BY convention.
+func (q *Queries) ListUpdateRunsWithCounts(ctx context.Context, arg ListUpdateRunsWithCountsParams) ([]ListUpdateRunsWithCountsRow, error) {
+	rows, err := q.db.Query(ctx, listUpdateRunsWithCounts, arg.TenantID, arg.RowOffset, arg.RowLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUpdateRunsWithCountsRow
+	for rows.Next() {
+		var i ListUpdateRunsWithCountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TenantID,
+			&i.CreatedBy,
+			&i.Status,
+			&i.DryRun,
+			&i.ScheduledAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.TaskCount,
+			&i.SucceededCount,
+			&i.FailedCount,
+			&i.SiteCount,
 		); err != nil {
 			return nil, err
 		}

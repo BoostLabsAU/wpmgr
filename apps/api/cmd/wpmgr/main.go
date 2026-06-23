@@ -205,6 +205,37 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		}
 	}
 
+	// One-shot revoke: WPMGR_SUPERADMIN_REVOKE_EMAILS = "email[,email2]".
+	// Sets is_superadmin=false for each listed email. A no-op for unknown emails
+	// (no account to demote) and for emails already not superadmin. This is the
+	// intentional mirror of WPMGR_SUPERADMIN_EMAILS: grants are never implicit
+	// in this seeder and revokes are never implicit in the grant seeder.
+	// REMOVE this env var after it runs — re-revocation on every boot is harmless
+	// but noisy. is_superadmin is NOT API-settable; this boot hook is the only
+	// supported revoke path.
+	if raw := os.Getenv("WPMGR_SUPERADMIN_REVOKE_EMAILS"); raw != "" {
+		for _, email := range strings.Split(raw, ",") {
+			email = strings.ToLower(strings.TrimSpace(email))
+			if email == "" {
+				continue
+			}
+			tag, err := migPool.Pool.Exec(ctx,
+				`UPDATE users
+				    SET is_superadmin = false,
+				        updated_at    = now()
+				  WHERE lower(email) = $1 AND is_superadmin = true`, email,
+			)
+			switch {
+			case err != nil:
+				logger.Warn("superadmin revoke failed", slog.String("email", email), slog.Any("error", err))
+			case tag.RowsAffected() > 0:
+				logger.Info("superadmin revoked", slog.String("email", email))
+			default:
+				logger.Info("superadmin revoke: account not superadmin or not found, no change", slog.String("email", email))
+			}
+		}
+	}
+
 	// One-shot escape hatch: mint a fresh set-password link for these (existing)
 	// superadmin accounts and log it. Set this when an operator needs to (re)claim
 	// an account whose password is unknown — e.g. one seeded before a fix — then
