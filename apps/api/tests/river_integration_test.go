@@ -5,11 +5,16 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 	"github.com/riverqueue/river/rivermigrate"
 
+	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
+	"github.com/mosamlife/wpmgr/apps/api/internal/media/model"
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
+	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
 	"github.com/mosamlife/wpmgr/apps/api/internal/site"
 )
 
@@ -158,4 +163,99 @@ func TestRiverWiringAndHealthJob(t *testing.T) {
 		}
 		time.Sleep(250 * time.Millisecond)
 	}
+}
+
+// TestRiverDualSchemaIsolation verifies job ROUTING when media isolation is
+// configured: encoder-owned jobs (media_encode, site_screenshot_capture) are
+// inserted into the media schema while API-owned jobs (site_health_check) stay
+// in public. The clients here are insert-only and never started, so this asserts
+// where jobs land, not River leader election.
+func TestRiverDualSchemaIsolation(t *testing.T) {
+	pool := startPostgres(t)
+	ctx := context.Background()
+
+	admin := connectAdmin(t, pool)
+	defer admin.Close()
+
+	migrator, err := rivermigrate.New(riverpgxv5.New(admin.Pool), nil)
+	if err != nil {
+		t.Fatalf("river migrator: %v", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatalf("river migrate public: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO wpmgr_app"); err != nil {
+		t.Fatalf("grant public river tables: %v", err)
+	}
+	if _, err := admin.Exec(ctx, "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO wpmgr_app"); err != nil {
+		t.Fatalf("grant public river sequences: %v", err)
+	}
+
+	const mediaSchema = "media_encoder"
+	if err := riverutil.EnsureSchema(ctx, admin.Pool, mediaSchema, "wpmgr_app"); err != nil {
+		t.Fatalf("ensure media schema: %v", err)
+	}
+
+	defaultClient, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
+		SkipUnknownJobCheck: true,
+	})
+	if err != nil {
+		t.Fatalf("default river client: %v", err)
+	}
+	mediaClient, err := river.NewClient(riverpgxv5.New(pool.Pool), &river.Config{
+		Schema:              mediaSchema,
+		SkipUnknownJobCheck: true,
+	})
+	if err != nil {
+		t.Fatalf("media river client: %v", err)
+	}
+
+	if _, err := mediaClient.Insert(ctx, model.EncodeArgs{
+		TenantID: uuid.New(),
+		SiteID:   uuid.New(),
+		JobID:    "job-media-schema-test",
+	}, nil); err != nil {
+		t.Fatalf("insert media job: %v", err)
+	}
+	if _, err := mediaClient.Insert(ctx, screenshot.CaptureArgs{
+		TenantID: uuid.New(),
+		SiteID:   uuid.New(),
+		SiteURL:  "https://river-screenshot.example.com",
+		Reason:   screenshot.ReasonManual,
+	}, nil); err != nil {
+		t.Fatalf("insert screenshot job: %v", err)
+	}
+	if _, err := defaultClient.Insert(ctx, site.HealthCheckArgs{}, nil); err != nil {
+		t.Fatalf("insert default job: %v", err)
+	}
+
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM "media_encoder"."river_job" WHERE kind = 'media_encode'`); got != 1 {
+		t.Fatalf("media schema media_encode jobs = %d, want 1", got)
+	}
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM public.river_job WHERE kind = 'media_encode'`); got != 0 {
+		t.Fatalf("public media_encode jobs = %d, want 0", got)
+	}
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM "media_encoder"."river_job" WHERE kind = 'site_screenshot_capture'`); got != 1 {
+		t.Fatalf("media schema site_screenshot_capture jobs = %d, want 1", got)
+	}
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM public.river_job WHERE kind = 'site_screenshot_capture'`); got != 0 {
+		t.Fatalf("public site_screenshot_capture jobs = %d, want 0", got)
+	}
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM public.river_job WHERE kind = 'site_health_check'`); got != 1 {
+		t.Fatalf("public site_health_check jobs = %d, want 1", got)
+	}
+	if got := countRiverJobs(t, admin, `SELECT count(*) FROM "media_encoder"."river_job" WHERE kind = 'site_health_check'`); got != 0 {
+		t.Fatalf("media schema site_health_check jobs = %d, want 0", got)
+	}
+}
+
+// countRiverJobs returns the number of River jobs matching a focused
+// integration-test query.
+func countRiverJobs(t *testing.T, pool *db.Pool, query string) int {
+	t.Helper()
+	var n int
+	if err := pool.QueryRow(context.Background(), query).Scan(&n); err != nil {
+		t.Fatalf("count river jobs: %v", err)
+	}
+	return n
 }

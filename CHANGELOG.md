@@ -17,6 +17,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 ### Fixed
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+- Advanced page-cache bypass and variant settings now reach the WordPress agent so saved URL, cookie, and query rules affect the rendered cache drop-in.
+- Isolated media-encoder River jobs into a dedicated schema in the bundled self-host profile so the encoder cannot take leadership for API uptime and cron jobs while image optimization and screenshot work still run.
 - Backup schedule form no longer rejects valid input: selecting a day of week (weekly), a day of month (monthly), or an interval (every N hours) now satisfies the cadence requirement and saves. The backup scheduler also now logs when a due schedule is skipped because its site could not be resolved, so a missed scheduled run can no longer fail silently.
 - Update runs list now shows each run's real task count, a marker when a run had failed tasks, and how many sites the run covered. On a finished run the detail progress bar now fills to completion instead of showing a sliver.
 - Bulk update from the Sites page: the plugins / themes / core target now drives the update modal, the modal defaults to only items that have an available update, and plugins and themes are separated into tabs.

@@ -9,7 +9,7 @@ import (
 )
 
 func TestEncoderWaker_DisabledWhenURLEmpty(t *testing.T) {
-	w := NewEncoderWaker(nil, "", nil)
+	w := NewEncoderWaker(nil, "", nil, "")
 	if w.Enabled() {
 		t.Fatal("waker with empty URL must be disabled")
 	}
@@ -23,7 +23,7 @@ func TestEncoderWaker_DisabledWhenURLEmpty(t *testing.T) {
 
 func TestEncoderWaker_DerivesDrainURLAndAudience(t *testing.T) {
 	// Trailing slash + whitespace must be trimmed; drainURL gets the path.
-	w := NewEncoderWaker(nil, "  https://enc.example.run.app/ ", nil)
+	w := NewEncoderWaker(nil, "  https://enc.example.run.app/ ", nil, "")
 	if !w.Enabled() {
 		t.Fatal("waker with a URL must be enabled")
 	}
@@ -36,13 +36,37 @@ func TestEncoderWaker_DerivesDrainURLAndAudience(t *testing.T) {
 }
 
 func TestEncoderWaker_KickIsDedupedAndNonBlocking(t *testing.T) {
-	w := NewEncoderWaker(nil, "https://enc.example.run.app", nil)
+	w := NewEncoderWaker(nil, "https://enc.example.run.app", nil, "")
 	// Many Kicks must collapse to a single buffered signal and never block.
 	for i := 0; i < 10; i++ {
 		w.Kick()
 	}
 	if len(w.kick) != 1 {
 		t.Fatalf("Kick must coalesce to one pending signal, got %d", len(w.kick))
+	}
+}
+
+func TestEncoderWaker_LiveJobCountQueryUsesDefaultSchema(t *testing.T) {
+	w := NewEncoderWaker(nil, "https://enc.example.run.app", nil, "")
+	q, err := w.liveJobCountQuery()
+	if err != nil {
+		t.Fatalf("liveJobCountQuery: %v", err)
+	}
+	want := `SELECT count(*) FROM river_job WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+	if q != want {
+		t.Fatalf("query = %q, want %q", q, want)
+	}
+}
+
+func TestEncoderWaker_LiveJobCountQueryUsesMediaSchema(t *testing.T) {
+	w := NewEncoderWaker(nil, "https://enc.example.run.app", nil, "media_encoder")
+	q, err := w.liveJobCountQuery()
+	if err != nil {
+		t.Fatalf("liveJobCountQuery: %v", err)
+	}
+	want := `SELECT count(*) FROM "media_encoder"."river_job" WHERE queue = ANY($1) AND state IN ('available','running','retryable')`
+	if q != want {
+		t.Fatalf("query = %q, want %q", q, want)
 	}
 }
 
@@ -59,7 +83,7 @@ func TestEncoderWaker_HoldDrainSendsBearerAndPosts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	w := NewEncoderWaker(nil, srv.URL, nil)
+	w := NewEncoderWaker(nil, srv.URL, nil, "")
 	w.mintToken = func(context.Context) (string, error) { return "test-id-token", nil }
 
 	w.holdDrain(context.Background(), 3)
@@ -84,7 +108,7 @@ func TestEncoderWaker_HoldDrainProceedsWithoutTokenOnMintError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	w := NewEncoderWaker(nil, srv.URL, nil)
+	w := NewEncoderWaker(nil, srv.URL, nil, "")
 	w.mintToken = func(context.Context) (string, error) { return "", context.DeadlineExceeded }
 
 	// Must not panic and must still attempt the POST (tokenless).

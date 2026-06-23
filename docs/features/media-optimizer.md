@@ -13,6 +13,10 @@ API: [api/media.md](../api/media.md).
 > wants image optimization runs `docker compose --profile media up`; one who
 > doesn't simply omits the profile and their core API stays a minimal static
 > binary. See [install.md](../install.md).
+>
+> The bundled Compose profile isolates encoder-owned River jobs in the
+> `media_encoder` schema. If you deploy API and encoder separately, set the same
+> `WPMGR_RIVER_MEDIA_SCHEMA` value on both processes.
 
 ## The Media tab
 

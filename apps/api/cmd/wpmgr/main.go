@@ -26,7 +26,6 @@ import (
 
 	"github.com/mosamlife/wpmgr/apps/api/internal/activity"
 	"github.com/mosamlife/wpmgr/apps/api/internal/admin"
-	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agent"
 	"github.com/mosamlife/wpmgr/apps/api/internal/agentcmd"
 	"github.com/mosamlife/wpmgr/apps/api/internal/apikey"
@@ -37,10 +36,6 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/backup"
 	"github.com/mosamlife/wpmgr/apps/api/internal/blobstore"
 	clientpkg "github.com/mosamlife/wpmgr/apps/api/internal/client"
-	portalpkg "github.com/mosamlife/wpmgr/apps/api/internal/portal"
-	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
-	reporthtml "github.com/mosamlife/wpmgr/apps/api/internal/report/render/html"
-	reportpdf "github.com/mosamlife/wpmgr/apps/api/internal/report/render/pdf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/config"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db"
 	"github.com/mosamlife/wpmgr/apps/api/internal/db/sqlc"
@@ -55,17 +50,25 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/loginbrand"
 	"github.com/mosamlife/wpmgr/apps/api/internal/mailer"
 	"github.com/mosamlife/wpmgr/apps/api/internal/media"
+	mediafont "github.com/mosamlife/wpmgr/apps/api/internal/media/font"
 	mediahandler "github.com/mosamlife/wpmgr/apps/api/internal/media/handler"
+	mediamodel "github.com/mosamlife/wpmgr/apps/api/internal/media/model"
 	mediarepo "github.com/mosamlife/wpmgr/apps/api/internal/media/repo"
 	mediaservice "github.com/mosamlife/wpmgr/apps/api/internal/media/service"
 	"github.com/mosamlife/wpmgr/apps/api/internal/metrics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
+	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
-	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
+	portalpkg "github.com/mosamlife/wpmgr/apps/api/internal/portal"
+	reportpkg "github.com/mosamlife/wpmgr/apps/api/internal/report"
+	reporthtml "github.com/mosamlife/wpmgr/apps/api/internal/report/render/html"
+	reportpdf "github.com/mosamlife/wpmgr/apps/api/internal/report/render/pdf"
+	"github.com/mosamlife/wpmgr/apps/api/internal/riverutil"
 	rucssrepo "github.com/mosamlife/wpmgr/apps/api/internal/rucss/repo"
 	rucssservice "github.com/mosamlife/wpmgr/apps/api/internal/rucss/service"
 	rucssworker "github.com/mosamlife/wpmgr/apps/api/internal/rucss/worker"
+	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshot"
 	"github.com/mosamlife/wpmgr/apps/api/internal/screenshotadapter"
@@ -118,6 +121,8 @@ func main() {
 	}
 }
 
+// run bootstraps the control plane: migrations, services, River worker pool,
+// media schema isolation wiring, and the HTTP server.
 func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	slog.SetDefault(logger)
 
@@ -145,6 +150,19 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 
+	mediaRiverSchema, err := riverutil.NormalizeSchema(cfg.River.MediaSchema)
+	if err != nil {
+		return err
+	}
+	// Log the resolved media River schema. A mismatch between this value and the
+	// media-encoder's silently strands media/screenshot jobs, so emitting it on
+	// each process makes an operator eyeball-diff trivial.
+	mediaSchemaLog := mediaRiverSchema
+	if riverutil.IsDefaultSchema(mediaRiverSchema) {
+		mediaSchemaLog = "public"
+	}
+	logger.Info("media River schema resolved", slog.String("media_river_schema", mediaSchemaLog))
+
 	// Migrations run with the owner/superuser DSN (creates the app role +
 	// privileged DDL); the application connects with the unprivileged app DSN.
 	// River's own schema is migrated here too, with the same owner DSN. In
@@ -160,6 +178,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		return err
 	}
 	if err := migrateRiver(ctx, migPool.Pool); err != nil {
+		migPool.Close()
+		return err
+	}
+	if err := riverutil.EnsureSchema(ctx, migPool.Pool, mediaRiverSchema, cfg.DB.User); err != nil {
 		migPool.Close()
 		return err
 	}
@@ -941,10 +963,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 
 	// M23 — Media Optimizer (ADR-043). The service + handlers are built here
 	// (before River) so the dashboard GETs work as soon as the agent syncs; the
-	// EncodeArgs enqueuer is wired post-River-start (the media_encode queue is
-	// registered with MaxWorkers=0 in the API — the separate media-encoder
-	// process runs the actual encoders). NO encoder import reaches this binary:
-	// the API only client.Inserts model.EncodeArgs (a pure-Go River job type).
+	// EncodeArgs enqueuer is wired post-River-start (insert-only in the API; the
+	// separate media-encoder process runs the actual encoders). NO encoder import
+	// reaches this binary: the API only client.Inserts model.EncodeArgs (a pure-Go
+	// River job type).
 	mediaRepo := mediarepo.NewRepo(pool)
 	var mediaStore *blobstore.Store
 	if cfg.S3.Enabled() {
@@ -1306,6 +1328,10 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	if err != nil {
 		return err
 	}
+	mediaRiverClient, err := newMediaRiverClient(pool.Pool, logger, riverClient, mediaRiverSchema)
+	if err != nil {
+		return err
+	}
 
 	// The enqueuer needs the started River client; the update service needs the
 	// enqueuer. Wire them after the client is up. The same enqueuer also serves
@@ -1370,13 +1396,15 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// M23 Media Optimizer: wire the EncodeArgs enqueuer now that River has
 	// started. The enqueuer lives in the PURE media package (no encoder import),
 	// so this binary still has no CGO dependency.
-	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(riverClient))
+	// Encoder-owned queues must use mediaRiverClient so the media-encoder sees
+	// them in its configured River schema.
+	mediaSvc.SetEnqueuer(media.NewRiverEnqueuer(mediaRiverClient))
 
 	// M72 Site Screenshots: wire the River enqueuer into the screenshot service
 	// now that the client is started. The site_screenshot queue is registered in
 	// cmd/media-encoder only; the API uses SkipUnknownJobCheck so Insert still works.
 	if screenshotSvc != nil && mediaStore != nil {
-		screenshotEnqueuer := screenshot.NewEnqueuer(riverClient)
+		screenshotEnqueuer := screenshot.NewEnqueuer(mediaRiverClient)
 		screenshotSvc.SetEnqueuer(screenshotEnqueuer)
 		// Hook into the connection service so the first enrollment triggers a capture.
 		if cs, ok := connSvc.(interface {
@@ -1400,7 +1428,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	// instance alive until the media_encode queue drains. WPMGR_MEDIA_ENCODER_URL
 	// is the encoder's Cloud Run URL; unset on self-host (the always-on `media`
 	// compose profile), where the waker disables itself.
-	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger)
+	mediaWaker := media.NewEncoderWaker(pool, os.Getenv("WPMGR_MEDIA_ENCODER_URL"), logger, mediaRiverSchema, mediamodel.MediaEncodeQueue, screenshot.ScreenshotQueue, mediafont.FontTranscodeQueue)
 	mediaSvc.SetWaker(mediaWaker)
 	// M72: wire the same waker into the screenshot service so enqueuing a capture
 	// also cold-starts the scale-to-zero encoder (it runs both media_encode and
@@ -1905,8 +1933,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m68 — Object Cache operator routes.
 		ObjectCacheH: ocH,
 		// m59 — per-site email management + Phase 3 log ingest.
-		EmailH:           emailH,
-		EmailAgentH:      emailAgentH,
+		EmailH:      emailH,
+		EmailAgentH: emailAgentH,
 		// m61 — webhook handler is now mounted (security hardened).
 		EmailWebhookH: emailWebhookH,
 		// m33 — superadmin instance-management area.
@@ -1920,7 +1948,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// m64 — white-label client reports.
 		ReportH: reportH,
 		// m66 — read-only client portal.
-		PortalH:     portalH,
+		PortalH: portalH,
 		// ADR-059 Phase 3 — HIBP breach-password range proxy (agent-authenticated).
 		HIBPAgentH: hibpAgentH,
 		// m79 — vulnerability scanner: fleet rollup + per-site finding management.
@@ -1938,6 +1966,8 @@ type orgTenantAdapter struct {
 	svc *tenant.Service
 }
 
+// Create adapts tenant.Service.Create to the org.TenantCreator interface,
+// translating a (name, slug) pair into a tenant creation call.
 func (a *orgTenantAdapter) Create(ctx context.Context, name, slug string) (uuid.UUID, error) {
 	t, err := a.svc.Create(ctx, tenant.CreateInput{Name: name, Slug: slug})
 	if err != nil {
@@ -1954,6 +1984,8 @@ type registryAdapter struct {
 	r *blobstore.Registry
 }
 
+// PresignerForSnapshot resolves the blobstore Registry entry for a snapshot so
+// backup operations can mint presigned URLs without importing blobstore types.
 func (a *registryAdapter) PresignerForSnapshot(ctx context.Context, snap backup.Snapshot) (backup.Presigner, error) {
 	store, err := a.r.StoreForSnapshot(ctx, blobstore.SnapshotLike{
 		TenantID:      snap.TenantID,
@@ -2190,6 +2222,8 @@ func revokeMembership(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logg
 	return nil
 }
 
+// migrateRiver applies River's own schema migrations using the migration-owner
+// pool, matching the ownership model used for WPMgr app migrations.
 func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
 	if err != nil {
@@ -2199,6 +2233,25 @@ func migrateRiver(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("river migrate: %w", err)
 	}
 	return nil
+}
+
+// newMediaRiverClient returns an insert-only River client for encoder-owned
+// queues when media schema isolation is enabled. When the schema is empty or
+// public it reuses the default client so existing behavior is preserved.
+func newMediaRiverClient(pool *pgxpool.Pool, logger *slog.Logger, defaultClient *river.Client[pgx.Tx], schema string) (*river.Client[pgx.Tx], error) {
+	if riverutil.IsDefaultSchema(schema) {
+		return defaultClient, nil
+	}
+	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{
+		Logger:              logger,
+		Schema:              schema,
+		SkipUnknownJobCheck: true,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("media river client: %w", err)
+	}
+	logger.Info("media river insert client configured", slog.String("schema", schema))
+	return client, nil
 }
 
 // riverDeps bundles everything startRiver needs: the M2 health checker, the M3
