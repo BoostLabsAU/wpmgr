@@ -438,6 +438,22 @@ final class Plugin
     }
 
     /**
+     * Reset the singleton for testing purposes.
+     *
+     * PHPUnit tests that call boot() must call this in their tear_down() to
+     * prevent the constructed singleton (with its Keystore, cached master key,
+     * and Brain Monkey stubs) from leaking into subsequent tests in the suite.
+     * Never call this outside of a test context.
+     *
+     * @internal For use by PluginActivationTest only.
+     * @return void
+     */
+    public static function resetForTesting(): void
+    {
+        self::$instance = null;
+    }
+
+    /**
      * Register WordPress hooks. REST routes are the only public surface.
      *
      * @return void

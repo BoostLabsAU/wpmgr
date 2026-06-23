@@ -350,6 +350,46 @@ if (!class_exists('Redis')) {
     }
 }
 
+if (!function_exists('get_core_updates')) {
+    /**
+     * Returns available WordPress core update objects — passthrough stub for tests.
+     *
+     * Real WP loads this from wp-admin/includes/update.php and queries the
+     * update_core transient. The test stub returns an empty array so
+     * MetadataCommand::coreUpdate() finds no pending updates without side effects.
+     * Tests that need a specific response override via Functions\when().
+     *
+     * @return array<int,object> Array of update objects.
+     */
+    function get_core_updates(): array
+    {
+        return [];
+    }
+}
+
+if (!function_exists('wp_upload_dir')) {
+    /**
+     * Returns information about the upload directory — passthrough stub for tests.
+     *
+     * Real WP reads wp-config and per-post upload path overrides. The test stub
+     * returns an empty array so callers that use `isset($info['basedir'])` safely
+     * get no value and skip any uploads-dir-dependent code path. Tests that need
+     * a specific basedir must override via Functions\when('wp_upload_dir')->justReturn([...]).
+     *
+     * Defined here (Patchwork-transformable) so that once MetadataCommand or any
+     * file-manager code triggers function_exists('wp_upload_dir') to return true
+     * process-wide, Brain Monkey can still intercept calls to it in tests that
+     * explicitly mock it — without throwing MissingFunctionExpectations in tests
+     * that do not mock it (those get this safe empty-array default).
+     *
+     * @return array<string,string> Upload directory info, or empty on failure.
+     */
+    function wp_upload_dir(): array
+    {
+        return [];
+    }
+}
+
 if (!function_exists('esc_sql')) {
     /**
      * Escapes data for use in a MySQL query — passthrough stub for tests.
