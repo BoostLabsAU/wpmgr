@@ -99,6 +99,48 @@ func TestToPerfConfigRequest_omitsBeaconKeyOnSubsequentPush(t *testing.T) {
 	}
 }
 
+// TestToPerfConfigRequest_cacheVariantWireNames verifies that the four page-
+// cache variant lists marshal with the agent-side unprefixed keys
+// (bypass_urls, bypass_cookies, include_queries, include_cookies), not the CP
+// public/API prefixed names. This is a regression guard: if the wire names ever
+// revert to cache_*, the agent will silently ignore the lists.
+func TestToPerfConfigRequest_cacheVariantWireNames(t *testing.T) {
+	cfg := Config{
+		CacheBypassURLs:     []string{"/cart", "/checkout"},
+		CacheBypassCookies:  []string{"woocommerce", "my_session"},
+		CacheIncludeQueries: []string{"sort_dir", "filter_color"},
+		CacheIncludeCookies: []string{"geo", "currency"},
+	}
+
+	req := toPerfConfigRequest(cfg, "", "")
+	data, err := json.Marshal(req)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	raw := string(data)
+
+	wantKeys := []string{"bypass_urls", "bypass_cookies", "include_queries", "include_cookies"}
+	for _, key := range wantKeys {
+		if !strings.Contains(raw, fmt.Sprintf("%q:", key)) {
+			t.Errorf("payload missing expected key %q; got %s", key, raw)
+		}
+	}
+
+	badKeys := []string{"cache_bypass_urls", "cache_bypass_cookies", "cache_include_queries", "cache_include_cookies"}
+	for _, key := range badKeys {
+		if strings.Contains(raw, fmt.Sprintf("%q:", key)) {
+			t.Errorf("payload must not use CP public field name %q; got %s", key, raw)
+		}
+	}
+
+	// Spot-check values are present so the test is not just key-name matching.
+	for _, val := range []string{"/cart", "woocommerce", "sort_dir", "geo"} {
+		if !strings.Contains(raw, fmt.Sprintf("%q", val)) {
+			t.Errorf("payload missing expected value %q; got %s", val, raw)
+		}
+	}
+}
+
 // TestToPerfConfigRequest_ingestURLEmptyWhenRumDisabled verifies that the
 // ingest URL is omitted when RumEnabled=false.
 func TestToPerfConfigRequest_ingestURLEmptyWhenRumDisabled(t *testing.T) {

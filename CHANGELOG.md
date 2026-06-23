@@ -18,6 +18,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 - Saved CDN rewrite settings now reach the WordPress agent with the selected asset type scope while CDN credentials remain control-plane only.
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+- Advanced page-cache bypass and variant settings now reach the WordPress agent so saved URL, cookie, and query rules affect the rendered cache drop-in.
+- Isolated media-encoder River jobs into a dedicated schema in the bundled self-host profile so the encoder cannot take leadership for API uptime and cron jobs while image optimization and screenshot work still run.
 
 ## [0.57.0] - 2026-06-21
 

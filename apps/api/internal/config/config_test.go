@@ -5,6 +5,8 @@ import (
 	"testing"
 )
 
+// TestValidateSessionSecret checks that empty, placeholder, and short session
+// secrets are rejected while adequate-length secrets are accepted.
 func TestValidateSessionSecret(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -28,6 +30,8 @@ func TestValidateSessionSecret(t *testing.T) {
 	}
 }
 
+// TestValidateAgentSigningKey verifies production rejects committed dev keys
+// while permitting fresh keys or empty keys, and that development allows dev keys.
 func TestValidateAgentSigningKey(t *testing.T) {
 	devKey := devAgentSigningPrivateKeys[0]
 	freshKey := "ZZZZ1W3DSfBwuE/V/H9BEmV9IAJfK5d6F2RDfYSj/raBW+b26qHT3spd1gHSw7aXEXxZkg9E9WMspibSjSFsnQ=="
@@ -53,6 +57,8 @@ func TestValidateAgentSigningKey(t *testing.T) {
 	}
 }
 
+// TestMigrateDSNFallback verifies the migration DSN falls back to the app DSN
+// when no separate migration DSN is configured.
 func TestMigrateDSNFallback(t *testing.T) {
 	d := DBConfig{Host: "h", Port: 5432, User: "u", Password: "p", Name: "n", SSLMode: "disable"}
 	if got := d.MigrateDSN(); got != d.DSN() {
@@ -64,6 +70,68 @@ func TestMigrateDSNFallback(t *testing.T) {
 	}
 }
 
+// TestLoadRiverMediaSchemaDefault verifies the media River schema defaults to
+// empty (public/default schema behavior) when the env var is unset.
+func TestLoadRiverMediaSchemaDefault(t *testing.T) {
+	t.Setenv("WPMGR_RIVER_MEDIA_SCHEMA", "")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.River.MediaSchema; got != "" {
+		t.Fatalf("River.MediaSchema = %q, want empty default", got)
+	}
+}
+
+// TestLoadRiverMediaSchemaEnv verifies WPMGR_RIVER_MEDIA_SCHEMA is loaded from
+// the environment when set.
+func TestLoadRiverMediaSchemaEnv(t *testing.T) {
+	t.Setenv("WPMGR_RIVER_MEDIA_SCHEMA", "media_encoder")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.River.MediaSchema; got != "media_encoder" {
+		t.Fatalf("River.MediaSchema = %q, want media_encoder", got)
+	}
+}
+
+// TestValidateRiverMediaSchema verifies that an invalid WPMGR_RIVER_MEDIA_SCHEMA
+// surfaces as a config Issue (so the server parks in readyz-degraded) while
+// empty, public, and valid identifiers are accepted.
+func TestValidateRiverMediaSchema(t *testing.T) {
+	base := Config{Auth: AuthConfig{SessionSecret: strings.Repeat("a", 32)}}
+	tests := []struct {
+		name      string
+		schema    string
+		wantIssue bool
+	}{
+		{"empty default", "", false},
+		{"public", "public", false},
+		{"valid identifier", "media_encoder", false},
+		{"hyphen rejected", "media-encoder", true},
+		{"dotted rejected", "public.river", true},
+		{"leading digit rejected", "1schema", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base
+			cfg.River = RiverConfig{MediaSchema: tt.schema}
+			gotIssue := false
+			for _, is := range Validate(cfg) {
+				if is.Name == "WPMGR_RIVER_MEDIA_SCHEMA" {
+					gotIssue = true
+				}
+			}
+			if gotIssue != tt.wantIssue {
+				t.Fatalf("Validate() river schema issue = %v, want %v", gotIssue, tt.wantIssue)
+			}
+		})
+	}
+}
+
+// TestOIDCEnabled verifies the OIDC provider is enabled only when an issuer
+// URL is configured.
 func TestOIDCEnabled(t *testing.T) {
 	if (OIDCConfig{}).Enabled() {
 		t.Fatal("empty issuer should be disabled")

@@ -39,10 +39,14 @@ type PerfConfigRequest struct {
 	CacheRefresh         bool     `json:"cache_refresh"`
 	CacheRefreshInterval string   `json:"cache_refresh_interval"`
 	CacheLinkPrefetch    bool     `json:"cache_link_prefetch"`
-	CacheBypassURLs      []string `json:"cache_bypass_urls"`
-	CacheBypassCookies   []string `json:"cache_bypass_cookies"`
-	CacheIncludeQueries  []string `json:"cache_include_queries"`
-	CacheIncludeCookies  []string `json:"cache_include_cookies"`
+	// Page-cache variant lists use the agent's persisted/drop-in config keys
+	// (unprefixed) on the wire, not the CP public/API field names. The agent
+	// stores and serves from bypass_urls, bypass_cookies, include_queries, and
+	// include_cookies; keeping these names aligned avoids silent ignore bugs.
+	CacheBypassURLs      []string `json:"bypass_urls"`
+	CacheBypassCookies   []string `json:"bypass_cookies"`
+	CacheIncludeQueries  []string `json:"include_queries"`
+	CacheIncludeCookies  []string `json:"include_cookies"`
 
 	// Preload (cache-warm) throttle (M37). Operator-tunable; the agent clamps
 	// each to the same bounds locally (concurrency 1..4, delay 0..10000 ms,
