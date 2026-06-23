@@ -266,6 +266,27 @@ func (UnimplementedHandler) AgentMetadata(ctx context.Context, req *AgentMetadat
 	return r, ht.ErrNotImplemented
 }
 
+// ApplySiteFileUpload implements applySiteFileUpload operation.
+//
+// Step 2 of 2 for browser file upload. After the browser has PUT all
+// chunks to the presigned S3 URLs returned by `prepareSiteFileUpload`,
+// this endpoint:
+// 1. Mints presigned S3 GET URLs for each staged chunk.
+// 2. Issues `file_upload_apply` to the agent, which fetches all chunks,
+// reassembles them in order, validates the SHA-256 digest, and
+// atomic-swaps the assembled file into the target path (same
+// FilesRestorer swap primitive used by restore).
+// The agent returns `400 write_failed` when the SHA-256 digest does not
+// match. The caller should retry the full upload in that case.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// **Executable/sensitive gate:** Same as `prepareSiteFileUpload`.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/upload/apply
+func (UnimplementedHandler) ApplySiteFileUpload(ctx context.Context, req *ApplyUploadRequest, params ApplySiteFileUploadParams) (r ApplySiteFileUploadRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ArchiveSite implements archiveSite operation.
 //
 // M21 / ADR-041 — operator action. Transitions the site to `archived`
@@ -387,6 +408,19 @@ func (UnimplementedHandler) CancelEnrollment(ctx context.Context, params CancelE
 //
 // POST /api/v1/sites/{siteId}/media/cancel
 func (UnimplementedHandler) CancelMedia(ctx context.Context, params CancelMediaParams) (r *CancelMediaOK, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ChmodSiteFile implements chmodSiteFile operation.
+//
+// Issues a `file_chmod` command to the site's agent. The agent validates
+// the mode against a safe allowlist — no setuid (4xxx), no setgid (2xxx),
+// no world-write; returns `400 mode_denied` for unsafe modes.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/chmod
+func (UnimplementedHandler) ChmodSiteFile(ctx context.Context, req *FileChmodRequest, params ChmodSiteFileParams) (r ChmodSiteFileRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -562,6 +596,44 @@ func (UnimplementedHandler) CreateSiteDestination(ctx context.Context, req *Site
 	return r, ht.ErrNotImplemented
 }
 
+// CreateSiteDirectory implements createSiteDirectory operation.
+//
+// Issues a `file_mkdir` command to the site's agent.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// Returns `403 files_write_not_enabled` when write mode is off.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/mkdir
+func (UnimplementedHandler) CreateSiteDirectory(ctx context.Context, req *FileMkdirRequest, params CreateSiteDirectoryParams) (r CreateSiteDirectoryRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// CreateSiteFileArchive implements createSiteFileArchive operation.
+//
+// Issues a `file_archive_create` command to the site's agent. The agent
+// zips the specified paths (all containment-checked within the jail) and
+// uploads the archive directly to a CP-minted S3 staging area. The CP
+// then mints a short-lived presigned GET URL for the browser to download
+// the archive.
+// This is a **read** operation — it does not require write mode.
+// **Sensitive-path gate (F1):** If any path in `paths` matches the
+// sensitive-file deny-list (wp-config.php, .env*, *.pem, …), the caller
+// must set `confirm_sensitive=true` AND hold `site.files.read_sensitive`
+// (owner). Both checks must pass — a missing flag or insufficient
+// permission returns `403`. The denial is audited at elevated severity.
+// The agent independently re-checks every path and returns
+// `sensitive_denied` when the flag is absent. The CP audit carries the
+// full path list.
+// Returns `503 storage_not_configured` on deployments without object storage.
+// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+// when not opted in.
+// Requires `site.files.read` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/archive
+func (UnimplementedHandler) CreateSiteFileArchive(ctx context.Context, req *FileArchiveCreateRequest, params CreateSiteFileArchiveParams) (r CreateSiteFileArchiveRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // CreateSiteShare implements createSiteShare operation.
 //
 // Grant site access to an email (admin+; org-scope only). If the email
@@ -728,6 +800,26 @@ func (UnimplementedHandler) DeleteSiteEmailSuppression(ctx context.Context, para
 	return r, ht.ErrNotImplemented
 }
 
+// DeleteSiteFile implements deleteSiteFile operation.
+//
+// Issues a `file_delete` command to the site's agent after verifying
+// three layered gates (T12/T13):
+// 1. **PermSiteFilesWrite** (admin+) — inherited from route middleware.
+// 2. **PermSiteFilesDelete** (owner) — checked in the handler; denial is
+// audited with action `site.files.delete.denied`.
+// 3. **Typed confirm token** — `confirm` in the request body must be the
+// string `"DELETE"` exactly. Missing or wrong value returns
+// `400 confirm_required`.
+// The agent independently enforces its protected-root guard (`wp-admin`,
+// `wp-includes`).
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// Requires `site.files.write` + `site.files.delete` (owner only).
+//
+// POST /api/v1/sites/{siteId}/files/delete
+func (UnimplementedHandler) DeleteSiteFile(ctx context.Context, req *FileDeleteRequest, params DeleteSiteFileParams) (r DeleteSiteFileRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // DeleteSiteShare implements deleteSiteShare operation.
 //
 // Revoke a collaborator's site access (admin+; org-scope only).
@@ -815,6 +907,34 @@ func (UnimplementedHandler) Enroll(ctx context.Context, req *EnrollRequest) (r E
 //
 // GET /api/v1/sites/{siteId}/email/log/export
 func (UnimplementedHandler) ExportSiteEmailLog(ctx context.Context, params ExportSiteEmailLogParams) (r ExportSiteEmailLogRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ExtractSiteFileArchive implements extractSiteFileArchive operation.
+//
+// Issues a `file_extract` command to the site's agent. The agent opens
+// the archive at `archive_path`, validates every entry against the
+// containment guard (zip-slip / zip-bomb / symlink / absolute-path
+// guards all enforced agent-side), and extracts into `dest_path`.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+// `true`. Returns `403 files_write_not_enabled` when write mode is off.
+// **Zip-slip / zip-bomb (422):** If any archive entry would resolve
+// outside `dest_path` or the archive exceeds the uncompressed-size /
+// entry-count guard, the agent returns `zip_slip` or `zip_bomb`
+// respectively. The CP maps these to `422 Unprocessable Entity`.
+// **Bad/unknown archive (400):** `bad_archive` (file is corrupted) and
+// `not_archive` (path is not a recognised archive) map to `400`.
+// **Executable/sensitive gate (T1/T6):** When `confirm_executable_write`
+// or `confirm_sensitive` is set in the request body:
+// - The caller must additionally hold `site.files.write_code` (owner).
+// - A non-owner caller is rejected at the CP handler — the agent is
+// **never called** — and the denial is audited at elevated severity.
+// - The agent independently enforces its executable deny-list and
+// sensitive-path deny-list regardless of the confirm flags.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/extract
+func (UnimplementedHandler) ExtractSiteFileArchive(ctx context.Context, req *FileExtractRequest, params ExtractSiteFileArchiveParams) (r ExtractSiteFileArchiveRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -1343,6 +1463,19 @@ func (UnimplementedHandler) GetSiteErrorConfig(ctx context.Context, params GetSi
 	return r, ht.ErrNotImplemented
 }
 
+// GetSiteFilesSettings implements getSiteFilesSettings operation.
+//
+// Returns the current file manager settings for a site, including whether
+// the feature is enabled.
+// Any site member (viewer+) may call this endpoint so the UI can render
+// the correct enable/disable state without an extra permission check.
+// No permission beyond `RequireSiteAccess` is required.
+//
+// GET /api/v1/sites/{siteId}/files/settings
+func (UnimplementedHandler) GetSiteFilesSettings(ctx context.Context, params GetSiteFilesSettingsParams) (r GetSiteFilesSettingsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // GetSiteLoginBrand implements getSiteLoginBrand operation.
 //
 // Returns the current login brand config (logo URL, logo link, message)
@@ -1793,6 +1926,46 @@ func (UnimplementedHandler) ListSiteEmailSuppression(ctx context.Context, params
 	return r, ht.ErrNotImplemented
 }
 
+// ListSiteFileVersions implements listSiteFileVersions operation.
+//
+// Issues a `file_versions_list` command to the site's agent. Returns the
+// version history for a single file, ordered newest-first. Each version
+// carries an opaque `version_id` that can be passed to
+// `POST /files/versions/restore` to restore that version.
+// **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+// deny-list (wp-config.php, .env*, *.pem, …), the caller must hold
+// `site.files.read_sensitive` (owner). A non-owner is denied `403` and
+// the denial is audited at elevated severity. This prevents leaking that
+// sensitive backups exist to non-owner collaborators.
+// Version history availability depends on the agent-side implementation
+// (e.g. the host's filesystem snapshot, the pre-write backup mechanism,
+// or WP's own revision system). When no history is available for a path,
+// the agent returns an empty `versions` list.
+// This is a **read** operation.
+// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+// when not opted in.
+// Requires `site.files.read` permission (admin+).
+//
+// GET /api/v1/sites/{siteId}/files/versions
+func (UnimplementedHandler) ListSiteFileVersions(ctx context.Context, params ListSiteFileVersionsParams) (r ListSiteFileVersionsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// ListSiteFiles implements listSiteFiles operation.
+//
+// Issues a `file_list` command to the site's agent and returns one page
+// of directory entries for the given path.
+// The feature must be **explicitly enabled per site** (off by default).
+// Returns `403 files_not_enabled` when the site has not opted in.
+// Requires the `site.files.read` permission (admin+).
+// Pagination is cursor-based: when `truncated=true` the response carries
+// an opaque `cursor` that the caller passes on the next request.
+//
+// GET /api/v1/sites/{siteId}/files
+func (UnimplementedHandler) ListSiteFiles(ctx context.Context, params ListSiteFilesParams) (r ListSiteFilesRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ListSiteLoginEvents implements listSiteLoginEvents operation.
 //
 // Returns the agent-ingested login events for the site, ordered by
@@ -1950,6 +2123,53 @@ func (UnimplementedHandler) PatchSiteErrorConfig(ctx context.Context, req *SiteE
 //
 // POST /api/v1/sites/{siteId}/perf/cache/preload
 func (UnimplementedHandler) PreloadCache(ctx context.Context, params PreloadCacheParams) (r *PerfActionResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PrepareSiteFileDownload implements prepareSiteFileDownload operation.
+//
+// Prepares a file for large-file download in three steps:
+// 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+// 2. CP issues `file_download_prepare` to the agent, which uploads the
+// file in chunks directly to S3 (never through the CP).
+// 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+// browser to fetch the staged file directly from object storage.
+// Large files bypass the CP's response path entirely — only the
+// presigned URL is returned in the 200 body.
+// A `file_transfers` row is persisted for audit and GC tracking.
+// **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+// owner-level permission required; the attempt is always audited.
+// Returns `503 storage_not_configured` when object storage is not
+// configured (self-hosted deployments without S3).
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// downloads additionally require `site.files.read_sensitive` (owner only).
+//
+// POST /api/v1/sites/{siteId}/files/download
+func (UnimplementedHandler) PrepareSiteFileDownload(ctx context.Context, req *FileDownloadRequest, params PrepareSiteFileDownloadParams) (r PrepareSiteFileDownloadRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// PrepareSiteFileUpload implements prepareSiteFileUpload operation.
+//
+// Step 1 of 2 for browser file upload. The CP mints short-lived presigned
+// S3 PUT URLs in the tenant-namespaced staging area and returns them to
+// the browser. The browser PUTs each chunk directly to S3 (never through
+// the CP). After all chunks are staged, the caller invokes
+// `POST /files/upload/apply` to have the agent fetch, reassemble,
+// validate (SHA-256), and atomic-swap the file into place.
+// Presigned PUT URLs are **never logged** (T8). TTL is ≤ 5 minutes.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+// `confirm_executable_write` or `confirm_sensitive` is set, owner
+// permission (`site.files.write_code`) is required.
+// Returns `503 storage_not_configured` on self-hosted deployments without
+// object storage.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/upload
+func (UnimplementedHandler) PrepareSiteFileUpload(ctx context.Context, req *PrepareUploadRequest, params PrepareSiteFileUploadParams) (r PrepareSiteFileUploadRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2157,6 +2377,29 @@ func (UnimplementedHandler) PutSiteLoginProtection(ctx context.Context, req *Sit
 	return r, ht.ErrNotImplemented
 }
 
+// ReadSiteFileContent implements readSiteFileContent operation.
+//
+// Issues a `file_read` command to the site's agent and returns the
+// base64-encoded content of a file up to 256 KiB. When the file is
+// larger than the cap, `truncated=true` is returned; use the download
+// endpoint for the full file.
+// **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+// `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+// require **both**:
+// - `confirm_sensitive=true` query parameter, and
+// - Owner-level permission (`site.files.read_sensitive`).
+// Both the successful read AND any denied attempt are recorded in the
+// tamper-evident audit log with the full path.
+// The feature must be explicitly enabled per site. Returns
+// `403 files_not_enabled` when not opted in.
+// Requires the `site.files.read` permission (admin+). Sensitive-path
+// reads additionally require `site.files.read_sensitive` (owner only).
+//
+// GET /api/v1/sites/{siteId}/files/content
+func (UnimplementedHandler) ReadSiteFileContent(ctx context.Context, params ReadSiteFileContentParams) (r ReadSiteFileContentRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // RefreshSiteDiagnostics implements refreshSiteDiagnostics operation.
 //
 // Enqueues a signed `diagnostics` command to the agent. The agent runs
@@ -2232,6 +2475,22 @@ func (UnimplementedHandler) RemoveClientMember(ctx context.Context, params Remov
 	return r, ht.ErrNotImplemented
 }
 
+// RenameSiteFile implements renameSiteFile operation.
+//
+// Issues a `file_rename` command to the site's agent. Both `src` and `dst`
+// are containment-checked by the agent; escaping the jail on either path
+// returns `400 outside_root`.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+// **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+// `confirm_executable_write` or `confirm_sensitive` is set, owner
+// permission (`site.files.write_code`) is required.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/rename
+func (UnimplementedHandler) RenameSiteFile(ctx context.Context, req *FileRenameRequest, params RenameSiteFileParams) (r RenameSiteFileRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // ResendEmailLog implements resendEmailLog operation.
 //
 // Dispatches the `resend_email` agent command for the given log entry.
@@ -2298,6 +2557,31 @@ func (UnimplementedHandler) RestoreMedia(ctx context.Context, req OptMediaAssetS
 //
 // POST /api/v1/sites/{siteId}/restore
 func (UnimplementedHandler) RestoreSite(ctx context.Context, params RestoreSiteParams) (r RestoreSiteRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// RestoreSiteFileVersion implements restoreSiteFileVersion operation.
+//
+// Issues a `file_version_restore` command to the site's agent, which
+// overwrites the file at `path` with the content of the specified
+// `version_id`. The version identifier is opaque — retrieve valid IDs
+// from `GET /files/versions?path=…`.
+// Returns `404 no_such_version` when the version ID does not exist for
+// the given path.
+// **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+// `true`. Returns `403 files_write_not_enabled` when write mode is off.
+// **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+// deny-list (wp-config.php, .env*, *.pem, …), the caller must set
+// `confirm_sensitive=true` AND hold `site.files.write_code` (owner).
+// Both checks must pass — a missing flag or insufficient permission
+// returns `403`. The denial is audited at elevated severity. The agent
+// independently re-checks and returns `sensitive_denied` when the flag
+// is absent.
+// Every restore is audited with the full `path` and `version_id`.
+// Requires `site.files.write` permission (admin+).
+//
+// POST /api/v1/sites/{siteId}/files/versions/restore
+func (UnimplementedHandler) RestoreSiteFileVersion(ctx context.Context, req *FileVersionRestoreRequest, params RestoreSiteFileVersionParams) (r RestoreSiteFileVersionRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2385,6 +2669,24 @@ func (UnimplementedHandler) RunSearchReplace(ctx context.Context, req *SearchRep
 //
 // GET /api/v1/sites/{siteId}/media/clean/scan
 func (UnimplementedHandler) ScanUnusedMedia(ctx context.Context, params ScanUnusedMediaParams) (r *MediaCleanScanResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// SearchSiteFiles implements searchSiteFiles operation.
+//
+// Issues a `file_search` command to the site's agent. Supports two modes:
+// - `name` — match filenames against the query string.
+// - `content` — grep file contents for the query string (line + snippet returned).
+// Results are cursor-paginated: when `truncated=true` the response carries
+// an opaque `cursor` for the next page.
+// This is a **read** operation. The agent never exposes the content of
+// sensitive paths (wp-config.php, .env*, *.pem, …) in search snippets.
+// The feature must be explicitly enabled. Returns `403 files_not_enabled`
+// when not opted in.
+// Requires `site.files.read` permission (admin+).
+//
+// GET /api/v1/sites/{siteId}/files/search
+func (UnimplementedHandler) SearchSiteFiles(ctx context.Context, params SearchSiteFilesParams) (r SearchSiteFilesRes, _ error) {
 	return r, ht.ErrNotImplemented
 }
 
@@ -2545,6 +2847,24 @@ func (UnimplementedHandler) UpdateSiteDestination(ctx context.Context, req *Site
 	return r, ht.ErrNotImplemented
 }
 
+// UpdateSiteFilesSettings implements updateSiteFilesSettings operation.
+//
+// Enables or disables the file manager feature for a site. The feature is
+// **off by default** (migration m82); an explicit enable is required before
+// any file browse/read/download endpoint will work.
+// `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+// site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+// An audit entry (`site.files.settings.changed`) is recorded on every call,
+// capturing the resulting `enabled` and `write_enabled` state.
+// `root_jail` is read-only in P1/P2 (always `""`) — the agent defaults to
+// the site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+// Requires `site.files.manage` permission (admin+).
+//
+// PUT /api/v1/sites/{siteId}/files/settings
+func (UnimplementedHandler) UpdateSiteFilesSettings(ctx context.Context, req *UpdateFileManagerSettingsRequest, params UpdateSiteFilesSettingsParams) (r UpdateSiteFilesSettingsRes, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
 // VerifyAudit implements verifyAudit operation.
 //
 // Verify the integrity of the audit hash-chain (admin+).
@@ -2576,5 +2896,29 @@ func (UnimplementedHandler) VerifyEmail(ctx context.Context, req *VerifyEmailReq
 //
 // GET /api/v1/sites/{siteId}/activity/verify
 func (UnimplementedHandler) VerifySiteActivity(ctx context.Context, params VerifySiteActivityParams) (r *ActivityVerifyResult, _ error) {
+	return r, ht.ErrNotImplemented
+}
+
+// WriteSiteFileContent implements writeSiteFileContent operation.
+//
+// Issues a `file_write` command to the site's agent. The agent writes the
+// content atomically (temp-write → rename swap) to the resolved path.
+// **Write-enabled gate:** The site must have both `enabled=true` AND
+// `write_enabled=true` in its file manager settings. Returns
+// `403 files_write_not_enabled` when write mode is off.
+// **Executable-write gate (T1):** When `confirm_executable_write=true` is
+// set in the request body, the caller must additionally hold
+// `site.files.write_code` (owner). If an admin-level caller passes
+// `confirm_executable_write=true`, the request is rejected with
+// `403 insufficient_permission` and the denial is audited at elevated
+// severity. The agent independently enforces its executable deny-list
+// regardless.
+// **Sensitive-file gate (T6):** Same as above for `confirm_sensitive=true`
+// — requires owner (`site.files.write_code`) and is audited at elevated
+// severity on both success and denial.
+// Requires `site.files.write` permission (admin+).
+//
+// PUT /api/v1/sites/{siteId}/files/content
+func (UnimplementedHandler) WriteSiteFileContent(ctx context.Context, req *WriteFileContentRequest, params WriteSiteFileContentParams) (r WriteSiteFileContentRes, _ error) {
 	return r, ht.ErrNotImplemented
 }

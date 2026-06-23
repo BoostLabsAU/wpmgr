@@ -63,6 +63,7 @@ import { Route as AuthedSitesSiteIdSecurityRouteImport } from './routes/_authed/
 import { Route as AuthedSitesSiteIdOptimizeRouteImport } from './routes/_authed/sites/$siteId.optimize'
 import { Route as AuthedSitesSiteIdMediaRouteImport } from './routes/_authed/sites/$siteId.media'
 import { Route as AuthedSitesSiteIdHealthRouteImport } from './routes/_authed/sites/$siteId.health'
+import { Route as AuthedSitesSiteIdFilesRouteImport } from './routes/_authed/sites/$siteId.files'
 import { Route as AuthedSitesSiteIdErrorsRouteImport } from './routes/_authed/sites/$siteId.errors'
 import { Route as AuthedSitesSiteIdEmailRouteImport } from './routes/_authed/sites/$siteId.email'
 import { Route as AuthedSitesSiteIdCacheRouteImport } from './routes/_authed/sites/$siteId.cache'
@@ -347,6 +348,11 @@ const AuthedSitesSiteIdHealthRoute = AuthedSitesSiteIdHealthRouteImport.update({
   path: '/health',
   getParentRoute: () => AuthedSitesSiteIdRoute,
 } as any)
+const AuthedSitesSiteIdFilesRoute = AuthedSitesSiteIdFilesRouteImport.update({
+  id: '/files',
+  path: '/files',
+  getParentRoute: () => AuthedSitesSiteIdRoute,
+} as any)
 const AuthedSitesSiteIdErrorsRoute = AuthedSitesSiteIdErrorsRouteImport.update({
   id: '/errors',
   path: '/errors',
@@ -446,6 +452,7 @@ export interface FileRoutesByFullPath {
   '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
+  '/sites/$siteId/files': typeof AuthedSitesSiteIdFilesRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
   '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
@@ -504,6 +511,7 @@ export interface FileRoutesByTo {
   '/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
+  '/sites/$siteId/files': typeof AuthedSitesSiteIdFilesRoute
   '/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
   '/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
@@ -569,6 +577,7 @@ export interface FileRoutesById {
   '/_authed/sites/$siteId/cache': typeof AuthedSitesSiteIdCacheRoute
   '/_authed/sites/$siteId/email': typeof AuthedSitesSiteIdEmailRoute
   '/_authed/sites/$siteId/errors': typeof AuthedSitesSiteIdErrorsRoute
+  '/_authed/sites/$siteId/files': typeof AuthedSitesSiteIdFilesRoute
   '/_authed/sites/$siteId/health': typeof AuthedSitesSiteIdHealthRoute
   '/_authed/sites/$siteId/media': typeof AuthedSitesSiteIdMediaRoute
   '/_authed/sites/$siteId/optimize': typeof AuthedSitesSiteIdOptimizeRoute
@@ -634,6 +643,7 @@ export interface FileRouteTypes {
     | '/sites/$siteId/cache'
     | '/sites/$siteId/email'
     | '/sites/$siteId/errors'
+    | '/sites/$siteId/files'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
     | '/sites/$siteId/optimize'
@@ -692,6 +702,7 @@ export interface FileRouteTypes {
     | '/sites/$siteId/cache'
     | '/sites/$siteId/email'
     | '/sites/$siteId/errors'
+    | '/sites/$siteId/files'
     | '/sites/$siteId/health'
     | '/sites/$siteId/media'
     | '/sites/$siteId/optimize'
@@ -756,6 +767,7 @@ export interface FileRouteTypes {
     | '/_authed/sites/$siteId/cache'
     | '/_authed/sites/$siteId/email'
     | '/_authed/sites/$siteId/errors'
+    | '/_authed/sites/$siteId/files'
     | '/_authed/sites/$siteId/health'
     | '/_authed/sites/$siteId/media'
     | '/_authed/sites/$siteId/optimize'
@@ -1162,6 +1174,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AuthedSitesSiteIdHealthRouteImport
       parentRoute: typeof AuthedSitesSiteIdRoute
     }
+    '/_authed/sites/$siteId/files': {
+      id: '/_authed/sites/$siteId/files'
+      path: '/files'
+      fullPath: '/sites/$siteId/files'
+      preLoaderRoute: typeof AuthedSitesSiteIdFilesRouteImport
+      parentRoute: typeof AuthedSitesSiteIdRoute
+    }
     '/_authed/sites/$siteId/errors': {
       id: '/_authed/sites/$siteId/errors'
       path: '/errors'
@@ -1298,6 +1317,7 @@ interface AuthedSitesSiteIdRouteChildren {
   AuthedSitesSiteIdCacheRoute: typeof AuthedSitesSiteIdCacheRoute
   AuthedSitesSiteIdEmailRoute: typeof AuthedSitesSiteIdEmailRoute
   AuthedSitesSiteIdErrorsRoute: typeof AuthedSitesSiteIdErrorsRoute
+  AuthedSitesSiteIdFilesRoute: typeof AuthedSitesSiteIdFilesRoute
   AuthedSitesSiteIdHealthRoute: typeof AuthedSitesSiteIdHealthRoute
   AuthedSitesSiteIdMediaRoute: typeof AuthedSitesSiteIdMediaRoute
   AuthedSitesSiteIdOptimizeRoute: typeof AuthedSitesSiteIdOptimizeRoute
@@ -1314,6 +1334,7 @@ const AuthedSitesSiteIdRouteChildren: AuthedSitesSiteIdRouteChildren = {
   AuthedSitesSiteIdCacheRoute: AuthedSitesSiteIdCacheRoute,
   AuthedSitesSiteIdEmailRoute: AuthedSitesSiteIdEmailRoute,
   AuthedSitesSiteIdErrorsRoute: AuthedSitesSiteIdErrorsRoute,
+  AuthedSitesSiteIdFilesRoute: AuthedSitesSiteIdFilesRoute,
   AuthedSitesSiteIdHealthRoute: AuthedSitesSiteIdHealthRoute,
   AuthedSitesSiteIdMediaRoute: AuthedSitesSiteIdMediaRoute,
   AuthedSitesSiteIdOptimizeRoute: AuthedSitesSiteIdOptimizeRoute,

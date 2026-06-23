@@ -129,6 +129,47 @@ const (
 	// a collaborator with access to a site can manage that site's security
 	// hardening. Viewers get read access via PermSiteRead on the GET routes.
 	PermSecurityManage Permission = "site.security.manage"
+
+	// PermSiteFilesRead authorises browse/list/read/download operations on the
+	// per-site File Manager (P1, read-only). Admin+ — the file manager exposes
+	// raw filesystem content including configuration files, and is
+	// off-by-default per site. Viewer and operator tiers are excluded: this is
+	// a high-privilege, site-filesystem-access capability.
+	PermSiteFilesRead Permission = "site.files.read"
+
+	// PermSiteFilesReadSensitive authorises reading or downloading a sensitive
+	// file (wp-config.php, .env*, *.pem, *.key, id_rsa*, .git/, .htpasswd,
+	// auth.json). Owner only — these files contain secrets and their exposure
+	// is the highest-risk read operation in the manager. The caller must also
+	// pass confirm_sensitive=true (belt-and-braces, T6).
+	PermSiteFilesReadSensitive Permission = "site.files.read_sensitive"
+
+	// PermSiteFilesManage enables or disables the file manager for a site via
+	// the settings endpoint (PUT /sites/{siteId}/files/settings). Admin+ —
+	// turning on the file manager is an access-control decision that grants
+	// filesystem visibility to all admin+ members of the site; it should not be
+	// delegated to operator-level principals.
+	PermSiteFilesManage Permission = "site.files.manage"
+
+	// PermSiteFilesWrite authorises write operations on the per-site File Manager
+	// (P2): file_write, file_mkdir, file_rename, file_chmod, file_upload_apply.
+	// Admin+ — same tier as PermSiteFilesRead; write is equally privileged.
+	// The per-site files_write_enabled flag must ALSO be true before the CP
+	// will sign any write command; this permission governs role access while the
+	// flag governs per-site opt-in.
+	PermSiteFilesWrite Permission = "site.files.write"
+
+	// PermSiteFilesDelete authorises the destructive file_delete operation (P2).
+	// Owner only — deletion is permanent and cannot be undone without a backup.
+	// The caller must also supply confirm="DELETE" in the request body.
+	PermSiteFilesDelete Permission = "site.files.delete"
+
+	// PermSiteFilesWriteCode authorises writes whose target path matches the
+	// executable-extension deny-list or the sensitive-file deny-list when the
+	// caller sets confirm_executable_write=true or confirm_sensitive=true (P2).
+	// Owner only — executable writes can introduce code-execution paths; this is
+	// the highest-risk write operation in the manager.
+	PermSiteFilesWriteCode Permission = "site.files.write_code"
 )
 
 // minRoleFor maps each permission to the minimum role that holds it. The matrix
@@ -173,6 +214,16 @@ var minRoleFor = map[Permission]Role{
 	// Security Suite (ADR-057). Hardening config + ban list: operator+;
 	// site-write-class, mirrors PermSiteCacheManage and PermEmailManage.
 	PermSecurityManage: RoleOperator,
+	// File Manager (P1). Browse/read/download: admin+; sensitive-file reads: owner only.
+	// Settings (enable/disable toggle): admin+ (access-control decision).
+	PermSiteFilesRead:          RoleAdmin,
+	PermSiteFilesReadSensitive: RoleOwner,
+	PermSiteFilesManage:        RoleAdmin,
+	// File Manager (P2). Write/mkdir/rename/chmod/upload: admin+; delete: owner;
+	// executable/sensitive writes (confirm_executable_write/confirm_sensitive): owner.
+	PermSiteFilesWrite:     RoleAdmin,
+	PermSiteFilesDelete:    RoleOwner,
+	PermSiteFilesWriteCode: RoleOwner,
 }
 
 // Allows reports whether role r is permitted to perform p.

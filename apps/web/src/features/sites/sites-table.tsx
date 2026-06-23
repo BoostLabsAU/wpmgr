@@ -462,9 +462,43 @@ function buildColumns(
       header: "Uptime",
       enableSorting: false,
       size: COL_UPTIME_PX,
-      // TODO(sprint-4): swap this placeholder for the real sparkline once the
-      // uptime series endpoint is plumbed.
-      cell: () => <span aria-hidden="true" />,
+      cell: ({ row }) => {
+        const { up, uptime_pct } = row.original.site;
+        // Neither field present: site has never been probed.
+        if (up === undefined && uptime_pct === undefined) {
+          return <span aria-hidden="true" />;
+        }
+        // Show the 30-day percentage when available, otherwise the live
+        // up/down indicator.
+        if (uptime_pct !== undefined) {
+          const pct = uptime_pct.toFixed(1);
+          const isDown = up === false;
+          return (
+            <span
+              className={cn(
+                "tabular-nums text-xs font-medium",
+                isDown
+                  ? "text-[var(--color-destructive)]"
+                  : "text-[var(--color-foreground)]",
+              )}
+              title={`${pct}% uptime (30 days)`}
+            >
+              {pct}%
+            </span>
+          );
+        }
+        // Only live up/down is available (no 30-day window yet).
+        return (
+          <span
+            className={cn(
+              "text-xs font-medium",
+              up ? "text-[var(--color-foreground)]" : "text-[var(--color-destructive)]",
+            )}
+          >
+            {up ? "Up" : "Down"}
+          </span>
+        );
+      },
     },
     {
       id: "actions",

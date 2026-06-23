@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 
 import { Button } from "@/components/ui/button";
@@ -26,18 +26,26 @@ import type { Site, UpdateItem, UpdateRunCreate } from "@wpmgr/api";
 //   - an optional schedule time
 // Submitting POSTs /api/v1/updates and navigates to the run detail page.
 //
-// Sprint 3 chrome refresh: native <dialog> replaced with the shared Dialog
-// primitive (motion-animated, --scrim backdrop, 480px panel). Form logic and
-// step structure unchanged — Sprint 4 forms-architect owns the inputs.
+// #98 UX fixes:
+//   1. updateKind in WizardTarget drives the active tab/section (plugins,
+//      themes, or core) so the split-button selection is honoured.
+//   2. Components default to "has update" filter — only items with a
+//      new_version reported by the agent are pre-checked. Items without an
+//      update are hidden by default (operator can reveal via "Show all").
+//   3. Plugins and themes are separated into tabs with their own lists.
+
+export type WizardUpdateKind = "plugins" | "themes" | "core";
 
 export type WizardTarget =
-  | { kind: "sites"; siteIds: string[] }
-  | { kind: "tag"; tag: string };
+  | { kind: "sites"; siteIds: string[]; updateKind?: WizardUpdateKind }
+  | { kind: "tag"; tag: string; updateKind?: WizardUpdateKind };
 
 interface ComponentOption {
   type: "plugin" | "theme";
   slug: string;
   label: string;
+  /** True when the agent reports a newer version is available. */
+  hasUpdate: boolean;
 }
 
 /** Build a de-duplicated, sorted list of plugin/theme options from sites. */
@@ -51,7 +59,14 @@ function componentOptions(sites: Site[]): ComponentOption[] {
           type: "plugin",
           slug: plugin.slug,
           label: plugin.name ?? plugin.slug,
+          hasUpdate: Boolean(plugin.available_update),
         });
+      } else {
+        // If any site reports an update available, mark the option as having one.
+        const existing = seen.get(key)!;
+        if (plugin.available_update && !existing.hasUpdate) {
+          seen.set(key, { ...existing, hasUpdate: true });
+        }
       }
     }
     for (const theme of site.components?.themes ?? []) {
@@ -61,7 +76,13 @@ function componentOptions(sites: Site[]): ComponentOption[] {
           type: "theme",
           slug: theme.slug,
           label: theme.name ?? theme.slug,
+          hasUpdate: Boolean(theme.available_update),
         });
+      } else {
+        const existing = seen.get(key)!;
+        if (theme.available_update && !existing.hasUpdate) {
+          seen.set(key, { ...existing, hasUpdate: true });
+        }
       }
     }
   }
@@ -73,9 +94,10 @@ function componentOptions(sites: Site[]): ComponentOption[] {
 /** Stable identity for a target, used to remount (reset) the form on open. */
 function targetKey(target: WizardTarget | null): string {
   if (!target) return "none";
+  const kindSuffix = target.updateKind ?? "plugins";
   return target.kind === "sites"
-    ? `sites:${[...target.siteIds].sort().join(",")}`
-    : `tag:${target.tag}`;
+    ? `sites:${[...target.siteIds].sort().join(",")}:${kindSuffix}`
+    : `tag:${target.tag}:${kindSuffix}`;
 }
 
 export function UpdateWizard({
@@ -107,6 +129,8 @@ export function UpdateWizard({
   );
 }
 
+type ComponentTab = "plugins" | "themes";
+
 function WizardForm({
   target,
   sites,
@@ -119,13 +143,39 @@ function WizardForm({
   const navigate = useNavigate();
   const create = useCreateUpdateRun();
 
-  const [updateCore, setUpdateCore] = useState(false);
+  // The updateKind from the split-button drives the initial active tab.
+  const initialTab: ComponentTab =
+    target.updateKind === "themes" ? "themes" : "plugins";
+  const initialUpdateCore = target.updateKind === "core";
+
+  const [activeTab, setActiveTab] = useState<ComponentTab>(initialTab);
+  const [updateCore, setUpdateCore] = useState(initialUpdateCore);
   const [selectedSlugs, setSelectedSlugs] = useState<Set<string>>(new Set());
   const [manualSlugs, setManualSlugs] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [scheduleAt, setScheduleAt] = useState("");
+  // When true, only items with a reported update are shown.
+  const [filterToUpdates, setFilterToUpdates] = useState(true);
 
   const options = useMemo(() => componentOptions(sites), [sites]);
+  const pluginOptions = useMemo(
+    () => options.filter((o) => o.type === "plugin"),
+    [options],
+  );
+  const themeOptions = useMemo(
+    () => options.filter((o) => o.type === "theme"),
+    [options],
+  );
+
+  // Count items that have updates, for the filter label.
+  const pluginsWithUpdate = useMemo(
+    () => pluginOptions.filter((o) => o.hasUpdate).length,
+    [pluginOptions],
+  );
+  const themesWithUpdate = useMemo(
+    () => themeOptions.filter((o) => o.hasUpdate).length,
+    [themeOptions],
+  );
 
   function toggleSlug(key: string) {
     setSelectedSlugs((prev) => {
@@ -157,10 +207,10 @@ function WizardForm({
   const targetDescribed =
     target.kind === "sites"
       ? `${target.siteIds.length} selected site${target.siteIds.length === 1 ? "" : "s"}`
-      : `sites tagged “${target.tag}”`;
+      : `sites tagged "${target.tag}"`;
 
   const submitLabel = create.isPending
-    ? "Starting…"
+    ? "Starting..."
     : dryRun
       ? `Preview ${items.length} update${items.length === 1 ? "" : "s"}`
       : `Apply ${items.length} update${items.length === 1 ? "" : "s"}`;
@@ -187,8 +237,17 @@ function WizardForm({
     void navigate({ to: "/updates/$runId", params: { runId: run.id } });
   }
 
+  // The visible list for the active tab, filtered when filterToUpdates is on.
+  const visibleOptions = useMemo(() => {
+    const list = activeTab === "plugins" ? pluginOptions : themeOptions;
+    return filterToUpdates ? list.filter((o) => o.hasUpdate) : list;
+  }, [activeTab, pluginOptions, themeOptions, filterToUpdates]);
+
+  const totalWithUpdates =
+    activeTab === "plugins" ? pluginsWithUpdate : themesWithUpdate;
+
   return (
-    <DialogContent ariaLabelledBy="update-wizard-title">
+    <DialogContent ariaLabelledBy="update-wizard-title" className="max-w-[560px]">
       <form onSubmit={(e) => void onSubmit(e)} noValidate>
         <DialogHeader>
           <DialogTitle id="update-wizard-title">Update sites</DialogTitle>
@@ -199,49 +258,122 @@ function WizardForm({
         </DialogHeader>
 
         <DialogBody>
-          <fieldset className="space-y-3">
-            <legend className="text-sm font-medium">What to update</legend>
-
-            <label className="flex items-center gap-2 text-sm">
+          {/* WordPress core */}
+          <div className="rounded-md border border-[var(--color-border)] p-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
               <Checkbox
                 checked={updateCore}
                 onChange={(e) => setUpdateCore(e.target.checked)}
               />
-              WordPress core (to latest)
+              WordPress core (update to latest)
             </label>
+          </div>
 
-            {options.length > 0 ? (
-              <div className="space-y-1">
+          {/* Plugins / Themes tabs */}
+          <div className="space-y-3">
+            {/* Tab strip */}
+            <div
+              role="tablist"
+              aria-label="Update target"
+              className="inline-flex rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-0.5"
+            >
+              {(["plugins", "themes"] as const).map((tab) => {
+                const count =
+                  tab === "plugins" ? pluginsWithUpdate : themesWithUpdate;
+                const total =
+                  tab === "plugins"
+                    ? pluginOptions.length
+                    : themeOptions.length;
+                return (
+                  <button
+                    key={tab}
+                    type="button"
+                    role="tab"
+                    aria-selected={activeTab === tab}
+                    onClick={() => setActiveTab(tab)}
+                    className={`rounded-sm px-3 py-1.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                      activeTab === tab
+                        ? "bg-[var(--color-background)] text-[var(--color-foreground)] shadow-sm"
+                        : "text-[var(--color-muted-foreground)] hover:text-[var(--color-foreground)]"
+                    }`}
+                  >
+                    {tab === "plugins" ? "Plugins" : "Themes"}
+                    {count > 0 ? (
+                      <span className="ml-1.5 rounded-sm bg-primary/10 px-1 text-[10px] font-semibold tabular-nums text-primary">
+                        {count}
+                      </span>
+                    ) : total > 0 ? (
+                      <span className="ml-1.5 rounded-sm bg-muted-foreground/10 px-1 text-[10px] tabular-nums text-muted-foreground">
+                        {total}
+                      </span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Filter toggle */}
+            {(activeTab === "plugins" ? pluginOptions : themeOptions).length > 0 ? (
+              <div className="flex items-center justify-between">
                 <p className="text-xs text-[var(--color-muted-foreground)]">
-                  Plugins &amp; themes detected on the selected sites:
+                  {filterToUpdates
+                    ? `Showing ${totalWithUpdates} with available update${totalWithUpdates === 1 ? "" : "s"}`
+                    : `Showing all ${(activeTab === "plugins" ? pluginOptions : themeOptions).length}`}
                 </p>
-                <ul className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] p-2">
-                  {options.map((opt) => {
-                    const key = `${opt.type}:${opt.slug}`;
-                    const id = `opt-${key}`;
-                    return (
-                      <li key={key}>
-                        <label
-                          htmlFor={id}
-                          className="flex items-center gap-2 text-sm"
-                        >
-                          <Checkbox
-                            id={id}
-                            checked={selectedSlugs.has(key)}
-                            onChange={() => toggleSlug(key)}
-                          />
-                          <span className="font-medium">{opt.label}</span>
-                          <span className="text-xs text-[var(--color-muted-foreground)] capitalize">
-                            {opt.type}
-                          </span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <button
+                  type="button"
+                  onClick={() => setFilterToUpdates((v) => !v)}
+                  className="text-xs text-primary underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                >
+                  {filterToUpdates ? "Show all" : "Show only with updates"}
+                </button>
               </div>
             ) : null}
 
+            {/* Component list */}
+            {visibleOptions.length > 0 ? (
+              <ul
+                role="tabpanel"
+                className="max-h-44 space-y-1 overflow-y-auto rounded-md border border-[var(--color-border)] p-2"
+              >
+                {visibleOptions.map((opt) => {
+                  const key = `${opt.type}:${opt.slug}`;
+                  const id = `opt-${key}`;
+                  return (
+                    <li key={key}>
+                      <label
+                        htmlFor={id}
+                        className="flex items-center gap-2 text-sm"
+                      >
+                        <Checkbox
+                          id={id}
+                          checked={selectedSlugs.has(key)}
+                          onChange={() => toggleSlug(key)}
+                        />
+                        <span className="font-medium">{opt.label}</span>
+                        {opt.hasUpdate ? (
+                          <span className="rounded-sm bg-primary/10 px-1 text-[10px] font-semibold text-primary">
+                            update
+                          </span>
+                        ) : (
+                          <span className="text-xs text-[var(--color-muted-foreground)]">
+                            up to date
+                          </span>
+                        )}
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            ) : (
+              <p className="text-sm text-[var(--color-muted-foreground)]">
+                {filterToUpdates
+                  ? `No ${activeTab} with available updates on the selected sites.`
+                  : `No ${activeTab} detected on the selected sites.`}
+              </p>
+            )}
+
+            {/* Manual slug entry */}
             <div className="space-y-1">
               <Label htmlFor="manual-slugs">Additional plugin slugs</Label>
               <Input
@@ -258,8 +390,9 @@ function WizardForm({
                 Comma- or space-separated. Each updates to its latest version.
               </p>
             </div>
-          </fieldset>
+          </div>
 
+          {/* Options */}
           <div className="space-y-3 rounded-md border border-[var(--color-border)] p-3">
             <label className="flex items-center gap-2 text-sm font-medium">
               <Checkbox

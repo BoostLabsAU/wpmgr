@@ -176,8 +176,11 @@ function RunDetail({
         </CardHeader>
         <CardContent className="space-y-4">
           <Progress
-            value={summary.done}
-            max={summary.total}
+            value={
+              summary.total === 0
+                ? null
+                : Math.round((summary.done / summary.total) * 100)
+            }
             label="Update progress"
           />
           <DefinitionList

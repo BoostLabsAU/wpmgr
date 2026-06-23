@@ -196,6 +196,27 @@ const (
 	// ActionObjectCacheTested: metadata: ok (bool), config_hash.
 	ActionObjectCacheTested = "site.objectcache.tested"
 
+	// File Manager (P1 read-only). Three audit events cover the read lifecycle.
+	//
+	// ActionSiteFilesRead is the standard audit event for a successful
+	// directory listing, inline file read, or file download (non-sensitive path).
+	// Metadata: op ("list"|"read"|"download"), path (read/download only), size,
+	// truncated (read only), transfer_id (download only).
+	ActionSiteFilesRead = "site.files.read"
+	// ActionSiteFilesSensitiveRead is recorded when a SENSITIVE path is
+	// successfully read or downloaded (T6 elevated-severity entry). The full path
+	// is always included in metadata. Requires confirm_sensitive + owner permission.
+	// Metadata: op ("read"|"download"), path, size, transfer_id (download only).
+	ActionSiteFilesSensitiveRead = "site.files.sensitive.read"
+	// ActionSiteFilesSensitiveDenied is recorded on every DENIED attempt to read
+	// or download a sensitive path, whether due to missing confirm_sensitive or
+	// insufficient permission (T9: log denials). Metadata: op, path, reason.
+	ActionSiteFilesSensitiveDenied = "site.files.sensitive.denied"
+	// ActionSiteFilesSettingsChanged is recorded when a user enables or disables
+	// the file manager for a site via PUT /sites/{siteId}/files/settings
+	// (PermSiteFilesManage, admin+). Metadata: enabled (bool).
+	ActionSiteFilesSettingsChanged = "site.files.settings.changed"
+
 	// Dashboard 2FA (ADR-056, Phase 2). These actions are account-scoped:
 	// they are recorded under the user's first tenant when one exists; otherwise
 	// best-effort under a client-member tenant. All carry ActorUser.
@@ -368,6 +389,53 @@ func (r *Recorder) List(ctx context.Context, tenantID uuid.UUID, limit, offset i
 	var out []Entry
 	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
 		rows, err := sqlc.New(tx).ListAuditEntries(ctx, sqlc.ListAuditEntriesParams{TenantID: tenantID, Limit: limit, Offset: offset})
+		if err != nil {
+			return domain.Internal("audit_list_failed", "failed to list audit entries").WithCause(err)
+		}
+		out = make([]Entry, 0, len(rows))
+		for _, row := range rows {
+			out = append(out, rowToEntry(row))
+		}
+		return nil
+	})
+	return out, err
+}
+
+// Filter holds the optional narrowing criteria for ListFiltered. Zero values
+// disable the respective filter: empty ActionPrefix matches all actions; a nil
+// SiteID matches all target sites.
+type Filter struct {
+	// ActionPrefix, when non-empty, restricts results to entries whose action
+	// starts with this string (prefix match). An exact action string also works
+	// because it is a prefix of itself.
+	ActionPrefix string
+	// SiteID, when non-nil, restricts results to entries whose target_type is
+	// "site" and target_id equals this UUID (string form). All file-manager,
+	// perf, backup, and other per-site actions write their siteID as target_id
+	// with target_type="site", so this filter correctly captures the full
+	// per-site timeline without a schema change to audit_log.
+	SiteID *uuid.UUID
+}
+
+// ListFiltered returns a page of a tenant's audit entries with optional
+// action-prefix and site-id filters applied. RLS is the primary tenancy gate;
+// the explicit tenantID in the query is defense-in-depth. The hash/prev_hash
+// fields are included so the integrity badge on the web layer keeps working.
+func (r *Recorder) ListFiltered(ctx context.Context, tenantID uuid.UUID, f Filter, limit, offset int32) ([]Entry, error) {
+	// Sentinel zero UUID disables the site_id filter in the SQL (see query).
+	siteIDStr := "00000000-0000-0000-0000-000000000000"
+	if f.SiteID != nil {
+		siteIDStr = f.SiteID.String()
+	}
+	var out []Entry
+	err := r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		rows, err := sqlc.New(tx).ListAuditEntriesFiltered(ctx, sqlc.ListAuditEntriesFilteredParams{
+			TenantID:     tenantID,
+			ActionPrefix: f.ActionPrefix,
+			SiteID:       siteIDStr,
+			RowOffset:    offset,
+			RowLimit:     limit,
+		})
 		if err != nil {
 			return domain.Internal("audit_list_failed", "failed to list audit entries").WithCause(err)
 		}

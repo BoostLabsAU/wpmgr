@@ -889,6 +889,22 @@ export type UpdateRun = {
   scheduled_at?: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks array is returned instead).
+   */
+  task_count?: number;
+  /**
+   * Number of tasks that reached `succeeded` status.
+   */
+  succeeded_count?: number;
+  /**
+   * Number of tasks that reached `failed` or `rolled_back` status.
+   */
+  failed_count?: number;
+  /**
+   * Number of distinct sites targeted by this run.
+   */
+  site_count?: number;
   tasks?: Array<UpdateTask>;
 };
 
@@ -4885,6 +4901,661 @@ export type ObjectCacheStatsHistory = {
 };
 
 /**
+ * One entry in a site directory listing.
+ */
+export type FileEntry = {
+  /**
+   * Filename (basename only; no directory component).
+   */
+  name: string;
+  /**
+   * File size in bytes (0 for directories).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * Human-readable permission string (e.g. "-rw-r--r--").
+   */
+  mode: string;
+  /**
+   * True when the entry is a directory.
+   */
+  is_dir: boolean;
+  /**
+   * True when the entry is a symlink. The agent never follows symlinks.
+   */
+  is_link: boolean;
+  /**
+   * True when the agent process can write to this entry.
+   */
+  is_writable: boolean;
+};
+
+/**
+ * One page of directory entries from a `file_list` agent command.
+ */
+export type FileListResult = {
+  /**
+   * Absolute resolved path (echoed from the agent).
+   */
+  path: string;
+  entries: Array<FileEntry>;
+  /**
+   * Total count of entries in the directory (before cursor pagination).
+   */
+  total: number;
+  /**
+   * True when more entries remain beyond this page.
+   */
+  truncated: boolean;
+  /**
+   * Opaque resume cursor; present only when `truncated=true`.
+   */
+  cursor?: string;
+};
+
+/**
+ * Inline base64-encoded content of a file (≤ 256 KiB).
+ */
+export type FileReadResult = {
+  /**
+   * Echoed path.
+   */
+  path: string;
+  /**
+   * Full file size in bytes (before any byte-cap truncation).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * Human-readable permission string.
+   */
+  mode: string;
+  /**
+   * Always "base64" in v1.
+   */
+  encoding: "base64";
+  /**
+   * Base64-encoded file content (up to 256 KiB).
+   */
+  content_base64: string;
+  /**
+   * True when the file was larger than the byte cap (256 KiB). Use the download endpoint to retrieve the full file.
+   *
+   */
+  truncated: boolean;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/download`.
+ */
+export type FileDownloadRequest = {
+  /**
+   * Site-relative path to the file to stage for download.
+   */
+  path: string;
+};
+
+/**
+ * Presigned download URL and transfer metadata returned by the `file_download_prepare` flow.
+ *
+ */
+export type FileDownloadResult = {
+  ok: boolean;
+  /**
+   * CP-assigned transfer ID (for audit correlation).
+   */
+  transfer_id: string;
+  /**
+   * Presigned GET URL for the browser to fetch the staged file directly from object storage. Valid for at most 5 minutes. Never log this URL.
+   *
+   */
+  download_url: string;
+  /**
+   * Staged file size in bytes.
+   */
+  size_bytes: number;
+  /**
+   * Number of S3 parts the agent uploaded.
+   */
+  chunk_count: number;
+  /**
+   * Unix epoch seconds when the presigned GET URL expires.
+   */
+  expires_at: number;
+};
+
+/**
+ * Per-site file manager configuration. Returned by both `GET /sites/{siteId}/files/settings` and `PUT /sites/{siteId}/files/settings`.
+ *
+ */
+export type FileManagerSettings = {
+  /**
+   * Whether the file manager read mode is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).
+   *
+   */
+  enabled: boolean;
+  /**
+   * Whether the file manager write mode is enabled for this site (P2). Separate opt-in from `enabled` so read and write can be toggled independently. Defaults to `false`. Both `enabled` AND `write_enabled` must be `true` before any write/delete/chmod/ mkdir/rename/upload command will be signed.
+   *
+   */
+  write_enabled: boolean;
+  /**
+   * The filesystem root the agent restricts all file operations to. Always `""` in P1/P2 — the agent defaults to the site's `ABSPATH`. Reserved for future P3 configuration.
+   *
+   */
+  root_jail: string;
+};
+
+/**
+ * Request body for `PUT /sites/{siteId}/files/settings`.
+ */
+export type UpdateFileManagerSettingsRequest = {
+  /**
+   * Set to `true` to enable the file manager (read), `false` to disable it.
+   */
+  enabled: boolean;
+  /**
+   * Set to `true` to also enable write mode (P2). Defaults to `false` when omitted (the read flag is updated but write remains off).
+   *
+   */
+  write_enabled?: boolean;
+};
+
+/**
+ * Request body for `PUT /sites/{siteId}/files/content`.
+ */
+export type WriteFileContentRequest = {
+  /**
+   * Site-relative file path to create or overwrite.
+   */
+  path: string;
+  /**
+   * Base64-encoded file content (≤ 256 KiB).
+   */
+  content_base64: string;
+  /**
+   * Must be `true` when the target path matches the executable-extension deny-list (`.php`, `.phar`, `.htaccess`, etc.) or is inside a PHP-executable web directory. Requires owner permission (`site.files.write_code`). Absence causes a `403 executable_write_denied` from the agent.
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Must be `true` when the target path matches the sensitive-file deny-list (`wp-config.php`, `.env*`, `*.pem`, etc.). Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `PUT /sites/{siteId}/files/content`.
+ */
+export type WriteFileResult = {
+  /**
+   * Resolved path of the written file (echoed).
+   */
+  path: string;
+  /**
+   * Bytes written.
+   */
+  size: number;
+  /**
+   * Last-modified time after the write (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * 4-digit octal permission string, e.g. `"0644"`.
+   */
+  mode: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/mkdir`.
+ */
+export type FileMkdirRequest = {
+  /**
+   * Site-relative path for the new directory.
+   */
+  path: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/mkdir`.
+ */
+export type FileMkdirResult = {
+  /**
+   * Resolved path of the created directory (echoed).
+   */
+  path: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/rename`.
+ */
+export type FileRenameRequest = {
+  /**
+   * Site-relative source path (must exist).
+   */
+  src: string;
+  /**
+   * Site-relative destination path.
+   */
+  dst: string;
+  /**
+   * Required when `dst` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Required when either `src` or `dst` is a sensitive path. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/rename`.
+ */
+export type FileRenameResult = {
+  src: string;
+  dst: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/delete`.
+ */
+export type FileDeleteRequest = {
+  /**
+   * Site-relative path to delete.
+   */
+  path: string;
+  /**
+   * When `true`, recursively delete a non-empty directory and all its contents. When `false`, the agent refuses to delete a non-empty directory (returns `400 not_directory`).
+   *
+   */
+  recursive?: boolean;
+  /**
+   * Typed confirmation token — must be the string `"DELETE"` exactly. Missing or wrong value returns `400 confirm_required` without issuing the delete command to the agent.
+   *
+   */
+  confirm: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/delete`.
+ */
+export type FileDeleteResult = {
+  /**
+   * Echoed path that was deleted.
+   */
+  path: string;
+  /**
+   * Number of filesystem entries removed (1 for a file; ≥1 for a recursive directory removal).
+   *
+   */
+  deleted: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/chmod`.
+ */
+export type FileChmodRequest = {
+  /**
+   * Site-relative path.
+   */
+  path: string;
+  /**
+   * 4-digit octal permission string, e.g. `"0644"` or `"0755"`. The agent validates against a safe allowlist — no setuid, no setgid, no world-write.
+   *
+   */
+  mode: string;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/chmod`.
+ */
+export type FileChmodResult = {
+  path: string;
+  /**
+   * Effective mode after the chmod (echoed).
+   */
+  mode: string;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/upload`.
+ */
+export type PrepareUploadRequest = {
+  /**
+   * Site-relative target path for the uploaded file.
+   */
+  path: string;
+  /**
+   * Number of chunks the browser will PUT. Each chunk corresponds to one presigned S3 PUT URL. Use 1 for files ≤ 5 MiB; increase for larger files (max 32 × 5 MiB = 160 MiB total).
+   *
+   */
+  part_count?: number;
+  /**
+   * Required when `path` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Required when `path` matches the sensitive-file deny-list. Requires owner permission (`site.files.write_code`).
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * One presigned S3 PUT slot returned by `prepareSiteFileUpload`.
+ */
+export type PrepareUploadPresignedPut = {
+  /**
+   * Zero-based chunk index.
+   */
+  index: number;
+  /**
+   * Presigned S3 PUT URL. Short TTL (≤ 5 min). Single-use. The browser PUTs the corresponding chunk bytes directly to this URL.
+   *
+   */
+  url: string;
+};
+
+/**
+ * Response body for `POST /sites/{siteId}/files/upload`.
+ */
+export type PrepareUploadResult = {
+  ok: boolean;
+  /**
+   * Opaque transfer ID — pass to `applySiteFileUpload` for audit.
+   */
+  transfer_id: string;
+  /**
+   * S3 key prefix for the staged chunks. Pass to `applySiteFileUpload` so the CP can mint presigned GETs for the agent.
+   *
+   */
+  object_key: string;
+  presigned_puts: Array<PrepareUploadPresignedPut>;
+  /**
+   * Unix epoch seconds when the presigned URLs expire (≤ 5 min from now).
+   */
+  expires_at: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/upload/apply`.
+ */
+export type ApplyUploadRequest = {
+  /**
+   * Site-relative target path (must match the prepare call).
+   */
+  path: string;
+  /**
+   * The `object_key` returned by `prepareSiteFileUpload`.
+   */
+  object_key: string;
+  /**
+   * Number of chunks staged (must match `part_count` from the prepare call).
+   */
+  part_count: number;
+  /**
+   * Expected assembled file size in bytes.
+   */
+  total_size: number;
+  /**
+   * Hex-encoded SHA-256 of the fully assembled file content. The agent validates this after reassembly and before the atomic swap; a mismatch returns `400 write_failed`.
+   *
+   */
+  sha256: string;
+  /**
+   * Mirrors the prepare call — required for executable target paths.
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Mirrors the prepare call — required for sensitive target paths.
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/upload/apply`.
+ */
+export type ApplyUploadResult = {
+  ok: boolean;
+  /**
+   * Resolved path of the written file (echoed).
+   */
+  path: string;
+  /**
+   * Bytes written (should match `total_size`).
+   */
+  size: number;
+  /**
+   * Last-modified time after the atomic swap (Unix epoch seconds).
+   */
+  mtime: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/archive`.
+ */
+export type FileArchiveCreateRequest = {
+  /**
+   * Site-relative paths to include in the archive. The agent runs each through the containment guard; at least one path is required.
+   *
+   */
+  paths: Array<string>;
+  /**
+   * Must be `true` when any path in `paths` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.read_sensitive`). A non-owner caller or a caller that omits this flag when a sensitive path is present is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Presigned download URL and transfer metadata returned by the `file_archive_create` flow.
+ *
+ */
+export type FileArchiveCreateResult = {
+  ok: boolean;
+  /**
+   * CP-assigned transfer ID (for audit correlation).
+   */
+  transfer_id: string;
+  /**
+   * Presigned GET URL for the browser to download the staged archive directly from object storage. Valid for at most 5 minutes. Never log this URL.
+   *
+   */
+  download_url: string;
+  /**
+   * Total archive size in bytes.
+   */
+  size_bytes: number;
+  /**
+   * Number of S3 parts the agent uploaded.
+   */
+  chunk_count: number;
+  /**
+   * Unix epoch seconds when the presigned GET URL expires (≤ 5 min from now).
+   */
+  expires_at: number;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/extract`.
+ */
+export type FileExtractRequest = {
+  /**
+   * Site-relative path to the ZIP archive to extract.
+   */
+  archive_path: string;
+  /**
+   * Site-relative destination directory. Created if absent.
+   */
+  dest_path: string;
+  /**
+   * Must be `true` when any archive entry would resolve to an executable-extension path (php, phar, htaccess, …). Requires owner permission (`site.files.write_code`). A non-owner passing this is rejected at the CP (agent never called) and the denial is audited at elevated severity.
+   *
+   */
+  confirm_executable_write?: boolean;
+  /**
+   * Must be `true` when any archive entry would resolve to a sensitive path (wp-config.php, .env*, *.pem, …). Same owner gate as `confirm_executable_write`.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/extract`.
+ */
+export type FileExtractResult = {
+  /**
+   * Resolved destination directory path (echoed).
+   */
+  dest_path: string;
+  /**
+   * Number of entries extracted from the archive.
+   */
+  extracted: number;
+};
+
+/**
+ * One result in a `file_search` response.
+ */
+export type FileSearchMatch = {
+  /**
+   * Site-relative path of the matching file or directory.
+   */
+  path: string;
+  /**
+   * Basename of the entry.
+   */
+  name: string;
+  /**
+   * File size in bytes (0 for directories).
+   */
+  size: number;
+  /**
+   * Last-modified time as Unix epoch seconds.
+   */
+  mtime: number;
+  /**
+   * True when the matched entry is a directory.
+   */
+  is_dir: boolean;
+  /**
+   * Line number of the match within the file (`content` mode only; absent for `name` mode).
+   *
+   */
+  line?: number;
+  /**
+   * Surrounding text context for the match (`content` mode only; absent for `name` mode). Never contains content from sensitive paths.
+   *
+   */
+  snippet?: string;
+};
+
+/**
+ * Paginated list of search results from a `file_search` agent command.
+ *
+ */
+export type FileSearchResult = {
+  matches: Array<FileSearchMatch>;
+  /**
+   * True when more results remain beyond this page.
+   */
+  truncated: boolean;
+  /**
+   * Opaque resume cursor; present only when `truncated=true`.
+   */
+  cursor?: string;
+};
+
+/**
+ * One version entry in a file's version history.
+ */
+export type FileVersion = {
+  /**
+   * Opaque version identifier. Pass to `POST /files/versions/restore` to restore this version.
+   *
+   */
+  version_id: string;
+  /**
+   * File size in bytes at this version.
+   */
+  size: number;
+  /**
+   * Last-modified time of this version (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * When this version was created (Unix epoch seconds). May equal `mtime` when the agent derives both from the same filesystem timestamp.
+   *
+   */
+  created_at: number;
+};
+
+/**
+ * Version history for a file, ordered newest-first, from a `file_versions_list` agent command.
+ *
+ */
+export type FileVersionsResult = {
+  /**
+   * List of versions ordered newest-first. Empty when the agent has no history for the path (no version system configured or no prior writes).
+   *
+   */
+  versions: Array<FileVersion>;
+};
+
+/**
+ * Request body for `POST /sites/{siteId}/files/versions/restore`.
+ */
+export type FileVersionRestoreRequest = {
+  /**
+   * Site-relative path of the file to restore.
+   */
+  path: string;
+  /**
+   * Opaque version identifier returned by `GET /files/versions?path=…`. Returns `404 no_such_version` when the ID does not exist for the path.
+   *
+   */
+  version_id: string;
+  /**
+   * Must be `true` when `path` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.write_code`). A non-owner caller or a caller that omits this flag when the path is sensitive is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.
+   *
+   */
+  confirm_sensitive?: boolean;
+};
+
+/**
+ * Response body for a successful `POST /sites/{siteId}/files/versions/restore`.
+ */
+export type FileVersionRestoreResult = {
+  /**
+   * Resolved path of the restored file (echoed).
+   */
+  path: string;
+  /**
+   * Size of the restored file in bytes.
+   */
+  size: number;
+  /**
+   * Last-modified time after restore (Unix epoch seconds).
+   */
+  mtime: number;
+  /**
+   * The version ID that was restored (echoed for audit correlation).
+   */
+  version_id: string;
+};
+
+/**
  * The full per-site performance configuration. `cdn_credentials` is
  * write-only (see CdnCredentials); `cdn_has_credentials` and the
  * install-state fields (`server_software`, `dropin_installed`,
@@ -6022,6 +6693,16 @@ export type ListAuditData = {
   query?: {
     limit?: number;
     offset?: number;
+    /**
+     * Prefix-match filter on the `action` field. Passing `site.files.` returns every file-manager event; passing an exact action string (e.g. `site.files.delete`) also works because it is a prefix of itself. Omit to return all actions.
+     *
+     */
+    action?: string;
+    /**
+     * UUID of a specific site. When set, only entries whose `target_type` is `"site"` and `target_id` matches this UUID are returned. All per-site actions (file-manager, perf, backup, cache, security, …) write the site UUID as `target_id` with `target_type="site"`, so this filter produces a complete per-site timeline. Omit to return entries for all sites.
+     *
+     */
+    site_id?: string;
   };
   url: "/api/v1/audit";
 };
@@ -11691,3 +12372,767 @@ export type DownloadPortalReportResponses = {
 
 export type DownloadPortalReportResponse =
   DownloadPortalReportResponses[keyof DownloadPortalReportResponses];
+
+export type GetSiteFilesSettingsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/settings";
+};
+
+export type GetSiteFilesSettingsErrors = {
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type GetSiteFilesSettingsError =
+  GetSiteFilesSettingsErrors[keyof GetSiteFilesSettingsErrors];
+
+export type GetSiteFilesSettingsResponses = {
+  /**
+   * Current file manager settings
+   */
+  200: FileManagerSettings;
+};
+
+export type GetSiteFilesSettingsResponse =
+  GetSiteFilesSettingsResponses[keyof GetSiteFilesSettingsResponses];
+
+export type UpdateSiteFilesSettingsData = {
+  body: UpdateFileManagerSettingsRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/settings";
+};
+
+export type UpdateSiteFilesSettingsErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type UpdateSiteFilesSettingsError =
+  UpdateSiteFilesSettingsErrors[keyof UpdateSiteFilesSettingsErrors];
+
+export type UpdateSiteFilesSettingsResponses = {
+  /**
+   * Updated file manager settings
+   */
+  200: FileManagerSettings;
+};
+
+export type UpdateSiteFilesSettingsResponse =
+  UpdateSiteFilesSettingsResponses[keyof UpdateSiteFilesSettingsResponses];
+
+export type ListSiteFilesData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: {
+    /**
+     * Site-relative directory path to list (forward-slash separated).
+     */
+    path?: string;
+    /**
+     * Opaque resume cursor from a prior response with `truncated=true`. Absent means start from the beginning of the directory.
+     *
+     */
+    cursor?: string;
+  };
+  url: "/api/v1/sites/{siteId}/files";
+};
+
+export type ListSiteFilesErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListSiteFilesError = ListSiteFilesErrors[keyof ListSiteFilesErrors];
+
+export type ListSiteFilesResponses = {
+  /**
+   * Directory listing
+   */
+  200: FileListResult;
+};
+
+export type ListSiteFilesResponse =
+  ListSiteFilesResponses[keyof ListSiteFilesResponses];
+
+export type ReadSiteFileContentData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative file path to read.
+     */
+    path: string;
+    /**
+     * Must be `true` when reading a sensitive path (wp-config.php, .env*, *.pem, *.key, id_rsa*, .git/, .htpasswd, auth.json). Absent or false causes a 403 for sensitive paths regardless of role.
+     *
+     */
+    confirm_sensitive?: boolean;
+  };
+  url: "/api/v1/sites/{siteId}/files/content";
+};
+
+export type ReadSiteFileContentErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * File is too large for inline read. Use the download endpoint (`POST /sites/{siteId}/files/download`) for files > 256 KiB.
+   *
+   */
+  413: Error;
+};
+
+export type ReadSiteFileContentError =
+  ReadSiteFileContentErrors[keyof ReadSiteFileContentErrors];
+
+export type ReadSiteFileContentResponses = {
+  /**
+   * File content (base64-encoded)
+   */
+  200: FileReadResult;
+};
+
+export type ReadSiteFileContentResponse =
+  ReadSiteFileContentResponses[keyof ReadSiteFileContentResponses];
+
+export type WriteSiteFileContentData = {
+  body: WriteFileContentRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/content";
+};
+
+export type WriteSiteFileContentErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type WriteSiteFileContentError =
+  WriteSiteFileContentErrors[keyof WriteSiteFileContentErrors];
+
+export type WriteSiteFileContentResponses = {
+  /**
+   * File written successfully
+   */
+  200: WriteFileResult;
+};
+
+export type WriteSiteFileContentResponse =
+  WriteSiteFileContentResponses[keyof WriteSiteFileContentResponses];
+
+export type CreateSiteDirectoryData = {
+  body: FileMkdirRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/mkdir";
+};
+
+export type CreateSiteDirectoryErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type CreateSiteDirectoryError =
+  CreateSiteDirectoryErrors[keyof CreateSiteDirectoryErrors];
+
+export type CreateSiteDirectoryResponses = {
+  /**
+   * Directory created
+   */
+  200: FileMkdirResult;
+};
+
+export type CreateSiteDirectoryResponse =
+  CreateSiteDirectoryResponses[keyof CreateSiteDirectoryResponses];
+
+export type RenameSiteFileData = {
+  body: FileRenameRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/rename";
+};
+
+export type RenameSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Conflict — resource is referenced and cannot be deleted
+   */
+  409: Error;
+};
+
+export type RenameSiteFileError =
+  RenameSiteFileErrors[keyof RenameSiteFileErrors];
+
+export type RenameSiteFileResponses = {
+  /**
+   * Rename succeeded
+   */
+  200: FileRenameResult;
+};
+
+export type RenameSiteFileResponse =
+  RenameSiteFileResponses[keyof RenameSiteFileResponses];
+
+export type DeleteSiteFileData = {
+  body: FileDeleteRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/delete";
+};
+
+export type DeleteSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type DeleteSiteFileError =
+  DeleteSiteFileErrors[keyof DeleteSiteFileErrors];
+
+export type DeleteSiteFileResponses = {
+  /**
+   * Delete succeeded
+   */
+  200: FileDeleteResult;
+};
+
+export type DeleteSiteFileResponse =
+  DeleteSiteFileResponses[keyof DeleteSiteFileResponses];
+
+export type ChmodSiteFileData = {
+  body: FileChmodRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/chmod";
+};
+
+export type ChmodSiteFileErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ChmodSiteFileError = ChmodSiteFileErrors[keyof ChmodSiteFileErrors];
+
+export type ChmodSiteFileResponses = {
+  /**
+   * Chmod succeeded
+   */
+  200: FileChmodResult;
+};
+
+export type ChmodSiteFileResponse =
+  ChmodSiteFileResponses[keyof ChmodSiteFileResponses];
+
+export type PrepareSiteFileUploadData = {
+  body: PrepareUploadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/upload";
+};
+
+export type PrepareSiteFileUploadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type PrepareSiteFileUploadError =
+  PrepareSiteFileUploadErrors[keyof PrepareSiteFileUploadErrors];
+
+export type PrepareSiteFileUploadResponses = {
+  /**
+   * Presigned PUT URLs and transfer metadata
+   */
+  200: PrepareUploadResult;
+};
+
+export type PrepareSiteFileUploadResponse =
+  PrepareSiteFileUploadResponses[keyof PrepareSiteFileUploadResponses];
+
+export type ApplySiteFileUploadData = {
+  body: ApplyUploadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/upload/apply";
+};
+
+export type ApplySiteFileUploadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type ApplySiteFileUploadError =
+  ApplySiteFileUploadErrors[keyof ApplySiteFileUploadErrors];
+
+export type ApplySiteFileUploadResponses = {
+  /**
+   * Upload applied successfully
+   */
+  200: ApplyUploadResult;
+};
+
+export type ApplySiteFileUploadResponse =
+  ApplySiteFileUploadResponses[keyof ApplySiteFileUploadResponses];
+
+export type PrepareSiteFileDownloadData = {
+  body: FileDownloadRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/download";
+};
+
+export type PrepareSiteFileDownloadErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type PrepareSiteFileDownloadError =
+  PrepareSiteFileDownloadErrors[keyof PrepareSiteFileDownloadErrors];
+
+export type PrepareSiteFileDownloadResponses = {
+  /**
+   * Presigned download URL and transfer metadata
+   */
+  200: FileDownloadResult;
+};
+
+export type PrepareSiteFileDownloadResponse =
+  PrepareSiteFileDownloadResponses[keyof PrepareSiteFileDownloadResponses];
+
+export type CreateSiteFileArchiveData = {
+  body: FileArchiveCreateRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/archive";
+};
+
+export type CreateSiteFileArchiveErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Object storage is not configured
+   */
+  503: Error;
+};
+
+export type CreateSiteFileArchiveError =
+  CreateSiteFileArchiveErrors[keyof CreateSiteFileArchiveErrors];
+
+export type CreateSiteFileArchiveResponses = {
+  /**
+   * Archive created and presigned download URL returned
+   */
+  200: FileArchiveCreateResult;
+};
+
+export type CreateSiteFileArchiveResponse =
+  CreateSiteFileArchiveResponses[keyof CreateSiteFileArchiveResponses];
+
+export type ExtractSiteFileArchiveData = {
+  body: FileExtractRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/extract";
+};
+
+export type ExtractSiteFileArchiveErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+  /**
+   * Archive is structurally valid but contains unsafe entries (`zip_slip` — path traversal outside destination, or `zip_bomb` — exceeds uncompressed-size / entry-count guard).
+   *
+   */
+  422: Error;
+};
+
+export type ExtractSiteFileArchiveError =
+  ExtractSiteFileArchiveErrors[keyof ExtractSiteFileArchiveErrors];
+
+export type ExtractSiteFileArchiveResponses = {
+  /**
+   * Archive extracted successfully
+   */
+  200: FileExtractResult;
+};
+
+export type ExtractSiteFileArchiveResponse =
+  ExtractSiteFileArchiveResponses[keyof ExtractSiteFileArchiveResponses];
+
+export type SearchSiteFilesData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative root directory to search under.
+     */
+    path?: string;
+    /**
+     * Search term (filename substring for `name` mode; grep pattern for `content` mode).
+     */
+    q: string;
+    /**
+     * Search mode. `name` matches filenames; `content` greps file contents and returns line number + surrounding snippet.
+     *
+     */
+    mode?: "name" | "content";
+    /**
+     * Opaque resume cursor from a prior truncated response.
+     */
+    cursor?: string;
+  };
+  url: "/api/v1/sites/{siteId}/files/search";
+};
+
+export type SearchSiteFilesErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type SearchSiteFilesError =
+  SearchSiteFilesErrors[keyof SearchSiteFilesErrors];
+
+export type SearchSiteFilesResponses = {
+  /**
+   * Search results (possibly paginated)
+   */
+  200: FileSearchResult;
+};
+
+export type SearchSiteFilesResponse =
+  SearchSiteFilesResponses[keyof SearchSiteFilesResponses];
+
+export type ListSiteFileVersionsData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query: {
+    /**
+     * Site-relative file path to retrieve version history for.
+     */
+    path: string;
+  };
+  url: "/api/v1/sites/{siteId}/files/versions";
+};
+
+export type ListSiteFileVersionsErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type ListSiteFileVersionsError =
+  ListSiteFileVersionsErrors[keyof ListSiteFileVersionsErrors];
+
+export type ListSiteFileVersionsResponses = {
+  /**
+   * Version history for the file
+   */
+  200: FileVersionsResult;
+};
+
+export type ListSiteFileVersionsResponse =
+  ListSiteFileVersionsResponses[keyof ListSiteFileVersionsResponses];
+
+export type RestoreSiteFileVersionData = {
+  body: FileVersionRestoreRequest;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/files/versions/restore";
+};
+
+export type RestoreSiteFileVersionErrors = {
+  /**
+   * Validation error
+   */
+  400: Error;
+  /**
+   * Not authenticated
+   */
+  401: Error;
+  /**
+   * Insufficient permission
+   */
+  403: Error;
+  /**
+   * Resource not found
+   */
+  404: Error;
+};
+
+export type RestoreSiteFileVersionError =
+  RestoreSiteFileVersionErrors[keyof RestoreSiteFileVersionErrors];
+
+export type RestoreSiteFileVersionResponses = {
+  /**
+   * File restored to the specified version
+   */
+  200: FileVersionRestoreResult;
+};
+
+export type RestoreSiteFileVersionResponse =
+  RestoreSiteFileVersionResponses[keyof RestoreSiteFileVersionResponses];

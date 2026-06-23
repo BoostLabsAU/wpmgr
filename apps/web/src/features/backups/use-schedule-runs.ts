@@ -77,8 +77,8 @@ async function apiGet<T>(url: string): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// useScheduleRuns — GET /api/v1/sites/{siteId}/schedule-runs?status=both
-// Returns { upcoming, past } splits from the full list.
+// useScheduleRuns — GET /api/v1/sites/{siteId}/schedule-runs
+// Omitting ?status returns both sets in one response: { upcoming, past }.
 // ---------------------------------------------------------------------------
 
 export interface UseScheduleRunsResult {
@@ -93,22 +93,14 @@ export function useScheduleRuns(
   return useQuery({
     queryKey: scheduleKeys.forSite(siteId),
     queryFn: async () => {
-      const data = await apiGet<{ items: ScheduleRun[] }>(
-        `/api/v1/sites/${encodeURIComponent(siteId)}/schedule-runs?status=both`,
+      // The CP returns { upcoming: [], past: [] } directly — no status filter
+      // needed; omitting ?status returns both sets in one response.
+      const data = await apiGet<{ upcoming: ScheduleRun[]; past: ScheduleRun[] }>(
+        `/api/v1/sites/${encodeURIComponent(siteId)}/schedule-runs`,
       );
-      const items = data.items ?? [];
-      const now = Date.now();
-      const upcoming = items.filter(
-        (r) =>
-          !isScheduleRunTerminal(r.status) ||
-          new Date(r.scheduled_for).getTime() > now,
-      );
-      const past = items.filter(
-        (r) =>
-          isScheduleRunTerminal(r.status) &&
-          new Date(r.scheduled_for).getTime() <= now,
-      );
-      return { all: items, upcoming, past };
+      const upcoming = data.upcoming ?? [];
+      const past = data.past ?? [];
+      return { all: [...upcoming, ...past], upcoming, past };
     },
     refetchInterval: (query) => {
       const items = query.state.data?.all ?? [];

@@ -100,8 +100,28 @@ function UpdatesPage() {
                       <Badge variant="secondary">Live</Badge>
                     )}
                   </TableCell>
-                  <TableCell className="tabular-nums text-[var(--color-muted-foreground)]">
-                    {run.tasks?.length ?? 0}
+                  <TableCell>
+                    <div className="flex flex-wrap items-center gap-1.5 tabular-nums">
+                      <span className="text-[var(--color-muted-foreground)]">
+                        {run.task_count ?? 0}
+                      </span>
+                      {(run.failed_count ?? 0) > 0 ? (
+                        <Badge
+                          variant="destructive"
+                          className="rounded-sm px-1.5 py-0 text-xs tabular-nums"
+                        >
+                          {run.failed_count} failed
+                        </Badge>
+                      ) : null}
+                      {(run.site_count ?? 0) > 0 ? (
+                        <Badge
+                          variant="muted"
+                          className="rounded-sm px-1.5 py-0 text-xs tabular-nums"
+                        >
+                          {run.site_count} site{run.site_count === 1 ? "" : "s"}
+                        </Badge>
+                      ) : null}
+                    </div>
                   </TableCell>
                   <TableCell className="text-[var(--color-muted-foreground)]">
                     <time dateTime={run.created_at}>

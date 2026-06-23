@@ -43,6 +43,23 @@ if (!function_exists('wp_parse_url')) {
 // Filesystem helpers
 // ---------------------------------------------------------------------------
 
+if (!function_exists('get_temp_dir')) {
+    /**
+     * Returns the directory WordPress uses for temporary files.
+     * Mirrors the real WP implementation: honours WP_TEMP_DIR when defined,
+     * then falls back to sys_get_temp_dir() with a trailing slash.
+     *
+     * @return string Absolute path with trailing slash.
+     */
+    function get_temp_dir(): string
+    {
+        if (defined('WP_TEMP_DIR') && is_string(WP_TEMP_DIR) && WP_TEMP_DIR !== '') {
+            return rtrim((string) WP_TEMP_DIR, '/\\') . '/';
+        }
+        return rtrim(sys_get_temp_dir(), '/\\') . '/';
+    }
+}
+
 if (!function_exists('wp_mkdir_p')) {
     /**
      * Recursively creates directories — mirrors the real WP implementation.
@@ -330,6 +347,46 @@ if (!class_exists('Redis')) {
 
         /** flushDB async flag for phpredis >= 6.0. */
         public const FLUSHDB_ASYNC = true;
+    }
+}
+
+if (!function_exists('get_core_updates')) {
+    /**
+     * Returns available WordPress core update objects — passthrough stub for tests.
+     *
+     * Real WP loads this from wp-admin/includes/update.php and queries the
+     * update_core transient. The test stub returns an empty array so
+     * MetadataCommand::coreUpdate() finds no pending updates without side effects.
+     * Tests that need a specific response override via Functions\when().
+     *
+     * @return array<int,object> Array of update objects.
+     */
+    function get_core_updates(): array
+    {
+        return [];
+    }
+}
+
+if (!function_exists('wp_upload_dir')) {
+    /**
+     * Returns information about the upload directory — passthrough stub for tests.
+     *
+     * Real WP reads wp-config and per-post upload path overrides. The test stub
+     * returns an empty array so callers that use `isset($info['basedir'])` safely
+     * get no value and skip any uploads-dir-dependent code path. Tests that need
+     * a specific basedir must override via Functions\when('wp_upload_dir')->justReturn([...]).
+     *
+     * Defined here (Patchwork-transformable) so that once MetadataCommand or any
+     * file-manager code triggers function_exists('wp_upload_dir') to return true
+     * process-wide, Brain Monkey can still intercept calls to it in tests that
+     * explicitly mock it — without throwing MissingFunctionExpectations in tests
+     * that do not mock it (those get this safe empty-array default).
+     *
+     * @return array<string,string> Upload directory info, or empty on failure.
+     */
+    function wp_upload_dir(): array
+    {
+        return [];
     }
 }
 

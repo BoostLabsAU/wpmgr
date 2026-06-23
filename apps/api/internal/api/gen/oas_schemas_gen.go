@@ -1730,6 +1730,166 @@ func (s *ApiKeyList) SetItems(val []ApiKey) {
 
 func (*ApiKeyList) listApiKeysRes() {}
 
+type ApplySiteFileUploadBadRequest Error
+
+func (*ApplySiteFileUploadBadRequest) applySiteFileUploadRes() {}
+
+type ApplySiteFileUploadForbidden Error
+
+func (*ApplySiteFileUploadForbidden) applySiteFileUploadRes() {}
+
+type ApplySiteFileUploadServiceUnavailable Error
+
+func (*ApplySiteFileUploadServiceUnavailable) applySiteFileUploadRes() {}
+
+type ApplySiteFileUploadUnauthorized Error
+
+func (*ApplySiteFileUploadUnauthorized) applySiteFileUploadRes() {}
+
+// Request body for `POST /sites/{siteId}/files/upload/apply`.
+// Ref: #/components/schemas/ApplyUploadRequest
+type ApplyUploadRequest struct {
+	// Site-relative target path (must match the prepare call).
+	Path string `json:"path"`
+	// The `object_key` returned by `prepareSiteFileUpload`.
+	ObjectKey string `json:"object_key"`
+	// Number of chunks staged (must match `part_count` from the prepare call).
+	PartCount int `json:"part_count"`
+	// Expected assembled file size in bytes.
+	TotalSize int64 `json:"total_size"`
+	// Hex-encoded SHA-256 of the fully assembled file content. The agent validates this after reassembly
+	// and before the atomic swap; a mismatch returns `400 write_failed`.
+	SHA256 string `json:"sha256"`
+	// Mirrors the prepare call — required for executable target paths.
+	ConfirmExecutableWrite OptBool `json:"confirm_executable_write"`
+	// Mirrors the prepare call — required for sensitive target paths.
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetPath returns the value of Path.
+func (s *ApplyUploadRequest) GetPath() string {
+	return s.Path
+}
+
+// GetObjectKey returns the value of ObjectKey.
+func (s *ApplyUploadRequest) GetObjectKey() string {
+	return s.ObjectKey
+}
+
+// GetPartCount returns the value of PartCount.
+func (s *ApplyUploadRequest) GetPartCount() int {
+	return s.PartCount
+}
+
+// GetTotalSize returns the value of TotalSize.
+func (s *ApplyUploadRequest) GetTotalSize() int64 {
+	return s.TotalSize
+}
+
+// GetSHA256 returns the value of SHA256.
+func (s *ApplyUploadRequest) GetSHA256() string {
+	return s.SHA256
+}
+
+// GetConfirmExecutableWrite returns the value of ConfirmExecutableWrite.
+func (s *ApplyUploadRequest) GetConfirmExecutableWrite() OptBool {
+	return s.ConfirmExecutableWrite
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *ApplyUploadRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetPath sets the value of Path.
+func (s *ApplyUploadRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetObjectKey sets the value of ObjectKey.
+func (s *ApplyUploadRequest) SetObjectKey(val string) {
+	s.ObjectKey = val
+}
+
+// SetPartCount sets the value of PartCount.
+func (s *ApplyUploadRequest) SetPartCount(val int) {
+	s.PartCount = val
+}
+
+// SetTotalSize sets the value of TotalSize.
+func (s *ApplyUploadRequest) SetTotalSize(val int64) {
+	s.TotalSize = val
+}
+
+// SetSHA256 sets the value of SHA256.
+func (s *ApplyUploadRequest) SetSHA256(val string) {
+	s.SHA256 = val
+}
+
+// SetConfirmExecutableWrite sets the value of ConfirmExecutableWrite.
+func (s *ApplyUploadRequest) SetConfirmExecutableWrite(val OptBool) {
+	s.ConfirmExecutableWrite = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *ApplyUploadRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/upload/apply`.
+// Ref: #/components/schemas/ApplyUploadResult
+type ApplyUploadResult struct {
+	Ok bool `json:"ok"`
+	// Resolved path of the written file (echoed).
+	Path string `json:"path"`
+	// Bytes written (should match `total_size`).
+	Size int64 `json:"size"`
+	// Last-modified time after the atomic swap (Unix epoch seconds).
+	Mtime int64 `json:"mtime"`
+}
+
+// GetOk returns the value of Ok.
+func (s *ApplyUploadResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetPath returns the value of Path.
+func (s *ApplyUploadResult) GetPath() string {
+	return s.Path
+}
+
+// GetSize returns the value of Size.
+func (s *ApplyUploadResult) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *ApplyUploadResult) GetMtime() int64 {
+	return s.Mtime
+}
+
+// SetOk sets the value of Ok.
+func (s *ApplyUploadResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetPath sets the value of Path.
+func (s *ApplyUploadResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetSize sets the value of Size.
+func (s *ApplyUploadResult) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *ApplyUploadResult) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+func (*ApplyUploadResult) applySiteFileUploadRes() {}
+
 // ArchiveSiteNoContent is response for ArchiveSite operation.
 type ArchiveSiteNoContent struct{}
 
@@ -4438,6 +4598,22 @@ func (s *ChainBreakKind) UnmarshalText(data []byte) error {
 	}
 }
 
+type ChmodSiteFileBadRequest Error
+
+func (*ChmodSiteFileBadRequest) chmodSiteFileRes() {}
+
+type ChmodSiteFileForbidden Error
+
+func (*ChmodSiteFileForbidden) chmodSiteFileRes() {}
+
+type ChmodSiteFileNotFound Error
+
+func (*ChmodSiteFileNotFound) chmodSiteFileRes() {}
+
+type ChmodSiteFileUnauthorized Error
+
+func (*ChmodSiteFileUnauthorized) chmodSiteFileRes() {}
+
 // Ref: #/components/schemas/ClientInvitation
 type ClientInvitation struct {
 	ID        uuid.UUID `json:"id"`
@@ -6175,6 +6351,46 @@ type CreateSiteDestinationUnprocessableEntity Error
 
 func (*CreateSiteDestinationUnprocessableEntity) createSiteDestinationRes() {}
 
+type CreateSiteDirectoryBadRequest Error
+
+func (*CreateSiteDirectoryBadRequest) createSiteDirectoryRes() {}
+
+type CreateSiteDirectoryConflict Error
+
+func (*CreateSiteDirectoryConflict) createSiteDirectoryRes() {}
+
+type CreateSiteDirectoryForbidden Error
+
+func (*CreateSiteDirectoryForbidden) createSiteDirectoryRes() {}
+
+type CreateSiteDirectoryNotFound Error
+
+func (*CreateSiteDirectoryNotFound) createSiteDirectoryRes() {}
+
+type CreateSiteDirectoryUnauthorized Error
+
+func (*CreateSiteDirectoryUnauthorized) createSiteDirectoryRes() {}
+
+type CreateSiteFileArchiveBadRequest Error
+
+func (*CreateSiteFileArchiveBadRequest) createSiteFileArchiveRes() {}
+
+type CreateSiteFileArchiveForbidden Error
+
+func (*CreateSiteFileArchiveForbidden) createSiteFileArchiveRes() {}
+
+type CreateSiteFileArchiveNotFound Error
+
+func (*CreateSiteFileArchiveNotFound) createSiteFileArchiveRes() {}
+
+type CreateSiteFileArchiveServiceUnavailable Error
+
+func (*CreateSiteFileArchiveServiceUnavailable) createSiteFileArchiveRes() {}
+
+type CreateSiteFileArchiveUnauthorized Error
+
+func (*CreateSiteFileArchiveUnauthorized) createSiteFileArchiveRes() {}
+
 type CreateSiteShareAccepted SiteShareGrantResponse
 
 func (*CreateSiteShareAccepted) createSiteShareRes() {}
@@ -6983,6 +7199,22 @@ func (*DeleteSiteEmailSuppressionNotFound) deleteSiteEmailSuppressionRes() {}
 type DeleteSiteEmailSuppressionUnauthorized Error
 
 func (*DeleteSiteEmailSuppressionUnauthorized) deleteSiteEmailSuppressionRes() {}
+
+type DeleteSiteFileBadRequest Error
+
+func (*DeleteSiteFileBadRequest) deleteSiteFileRes() {}
+
+type DeleteSiteFileForbidden Error
+
+func (*DeleteSiteFileForbidden) deleteSiteFileRes() {}
+
+type DeleteSiteFileNotFound Error
+
+func (*DeleteSiteFileNotFound) deleteSiteFileRes() {}
+
+type DeleteSiteFileUnauthorized Error
+
+func (*DeleteSiteFileUnauthorized) deleteSiteFileRes() {}
 
 // DeleteSiteNoContent is response for DeleteSite operation.
 type DeleteSiteNoContent struct{}
@@ -8508,6 +8740,1215 @@ func (*ExportSiteEmailLogOKTextCsv) exportSiteEmailLogRes() {}
 type ExportSiteEmailLogUnauthorized Error
 
 func (*ExportSiteEmailLogUnauthorized) exportSiteEmailLogRes() {}
+
+type ExtractSiteFileArchiveBadRequest Error
+
+func (*ExtractSiteFileArchiveBadRequest) extractSiteFileArchiveRes() {}
+
+type ExtractSiteFileArchiveForbidden Error
+
+func (*ExtractSiteFileArchiveForbidden) extractSiteFileArchiveRes() {}
+
+type ExtractSiteFileArchiveNotFound Error
+
+func (*ExtractSiteFileArchiveNotFound) extractSiteFileArchiveRes() {}
+
+type ExtractSiteFileArchiveUnauthorized Error
+
+func (*ExtractSiteFileArchiveUnauthorized) extractSiteFileArchiveRes() {}
+
+type ExtractSiteFileArchiveUnprocessableEntity Error
+
+func (*ExtractSiteFileArchiveUnprocessableEntity) extractSiteFileArchiveRes() {}
+
+// Request body for `POST /sites/{siteId}/files/archive`.
+// Ref: #/components/schemas/FileArchiveCreateRequest
+type FileArchiveCreateRequest struct {
+	// Site-relative paths to include in the archive. The agent runs each through the containment guard;
+	// at least one path is required.
+	Paths []string `json:"paths"`
+	// Must be `true` when any path in `paths` matches the sensitive-file deny-list (wp-config.php, .env*,
+	//  *.pem, …). Requires owner permission (`site.files.read_sensitive`). A non-owner caller or a
+	// caller that omits this flag when a sensitive path is present is rejected at the CP (agent never
+	// called) and the denial is audited at elevated severity. The agent independently re-checks and
+	// returns `sensitive_denied` when absent / false.
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetPaths returns the value of Paths.
+func (s *FileArchiveCreateRequest) GetPaths() []string {
+	return s.Paths
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *FileArchiveCreateRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetPaths sets the value of Paths.
+func (s *FileArchiveCreateRequest) SetPaths(val []string) {
+	s.Paths = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *FileArchiveCreateRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Presigned download URL and transfer metadata returned by the `file_archive_create` flow.
+// Ref: #/components/schemas/FileArchiveCreateResult
+type FileArchiveCreateResult struct {
+	Ok bool `json:"ok"`
+	// CP-assigned transfer ID (for audit correlation).
+	TransferID uuid.UUID `json:"transfer_id"`
+	// Presigned GET URL for the browser to download the staged archive directly from object storage.
+	// Valid for at most 5 minutes. Never log this URL.
+	DownloadURL url.URL `json:"download_url"`
+	// Total archive size in bytes.
+	SizeBytes int64 `json:"size_bytes"`
+	// Number of S3 parts the agent uploaded.
+	ChunkCount int `json:"chunk_count"`
+	// Unix epoch seconds when the presigned GET URL expires (≤ 5 min from now).
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// GetOk returns the value of Ok.
+func (s *FileArchiveCreateResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetTransferID returns the value of TransferID.
+func (s *FileArchiveCreateResult) GetTransferID() uuid.UUID {
+	return s.TransferID
+}
+
+// GetDownloadURL returns the value of DownloadURL.
+func (s *FileArchiveCreateResult) GetDownloadURL() url.URL {
+	return s.DownloadURL
+}
+
+// GetSizeBytes returns the value of SizeBytes.
+func (s *FileArchiveCreateResult) GetSizeBytes() int64 {
+	return s.SizeBytes
+}
+
+// GetChunkCount returns the value of ChunkCount.
+func (s *FileArchiveCreateResult) GetChunkCount() int {
+	return s.ChunkCount
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *FileArchiveCreateResult) GetExpiresAt() int64 {
+	return s.ExpiresAt
+}
+
+// SetOk sets the value of Ok.
+func (s *FileArchiveCreateResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetTransferID sets the value of TransferID.
+func (s *FileArchiveCreateResult) SetTransferID(val uuid.UUID) {
+	s.TransferID = val
+}
+
+// SetDownloadURL sets the value of DownloadURL.
+func (s *FileArchiveCreateResult) SetDownloadURL(val url.URL) {
+	s.DownloadURL = val
+}
+
+// SetSizeBytes sets the value of SizeBytes.
+func (s *FileArchiveCreateResult) SetSizeBytes(val int64) {
+	s.SizeBytes = val
+}
+
+// SetChunkCount sets the value of ChunkCount.
+func (s *FileArchiveCreateResult) SetChunkCount(val int) {
+	s.ChunkCount = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *FileArchiveCreateResult) SetExpiresAt(val int64) {
+	s.ExpiresAt = val
+}
+
+func (*FileArchiveCreateResult) createSiteFileArchiveRes() {}
+
+// Request body for `POST /sites/{siteId}/files/chmod`.
+// Ref: #/components/schemas/FileChmodRequest
+type FileChmodRequest struct {
+	// Site-relative path.
+	Path string `json:"path"`
+	// 4-digit octal permission string, e.g. `"0644"` or `"0755"`. The agent validates against a safe
+	// allowlist — no setuid, no setgid, no world-write.
+	Mode string `json:"mode"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileChmodRequest) GetPath() string {
+	return s.Path
+}
+
+// GetMode returns the value of Mode.
+func (s *FileChmodRequest) GetMode() string {
+	return s.Mode
+}
+
+// SetPath sets the value of Path.
+func (s *FileChmodRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetMode sets the value of Mode.
+func (s *FileChmodRequest) SetMode(val string) {
+	s.Mode = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/chmod`.
+// Ref: #/components/schemas/FileChmodResult
+type FileChmodResult struct {
+	Path string `json:"path"`
+	// Effective mode after the chmod (echoed).
+	Mode string `json:"mode"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileChmodResult) GetPath() string {
+	return s.Path
+}
+
+// GetMode returns the value of Mode.
+func (s *FileChmodResult) GetMode() string {
+	return s.Mode
+}
+
+// SetPath sets the value of Path.
+func (s *FileChmodResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetMode sets the value of Mode.
+func (s *FileChmodResult) SetMode(val string) {
+	s.Mode = val
+}
+
+func (*FileChmodResult) chmodSiteFileRes() {}
+
+// Request body for `POST /sites/{siteId}/files/delete`.
+// Ref: #/components/schemas/FileDeleteRequest
+type FileDeleteRequest struct {
+	// Site-relative path to delete.
+	Path string `json:"path"`
+	// When `true`, recursively delete a non-empty directory and all its contents. When `false`, the
+	// agent refuses to delete a non-empty directory (returns `400 not_directory`).
+	Recursive OptBool `json:"recursive"`
+	// Typed confirmation token — must be the string `"DELETE"` exactly. Missing or wrong value returns
+	// `400 confirm_required` without issuing the delete command to the agent.
+	Confirm string `json:"confirm"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileDeleteRequest) GetPath() string {
+	return s.Path
+}
+
+// GetRecursive returns the value of Recursive.
+func (s *FileDeleteRequest) GetRecursive() OptBool {
+	return s.Recursive
+}
+
+// GetConfirm returns the value of Confirm.
+func (s *FileDeleteRequest) GetConfirm() string {
+	return s.Confirm
+}
+
+// SetPath sets the value of Path.
+func (s *FileDeleteRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetRecursive sets the value of Recursive.
+func (s *FileDeleteRequest) SetRecursive(val OptBool) {
+	s.Recursive = val
+}
+
+// SetConfirm sets the value of Confirm.
+func (s *FileDeleteRequest) SetConfirm(val string) {
+	s.Confirm = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/delete`.
+// Ref: #/components/schemas/FileDeleteResult
+type FileDeleteResult struct {
+	// Echoed path that was deleted.
+	Path string `json:"path"`
+	// Number of filesystem entries removed (1 for a file; ≥1 for a recursive directory removal).
+	Deleted int `json:"deleted"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileDeleteResult) GetPath() string {
+	return s.Path
+}
+
+// GetDeleted returns the value of Deleted.
+func (s *FileDeleteResult) GetDeleted() int {
+	return s.Deleted
+}
+
+// SetPath sets the value of Path.
+func (s *FileDeleteResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetDeleted sets the value of Deleted.
+func (s *FileDeleteResult) SetDeleted(val int) {
+	s.Deleted = val
+}
+
+func (*FileDeleteResult) deleteSiteFileRes() {}
+
+// Request body for `POST /sites/{siteId}/files/download`.
+// Ref: #/components/schemas/FileDownloadRequest
+type FileDownloadRequest struct {
+	// Site-relative path to the file to stage for download.
+	Path string `json:"path"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileDownloadRequest) GetPath() string {
+	return s.Path
+}
+
+// SetPath sets the value of Path.
+func (s *FileDownloadRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// Presigned download URL and transfer metadata returned by the `file_download_prepare` flow.
+// Ref: #/components/schemas/FileDownloadResult
+type FileDownloadResult struct {
+	Ok bool `json:"ok"`
+	// CP-assigned transfer ID (for audit correlation).
+	TransferID uuid.UUID `json:"transfer_id"`
+	// Presigned GET URL for the browser to fetch the staged file directly from object storage. Valid for
+	// at most 5 minutes. Never log this URL.
+	DownloadURL url.URL `json:"download_url"`
+	// Staged file size in bytes.
+	SizeBytes int64 `json:"size_bytes"`
+	// Number of S3 parts the agent uploaded.
+	ChunkCount int `json:"chunk_count"`
+	// Unix epoch seconds when the presigned GET URL expires.
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// GetOk returns the value of Ok.
+func (s *FileDownloadResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetTransferID returns the value of TransferID.
+func (s *FileDownloadResult) GetTransferID() uuid.UUID {
+	return s.TransferID
+}
+
+// GetDownloadURL returns the value of DownloadURL.
+func (s *FileDownloadResult) GetDownloadURL() url.URL {
+	return s.DownloadURL
+}
+
+// GetSizeBytes returns the value of SizeBytes.
+func (s *FileDownloadResult) GetSizeBytes() int64 {
+	return s.SizeBytes
+}
+
+// GetChunkCount returns the value of ChunkCount.
+func (s *FileDownloadResult) GetChunkCount() int {
+	return s.ChunkCount
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *FileDownloadResult) GetExpiresAt() int64 {
+	return s.ExpiresAt
+}
+
+// SetOk sets the value of Ok.
+func (s *FileDownloadResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetTransferID sets the value of TransferID.
+func (s *FileDownloadResult) SetTransferID(val uuid.UUID) {
+	s.TransferID = val
+}
+
+// SetDownloadURL sets the value of DownloadURL.
+func (s *FileDownloadResult) SetDownloadURL(val url.URL) {
+	s.DownloadURL = val
+}
+
+// SetSizeBytes sets the value of SizeBytes.
+func (s *FileDownloadResult) SetSizeBytes(val int64) {
+	s.SizeBytes = val
+}
+
+// SetChunkCount sets the value of ChunkCount.
+func (s *FileDownloadResult) SetChunkCount(val int) {
+	s.ChunkCount = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *FileDownloadResult) SetExpiresAt(val int64) {
+	s.ExpiresAt = val
+}
+
+func (*FileDownloadResult) prepareSiteFileDownloadRes() {}
+
+// One entry in a site directory listing.
+// Ref: #/components/schemas/FileEntry
+type FileEntry struct {
+	// Filename (basename only; no directory component).
+	Name string `json:"name"`
+	// File size in bytes (0 for directories).
+	Size int64 `json:"size"`
+	// Last-modified time as Unix epoch seconds.
+	Mtime int64 `json:"mtime"`
+	// Human-readable permission string (e.g. "-rw-r--r--").
+	Mode string `json:"mode"`
+	// True when the entry is a directory.
+	IsDir bool `json:"is_dir"`
+	// True when the entry is a symlink. The agent never follows symlinks.
+	IsLink bool `json:"is_link"`
+	// True when the agent process can write to this entry.
+	IsWritable bool `json:"is_writable"`
+}
+
+// GetName returns the value of Name.
+func (s *FileEntry) GetName() string {
+	return s.Name
+}
+
+// GetSize returns the value of Size.
+func (s *FileEntry) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *FileEntry) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetMode returns the value of Mode.
+func (s *FileEntry) GetMode() string {
+	return s.Mode
+}
+
+// GetIsDir returns the value of IsDir.
+func (s *FileEntry) GetIsDir() bool {
+	return s.IsDir
+}
+
+// GetIsLink returns the value of IsLink.
+func (s *FileEntry) GetIsLink() bool {
+	return s.IsLink
+}
+
+// GetIsWritable returns the value of IsWritable.
+func (s *FileEntry) GetIsWritable() bool {
+	return s.IsWritable
+}
+
+// SetName sets the value of Name.
+func (s *FileEntry) SetName(val string) {
+	s.Name = val
+}
+
+// SetSize sets the value of Size.
+func (s *FileEntry) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *FileEntry) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetMode sets the value of Mode.
+func (s *FileEntry) SetMode(val string) {
+	s.Mode = val
+}
+
+// SetIsDir sets the value of IsDir.
+func (s *FileEntry) SetIsDir(val bool) {
+	s.IsDir = val
+}
+
+// SetIsLink sets the value of IsLink.
+func (s *FileEntry) SetIsLink(val bool) {
+	s.IsLink = val
+}
+
+// SetIsWritable sets the value of IsWritable.
+func (s *FileEntry) SetIsWritable(val bool) {
+	s.IsWritable = val
+}
+
+// Request body for `POST /sites/{siteId}/files/extract`.
+// Ref: #/components/schemas/FileExtractRequest
+type FileExtractRequest struct {
+	// Site-relative path to the ZIP archive to extract.
+	ArchivePath string `json:"archive_path"`
+	// Site-relative destination directory. Created if absent.
+	DestPath string `json:"dest_path"`
+	// Must be `true` when any archive entry would resolve to an executable-extension path (php, phar,
+	// htaccess, …). Requires owner permission (`site.files.write_code`). A non-owner passing this is
+	// rejected at the CP (agent never called) and the denial is audited at elevated severity.
+	ConfirmExecutableWrite OptBool `json:"confirm_executable_write"`
+	// Must be `true` when any archive entry would resolve to a sensitive path (wp-config.php, .env*, *.
+	// pem, …). Same owner gate as `confirm_executable_write`.
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetArchivePath returns the value of ArchivePath.
+func (s *FileExtractRequest) GetArchivePath() string {
+	return s.ArchivePath
+}
+
+// GetDestPath returns the value of DestPath.
+func (s *FileExtractRequest) GetDestPath() string {
+	return s.DestPath
+}
+
+// GetConfirmExecutableWrite returns the value of ConfirmExecutableWrite.
+func (s *FileExtractRequest) GetConfirmExecutableWrite() OptBool {
+	return s.ConfirmExecutableWrite
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *FileExtractRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetArchivePath sets the value of ArchivePath.
+func (s *FileExtractRequest) SetArchivePath(val string) {
+	s.ArchivePath = val
+}
+
+// SetDestPath sets the value of DestPath.
+func (s *FileExtractRequest) SetDestPath(val string) {
+	s.DestPath = val
+}
+
+// SetConfirmExecutableWrite sets the value of ConfirmExecutableWrite.
+func (s *FileExtractRequest) SetConfirmExecutableWrite(val OptBool) {
+	s.ConfirmExecutableWrite = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *FileExtractRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/extract`.
+// Ref: #/components/schemas/FileExtractResult
+type FileExtractResult struct {
+	// Resolved destination directory path (echoed).
+	DestPath string `json:"dest_path"`
+	// Number of entries extracted from the archive.
+	Extracted int `json:"extracted"`
+}
+
+// GetDestPath returns the value of DestPath.
+func (s *FileExtractResult) GetDestPath() string {
+	return s.DestPath
+}
+
+// GetExtracted returns the value of Extracted.
+func (s *FileExtractResult) GetExtracted() int {
+	return s.Extracted
+}
+
+// SetDestPath sets the value of DestPath.
+func (s *FileExtractResult) SetDestPath(val string) {
+	s.DestPath = val
+}
+
+// SetExtracted sets the value of Extracted.
+func (s *FileExtractResult) SetExtracted(val int) {
+	s.Extracted = val
+}
+
+func (*FileExtractResult) extractSiteFileArchiveRes() {}
+
+// One page of directory entries from a `file_list` agent command.
+// Ref: #/components/schemas/FileListResult
+type FileListResult struct {
+	// Absolute resolved path (echoed from the agent).
+	Path    string      `json:"path"`
+	Entries []FileEntry `json:"entries"`
+	// Total count of entries in the directory (before cursor pagination).
+	Total int `json:"total"`
+	// True when more entries remain beyond this page.
+	Truncated bool `json:"truncated"`
+	// Opaque resume cursor; present only when `truncated=true`.
+	Cursor OptNilString `json:"cursor"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileListResult) GetPath() string {
+	return s.Path
+}
+
+// GetEntries returns the value of Entries.
+func (s *FileListResult) GetEntries() []FileEntry {
+	return s.Entries
+}
+
+// GetTotal returns the value of Total.
+func (s *FileListResult) GetTotal() int {
+	return s.Total
+}
+
+// GetTruncated returns the value of Truncated.
+func (s *FileListResult) GetTruncated() bool {
+	return s.Truncated
+}
+
+// GetCursor returns the value of Cursor.
+func (s *FileListResult) GetCursor() OptNilString {
+	return s.Cursor
+}
+
+// SetPath sets the value of Path.
+func (s *FileListResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetEntries sets the value of Entries.
+func (s *FileListResult) SetEntries(val []FileEntry) {
+	s.Entries = val
+}
+
+// SetTotal sets the value of Total.
+func (s *FileListResult) SetTotal(val int) {
+	s.Total = val
+}
+
+// SetTruncated sets the value of Truncated.
+func (s *FileListResult) SetTruncated(val bool) {
+	s.Truncated = val
+}
+
+// SetCursor sets the value of Cursor.
+func (s *FileListResult) SetCursor(val OptNilString) {
+	s.Cursor = val
+}
+
+func (*FileListResult) listSiteFilesRes() {}
+
+// Per-site file manager configuration. Returned by both `GET /sites/{siteId}/files/settings` and
+// `PUT /sites/{siteId}/files/settings`.
+// Ref: #/components/schemas/FileManagerSettings
+type FileManagerSettings struct {
+	// Whether the file manager read mode is enabled for this site. Defaults to `false` (off by default,
+	// explicit opt-in required).
+	Enabled bool `json:"enabled"`
+	// Whether the file manager write mode is enabled for this site (P2). Separate opt-in from `enabled`
+	// so read and write can be toggled independently. Defaults to `false`. Both `enabled` AND
+	// `write_enabled` must be `true` before any write/delete/chmod/ mkdir/rename/upload command will be
+	// signed.
+	WriteEnabled bool `json:"write_enabled"`
+	// The filesystem root the agent restricts all file operations to. Always `""` in P1/P2 — the agent
+	// defaults to the site's `ABSPATH`. Reserved for future P3 configuration.
+	RootJail string `json:"root_jail"`
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *FileManagerSettings) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetWriteEnabled returns the value of WriteEnabled.
+func (s *FileManagerSettings) GetWriteEnabled() bool {
+	return s.WriteEnabled
+}
+
+// GetRootJail returns the value of RootJail.
+func (s *FileManagerSettings) GetRootJail() string {
+	return s.RootJail
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *FileManagerSettings) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetWriteEnabled sets the value of WriteEnabled.
+func (s *FileManagerSettings) SetWriteEnabled(val bool) {
+	s.WriteEnabled = val
+}
+
+// SetRootJail sets the value of RootJail.
+func (s *FileManagerSettings) SetRootJail(val string) {
+	s.RootJail = val
+}
+
+func (*FileManagerSettings) getSiteFilesSettingsRes()    {}
+func (*FileManagerSettings) updateSiteFilesSettingsRes() {}
+
+// Request body for `POST /sites/{siteId}/files/mkdir`.
+// Ref: #/components/schemas/FileMkdirRequest
+type FileMkdirRequest struct {
+	// Site-relative path for the new directory.
+	Path string `json:"path"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileMkdirRequest) GetPath() string {
+	return s.Path
+}
+
+// SetPath sets the value of Path.
+func (s *FileMkdirRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/mkdir`.
+// Ref: #/components/schemas/FileMkdirResult
+type FileMkdirResult struct {
+	// Resolved path of the created directory (echoed).
+	Path string `json:"path"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileMkdirResult) GetPath() string {
+	return s.Path
+}
+
+// SetPath sets the value of Path.
+func (s *FileMkdirResult) SetPath(val string) {
+	s.Path = val
+}
+
+func (*FileMkdirResult) createSiteDirectoryRes() {}
+
+// Inline base64-encoded content of a file (≤ 256 KiB).
+// Ref: #/components/schemas/FileReadResult
+type FileReadResult struct {
+	// Echoed path.
+	Path string `json:"path"`
+	// Full file size in bytes (before any byte-cap truncation).
+	Size int64 `json:"size"`
+	// Last-modified time as Unix epoch seconds.
+	Mtime int64 `json:"mtime"`
+	// Human-readable permission string.
+	Mode string `json:"mode"`
+	// Always "base64" in v1.
+	Encoding FileReadResultEncoding `json:"encoding"`
+	// Base64-encoded file content (up to 256 KiB).
+	ContentBase64 string `json:"content_base64"`
+	// True when the file was larger than the byte cap (256 KiB). Use the download endpoint to retrieve
+	// the full file.
+	Truncated bool `json:"truncated"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileReadResult) GetPath() string {
+	return s.Path
+}
+
+// GetSize returns the value of Size.
+func (s *FileReadResult) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *FileReadResult) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetMode returns the value of Mode.
+func (s *FileReadResult) GetMode() string {
+	return s.Mode
+}
+
+// GetEncoding returns the value of Encoding.
+func (s *FileReadResult) GetEncoding() FileReadResultEncoding {
+	return s.Encoding
+}
+
+// GetContentBase64 returns the value of ContentBase64.
+func (s *FileReadResult) GetContentBase64() string {
+	return s.ContentBase64
+}
+
+// GetTruncated returns the value of Truncated.
+func (s *FileReadResult) GetTruncated() bool {
+	return s.Truncated
+}
+
+// SetPath sets the value of Path.
+func (s *FileReadResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetSize sets the value of Size.
+func (s *FileReadResult) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *FileReadResult) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetMode sets the value of Mode.
+func (s *FileReadResult) SetMode(val string) {
+	s.Mode = val
+}
+
+// SetEncoding sets the value of Encoding.
+func (s *FileReadResult) SetEncoding(val FileReadResultEncoding) {
+	s.Encoding = val
+}
+
+// SetContentBase64 sets the value of ContentBase64.
+func (s *FileReadResult) SetContentBase64(val string) {
+	s.ContentBase64 = val
+}
+
+// SetTruncated sets the value of Truncated.
+func (s *FileReadResult) SetTruncated(val bool) {
+	s.Truncated = val
+}
+
+func (*FileReadResult) readSiteFileContentRes() {}
+
+// Always "base64" in v1.
+type FileReadResultEncoding string
+
+const (
+	FileReadResultEncodingBase64 FileReadResultEncoding = "base64"
+)
+
+// AllValues returns all FileReadResultEncoding values.
+func (FileReadResultEncoding) AllValues() []FileReadResultEncoding {
+	return []FileReadResultEncoding{
+		FileReadResultEncodingBase64,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s FileReadResultEncoding) MarshalText() ([]byte, error) {
+	switch s {
+	case FileReadResultEncodingBase64:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *FileReadResultEncoding) UnmarshalText(data []byte) error {
+	switch FileReadResultEncoding(data) {
+	case FileReadResultEncodingBase64:
+		*s = FileReadResultEncodingBase64
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+// Request body for `POST /sites/{siteId}/files/rename`.
+// Ref: #/components/schemas/FileRenameRequest
+type FileRenameRequest struct {
+	// Site-relative source path (must exist).
+	Src string `json:"src"`
+	// Site-relative destination path.
+	Dst string `json:"dst"`
+	// Required when `dst` matches the executable-extension deny-list. Requires owner permission (`site.
+	// files.write_code`).
+	ConfirmExecutableWrite OptBool `json:"confirm_executable_write"`
+	// Required when either `src` or `dst` is a sensitive path. Requires owner permission (`site.files.
+	// write_code`).
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetSrc returns the value of Src.
+func (s *FileRenameRequest) GetSrc() string {
+	return s.Src
+}
+
+// GetDst returns the value of Dst.
+func (s *FileRenameRequest) GetDst() string {
+	return s.Dst
+}
+
+// GetConfirmExecutableWrite returns the value of ConfirmExecutableWrite.
+func (s *FileRenameRequest) GetConfirmExecutableWrite() OptBool {
+	return s.ConfirmExecutableWrite
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *FileRenameRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetSrc sets the value of Src.
+func (s *FileRenameRequest) SetSrc(val string) {
+	s.Src = val
+}
+
+// SetDst sets the value of Dst.
+func (s *FileRenameRequest) SetDst(val string) {
+	s.Dst = val
+}
+
+// SetConfirmExecutableWrite sets the value of ConfirmExecutableWrite.
+func (s *FileRenameRequest) SetConfirmExecutableWrite(val OptBool) {
+	s.ConfirmExecutableWrite = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *FileRenameRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/rename`.
+// Ref: #/components/schemas/FileRenameResult
+type FileRenameResult struct {
+	Src string `json:"src"`
+	Dst string `json:"dst"`
+}
+
+// GetSrc returns the value of Src.
+func (s *FileRenameResult) GetSrc() string {
+	return s.Src
+}
+
+// GetDst returns the value of Dst.
+func (s *FileRenameResult) GetDst() string {
+	return s.Dst
+}
+
+// SetSrc sets the value of Src.
+func (s *FileRenameResult) SetSrc(val string) {
+	s.Src = val
+}
+
+// SetDst sets the value of Dst.
+func (s *FileRenameResult) SetDst(val string) {
+	s.Dst = val
+}
+
+func (*FileRenameResult) renameSiteFileRes() {}
+
+// One result in a `file_search` response.
+// Ref: #/components/schemas/FileSearchMatch
+type FileSearchMatch struct {
+	// Site-relative path of the matching file or directory.
+	Path string `json:"path"`
+	// Basename of the entry.
+	Name string `json:"name"`
+	// File size in bytes (0 for directories).
+	Size int64 `json:"size"`
+	// Last-modified time as Unix epoch seconds.
+	Mtime int64 `json:"mtime"`
+	// True when the matched entry is a directory.
+	IsDir bool `json:"is_dir"`
+	// Line number of the match within the file (`content` mode only; absent for `name` mode).
+	Line OptInt `json:"line"`
+	// Surrounding text context for the match (`content` mode only; absent for `name` mode). Never
+	// contains content from sensitive paths.
+	Snippet OptString `json:"snippet"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileSearchMatch) GetPath() string {
+	return s.Path
+}
+
+// GetName returns the value of Name.
+func (s *FileSearchMatch) GetName() string {
+	return s.Name
+}
+
+// GetSize returns the value of Size.
+func (s *FileSearchMatch) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *FileSearchMatch) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetIsDir returns the value of IsDir.
+func (s *FileSearchMatch) GetIsDir() bool {
+	return s.IsDir
+}
+
+// GetLine returns the value of Line.
+func (s *FileSearchMatch) GetLine() OptInt {
+	return s.Line
+}
+
+// GetSnippet returns the value of Snippet.
+func (s *FileSearchMatch) GetSnippet() OptString {
+	return s.Snippet
+}
+
+// SetPath sets the value of Path.
+func (s *FileSearchMatch) SetPath(val string) {
+	s.Path = val
+}
+
+// SetName sets the value of Name.
+func (s *FileSearchMatch) SetName(val string) {
+	s.Name = val
+}
+
+// SetSize sets the value of Size.
+func (s *FileSearchMatch) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *FileSearchMatch) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetIsDir sets the value of IsDir.
+func (s *FileSearchMatch) SetIsDir(val bool) {
+	s.IsDir = val
+}
+
+// SetLine sets the value of Line.
+func (s *FileSearchMatch) SetLine(val OptInt) {
+	s.Line = val
+}
+
+// SetSnippet sets the value of Snippet.
+func (s *FileSearchMatch) SetSnippet(val OptString) {
+	s.Snippet = val
+}
+
+// Paginated list of search results from a `file_search` agent command.
+// Ref: #/components/schemas/FileSearchResult
+type FileSearchResult struct {
+	Matches []FileSearchMatch `json:"matches"`
+	// True when more results remain beyond this page.
+	Truncated bool `json:"truncated"`
+	// Opaque resume cursor; present only when `truncated=true`.
+	Cursor OptNilString `json:"cursor"`
+}
+
+// GetMatches returns the value of Matches.
+func (s *FileSearchResult) GetMatches() []FileSearchMatch {
+	return s.Matches
+}
+
+// GetTruncated returns the value of Truncated.
+func (s *FileSearchResult) GetTruncated() bool {
+	return s.Truncated
+}
+
+// GetCursor returns the value of Cursor.
+func (s *FileSearchResult) GetCursor() OptNilString {
+	return s.Cursor
+}
+
+// SetMatches sets the value of Matches.
+func (s *FileSearchResult) SetMatches(val []FileSearchMatch) {
+	s.Matches = val
+}
+
+// SetTruncated sets the value of Truncated.
+func (s *FileSearchResult) SetTruncated(val bool) {
+	s.Truncated = val
+}
+
+// SetCursor sets the value of Cursor.
+func (s *FileSearchResult) SetCursor(val OptNilString) {
+	s.Cursor = val
+}
+
+func (*FileSearchResult) searchSiteFilesRes() {}
+
+// One version entry in a file's version history.
+// Ref: #/components/schemas/FileVersion
+type FileVersion struct {
+	// Opaque version identifier. Pass to `POST /files/versions/restore` to restore this version.
+	VersionID string `json:"version_id"`
+	// File size in bytes at this version.
+	Size int64 `json:"size"`
+	// Last-modified time of this version (Unix epoch seconds).
+	Mtime int64 `json:"mtime"`
+	// When this version was created (Unix epoch seconds). May equal `mtime` when the agent derives both
+	// from the same filesystem timestamp.
+	CreatedAt int64 `json:"created_at"`
+}
+
+// GetVersionID returns the value of VersionID.
+func (s *FileVersion) GetVersionID() string {
+	return s.VersionID
+}
+
+// GetSize returns the value of Size.
+func (s *FileVersion) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *FileVersion) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetCreatedAt returns the value of CreatedAt.
+func (s *FileVersion) GetCreatedAt() int64 {
+	return s.CreatedAt
+}
+
+// SetVersionID sets the value of VersionID.
+func (s *FileVersion) SetVersionID(val string) {
+	s.VersionID = val
+}
+
+// SetSize sets the value of Size.
+func (s *FileVersion) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *FileVersion) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetCreatedAt sets the value of CreatedAt.
+func (s *FileVersion) SetCreatedAt(val int64) {
+	s.CreatedAt = val
+}
+
+// Request body for `POST /sites/{siteId}/files/versions/restore`.
+// Ref: #/components/schemas/FileVersionRestoreRequest
+type FileVersionRestoreRequest struct {
+	// Site-relative path of the file to restore.
+	Path string `json:"path"`
+	// Opaque version identifier returned by `GET /files/versions?path=…`. Returns `404
+	// no_such_version` when the ID does not exist for the path.
+	VersionID string `json:"version_id"`
+	// Must be `true` when `path` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …).
+	//  Requires owner permission (`site.files.write_code`). A non-owner caller or a caller that omits
+	// this flag when the path is sensitive is rejected at the CP (agent never called) and the denial is
+	// audited at elevated severity. The agent independently re-checks and returns `sensitive_denied`
+	// when absent / false.
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileVersionRestoreRequest) GetPath() string {
+	return s.Path
+}
+
+// GetVersionID returns the value of VersionID.
+func (s *FileVersionRestoreRequest) GetVersionID() string {
+	return s.VersionID
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *FileVersionRestoreRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetPath sets the value of Path.
+func (s *FileVersionRestoreRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetVersionID sets the value of VersionID.
+func (s *FileVersionRestoreRequest) SetVersionID(val string) {
+	s.VersionID = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *FileVersionRestoreRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for a successful `POST /sites/{siteId}/files/versions/restore`.
+// Ref: #/components/schemas/FileVersionRestoreResult
+type FileVersionRestoreResult struct {
+	// Resolved path of the restored file (echoed).
+	Path string `json:"path"`
+	// Size of the restored file in bytes.
+	Size int64 `json:"size"`
+	// Last-modified time after restore (Unix epoch seconds).
+	Mtime int64 `json:"mtime"`
+	// The version ID that was restored (echoed for audit correlation).
+	VersionID string `json:"version_id"`
+}
+
+// GetPath returns the value of Path.
+func (s *FileVersionRestoreResult) GetPath() string {
+	return s.Path
+}
+
+// GetSize returns the value of Size.
+func (s *FileVersionRestoreResult) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *FileVersionRestoreResult) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetVersionID returns the value of VersionID.
+func (s *FileVersionRestoreResult) GetVersionID() string {
+	return s.VersionID
+}
+
+// SetPath sets the value of Path.
+func (s *FileVersionRestoreResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetSize sets the value of Size.
+func (s *FileVersionRestoreResult) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *FileVersionRestoreResult) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetVersionID sets the value of VersionID.
+func (s *FileVersionRestoreResult) SetVersionID(val string) {
+	s.VersionID = val
+}
+
+func (*FileVersionRestoreResult) restoreSiteFileVersionRes() {}
+
+// Version history for a file, ordered newest-first, from a `file_versions_list` agent command.
+// Ref: #/components/schemas/FileVersionsResult
+type FileVersionsResult struct {
+	// List of versions ordered newest-first. Empty when the agent has no history for the path (no
+	// version system configured or no prior writes).
+	Versions []FileVersion `json:"versions"`
+}
+
+// GetVersions returns the value of Versions.
+func (s *FileVersionsResult) GetVersions() []FileVersion {
+	return s.Versions
+}
+
+// SetVersions sets the value of Versions.
+func (s *FileVersionsResult) SetVersions(val []FileVersion) {
+	s.Versions = val
+}
+
+func (*FileVersionsResult) listSiteFileVersionsRes() {}
 
 // An open or recently-closed incident. NOTE: site_alert_state stores only
 // current transition memory; full historical incident logs are not persisted.
@@ -10375,6 +11816,18 @@ type GetSiteEmailStatsUnauthorized Error
 
 func (*GetSiteEmailStatsUnauthorized) getSiteEmailStatsRes() {}
 
+type GetSiteFilesSettingsForbidden Error
+
+func (*GetSiteFilesSettingsForbidden) getSiteFilesSettingsRes() {}
+
+type GetSiteFilesSettingsNotFound Error
+
+func (*GetSiteFilesSettingsNotFound) getSiteFilesSettingsRes() {}
+
+type GetSiteFilesSettingsUnauthorized Error
+
+func (*GetSiteFilesSettingsUnauthorized) getSiteFilesSettingsRes() {}
+
 type GetSiteUptimeWindow string
 
 const (
@@ -10886,6 +12339,38 @@ func (*ListSiteEmailSuppressionForbidden) listSiteEmailSuppressionRes() {}
 type ListSiteEmailSuppressionUnauthorized Error
 
 func (*ListSiteEmailSuppressionUnauthorized) listSiteEmailSuppressionRes() {}
+
+type ListSiteFileVersionsBadRequest Error
+
+func (*ListSiteFileVersionsBadRequest) listSiteFileVersionsRes() {}
+
+type ListSiteFileVersionsForbidden Error
+
+func (*ListSiteFileVersionsForbidden) listSiteFileVersionsRes() {}
+
+type ListSiteFileVersionsNotFound Error
+
+func (*ListSiteFileVersionsNotFound) listSiteFileVersionsRes() {}
+
+type ListSiteFileVersionsUnauthorized Error
+
+func (*ListSiteFileVersionsUnauthorized) listSiteFileVersionsRes() {}
+
+type ListSiteFilesBadRequest Error
+
+func (*ListSiteFilesBadRequest) listSiteFilesRes() {}
+
+type ListSiteFilesForbidden Error
+
+func (*ListSiteFilesForbidden) listSiteFilesRes() {}
+
+type ListSiteFilesNotFound Error
+
+func (*ListSiteFilesNotFound) listSiteFilesRes() {}
+
+type ListSiteFilesUnauthorized Error
+
+func (*ListSiteFilesUnauthorized) listSiteFilesRes() {}
 
 type ListSiteLoginEventsStatus int32
 
@@ -19755,6 +21240,52 @@ func (o OptRumResultRating) Or(d RumResultRating) RumResultRating {
 	return d
 }
 
+// NewOptSearchSiteFilesMode returns new OptSearchSiteFilesMode with value set to v.
+func NewOptSearchSiteFilesMode(v SearchSiteFilesMode) OptSearchSiteFilesMode {
+	return OptSearchSiteFilesMode{
+		Value: v,
+		Set:   true,
+	}
+}
+
+// OptSearchSiteFilesMode is optional SearchSiteFilesMode.
+type OptSearchSiteFilesMode struct {
+	Value SearchSiteFilesMode
+	Set   bool
+}
+
+// IsSet returns true if OptSearchSiteFilesMode was set.
+func (o OptSearchSiteFilesMode) IsSet() bool { return o.Set }
+
+// Reset unsets value.
+func (o *OptSearchSiteFilesMode) Reset() {
+	var v SearchSiteFilesMode
+	o.Value = v
+	o.Set = false
+}
+
+// SetTo sets value to v.
+func (o *OptSearchSiteFilesMode) SetTo(v SearchSiteFilesMode) {
+	o.Set = true
+	o.Value = v
+}
+
+// Get returns value and boolean that denotes whether value was set.
+func (o OptSearchSiteFilesMode) Get() (v SearchSiteFilesMode, ok bool) {
+	if !o.Set {
+		return v, false
+	}
+	return o.Value, true
+}
+
+// Or returns value if set, or given parameter if does not.
+func (o OptSearchSiteFilesMode) Or(d SearchSiteFilesMode) SearchSiteFilesMode {
+	if v, ok := o.Get(); ok {
+		return v
+	}
+	return d
+}
+
 // NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion returns new OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion with value set to v.
 func NewOptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion(v SiteBackupSettingsNotificationsUpdateNotifyOnCompletion) OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion {
 	return OptSiteBackupSettingsNotificationsUpdateNotifyOnCompletion{
@@ -23057,6 +24588,194 @@ func (s *PortalVitalsSummary) SetMetrics(val []PortalVitalMetric) {
 
 func (*PortalVitalsSummary) getPortalSiteVitalsRes() {}
 
+type PrepareSiteFileDownloadBadRequest Error
+
+func (*PrepareSiteFileDownloadBadRequest) prepareSiteFileDownloadRes() {}
+
+type PrepareSiteFileDownloadForbidden Error
+
+func (*PrepareSiteFileDownloadForbidden) prepareSiteFileDownloadRes() {}
+
+type PrepareSiteFileDownloadNotFound Error
+
+func (*PrepareSiteFileDownloadNotFound) prepareSiteFileDownloadRes() {}
+
+type PrepareSiteFileDownloadServiceUnavailable Error
+
+func (*PrepareSiteFileDownloadServiceUnavailable) prepareSiteFileDownloadRes() {}
+
+type PrepareSiteFileDownloadUnauthorized Error
+
+func (*PrepareSiteFileDownloadUnauthorized) prepareSiteFileDownloadRes() {}
+
+type PrepareSiteFileUploadBadRequest Error
+
+func (*PrepareSiteFileUploadBadRequest) prepareSiteFileUploadRes() {}
+
+type PrepareSiteFileUploadForbidden Error
+
+func (*PrepareSiteFileUploadForbidden) prepareSiteFileUploadRes() {}
+
+type PrepareSiteFileUploadServiceUnavailable Error
+
+func (*PrepareSiteFileUploadServiceUnavailable) prepareSiteFileUploadRes() {}
+
+type PrepareSiteFileUploadUnauthorized Error
+
+func (*PrepareSiteFileUploadUnauthorized) prepareSiteFileUploadRes() {}
+
+// One presigned S3 PUT slot returned by `prepareSiteFileUpload`.
+// Ref: #/components/schemas/PrepareUploadPresignedPut
+type PrepareUploadPresignedPut struct {
+	// Zero-based chunk index.
+	Index int `json:"index"`
+	// Presigned S3 PUT URL. Short TTL (≤ 5 min). Single-use. The browser PUTs the corresponding chunk
+	// bytes directly to this URL.
+	URL string `json:"url"`
+}
+
+// GetIndex returns the value of Index.
+func (s *PrepareUploadPresignedPut) GetIndex() int {
+	return s.Index
+}
+
+// GetURL returns the value of URL.
+func (s *PrepareUploadPresignedPut) GetURL() string {
+	return s.URL
+}
+
+// SetIndex sets the value of Index.
+func (s *PrepareUploadPresignedPut) SetIndex(val int) {
+	s.Index = val
+}
+
+// SetURL sets the value of URL.
+func (s *PrepareUploadPresignedPut) SetURL(val string) {
+	s.URL = val
+}
+
+// Request body for `POST /sites/{siteId}/files/upload`.
+// Ref: #/components/schemas/PrepareUploadRequest
+type PrepareUploadRequest struct {
+	// Site-relative target path for the uploaded file.
+	Path string `json:"path"`
+	// Number of chunks the browser will PUT. Each chunk corresponds to one presigned S3 PUT URL. Use 1
+	// for files ≤ 5 MiB; increase for larger files (max 32 × 5 MiB = 160 MiB total).
+	PartCount OptInt `json:"part_count"`
+	// Required when `path` matches the executable-extension deny-list. Requires owner permission (`site.
+	// files.write_code`).
+	ConfirmExecutableWrite OptBool `json:"confirm_executable_write"`
+	// Required when `path` matches the sensitive-file deny-list. Requires owner permission (`site.files.
+	// write_code`).
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetPath returns the value of Path.
+func (s *PrepareUploadRequest) GetPath() string {
+	return s.Path
+}
+
+// GetPartCount returns the value of PartCount.
+func (s *PrepareUploadRequest) GetPartCount() OptInt {
+	return s.PartCount
+}
+
+// GetConfirmExecutableWrite returns the value of ConfirmExecutableWrite.
+func (s *PrepareUploadRequest) GetConfirmExecutableWrite() OptBool {
+	return s.ConfirmExecutableWrite
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *PrepareUploadRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetPath sets the value of Path.
+func (s *PrepareUploadRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetPartCount sets the value of PartCount.
+func (s *PrepareUploadRequest) SetPartCount(val OptInt) {
+	s.PartCount = val
+}
+
+// SetConfirmExecutableWrite sets the value of ConfirmExecutableWrite.
+func (s *PrepareUploadRequest) SetConfirmExecutableWrite(val OptBool) {
+	s.ConfirmExecutableWrite = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *PrepareUploadRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for `POST /sites/{siteId}/files/upload`.
+// Ref: #/components/schemas/PrepareUploadResult
+type PrepareUploadResult struct {
+	Ok bool `json:"ok"`
+	// Opaque transfer ID — pass to `applySiteFileUpload` for audit.
+	TransferID uuid.UUID `json:"transfer_id"`
+	// S3 key prefix for the staged chunks. Pass to `applySiteFileUpload` so the CP can mint presigned
+	// GETs for the agent.
+	ObjectKey     string                      `json:"object_key"`
+	PresignedPuts []PrepareUploadPresignedPut `json:"presigned_puts"`
+	// Unix epoch seconds when the presigned URLs expire (≤ 5 min from now).
+	ExpiresAt int64 `json:"expires_at"`
+}
+
+// GetOk returns the value of Ok.
+func (s *PrepareUploadResult) GetOk() bool {
+	return s.Ok
+}
+
+// GetTransferID returns the value of TransferID.
+func (s *PrepareUploadResult) GetTransferID() uuid.UUID {
+	return s.TransferID
+}
+
+// GetObjectKey returns the value of ObjectKey.
+func (s *PrepareUploadResult) GetObjectKey() string {
+	return s.ObjectKey
+}
+
+// GetPresignedPuts returns the value of PresignedPuts.
+func (s *PrepareUploadResult) GetPresignedPuts() []PrepareUploadPresignedPut {
+	return s.PresignedPuts
+}
+
+// GetExpiresAt returns the value of ExpiresAt.
+func (s *PrepareUploadResult) GetExpiresAt() int64 {
+	return s.ExpiresAt
+}
+
+// SetOk sets the value of Ok.
+func (s *PrepareUploadResult) SetOk(val bool) {
+	s.Ok = val
+}
+
+// SetTransferID sets the value of TransferID.
+func (s *PrepareUploadResult) SetTransferID(val uuid.UUID) {
+	s.TransferID = val
+}
+
+// SetObjectKey sets the value of ObjectKey.
+func (s *PrepareUploadResult) SetObjectKey(val string) {
+	s.ObjectKey = val
+}
+
+// SetPresignedPuts sets the value of PresignedPuts.
+func (s *PrepareUploadResult) SetPresignedPuts(val []PrepareUploadPresignedPut) {
+	s.PresignedPuts = val
+}
+
+// SetExpiresAt sets the value of ExpiresAt.
+func (s *PrepareUploadResult) SetExpiresAt(val int64) {
+	s.ExpiresAt = val
+}
+
+func (*PrepareUploadResult) prepareSiteFileUploadRes() {}
+
 // Effective role of the authenticated principal. Extends the member Role enum with "client" for
 // portal principals. The existing Role enum (owner/admin/operator/viewer) is unchanged; this
 // standalone enum is used only in Me responses.
@@ -23766,6 +25485,26 @@ type PutSiteEmailWebhookConfigUnauthorized Error
 
 func (*PutSiteEmailWebhookConfigUnauthorized) putSiteEmailWebhookConfigRes() {}
 
+type ReadSiteFileContentBadRequest Error
+
+func (*ReadSiteFileContentBadRequest) readSiteFileContentRes() {}
+
+type ReadSiteFileContentForbidden Error
+
+func (*ReadSiteFileContentForbidden) readSiteFileContentRes() {}
+
+type ReadSiteFileContentNotFound Error
+
+func (*ReadSiteFileContentNotFound) readSiteFileContentRes() {}
+
+type ReadSiteFileContentRequestEntityTooLarge Error
+
+func (*ReadSiteFileContentRequestEntityTooLarge) readSiteFileContentRes() {}
+
+type ReadSiteFileContentUnauthorized Error
+
+func (*ReadSiteFileContentUnauthorized) readSiteFileContentRes() {}
+
 // Ref: #/components/schemas/Readiness
 type Readiness struct {
 	Status ReadinessStatus `json:"status"`
@@ -24057,6 +25796,26 @@ func (*RemoveClientMemberNotFound) removeClientMemberRes() {}
 type RemoveClientMemberUnauthorized Error
 
 func (*RemoveClientMemberUnauthorized) removeClientMemberRes() {}
+
+type RenameSiteFileBadRequest Error
+
+func (*RenameSiteFileBadRequest) renameSiteFileRes() {}
+
+type RenameSiteFileConflict Error
+
+func (*RenameSiteFileConflict) renameSiteFileRes() {}
+
+type RenameSiteFileForbidden Error
+
+func (*RenameSiteFileForbidden) renameSiteFileRes() {}
+
+type RenameSiteFileNotFound Error
+
+func (*RenameSiteFileNotFound) renameSiteFileRes() {}
+
+type RenameSiteFileUnauthorized Error
+
+func (*RenameSiteFileUnauthorized) renameSiteFileRes() {}
 
 type ResendEmailLogConflict Error
 
@@ -24840,6 +26599,22 @@ func (s *RestoreRunStatus) UnmarshalText(data []byte) error {
 		return errors.Errorf("invalid value: %q", data)
 	}
 }
+
+type RestoreSiteFileVersionBadRequest Error
+
+func (*RestoreSiteFileVersionBadRequest) restoreSiteFileVersionRes() {}
+
+type RestoreSiteFileVersionForbidden Error
+
+func (*RestoreSiteFileVersionForbidden) restoreSiteFileVersionRes() {}
+
+type RestoreSiteFileVersionNotFound Error
+
+func (*RestoreSiteFileVersionNotFound) restoreSiteFileVersionRes() {}
+
+type RestoreSiteFileVersionUnauthorized Error
+
+func (*RestoreSiteFileVersionUnauthorized) restoreSiteFileVersionRes() {}
 
 type RevokeApiKeyForbidden Error
 
@@ -26149,6 +27924,63 @@ func (s *SearchReplaceResultHeaders) SetXBackupWarning(val OptString) {
 func (s *SearchReplaceResultHeaders) SetResponse(val SearchReplaceResult) {
 	s.Response = val
 }
+
+type SearchSiteFilesBadRequest Error
+
+func (*SearchSiteFilesBadRequest) searchSiteFilesRes() {}
+
+type SearchSiteFilesForbidden Error
+
+func (*SearchSiteFilesForbidden) searchSiteFilesRes() {}
+
+type SearchSiteFilesMode string
+
+const (
+	SearchSiteFilesModeName    SearchSiteFilesMode = "name"
+	SearchSiteFilesModeContent SearchSiteFilesMode = "content"
+)
+
+// AllValues returns all SearchSiteFilesMode values.
+func (SearchSiteFilesMode) AllValues() []SearchSiteFilesMode {
+	return []SearchSiteFilesMode{
+		SearchSiteFilesModeName,
+		SearchSiteFilesModeContent,
+	}
+}
+
+// MarshalText implements encoding.TextMarshaler.
+func (s SearchSiteFilesMode) MarshalText() ([]byte, error) {
+	switch s {
+	case SearchSiteFilesModeName:
+		return []byte(s), nil
+	case SearchSiteFilesModeContent:
+		return []byte(s), nil
+	default:
+		return nil, errors.Errorf("invalid value: %q", s)
+	}
+}
+
+// UnmarshalText implements encoding.TextUnmarshaler.
+func (s *SearchSiteFilesMode) UnmarshalText(data []byte) error {
+	switch SearchSiteFilesMode(data) {
+	case SearchSiteFilesModeName:
+		*s = SearchSiteFilesModeName
+		return nil
+	case SearchSiteFilesModeContent:
+		*s = SearchSiteFilesModeContent
+		return nil
+	default:
+		return errors.Errorf("invalid value: %q", data)
+	}
+}
+
+type SearchSiteFilesNotFound Error
+
+func (*SearchSiteFilesNotFound) searchSiteFilesRes() {}
+
+type SearchSiteFilesUnauthorized Error
+
+func (*SearchSiteFilesUnauthorized) searchSiteFilesRes() {}
 
 // Ref: #/components/schemas/SecurityThresholds
 type SecurityThresholds struct {
@@ -31261,6 +33093,36 @@ type UpdateClientUnauthorized Error
 
 func (*UpdateClientUnauthorized) updateClientRes() {}
 
+// Request body for `PUT /sites/{siteId}/files/settings`.
+// Ref: #/components/schemas/UpdateFileManagerSettingsRequest
+type UpdateFileManagerSettingsRequest struct {
+	// Set to `true` to enable the file manager (read), `false` to disable it.
+	Enabled bool `json:"enabled"`
+	// Set to `true` to also enable write mode (P2). Defaults to `false` when omitted (the read flag is
+	// updated but write remains off).
+	WriteEnabled OptBool `json:"write_enabled"`
+}
+
+// GetEnabled returns the value of Enabled.
+func (s *UpdateFileManagerSettingsRequest) GetEnabled() bool {
+	return s.Enabled
+}
+
+// GetWriteEnabled returns the value of WriteEnabled.
+func (s *UpdateFileManagerSettingsRequest) GetWriteEnabled() OptBool {
+	return s.WriteEnabled
+}
+
+// SetEnabled sets the value of Enabled.
+func (s *UpdateFileManagerSettingsRequest) SetEnabled(val bool) {
+	s.Enabled = val
+}
+
+// SetWriteEnabled sets the value of WriteEnabled.
+func (s *UpdateFileManagerSettingsRequest) SetWriteEnabled(val OptBool) {
+	s.WriteEnabled = val
+}
+
 // One thing to update on a site.
 // Ref: #/components/schemas/UpdateItem
 type UpdateItem struct {
@@ -31359,7 +33221,16 @@ type UpdateRun struct {
 	ScheduledAt OptDateTime     `json:"scheduled_at"`
 	CreatedAt   time.Time       `json:"created_at"`
 	UpdatedAt   time.Time       `json:"updated_at"`
-	Tasks       []UpdateTask    `json:"tasks"`
+	// Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks
+	// array is returned instead).
+	TaskCount OptInt64 `json:"task_count"`
+	// Number of tasks that reached `succeeded` status.
+	SucceededCount OptInt64 `json:"succeeded_count"`
+	// Number of tasks that reached `failed` or `rolled_back` status.
+	FailedCount OptInt64 `json:"failed_count"`
+	// Number of distinct sites targeted by this run.
+	SiteCount OptInt64     `json:"site_count"`
+	Tasks     []UpdateTask `json:"tasks"`
 }
 
 // GetID returns the value of ID.
@@ -31400,6 +33271,26 @@ func (s *UpdateRun) GetCreatedAt() time.Time {
 // GetUpdatedAt returns the value of UpdatedAt.
 func (s *UpdateRun) GetUpdatedAt() time.Time {
 	return s.UpdatedAt
+}
+
+// GetTaskCount returns the value of TaskCount.
+func (s *UpdateRun) GetTaskCount() OptInt64 {
+	return s.TaskCount
+}
+
+// GetSucceededCount returns the value of SucceededCount.
+func (s *UpdateRun) GetSucceededCount() OptInt64 {
+	return s.SucceededCount
+}
+
+// GetFailedCount returns the value of FailedCount.
+func (s *UpdateRun) GetFailedCount() OptInt64 {
+	return s.FailedCount
+}
+
+// GetSiteCount returns the value of SiteCount.
+func (s *UpdateRun) GetSiteCount() OptInt64 {
+	return s.SiteCount
 }
 
 // GetTasks returns the value of Tasks.
@@ -31445,6 +33336,26 @@ func (s *UpdateRun) SetCreatedAt(val time.Time) {
 // SetUpdatedAt sets the value of UpdatedAt.
 func (s *UpdateRun) SetUpdatedAt(val time.Time) {
 	s.UpdatedAt = val
+}
+
+// SetTaskCount sets the value of TaskCount.
+func (s *UpdateRun) SetTaskCount(val OptInt64) {
+	s.TaskCount = val
+}
+
+// SetSucceededCount sets the value of SucceededCount.
+func (s *UpdateRun) SetSucceededCount(val OptInt64) {
+	s.SucceededCount = val
+}
+
+// SetFailedCount sets the value of FailedCount.
+func (s *UpdateRun) SetFailedCount(val OptInt64) {
+	s.FailedCount = val
+}
+
+// SetSiteCount sets the value of SiteCount.
+func (s *UpdateRun) SetSiteCount(val OptInt64) {
+	s.SiteCount = val
 }
 
 // SetTasks sets the value of Tasks.
@@ -31590,6 +33501,22 @@ func (*UpdateSiteDestinationNotFound) updateSiteDestinationRes() {}
 type UpdateSiteDestinationUnauthorized Error
 
 func (*UpdateSiteDestinationUnauthorized) updateSiteDestinationRes() {}
+
+type UpdateSiteFilesSettingsBadRequest Error
+
+func (*UpdateSiteFilesSettingsBadRequest) updateSiteFilesSettingsRes() {}
+
+type UpdateSiteFilesSettingsForbidden Error
+
+func (*UpdateSiteFilesSettingsForbidden) updateSiteFilesSettingsRes() {}
+
+type UpdateSiteFilesSettingsNotFound Error
+
+func (*UpdateSiteFilesSettingsNotFound) updateSiteFilesSettingsRes() {}
+
+type UpdateSiteFilesSettingsUnauthorized Error
+
+func (*UpdateSiteFilesSettingsUnauthorized) updateSiteFilesSettingsRes() {}
 
 // Ref: #/components/schemas/UpdateTask
 type UpdateTask struct {
@@ -32286,3 +34213,134 @@ func (s *VerifyEmailReq) GetToken() string {
 func (s *VerifyEmailReq) SetToken(val string) {
 	s.Token = val
 }
+
+// Request body for `PUT /sites/{siteId}/files/content`.
+// Ref: #/components/schemas/WriteFileContentRequest
+type WriteFileContentRequest struct {
+	// Site-relative file path to create or overwrite.
+	Path string `json:"path"`
+	// Base64-encoded file content (≤ 256 KiB).
+	ContentBase64 string `json:"content_base64"`
+	// Must be `true` when the target path matches the executable-extension deny-list (`.php`, `.phar`, `.
+	// htaccess`, etc.) or is inside a PHP-executable web directory. Requires owner permission (`site.
+	// files.write_code`). Absence causes a `403 executable_write_denied` from the agent.
+	ConfirmExecutableWrite OptBool `json:"confirm_executable_write"`
+	// Must be `true` when the target path matches the sensitive-file deny-list (`wp-config.php`, `.env*`,
+	//  `*.pem`, etc.). Requires owner permission (`site.files.write_code`).
+	ConfirmSensitive OptBool `json:"confirm_sensitive"`
+}
+
+// GetPath returns the value of Path.
+func (s *WriteFileContentRequest) GetPath() string {
+	return s.Path
+}
+
+// GetContentBase64 returns the value of ContentBase64.
+func (s *WriteFileContentRequest) GetContentBase64() string {
+	return s.ContentBase64
+}
+
+// GetConfirmExecutableWrite returns the value of ConfirmExecutableWrite.
+func (s *WriteFileContentRequest) GetConfirmExecutableWrite() OptBool {
+	return s.ConfirmExecutableWrite
+}
+
+// GetConfirmSensitive returns the value of ConfirmSensitive.
+func (s *WriteFileContentRequest) GetConfirmSensitive() OptBool {
+	return s.ConfirmSensitive
+}
+
+// SetPath sets the value of Path.
+func (s *WriteFileContentRequest) SetPath(val string) {
+	s.Path = val
+}
+
+// SetContentBase64 sets the value of ContentBase64.
+func (s *WriteFileContentRequest) SetContentBase64(val string) {
+	s.ContentBase64 = val
+}
+
+// SetConfirmExecutableWrite sets the value of ConfirmExecutableWrite.
+func (s *WriteFileContentRequest) SetConfirmExecutableWrite(val OptBool) {
+	s.ConfirmExecutableWrite = val
+}
+
+// SetConfirmSensitive sets the value of ConfirmSensitive.
+func (s *WriteFileContentRequest) SetConfirmSensitive(val OptBool) {
+	s.ConfirmSensitive = val
+}
+
+// Response body for a successful `PUT /sites/{siteId}/files/content`.
+// Ref: #/components/schemas/WriteFileResult
+type WriteFileResult struct {
+	// Resolved path of the written file (echoed).
+	Path string `json:"path"`
+	// Bytes written.
+	Size int64 `json:"size"`
+	// Last-modified time after the write (Unix epoch seconds).
+	Mtime int64 `json:"mtime"`
+	// 4-digit octal permission string, e.g. `"0644"`.
+	Mode string `json:"mode"`
+}
+
+// GetPath returns the value of Path.
+func (s *WriteFileResult) GetPath() string {
+	return s.Path
+}
+
+// GetSize returns the value of Size.
+func (s *WriteFileResult) GetSize() int64 {
+	return s.Size
+}
+
+// GetMtime returns the value of Mtime.
+func (s *WriteFileResult) GetMtime() int64 {
+	return s.Mtime
+}
+
+// GetMode returns the value of Mode.
+func (s *WriteFileResult) GetMode() string {
+	return s.Mode
+}
+
+// SetPath sets the value of Path.
+func (s *WriteFileResult) SetPath(val string) {
+	s.Path = val
+}
+
+// SetSize sets the value of Size.
+func (s *WriteFileResult) SetSize(val int64) {
+	s.Size = val
+}
+
+// SetMtime sets the value of Mtime.
+func (s *WriteFileResult) SetMtime(val int64) {
+	s.Mtime = val
+}
+
+// SetMode sets the value of Mode.
+func (s *WriteFileResult) SetMode(val string) {
+	s.Mode = val
+}
+
+func (*WriteFileResult) writeSiteFileContentRes() {}
+
+type WriteSiteFileContentBadRequest Error
+
+func (*WriteSiteFileContentBadRequest) writeSiteFileContentRes() {}
+
+type WriteSiteFileContentConflict Error
+
+func (*WriteSiteFileContentConflict) writeSiteFileContentRes() {}
+
+type WriteSiteFileContentForbidden Error
+
+func (*WriteSiteFileContentForbidden) writeSiteFileContentRes() {}
+
+type WriteSiteFileContentNotFound Error
+
+func (*WriteSiteFileContentNotFound) writeSiteFileContentRes() {}
+
+type WriteSiteFileContentUnauthorized Error
+
+func (*WriteSiteFileContentUnauthorized) writeSiteFileContentRes() {}
