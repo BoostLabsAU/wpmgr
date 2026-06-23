@@ -258,6 +258,9 @@ final class OptimizerTransformsTest extends TestCase
         $this->assertStringContainsString('https://example.com/a.css', $out, 'css not rewritten in image-only mode');
     }
 
+    /**
+     * Ensures CSS, JavaScript, and font rewrites do not rewrite image assets.
+     */
     public function test_cdn_css_js_font_only_skips_images(): void
     {
         $cfg  = new PerfConfig(['cdn' => true, 'cdn_url' => 'cdn.example.net', 'cdn_file_types' => 'css_js_font']);

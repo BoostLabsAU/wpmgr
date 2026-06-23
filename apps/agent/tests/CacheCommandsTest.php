@@ -239,6 +239,9 @@ final class CacheCommandsTest extends TestCase
         $this->assertArrayHasKey('htaccess_managed', $res);
     }
 
+    /**
+     * Ensures CDN rewrite settings are stored under the agent keys read by the optimizer.
+     */
     public function test_perf_config_update_persists_cdn_rewrite_config(): void
     {
         $cmd = new PerfConfigUpdateCommand($this->manager());
