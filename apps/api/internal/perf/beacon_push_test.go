@@ -178,6 +178,7 @@ func TestToPerfConfigRequest_cdnWireAndFileTypeMapping(t *testing.T) {
 		{"images maps to image", "images", "cdn", "image"},
 		{"css_js maps to css_js_font", "css_js", "cdn", "css_js_font"},
 		{"empty defaults to all", "", "cdn", "all"},
+		{"unrecognized defaults to all", "unknown", "cdn", "all"},
 	}
 
 	for _, tc := range cases {
