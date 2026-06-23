@@ -17,6 +17,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 ### Fixed
 
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
+- Advanced page-cache bypass and variant settings now reach the WordPress agent so saved URL, cookie, and query rules affect the rendered cache drop-in.
 
 ## [0.57.0] - 2026-06-21
 

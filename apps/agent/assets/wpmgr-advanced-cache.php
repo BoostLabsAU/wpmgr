@@ -34,7 +34,7 @@
  * finds in the on-disk copy; a mismatch triggers a transparent reinstall so
  * existing sites always run the current drop-in logic without manual intervention.
  */
-define('WPMGR_PAGE_CACHE_DROPIN_VERSION', '0.45.0');
+define('WPMGR_PAGE_CACHE_DROPIN_VERSION', '0.45.1');
 
 if (!defined('ABSPATH')) {
     exit; // No direct access.
@@ -326,6 +326,24 @@ $wpmgr_path = preg_replace('#/+#', '/', $wpmgr_path);
 $wpmgr_path = preg_replace('#(\.\./|/\.\.)#', '', (string) $wpmgr_path);
 $wpmgr_path = '/' . ltrim((string) $wpmgr_path, '/');
 $wpmgr_path = rtrim($wpmgr_path, '/'); // '' for root
+
+// Bypass URLs: any configured substring in the request URI/path disables the
+// cache. This runs BEFORE locating an existing cache file so an already-warmed
+// file cannot be served for a URL the operator marked as non-cacheable.
+// Matches are case-insensitive substring containment, identical to the PHP
+// cacheability path, so the pre-WP fast path and the write layer agree.
+$wpmgr_bypass_urls = isset($wpmgr_config['bypass_urls']) && is_array($wpmgr_config['bypass_urls'])
+    ? $wpmgr_config['bypass_urls'] : array();
+if (!empty($wpmgr_bypass_urls) && $wpmgr_uri !== '') {
+    foreach ($wpmgr_bypass_urls as $wpmgr_bypass_url) {
+        if ($wpmgr_bypass_url === '') {
+            continue;
+        }
+        if (stripos($wpmgr_uri, (string) $wpmgr_bypass_url) !== false) {
+            return false;
+        }
+    }
+}
 
 $wpmgr_content = defined('WP_CONTENT_DIR') ? (string) WP_CONTENT_DIR : (dirname(__DIR__));
 $wpmgr_file = rtrim($wpmgr_content, '/\\')
