@@ -164,6 +164,71 @@ func TestToPerfConfigRequest_ingestURLTrailingSlashStripped(t *testing.T) {
 	}
 }
 
+// TestToPerfConfigRequest_cdnWireAndFileTypeMapping verifies that the CDN
+// rewrite config is marshaled with the agent-side wire names and enum values,
+// and that provider/credential fields never leak into the agent payload.
+func TestToPerfConfigRequest_cdnWireAndFileTypeMapping(t *testing.T) {
+	cases := []struct {
+		name       string
+		fileTypes  string
+		wantWire   string
+		wantMapped string
+	}{
+		{"all", "all", "cdn", "all"},
+		{"images maps to image", "images", "cdn", "image"},
+		{"css_js maps to css_js_font", "css_js", "cdn", "css_js_font"},
+		{"empty defaults to all", "", "cdn", "all"},
+		{"unrecognized defaults to all", "unknown", "cdn", "all"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{
+				CDNEnabled:   true,
+				CDNURL:       "https://cdn.example.com",
+				CDNFileTypes: tc.fileTypes,
+				CDNProvider:  "bunny",
+			}
+			req := toPerfConfigRequest(cfg, "", "")
+
+			if !req.CDNEnabled {
+				t.Error("CDNEnabled must be true")
+			}
+			if req.CDNURL != cfg.CDNURL {
+				t.Errorf("CDNURL = %q, want %q", req.CDNURL, cfg.CDNURL)
+			}
+			if req.CDNFileType != tc.wantMapped {
+				t.Errorf("CDNFileType = %q, want %q", req.CDNFileType, tc.wantMapped)
+			}
+
+			data, err := json.Marshal(req)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			raw := string(data)
+
+			// The enabled flag must marshal under the agent key.
+			if !strings.Contains(raw, fmt.Sprintf("%q:", tc.wantWire)) {
+				t.Errorf("payload missing expected key %q; got %s", tc.wantWire, raw)
+			}
+			// The CP public key must NOT appear.
+			if strings.Contains(raw, `"cdn_enabled"`) {
+				t.Errorf("payload must not use CP public field name \"cdn_enabled\"; got %s", raw)
+			}
+			// The mapped file-type value must be present.
+			if !strings.Contains(raw, fmt.Sprintf("%q", tc.wantMapped)) {
+				t.Errorf("payload missing expected file-type value %q; got %s", tc.wantMapped, raw)
+			}
+			// Provider and credential-shaped fields must be absent.
+			for _, bad := range []string{"cdn_provider", "api_token", "zone_id", "zone", "cdn_credentials"} {
+				if strings.Contains(raw, fmt.Sprintf("%q:", bad)) {
+					t.Errorf("payload must not contain credential/provider field %q; got %s", bad, raw)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // UpdateConfig integration (uses fakeRepo + recordingAgent + nil beaconRepo)
 // ---------------------------------------------------------------------------

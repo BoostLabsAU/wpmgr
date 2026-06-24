@@ -85,8 +85,9 @@ type PerfConfigRequest struct {
 	YouTubePlaceholder bool     `json:"youtube_placeholder"`
 	SelfHostGravatars  bool     `json:"self_host_gravatars"`
 
-	// CDN (non-secret rewrite config only — credentials never leave the CP)
-	CDNEnabled  bool   `json:"cdn_enabled"`
+	// CDN (non-secret rewrite config only — credentials never leave the CP).
+	// The agent persists the enabled flag as "cdn", not "cdn_enabled".
+	CDNEnabled  bool   `json:"cdn"`
 	CDNURL      string `json:"cdn_url,omitempty"`
 	CDNFileType string `json:"cdn_file_types"`
 

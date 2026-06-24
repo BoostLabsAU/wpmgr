@@ -285,6 +285,30 @@ final class CacheCommandsTest extends TestCase
         $this->assertArrayHasKey('htaccess_managed', $res);
     }
 
+    /**
+     * Ensures CDN rewrite settings are stored under the agent keys read by the optimizer.
+     */
+    public function test_perf_config_update_persists_cdn_rewrite_config(): void
+    {
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], [
+            'cdn'             => true,
+            'cdn_url'         => 'cdn.example.net',
+            'cdn_file_types'  => 'image',
+            'config_version'  => 7,
+        ]);
+        $this->assertTrue($res['ok']);
+
+        $stored = $this->optionStore['wpmgr_perf_config'] ?? [];
+        $this->assertTrue($stored['cdn']);
+        $this->assertSame('cdn.example.net', $stored['cdn_url']);
+        $this->assertSame('image', $stored['cdn_file_types']);
+
+        // config_version lives in its own option, not the optimization option.
+        $this->assertArrayHasKey('wpmgr_perf_config_version', $this->optionStore);
+        $this->assertSame(7, $this->optionStore['wpmgr_perf_config_version']);
+    }
+
     public function test_enable_refused_on_plain_permalinks(): void
     {
         // Plain permalinks (?p=123) give no URL path to key a disk cache file on,

@@ -1872,6 +1872,23 @@ func normalize(in []string) []string {
 	return out
 }
 
+// mapCDNFileTypes translates the operator-facing CDN file-type values into
+// the agent-side enum. The public API and database keep "images" and "css_js";
+// the agent expects "image" and "css_js_font". An empty value defaults to
+// "all" so a fresh config never accidentally disables the rewrite scope.
+func mapCDNFileTypes(cpValue string) string {
+	switch cpValue {
+	case "images":
+		return "image"
+	case "css_js":
+		return "css_js_font"
+	case "all":
+		return "all"
+	default:
+		return "all"
+	}
+}
+
 // toPerfConfigRequest maps a stored Config to the agent command body. CDN
 // credentials are deliberately omitted (the CP holds them).
 //
@@ -1921,7 +1938,7 @@ func toPerfConfigRequest(c Config, freshBeaconKey, cpBaseURL string) agentcmd.Pe
 		SelfHostGravatars:        c.SelfHostGravatars,
 		CDNEnabled:               c.CDNEnabled,
 		CDNURL:                   c.CDNURL,
-		CDNFileType:              c.CDNFileTypes,
+		CDNFileType:              mapCDNFileTypes(c.CDNFileTypes),
 		DBAutoClean:              c.DBAutoClean,
 		DBAutoCleanInterval:      c.DBAutoCleanInterval,
 		DBPostRevisions:          c.DBPostRevisions,
