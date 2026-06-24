@@ -3096,3 +3096,87 @@ CREATE POLICY site_vulnerabilities_tenant_isolation ON site_vulnerabilities
 CREATE POLICY site_vulnerabilities_agent ON site_vulnerabilities
     USING      (current_setting('app.agent', true) = 'on')
     WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- site_file_manager  (m82 — per-site opt-in flag, tenant-RLS)
+-- ---------------------------------------------------------------------------
+-- One row per site (PK = site_id). The CP is the source of truth; the agent
+-- reads files_enabled on every signed file_* command. Default OFF.
+CREATE TABLE IF NOT EXISTS site_file_manager (
+    site_id        uuid PRIMARY KEY,
+    tenant_id      uuid NOT NULL,
+    files_enabled       boolean NOT NULL DEFAULT false,
+    -- files_write_enabled is the SEPARATE P2 opt-in for write operations.
+    -- Both files_enabled AND files_write_enabled must be true before the CP
+    -- will sign any file_write / file_mkdir / file_rename / file_delete /
+    -- file_chmod / file_upload_apply command.  Default: false.
+    files_write_enabled boolean NOT NULL DEFAULT false,
+    root_jail      text NOT NULL DEFAULT '',
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    updated_at     timestamptz NOT NULL DEFAULT now(),
+
+    CONSTRAINT site_file_manager_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON UPDATE NO ACTION ON DELETE CASCADE,
+    CONSTRAINT site_file_manager_site_fkey
+        FOREIGN KEY (site_id) REFERENCES sites (id) ON UPDATE NO ACTION ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS site_file_manager_tenant_idx
+    ON site_file_manager (tenant_id);
+
+ALTER TABLE site_file_manager ENABLE ROW LEVEL SECURITY;
+ALTER TABLE site_file_manager FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY site_file_manager_tenant_isolation ON site_file_manager
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY site_file_manager_agent ON site_file_manager
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
+
+-- ---------------------------------------------------------------------------
+-- file_transfers  (m82 — download/upload transfer bookkeeping, tenant-RLS)
+-- ---------------------------------------------------------------------------
+-- Short-lived rows created when the CP mints presigned URLs for a file
+-- download. Rows are GC-eligible after expires_at. RLS mirrors backup_snapshots.
+CREATE TABLE IF NOT EXISTS file_transfers (
+    id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id    uuid NOT NULL,
+    site_id      uuid NOT NULL
+        REFERENCES sites (id) ON UPDATE NO ACTION ON DELETE CASCADE,
+    direction    text NOT NULL
+        CONSTRAINT file_transfers_direction_chk
+        CHECK (direction IN ('download', 'upload')),
+    rel_path     text NOT NULL,
+    status       text NOT NULL DEFAULT 'done'
+        CONSTRAINT file_transfers_status_chk
+        CHECK (status IN ('staged', 'active', 'done', 'failed')),
+    object_key   text NOT NULL DEFAULT '',
+    size_bytes   bigint NOT NULL DEFAULT 0,
+    chunk_count  integer NOT NULL DEFAULT 0,
+    created_by   uuid NOT NULL DEFAULT '00000000-0000-0000-0000-000000000000',
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    expires_at   timestamptz NOT NULL,
+
+    CONSTRAINT file_transfers_tenant_fkey
+        FOREIGN KEY (tenant_id) REFERENCES tenants (id) ON UPDATE NO ACTION ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS file_transfers_tenant_site_idx
+    ON file_transfers (tenant_id, site_id, created_at DESC, id DESC);
+
+CREATE INDEX IF NOT EXISTS file_transfers_expires_at_idx
+    ON file_transfers (expires_at)
+    WHERE status IN ('staged', 'done');
+
+ALTER TABLE file_transfers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE file_transfers FORCE ROW LEVEL SECURITY;
+
+CREATE POLICY file_transfers_tenant_isolation ON file_transfers
+    USING      (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
+    WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
+
+CREATE POLICY file_transfers_agent ON file_transfers
+    USING      (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');

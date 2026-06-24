@@ -57,6 +57,9 @@ import type {
   AgentMetadataData,
   AgentMetadataErrors,
   AgentMetadataResponses,
+  ApplySiteFileUploadData,
+  ApplySiteFileUploadErrors,
+  ApplySiteFileUploadResponses,
   ArchiveSiteData,
   ArchiveSiteErrors,
   ArchiveSiteResponses,
@@ -85,6 +88,9 @@ import type {
   CancelEnrollmentResponses,
   CancelMediaData,
   CancelMediaResponses,
+  ChmodSiteFileData,
+  ChmodSiteFileErrors,
+  ChmodSiteFileResponses,
   CleanDatabaseData,
   CleanDatabaseResponses,
   ClearRucssData,
@@ -118,7 +124,13 @@ import type {
   CreateSiteDestinationData,
   CreateSiteDestinationErrors,
   CreateSiteDestinationResponses,
+  CreateSiteDirectoryData,
+  CreateSiteDirectoryErrors,
+  CreateSiteDirectoryResponses,
   CreateSiteErrors,
+  CreateSiteFileArchiveData,
+  CreateSiteFileArchiveErrors,
+  CreateSiteFileArchiveResponses,
   CreateSiteResponses,
   CreateSiteShareData,
   CreateSiteShareErrors,
@@ -161,6 +173,9 @@ import type {
   DeleteSiteEmailSuppressionErrors,
   DeleteSiteEmailSuppressionResponses,
   DeleteSiteErrors,
+  DeleteSiteFileData,
+  DeleteSiteFileErrors,
+  DeleteSiteFileResponses,
   DeleteSiteResponses,
   DeleteSiteShareData,
   DeleteSiteShareErrors,
@@ -183,6 +198,9 @@ import type {
   ExportSiteEmailLogData,
   ExportSiteEmailLogErrors,
   ExportSiteEmailLogResponses,
+  ExtractSiteFileArchiveData,
+  ExtractSiteFileArchiveErrors,
+  ExtractSiteFileArchiveResponses,
   FlushObjectCacheData,
   FlushObjectCacheResponses,
   ForgotPasswordData,
@@ -304,6 +322,9 @@ import type {
   GetSiteErrorConfigErrors,
   GetSiteErrorConfigResponses,
   GetSiteErrors,
+  GetSiteFilesSettingsData,
+  GetSiteFilesSettingsErrors,
+  GetSiteFilesSettingsResponses,
   GetSiteLoginBrandData,
   GetSiteLoginBrandResponses,
   GetSiteLoginProtectionData,
@@ -411,6 +432,12 @@ import type {
   ListSiteEmailSuppressionData,
   ListSiteEmailSuppressionErrors,
   ListSiteEmailSuppressionResponses,
+  ListSiteFilesData,
+  ListSiteFilesErrors,
+  ListSiteFilesResponses,
+  ListSiteFileVersionsData,
+  ListSiteFileVersionsErrors,
+  ListSiteFileVersionsResponses,
   ListSiteLoginEventsData,
   ListSiteLoginEventsResponses,
   ListSitePhpErrorsData,
@@ -448,6 +475,12 @@ import type {
   PatchSiteErrorConfigResponses,
   PreloadCacheData,
   PreloadCacheResponses,
+  PrepareSiteFileDownloadData,
+  PrepareSiteFileDownloadErrors,
+  PrepareSiteFileDownloadResponses,
+  PrepareSiteFileUploadData,
+  PrepareSiteFileUploadErrors,
+  PrepareSiteFileUploadResponses,
   PurgeCacheData,
   PurgeCacheErrors,
   PurgeCacheResponses,
@@ -496,6 +529,9 @@ import type {
   PutSiteLoginProtectionData,
   PutSiteLoginProtectionErrors,
   PutSiteLoginProtectionResponses,
+  ReadSiteFileContentData,
+  ReadSiteFileContentErrors,
+  ReadSiteFileContentResponses,
   RefreshSiteDiagnosticsData,
   RefreshSiteDiagnosticsErrors,
   RefreshSiteDiagnosticsResponses,
@@ -514,6 +550,9 @@ import type {
   RemoveClientMemberData,
   RemoveClientMemberErrors,
   RemoveClientMemberResponses,
+  RenameSiteFileData,
+  RenameSiteFileErrors,
+  RenameSiteFileResponses,
   ResendEmailLogData,
   ResendEmailLogErrors,
   ResendEmailLogResponses,
@@ -528,6 +567,9 @@ import type {
   RestoreMediaResponses,
   RestoreSiteData,
   RestoreSiteErrors,
+  RestoreSiteFileVersionData,
+  RestoreSiteFileVersionErrors,
+  RestoreSiteFileVersionResponses,
   RestoreSiteResponses,
   RevertDbSnapshotData,
   RevertDbSnapshotResponses,
@@ -544,6 +586,9 @@ import type {
   RunSearchReplaceResponses,
   ScanUnusedMediaData,
   ScanUnusedMediaResponses,
+  SearchSiteFilesData,
+  SearchSiteFilesErrors,
+  SearchSiteFilesResponses,
   SendTestEmailData,
   SendTestEmailErrors,
   SendTestEmailResponses,
@@ -588,6 +633,9 @@ import type {
   UpdateSiteDestinationData,
   UpdateSiteDestinationErrors,
   UpdateSiteDestinationResponses,
+  UpdateSiteFilesSettingsData,
+  UpdateSiteFilesSettingsErrors,
+  UpdateSiteFilesSettingsResponses,
   VerifyAuditData,
   VerifyAuditErrors,
   VerifyAuditResponses,
@@ -596,6 +644,9 @@ import type {
   VerifyEmailResponses,
   VerifySiteActivityData,
   VerifySiteActivityResponses,
+  WriteSiteFileContentData,
+  WriteSiteFileContentErrors,
+  WriteSiteFileContentResponses,
 } from "./types.gen";
 
 export type Options<
@@ -5000,3 +5051,601 @@ export const downloadPortalReport = <ThrowOnError extends boolean = false>(
     DownloadPortalReportErrors,
     ThrowOnError
   >({ url: "/api/v1/portal/reports/{reportId}/download", ...options });
+
+/**
+ * Get file manager settings for a site
+ *
+ * Returns the current file manager settings for a site, including whether
+ * the feature is enabled.
+ *
+ * Any site member (viewer+) may call this endpoint so the UI can render
+ * the correct enable/disable state without an extra permission check.
+ *
+ * No permission beyond `RequireSiteAccess` is required.
+ *
+ */
+export const getSiteFilesSettings = <ThrowOnError extends boolean = false>(
+  options: Options<GetSiteFilesSettingsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    GetSiteFilesSettingsResponses,
+    GetSiteFilesSettingsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/settings", ...options });
+
+/**
+ * Enable or disable the file manager for a site
+ *
+ * Enables or disables the file manager feature for a site. The feature is
+ * **off by default** (migration m82); an explicit enable is required before
+ * any file browse/read/download endpoint will work.
+ *
+ * `root_jail` is read-only in P1 (always `""`) — the agent defaults to the
+ * site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+ *
+ * An audit entry (`site.files.settings.changed`) is recorded on every call,
+ * capturing the resulting `enabled` and `write_enabled` state.
+ *
+ * `root_jail` is read-only in P1/P2 (always `""`) — the agent defaults to
+ * the site's `ABSPATH`. Any `root_jail` field in the request body is ignored.
+ *
+ * Requires `site.files.manage` permission (admin+).
+ *
+ */
+export const updateSiteFilesSettings = <ThrowOnError extends boolean = false>(
+  options: Options<UpdateSiteFilesSettingsData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    UpdateSiteFilesSettingsResponses,
+    UpdateSiteFilesSettingsErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/settings",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * List a directory on a managed site
+ *
+ * Issues a `file_list` command to the site's agent and returns one page
+ * of directory entries for the given path.
+ *
+ * The feature must be **explicitly enabled per site** (off by default).
+ * Returns `403 files_not_enabled` when the site has not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+).
+ *
+ * Pagination is cursor-based: when `truncated=true` the response carries
+ * an opaque `cursor` that the caller passes on the next request.
+ *
+ */
+export const listSiteFiles = <ThrowOnError extends boolean = false>(
+  options: Options<ListSiteFilesData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListSiteFilesResponses,
+    ListSiteFilesErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files", ...options });
+
+/**
+ * Read a small file inline (base64, ≤ 256 KiB)
+ *
+ * Issues a `file_read` command to the site's agent and returns the
+ * base64-encoded content of a file up to 256 KiB. When the file is
+ * larger than the cap, `truncated=true` is returned; use the download
+ * endpoint for the full file.
+ *
+ * **Sensitive-path gate (T6):** paths matching `wp-config.php`, `.env*`,
+ * `*.pem`, `*.key`, `id_rsa*`, `.git/`, `.htpasswd`, or `auth.json`
+ * require **both**:
+ * - `confirm_sensitive=true` query parameter, and
+ * - Owner-level permission (`site.files.read_sensitive`).
+ *
+ * Both the successful read AND any denied attempt are recorded in the
+ * tamper-evident audit log with the full path.
+ *
+ * The feature must be explicitly enabled per site. Returns
+ * `403 files_not_enabled` when not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+). Sensitive-path
+ * reads additionally require `site.files.read_sensitive` (owner only).
+ *
+ */
+export const readSiteFileContent = <ThrowOnError extends boolean = false>(
+  options: Options<ReadSiteFileContentData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ReadSiteFileContentResponses,
+    ReadSiteFileContentErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/content", ...options });
+
+/**
+ * Write (create or overwrite) a small text file (≤ 256 KiB)
+ *
+ * Issues a `file_write` command to the site's agent. The agent writes the
+ * content atomically (temp-write → rename swap) to the resolved path.
+ *
+ * **Write-enabled gate:** The site must have both `enabled=true` AND
+ * `write_enabled=true` in its file manager settings. Returns
+ * `403 files_write_not_enabled` when write mode is off.
+ *
+ * **Executable-write gate (T1):** When `confirm_executable_write=true` is
+ * set in the request body, the caller must additionally hold
+ * `site.files.write_code` (owner). If an admin-level caller passes
+ * `confirm_executable_write=true`, the request is rejected with
+ * `403 insufficient_permission` and the denial is audited at elevated
+ * severity. The agent independently enforces its executable deny-list
+ * regardless.
+ *
+ * **Sensitive-file gate (T6):** Same as above for `confirm_sensitive=true`
+ * — requires owner (`site.files.write_code`) and is audited at elevated
+ * severity on both success and denial.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const writeSiteFileContent = <ThrowOnError extends boolean = false>(
+  options: Options<WriteSiteFileContentData, ThrowOnError>,
+) =>
+  (options.client ?? client).put<
+    WriteSiteFileContentResponses,
+    WriteSiteFileContentErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/content",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Create a directory on a managed site
+ *
+ * Issues a `file_mkdir` command to the site's agent.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ * Returns `403 files_write_not_enabled` when write mode is off.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const createSiteDirectory = <ThrowOnError extends boolean = false>(
+  options: Options<CreateSiteDirectoryData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CreateSiteDirectoryResponses,
+    CreateSiteDirectoryErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/mkdir",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Rename or move a file/directory within the jail
+ *
+ * Issues a `file_rename` command to the site's agent. Both `src` and `dst`
+ * are containment-checked by the agent; escaping the jail on either path
+ * returns `400 outside_root`.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ *
+ * **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+ * `confirm_executable_write` or `confirm_sensitive` is set, owner
+ * permission (`site.files.write_code`) is required.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const renameSiteFile = <ThrowOnError extends boolean = false>(
+  options: Options<RenameSiteFileData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RenameSiteFileResponses,
+    RenameSiteFileErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/rename",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Delete a file or directory on a managed site
+ *
+ * Issues a `file_delete` command to the site's agent after verifying
+ * three layered gates (T12/T13):
+ *
+ * 1. **PermSiteFilesWrite** (admin+) — inherited from route middleware.
+ * 2. **PermSiteFilesDelete** (owner) — checked in the handler; denial is
+ * audited with action `site.files.delete.denied`.
+ * 3. **Typed confirm token** — `confirm` in the request body must be the
+ * string `"DELETE"` exactly. Missing or wrong value returns
+ * `400 confirm_required`.
+ *
+ * The agent independently enforces its protected-root guard (`wp-admin`,
+ * `wp-includes`).
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ *
+ * Requires `site.files.write` + `site.files.delete` (owner only).
+ *
+ */
+export const deleteSiteFile = <ThrowOnError extends boolean = false>(
+  options: Options<DeleteSiteFileData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    DeleteSiteFileResponses,
+    DeleteSiteFileErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/delete",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Change file/directory permissions on a managed site
+ *
+ * Issues a `file_chmod` command to the site's agent. The agent validates
+ * the mode against a safe allowlist — no setuid (4xxx), no setgid (2xxx),
+ * no world-write; returns `400 mode_denied` for unsafe modes.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const chmodSiteFile = <ThrowOnError extends boolean = false>(
+  options: Options<ChmodSiteFileData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ChmodSiteFileResponses,
+    ChmodSiteFileErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/chmod",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Stage an upload — mint presigned S3 PUT URLs for the browser
+ *
+ * Step 1 of 2 for browser file upload. The CP mints short-lived presigned
+ * S3 PUT URLs in the tenant-namespaced staging area and returns them to
+ * the browser. The browser PUTs each chunk directly to S3 (never through
+ * the CP). After all chunks are staged, the caller invokes
+ * `POST /files/upload/apply` to have the agent fetch, reassemble,
+ * validate (SHA-256), and atomic-swap the file into place.
+ *
+ * Presigned PUT URLs are **never logged** (T8). TTL is ≤ 5 minutes.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ *
+ * **Executable/sensitive gate:** Same as `writeSiteFileContent` — if
+ * `confirm_executable_write` or `confirm_sensitive` is set, owner
+ * permission (`site.files.write_code`) is required.
+ *
+ * Returns `503 storage_not_configured` on self-hosted deployments without
+ * object storage.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const prepareSiteFileUpload = <ThrowOnError extends boolean = false>(
+  options: Options<PrepareSiteFileUploadData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    PrepareSiteFileUploadResponses,
+    PrepareSiteFileUploadErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/upload",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Apply a staged upload — agent fetches chunks and atomic-swaps
+ *
+ * Step 2 of 2 for browser file upload. After the browser has PUT all
+ * chunks to the presigned S3 URLs returned by `prepareSiteFileUpload`,
+ * this endpoint:
+ *
+ * 1. Mints presigned S3 GET URLs for each staged chunk.
+ * 2. Issues `file_upload_apply` to the agent, which fetches all chunks,
+ * reassembles them in order, validates the SHA-256 digest, and
+ * atomic-swaps the assembled file into the target path (same
+ * FilesRestorer swap primitive used by restore).
+ *
+ * The agent returns `400 write_failed` when the SHA-256 digest does not
+ * match. The caller should retry the full upload in that case.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be true.
+ *
+ * **Executable/sensitive gate:** Same as `prepareSiteFileUpload`.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const applySiteFileUpload = <ThrowOnError extends boolean = false>(
+  options: Options<ApplySiteFileUploadData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ApplySiteFileUploadResponses,
+    ApplySiteFileUploadErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/upload/apply",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Stage a file for browser download (presigned URL)
+ *
+ * Prepares a file for large-file download in three steps:
+ * 1. CP mints presigned S3 PUT URLs in a tenant-namespaced staging area.
+ * 2. CP issues `file_download_prepare` to the agent, which uploads the
+ * file in chunks directly to S3 (never through the CP).
+ * 3. CP mints a short-lived presigned GET URL (≤ 5 min TTL) for the
+ * browser to fetch the staged file directly from object storage.
+ *
+ * Large files bypass the CP's response path entirely — only the
+ * presigned URL is returned in the 200 body.
+ *
+ * A `file_transfers` row is persisted for audit and GC tracking.
+ *
+ * **Sensitive-path gate (T6):** same rules as `readSiteFileContent` —
+ * owner-level permission required; the attempt is always audited.
+ *
+ * Returns `503 storage_not_configured` when object storage is not
+ * configured (self-hosted deployments without S3).
+ *
+ * The feature must be explicitly enabled per site. Returns
+ * `403 files_not_enabled` when not opted in.
+ *
+ * Requires the `site.files.read` permission (admin+). Sensitive-path
+ * downloads additionally require `site.files.read_sensitive` (owner only).
+ *
+ */
+export const prepareSiteFileDownload = <ThrowOnError extends boolean = false>(
+  options: Options<PrepareSiteFileDownloadData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    PrepareSiteFileDownloadResponses,
+    PrepareSiteFileDownloadErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/download",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Create a ZIP archive of site paths and return a presigned download URL
+ *
+ * Issues a `file_archive_create` command to the site's agent. The agent
+ * zips the specified paths (all containment-checked within the jail) and
+ * uploads the archive directly to a CP-minted S3 staging area. The CP
+ * then mints a short-lived presigned GET URL for the browser to download
+ * the archive.
+ *
+ * This is a **read** operation — it does not require write mode.
+ *
+ * **Sensitive-path gate (F1):** If any path in `paths` matches the
+ * sensitive-file deny-list (wp-config.php, .env*, *.pem, …), the caller
+ * must set `confirm_sensitive=true` AND hold `site.files.read_sensitive`
+ * (owner). Both checks must pass — a missing flag or insufficient
+ * permission returns `403`. The denial is audited at elevated severity.
+ * The agent independently re-checks every path and returns
+ * `sensitive_denied` when the flag is absent. The CP audit carries the
+ * full path list.
+ *
+ * Returns `503 storage_not_configured` on deployments without object storage.
+ *
+ * The feature must be explicitly enabled. Returns `403 files_not_enabled`
+ * when not opted in.
+ *
+ * Requires `site.files.read` permission (admin+).
+ *
+ */
+export const createSiteFileArchive = <ThrowOnError extends boolean = false>(
+  options: Options<CreateSiteFileArchiveData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    CreateSiteFileArchiveResponses,
+    CreateSiteFileArchiveErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/archive",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Extract a ZIP archive on a managed site
+ *
+ * Issues a `file_extract` command to the site's agent. The agent opens
+ * the archive at `archive_path`, validates every entry against the
+ * containment guard (zip-slip / zip-bomb / symlink / absolute-path
+ * guards all enforced agent-side), and extracts into `dest_path`.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+ * `true`. Returns `403 files_write_not_enabled` when write mode is off.
+ *
+ * **Zip-slip / zip-bomb (422):** If any archive entry would resolve
+ * outside `dest_path` or the archive exceeds the uncompressed-size /
+ * entry-count guard, the agent returns `zip_slip` or `zip_bomb`
+ * respectively. The CP maps these to `422 Unprocessable Entity`.
+ *
+ * **Bad/unknown archive (400):** `bad_archive` (file is corrupted) and
+ * `not_archive` (path is not a recognised archive) map to `400`.
+ *
+ * **Executable/sensitive gate (T1/T6):** When `confirm_executable_write`
+ * or `confirm_sensitive` is set in the request body:
+ * - The caller must additionally hold `site.files.write_code` (owner).
+ * - A non-owner caller is rejected at the CP handler — the agent is
+ * **never called** — and the denial is audited at elevated severity.
+ * - The agent independently enforces its executable deny-list and
+ * sensitive-path deny-list regardless of the confirm flags.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const extractSiteFileArchive = <ThrowOnError extends boolean = false>(
+  options: Options<ExtractSiteFileArchiveData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ExtractSiteFileArchiveResponses,
+    ExtractSiteFileArchiveErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/extract",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
+
+/**
+ * Search files by name or content within the jail
+ *
+ * Issues a `file_search` command to the site's agent. Supports two modes:
+ * - `name` — match filenames against the query string.
+ * - `content` — grep file contents for the query string (line + snippet returned).
+ *
+ * Results are cursor-paginated: when `truncated=true` the response carries
+ * an opaque `cursor` for the next page.
+ *
+ * This is a **read** operation. The agent never exposes the content of
+ * sensitive paths (wp-config.php, .env*, *.pem, …) in search snippets.
+ *
+ * The feature must be explicitly enabled. Returns `403 files_not_enabled`
+ * when not opted in.
+ *
+ * Requires `site.files.read` permission (admin+).
+ *
+ */
+export const searchSiteFiles = <ThrowOnError extends boolean = false>(
+  options: Options<SearchSiteFilesData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    SearchSiteFilesResponses,
+    SearchSiteFilesErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/search", ...options });
+
+/**
+ * List version history for a file
+ *
+ * Issues a `file_versions_list` command to the site's agent. Returns the
+ * version history for a single file, ordered newest-first. Each version
+ * carries an opaque `version_id` that can be passed to
+ * `POST /files/versions/restore` to restore that version.
+ *
+ * **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+ * deny-list (wp-config.php, .env*, *.pem, …), the caller must hold
+ * `site.files.read_sensitive` (owner). A non-owner is denied `403` and
+ * the denial is audited at elevated severity. This prevents leaking that
+ * sensitive backups exist to non-owner collaborators.
+ *
+ * Version history availability depends on the agent-side implementation
+ * (e.g. the host's filesystem snapshot, the pre-write backup mechanism,
+ * or WP's own revision system). When no history is available for a path,
+ * the agent returns an empty `versions` list.
+ *
+ * This is a **read** operation.
+ *
+ * The feature must be explicitly enabled. Returns `403 files_not_enabled`
+ * when not opted in.
+ *
+ * Requires `site.files.read` permission (admin+).
+ *
+ */
+export const listSiteFileVersions = <ThrowOnError extends boolean = false>(
+  options: Options<ListSiteFileVersionsData, ThrowOnError>,
+) =>
+  (options.client ?? client).get<
+    ListSiteFileVersionsResponses,
+    ListSiteFileVersionsErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/files/versions", ...options });
+
+/**
+ * Restore a file to a prior version
+ *
+ * Issues a `file_version_restore` command to the site's agent, which
+ * overwrites the file at `path` with the content of the specified
+ * `version_id`. The version identifier is opaque — retrieve valid IDs
+ * from `GET /files/versions?path=…`.
+ *
+ * Returns `404 no_such_version` when the version ID does not exist for
+ * the given path.
+ *
+ * **Write-enabled gate:** Both `enabled` and `write_enabled` must be
+ * `true`. Returns `403 files_write_not_enabled` when write mode is off.
+ *
+ * **Sensitive-path gate (F3):** If `path` matches the sensitive-file
+ * deny-list (wp-config.php, .env*, *.pem, …), the caller must set
+ * `confirm_sensitive=true` AND hold `site.files.write_code` (owner).
+ * Both checks must pass — a missing flag or insufficient permission
+ * returns `403`. The denial is audited at elevated severity. The agent
+ * independently re-checks and returns `sensitive_denied` when the flag
+ * is absent.
+ *
+ * Every restore is audited with the full `path` and `version_id`.
+ *
+ * Requires `site.files.write` permission (admin+).
+ *
+ */
+export const restoreSiteFileVersion = <ThrowOnError extends boolean = false>(
+  options: Options<RestoreSiteFileVersionData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    RestoreSiteFileVersionResponses,
+    RestoreSiteFileVersionErrors,
+    ThrowOnError
+  >({
+    url: "/api/v1/sites/{siteId}/files/versions/restore",
+    ...options,
+    headers: {
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });

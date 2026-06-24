@@ -73,6 +73,10 @@ type AgentMetadataRes interface {
 	agentMetadataRes()
 }
 
+type ApplySiteFileUploadRes interface {
+	applySiteFileUploadRes()
+}
+
 type ArchiveSiteRes interface {
 	archiveSiteRes()
 }
@@ -105,6 +109,10 @@ type CancelEnrollmentRes interface {
 	cancelEnrollmentRes()
 }
 
+type ChmodSiteFileRes interface {
+	chmodSiteFileRes()
+}
+
 type CreateApiKeyRes interface {
 	createApiKeyRes()
 }
@@ -135,6 +143,14 @@ type CreateRestoreRes interface {
 
 type CreateSiteDestinationRes interface {
 	createSiteDestinationRes()
+}
+
+type CreateSiteDirectoryRes interface {
+	createSiteDirectoryRes()
+}
+
+type CreateSiteFileArchiveRes interface {
+	createSiteFileArchiveRes()
 }
 
 type CreateSiteRes interface {
@@ -185,6 +201,10 @@ type DeleteSiteEmailSuppressionRes interface {
 	deleteSiteEmailSuppressionRes()
 }
 
+type DeleteSiteFileRes interface {
+	deleteSiteFileRes()
+}
+
 type DeleteSiteRes interface {
 	deleteSiteRes()
 }
@@ -207,6 +227,10 @@ type EnrollRes interface {
 
 type ExportSiteEmailLogRes interface {
 	exportSiteEmailLogRes()
+}
+
+type ExtractSiteFileArchiveRes interface {
+	extractSiteFileArchiveRes()
 }
 
 type GenerateClientReportRes interface {
@@ -325,6 +349,10 @@ type GetSiteErrorConfigRes interface {
 	getSiteErrorConfigRes()
 }
 
+type GetSiteFilesSettingsRes interface {
+	getSiteFilesSettingsRes()
+}
+
 type GetSiteRes interface {
 	getSiteRes()
 }
@@ -433,6 +461,14 @@ type ListSiteEmailSuppressionRes interface {
 	listSiteEmailSuppressionRes()
 }
 
+type ListSiteFileVersionsRes interface {
+	listSiteFileVersionsRes()
+}
+
+type ListSiteFilesRes interface {
+	listSiteFilesRes()
+}
+
 type ListSiteSharesRes interface {
 	listSiteSharesRes()
 }
@@ -463,6 +499,14 @@ type PatchMemberRes interface {
 
 type PatchSiteErrorConfigRes interface {
 	patchSiteErrorConfigRes()
+}
+
+type PrepareSiteFileDownloadRes interface {
+	prepareSiteFileDownloadRes()
+}
+
+type PrepareSiteFileUploadRes interface {
+	prepareSiteFileUploadRes()
 }
 
 type PurgeCacheRes interface {
@@ -529,6 +573,10 @@ type PutSiteLoginProtectionRes interface {
 	putSiteLoginProtectionRes()
 }
 
+type ReadSiteFileContentRes interface {
+	readSiteFileContentRes()
+}
+
 type RefreshSiteDiagnosticsRes interface {
 	refreshSiteDiagnosticsRes()
 }
@@ -553,12 +601,20 @@ type RemoveClientMemberRes interface {
 	removeClientMemberRes()
 }
 
+type RenameSiteFileRes interface {
+	renameSiteFileRes()
+}
+
 type ResendEmailLogRes interface {
 	resendEmailLogRes()
 }
 
 type ResetPasswordRes interface {
 	resetPasswordRes()
+}
+
+type RestoreSiteFileVersionRes interface {
+	restoreSiteFileVersionRes()
 }
 
 type RestoreSiteRes interface {
@@ -575,6 +631,10 @@ type RevokeClientInvitationRes interface {
 
 type RevokeSiteRes interface {
 	revokeSiteRes()
+}
+
+type SearchSiteFilesRes interface {
+	searchSiteFilesRes()
 }
 
 type SendTestEmailRes interface {
@@ -613,10 +673,18 @@ type UpdateSiteDestinationRes interface {
 	updateSiteDestinationRes()
 }
 
+type UpdateSiteFilesSettingsRes interface {
+	updateSiteFilesSettingsRes()
+}
+
 type VerifyAuditRes interface {
 	verifyAuditRes()
 }
 
 type VerifyEmailRes interface {
 	verifyEmailRes()
+}
+
+type WriteSiteFileContentRes interface {
+	writeSiteFileContentRes()
 }

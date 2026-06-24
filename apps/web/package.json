@@ -36,6 +36,7 @@
     "motion": "^12.40.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-dropzone": "^15.0.0",
     "react-hook-form": "^7.76.0",
     "react-qr-code": "^2.2.0",
     "react-virtuoso": "^4.18.7",

@@ -1807,6 +1807,28 @@ export const UpdateRunSchema = {
       type: "string",
       format: "date-time",
     },
+    task_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Total number of tasks in this run. Populated on list responses; absent on the detail GET (tasks array is returned instead).",
+    },
+    succeeded_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of tasks that reached `succeeded` status.",
+    },
+    failed_count: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Number of tasks that reached `failed` or `rolled_back` status.",
+    },
+    site_count: {
+      type: "integer",
+      format: "int64",
+      description: "Number of distinct sites targeted by this run.",
+    },
     tasks: {
       type: "array",
       items: {
@@ -9045,6 +9067,857 @@ export const ObjectCacheStatsHistorySchema = {
     avg_ratio_pct: {
       type: "number",
       description: "Average hit ratio across all data points in the window.",
+    },
+  },
+} as const;
+
+export const FileEntrySchema = {
+  type: "object",
+  description: "One entry in a site directory listing.",
+  required: [
+    "name",
+    "size",
+    "mtime",
+    "mode",
+    "is_dir",
+    "is_link",
+    "is_writable",
+  ],
+  properties: {
+    name: {
+      type: "string",
+      description: "Filename (basename only; no directory component).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes (0 for directories).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    mode: {
+      type: "string",
+      description: 'Human-readable permission string (e.g. "-rw-r--r--").',
+    },
+    is_dir: {
+      type: "boolean",
+      description: "True when the entry is a directory.",
+    },
+    is_link: {
+      type: "boolean",
+      description:
+        "True when the entry is a symlink. The agent never follows symlinks.",
+    },
+    is_writable: {
+      type: "boolean",
+      description: "True when the agent process can write to this entry.",
+    },
+  },
+} as const;
+
+export const FileListResultSchema = {
+  type: "object",
+  description:
+    "One page of directory entries from a `file_list` agent command.",
+  required: ["path", "entries", "total", "truncated"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Absolute resolved path (echoed from the agent).",
+    },
+    entries: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileEntry",
+      },
+    },
+    total: {
+      type: "integer",
+      description:
+        "Total count of entries in the directory (before cursor pagination).",
+    },
+    truncated: {
+      type: "boolean",
+      description: "True when more entries remain beyond this page.",
+    },
+    cursor: {
+      type: "string",
+      nullable: true,
+      description: "Opaque resume cursor; present only when `truncated=true`.",
+    },
+  },
+} as const;
+
+export const FileReadResultSchema = {
+  type: "object",
+  description: "Inline base64-encoded content of a file (≤ 256 KiB).",
+  required: [
+    "path",
+    "size",
+    "mtime",
+    "mode",
+    "encoding",
+    "content_base64",
+    "truncated",
+  ],
+  properties: {
+    path: {
+      type: "string",
+      description: "Echoed path.",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Full file size in bytes (before any byte-cap truncation).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    mode: {
+      type: "string",
+      description: "Human-readable permission string.",
+    },
+    encoding: {
+      type: "string",
+      description: 'Always "base64" in v1.',
+      enum: ["base64"],
+    },
+    content_base64: {
+      type: "string",
+      description: "Base64-encoded file content (up to 256 KiB).",
+    },
+    truncated: {
+      type: "boolean",
+      description:
+        "True when the file was larger than the byte cap (256 KiB). Use the download endpoint to retrieve the full file.\n",
+    },
+  },
+} as const;
+
+export const FileDownloadRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/download`.",
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path to the file to stage for download.",
+    },
+  },
+} as const;
+
+export const FileDownloadResultSchema = {
+  type: "object",
+  description:
+    "Presigned download URL and transfer metadata returned by the `file_download_prepare` flow.\n",
+  required: [
+    "ok",
+    "transfer_id",
+    "download_url",
+    "size_bytes",
+    "chunk_count",
+    "expires_at",
+  ],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    transfer_id: {
+      type: "string",
+      format: "uuid",
+      description: "CP-assigned transfer ID (for audit correlation).",
+    },
+    download_url: {
+      type: "string",
+      format: "uri",
+      description:
+        "Presigned GET URL for the browser to fetch the staged file directly from object storage. Valid for at most 5 minutes. Never log this URL.\n",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Staged file size in bytes.",
+    },
+    chunk_count: {
+      type: "integer",
+      description: "Number of S3 parts the agent uploaded.",
+    },
+    expires_at: {
+      type: "integer",
+      format: "int64",
+      description: "Unix epoch seconds when the presigned GET URL expires.",
+    },
+  },
+} as const;
+
+export const FileManagerSettingsSchema = {
+  type: "object",
+  description:
+    "Per-site file manager configuration. Returned by both `GET /sites/{siteId}/files/settings` and `PUT /sites/{siteId}/files/settings`.\n",
+  required: ["enabled", "write_enabled", "root_jail"],
+  properties: {
+    enabled: {
+      type: "boolean",
+      description:
+        "Whether the file manager read mode is enabled for this site. Defaults to `false` (off by default, explicit opt-in required).\n",
+    },
+    write_enabled: {
+      type: "boolean",
+      description:
+        "Whether the file manager write mode is enabled for this site (P2). Separate opt-in from `enabled` so read and write can be toggled independently. Defaults to `false`. Both `enabled` AND `write_enabled` must be `true` before any write/delete/chmod/ mkdir/rename/upload command will be signed.\n",
+    },
+    root_jail: {
+      type: "string",
+      description:
+        'The filesystem root the agent restricts all file operations to. Always `""` in P1/P2 — the agent defaults to the site\'s `ABSPATH`. Reserved for future P3 configuration.\n',
+    },
+  },
+} as const;
+
+export const UpdateFileManagerSettingsRequestSchema = {
+  type: "object",
+  description: "Request body for `PUT /sites/{siteId}/files/settings`.",
+  required: ["enabled"],
+  properties: {
+    enabled: {
+      type: "boolean",
+      description:
+        "Set to `true` to enable the file manager (read), `false` to disable it.",
+    },
+    write_enabled: {
+      type: "boolean",
+      description:
+        "Set to `true` to also enable write mode (P2). Defaults to `false` when omitted (the read flag is updated but write remains off).\n",
+    },
+  },
+} as const;
+
+export const WriteFileContentRequestSchema = {
+  type: "object",
+  description: "Request body for `PUT /sites/{siteId}/files/content`.",
+  required: ["path", "content_base64"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative file path to create or overwrite.",
+    },
+    content_base64: {
+      type: "string",
+      description: "Base64-encoded file content (≤ 256 KiB).",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when the target path matches the executable-extension deny-list (`.php`, `.phar`, `.htaccess`, etc.) or is inside a PHP-executable web directory. Requires owner permission (`site.files.write_code`). Absence causes a `403 executable_write_denied` from the agent.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when the target path matches the sensitive-file deny-list (`wp-config.php`, `.env*`, `*.pem`, etc.). Requires owner permission (`site.files.write_code`).\n",
+    },
+  },
+} as const;
+
+export const WriteFileResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `PUT /sites/{siteId}/files/content`.",
+  required: ["path", "size", "mtime", "mode"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Resolved path of the written file (echoed).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Bytes written.",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time after the write (Unix epoch seconds).",
+    },
+    mode: {
+      type: "string",
+      description: '4-digit octal permission string, e.g. `"0644"`.',
+    },
+  },
+} as const;
+
+export const FileMkdirRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/mkdir`.",
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path for the new directory.",
+    },
+  },
+} as const;
+
+export const FileMkdirResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/mkdir`.",
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Resolved path of the created directory (echoed).",
+    },
+  },
+} as const;
+
+export const FileRenameRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/rename`.",
+  required: ["src", "dst"],
+  properties: {
+    src: {
+      type: "string",
+      description: "Site-relative source path (must exist).",
+    },
+    dst: {
+      type: "string",
+      description: "Site-relative destination path.",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Required when `dst` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Required when either `src` or `dst` is a sensitive path. Requires owner permission (`site.files.write_code`).\n",
+    },
+  },
+} as const;
+
+export const FileRenameResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/rename`.",
+  required: ["src", "dst"],
+  properties: {
+    src: {
+      type: "string",
+    },
+    dst: {
+      type: "string",
+    },
+  },
+} as const;
+
+export const FileDeleteRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/delete`.",
+  required: ["path", "confirm"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path to delete.",
+    },
+    recursive: {
+      type: "boolean",
+      default: false,
+      description:
+        "When `true`, recursively delete a non-empty directory and all its contents. When `false`, the agent refuses to delete a non-empty directory (returns `400 not_directory`).\n",
+    },
+    confirm: {
+      type: "string",
+      description:
+        'Typed confirmation token — must be the string `"DELETE"` exactly. Missing or wrong value returns `400 confirm_required` without issuing the delete command to the agent.\n',
+    },
+  },
+} as const;
+
+export const FileDeleteResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/delete`.",
+  required: ["path", "deleted"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Echoed path that was deleted.",
+    },
+    deleted: {
+      type: "integer",
+      description:
+        "Number of filesystem entries removed (1 for a file; ≥1 for a recursive directory removal).\n",
+    },
+  },
+} as const;
+
+export const FileChmodRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/chmod`.",
+  required: ["path", "mode"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path.",
+    },
+    mode: {
+      type: "string",
+      description:
+        '4-digit octal permission string, e.g. `"0644"` or `"0755"`. The agent validates against a safe allowlist — no setuid, no setgid, no world-write.\n',
+    },
+  },
+} as const;
+
+export const FileChmodResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/chmod`.",
+  required: ["path", "mode"],
+  properties: {
+    path: {
+      type: "string",
+    },
+    mode: {
+      type: "string",
+      description: "Effective mode after the chmod (echoed).",
+    },
+  },
+} as const;
+
+export const PrepareUploadRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/upload`.",
+  required: ["path"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative target path for the uploaded file.",
+    },
+    part_count: {
+      type: "integer",
+      minimum: 1,
+      maximum: 32,
+      default: 1,
+      description:
+        "Number of chunks the browser will PUT. Each chunk corresponds to one presigned S3 PUT URL. Use 1 for files ≤ 5 MiB; increase for larger files (max 32 × 5 MiB = 160 MiB total).\n",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Required when `path` matches the executable-extension deny-list. Requires owner permission (`site.files.write_code`).\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Required when `path` matches the sensitive-file deny-list. Requires owner permission (`site.files.write_code`).\n",
+    },
+  },
+} as const;
+
+export const PrepareUploadPresignedPutSchema = {
+  type: "object",
+  description: "One presigned S3 PUT slot returned by `prepareSiteFileUpload`.",
+  required: ["index", "url"],
+  properties: {
+    index: {
+      type: "integer",
+      description: "Zero-based chunk index.",
+    },
+    url: {
+      type: "string",
+      description:
+        "Presigned S3 PUT URL. Short TTL (≤ 5 min). Single-use. The browser PUTs the corresponding chunk bytes directly to this URL.\n",
+    },
+  },
+} as const;
+
+export const PrepareUploadResultSchema = {
+  type: "object",
+  description: "Response body for `POST /sites/{siteId}/files/upload`.",
+  required: ["ok", "transfer_id", "object_key", "presigned_puts", "expires_at"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    transfer_id: {
+      type: "string",
+      format: "uuid",
+      description:
+        "Opaque transfer ID — pass to `applySiteFileUpload` for audit.",
+    },
+    object_key: {
+      type: "string",
+      description:
+        "S3 key prefix for the staged chunks. Pass to `applySiteFileUpload` so the CP can mint presigned GETs for the agent.\n",
+    },
+    presigned_puts: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/PrepareUploadPresignedPut",
+      },
+    },
+    expires_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Unix epoch seconds when the presigned URLs expire (≤ 5 min from now).",
+    },
+  },
+} as const;
+
+export const ApplyUploadRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/upload/apply`.",
+  required: ["path", "object_key", "part_count", "total_size", "sha256"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative target path (must match the prepare call).",
+    },
+    object_key: {
+      type: "string",
+      description: "The `object_key` returned by `prepareSiteFileUpload`.",
+    },
+    part_count: {
+      type: "integer",
+      description:
+        "Number of chunks staged (must match `part_count` from the prepare call).",
+    },
+    total_size: {
+      type: "integer",
+      format: "int64",
+      description: "Expected assembled file size in bytes.",
+    },
+    sha256: {
+      type: "string",
+      description:
+        "Hex-encoded SHA-256 of the fully assembled file content. The agent validates this after reassembly and before the atomic swap; a mismatch returns `400 write_failed`.\n",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Mirrors the prepare call — required for executable target paths.",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Mirrors the prepare call — required for sensitive target paths.",
+    },
+  },
+} as const;
+
+export const ApplyUploadResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/upload/apply`.",
+  required: ["ok", "path", "size", "mtime"],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    path: {
+      type: "string",
+      description: "Resolved path of the written file (echoed).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Bytes written (should match `total_size`).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Last-modified time after the atomic swap (Unix epoch seconds).",
+    },
+  },
+} as const;
+
+export const FileArchiveCreateRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/archive`.",
+  required: ["paths"],
+  properties: {
+    paths: {
+      type: "array",
+      items: {
+        type: "string",
+      },
+      minItems: 1,
+      description:
+        "Site-relative paths to include in the archive. The agent runs each through the containment guard; at least one path is required.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any path in `paths` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.read_sensitive`). A non-owner caller or a caller that omits this flag when a sensitive path is present is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.\n",
+    },
+  },
+} as const;
+
+export const FileArchiveCreateResultSchema = {
+  type: "object",
+  description:
+    "Presigned download URL and transfer metadata returned by the `file_archive_create` flow.\n",
+  required: [
+    "ok",
+    "transfer_id",
+    "download_url",
+    "size_bytes",
+    "chunk_count",
+    "expires_at",
+  ],
+  properties: {
+    ok: {
+      type: "boolean",
+    },
+    transfer_id: {
+      type: "string",
+      format: "uuid",
+      description: "CP-assigned transfer ID (for audit correlation).",
+    },
+    download_url: {
+      type: "string",
+      format: "uri",
+      description:
+        "Presigned GET URL for the browser to download the staged archive directly from object storage. Valid for at most 5 minutes. Never log this URL.\n",
+    },
+    size_bytes: {
+      type: "integer",
+      format: "int64",
+      description: "Total archive size in bytes.",
+    },
+    chunk_count: {
+      type: "integer",
+      description: "Number of S3 parts the agent uploaded.",
+    },
+    expires_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "Unix epoch seconds when the presigned GET URL expires (≤ 5 min from now).",
+    },
+  },
+} as const;
+
+export const FileExtractRequestSchema = {
+  type: "object",
+  description: "Request body for `POST /sites/{siteId}/files/extract`.",
+  required: ["archive_path", "dest_path"],
+  properties: {
+    archive_path: {
+      type: "string",
+      description: "Site-relative path to the ZIP archive to extract.",
+    },
+    dest_path: {
+      type: "string",
+      description: "Site-relative destination directory. Created if absent.",
+    },
+    confirm_executable_write: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any archive entry would resolve to an executable-extension path (php, phar, htaccess, …). Requires owner permission (`site.files.write_code`). A non-owner passing this is rejected at the CP (agent never called) and the denial is audited at elevated severity.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when any archive entry would resolve to a sensitive path (wp-config.php, .env*, *.pem, …). Same owner gate as `confirm_executable_write`.\n",
+    },
+  },
+} as const;
+
+export const FileExtractResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/extract`.",
+  required: ["dest_path", "extracted"],
+  properties: {
+    dest_path: {
+      type: "string",
+      description: "Resolved destination directory path (echoed).",
+    },
+    extracted: {
+      type: "integer",
+      description: "Number of entries extracted from the archive.",
+    },
+  },
+} as const;
+
+export const FileSearchMatchSchema = {
+  type: "object",
+  description: "One result in a `file_search` response.",
+  required: ["path", "name", "size", "mtime", "is_dir"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path of the matching file or directory.",
+    },
+    name: {
+      type: "string",
+      description: "Basename of the entry.",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes (0 for directories).",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time as Unix epoch seconds.",
+    },
+    is_dir: {
+      type: "boolean",
+      description: "True when the matched entry is a directory.",
+    },
+    line: {
+      type: "integer",
+      description:
+        "Line number of the match within the file (`content` mode only; absent for `name` mode).\n",
+    },
+    snippet: {
+      type: "string",
+      description:
+        "Surrounding text context for the match (`content` mode only; absent for `name` mode). Never contains content from sensitive paths.\n",
+    },
+  },
+} as const;
+
+export const FileSearchResultSchema = {
+  type: "object",
+  description:
+    "Paginated list of search results from a `file_search` agent command.\n",
+  required: ["matches", "truncated"],
+  properties: {
+    matches: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileSearchMatch",
+      },
+    },
+    truncated: {
+      type: "boolean",
+      description: "True when more results remain beyond this page.",
+    },
+    cursor: {
+      type: "string",
+      nullable: true,
+      description: "Opaque resume cursor; present only when `truncated=true`.",
+    },
+  },
+} as const;
+
+export const FileVersionSchema = {
+  type: "object",
+  description: "One version entry in a file's version history.",
+  required: ["version_id", "size", "mtime", "created_at"],
+  properties: {
+    version_id: {
+      type: "string",
+      description:
+        "Opaque version identifier. Pass to `POST /files/versions/restore` to restore this version.\n",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "File size in bytes at this version.",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time of this version (Unix epoch seconds).",
+    },
+    created_at: {
+      type: "integer",
+      format: "int64",
+      description:
+        "When this version was created (Unix epoch seconds). May equal `mtime` when the agent derives both from the same filesystem timestamp.\n",
+    },
+  },
+} as const;
+
+export const FileVersionsResultSchema = {
+  type: "object",
+  description:
+    "Version history for a file, ordered newest-first, from a `file_versions_list` agent command.\n",
+  required: ["versions"],
+  properties: {
+    versions: {
+      type: "array",
+      items: {
+        $ref: "#/components/schemas/FileVersion",
+      },
+      description:
+        "List of versions ordered newest-first. Empty when the agent has no history for the path (no version system configured or no prior writes).\n",
+    },
+  },
+} as const;
+
+export const FileVersionRestoreRequestSchema = {
+  type: "object",
+  description:
+    "Request body for `POST /sites/{siteId}/files/versions/restore`.",
+  required: ["path", "version_id"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Site-relative path of the file to restore.",
+    },
+    version_id: {
+      type: "string",
+      description:
+        "Opaque version identifier returned by `GET /files/versions?path=…`. Returns `404 no_such_version` when the ID does not exist for the path.\n",
+    },
+    confirm_sensitive: {
+      type: "boolean",
+      default: false,
+      description:
+        "Must be `true` when `path` matches the sensitive-file deny-list (wp-config.php, .env*, *.pem, …). Requires owner permission (`site.files.write_code`). A non-owner caller or a caller that omits this flag when the path is sensitive is rejected at the CP (agent never called) and the denial is audited at elevated severity. The agent independently re-checks and returns `sensitive_denied` when absent / false.\n",
+    },
+  },
+} as const;
+
+export const FileVersionRestoreResultSchema = {
+  type: "object",
+  description:
+    "Response body for a successful `POST /sites/{siteId}/files/versions/restore`.",
+  required: ["path", "size", "mtime", "version_id"],
+  properties: {
+    path: {
+      type: "string",
+      description: "Resolved path of the restored file (echoed).",
+    },
+    size: {
+      type: "integer",
+      format: "int64",
+      description: "Size of the restored file in bytes.",
+    },
+    mtime: {
+      type: "integer",
+      format: "int64",
+      description: "Last-modified time after restore (Unix epoch seconds).",
+    },
+    version_id: {
+      type: "string",
+      description:
+        "The version ID that was restored (echoed for audit correlation).",
     },
   },
 } as const;

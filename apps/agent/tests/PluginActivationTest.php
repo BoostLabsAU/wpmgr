@@ -48,13 +48,21 @@ final class PluginActivationTest extends TestCase
         parent::set_up();
         Monkey\setUp();
 
-        // Pin the master-key source to 'salts'. With the salts unusable (no
-        // valid AUTH_KEY/... constants in the test runtime), resolveMasterKey()
-        // throws on the pinned source -> the keystore fails deterministically,
-        // regardless of any WPMGR_AGENT_KEY_FILE / ABSPATH leaked from sibling
-        // tests in the same process.
+        // Pin the master-key source to 'file' with a path that does not and
+        // cannot exist. resolveMasterKey() will try readKeyFile() on that path,
+        // find nothing, and throw — making the keystore fail deterministically.
+        //
+        // We previously pinned to 'salts', but other tests in the suite
+        // (FileManagerP3CommandsTest::testVersionRestoreSwapsContentAndCreatesPreRestoreVersion)
+        // define AUTH_KEY / SECURE_AUTH_KEY / ... as real PHP process-global
+        // constants. Once defined, constants cannot be undefined, so keyFromSalts()
+        // begins succeeding for the remainder of the process — defeating the
+        // 'salts' pin strategy. A non-existent file path is immune to that leak.
         $this->options = [
-            Keystore::OPTION_MASTER_KEY_SOURCE => ['source' => 'salts'],
+            Keystore::OPTION_MASTER_KEY_SOURCE => [
+                'source' => 'file',
+                'path'   => '/nonexistent-wpmgr-test-master-key-path/master.key',
+            ],
         ];
 
         // Hook/registration no-ops used during boot().
@@ -105,6 +113,9 @@ final class PluginActivationTest extends TestCase
 
     protected function tear_down(): void
     {
+        // Reset the Plugin singleton so this test's constructed instance (with its
+        // Keystore and Brain Monkey stubs) does not leak into subsequent tests.
+        Plugin::resetForTesting();
         Monkey\tearDown();
         parent::tear_down();
     }

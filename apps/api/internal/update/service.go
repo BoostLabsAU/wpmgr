@@ -178,6 +178,17 @@ func (s *Service) ListRuns(ctx context.Context, tenantID uuid.UUID, limit, offse
 	return s.repo.ListRuns(ctx, tenantID, limit, offset)
 }
 
+// ListRunSummaries returns a page of the tenant's runs with pre-computed
+// per-run task aggregate counts (task_count, succeeded_count, failed_count,
+// site_count) in a single query. Used by the list endpoint.
+func (s *Service) ListRunSummaries(ctx context.Context, tenantID uuid.UUID, limit, offset int32) ([]RunSummary, error) {
+	if tenantID == uuid.Nil {
+		return nil, domain.Forbidden("tenant_required", "a tenant context is required")
+	}
+	limit, offset = normalizePage(limit, offset)
+	return s.repo.ListRunSummaries(ctx, tenantID, limit, offset)
+}
+
 func indexVersions(cs []Component) map[string]string {
 	m := make(map[string]string, len(cs))
 	for _, c := range cs {

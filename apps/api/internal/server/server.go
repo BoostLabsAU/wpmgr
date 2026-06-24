@@ -35,6 +35,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/middleware"
 	"github.com/mosamlife/wpmgr/apps/api/internal/objectcache"
 	"github.com/mosamlife/wpmgr/apps/api/internal/org"
+	"github.com/mosamlife/wpmgr/apps/api/internal/files"
 	"github.com/mosamlife/wpmgr/apps/api/internal/perf"
 	"github.com/mosamlife/wpmgr/apps/api/internal/rum"
 	"github.com/mosamlife/wpmgr/apps/api/internal/scan"
@@ -170,6 +171,12 @@ type Deps struct {
 	// /api/v1/sites/{siteId}/email/... and the org-level routes under
 	// /api/v1/email/... nil ⇒ routes not mounted.
 	EmailH *email.Handler
+	// FilesH serves the P1 read-only File Manager routes under
+	// /api/v1/sites/{siteId}/files (list / content / download).
+	// nil ⇒ routes not mounted. Off-by-default per site; the per-site opt-in
+	// flag gates every route inside the handler.
+	FilesH *files.Handler
+
 	// EmailAgentH serves the Phase-3 agent email log ingest at
 	// POST /agent/v1/email/log. nil ⇒ route not mounted.
 	EmailAgentH *email.AgentHandler
@@ -419,6 +426,13 @@ func New(deps Deps) *Server {
 	// m79 — vulnerability scanner: fleet rollup + per-site finding management.
 	if deps.VulnH != nil {
 		deps.VulnH.Register(v1)
+	}
+
+	// m82 — P1 read-only File Manager (list dir / read content / presigned download).
+	// Off-by-default per site; the per-site opt-in flag gates every route.
+	// Admin+ for browse/read/download; owner-only for sensitive paths (T4/T6).
+	if deps.FilesH != nil {
+		deps.FilesH.Register(v1)
 	}
 	// M72 — site screenshot refresh endpoint. Gated on RequireSiteAccess inside
 	// the handler's Register (same as every per-site endpoint).

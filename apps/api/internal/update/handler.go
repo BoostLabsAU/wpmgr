@@ -89,14 +89,14 @@ func (h *Handler) list(c *gin.Context) {
 		httpx.Error(c, domain.Forbidden("tenant_required", "a tenant context is required"))
 		return
 	}
-	runs, err := h.svc.ListRuns(c.Request.Context(), tenantID, parseInt32(c.Query("limit"), 50), parseInt32(c.Query("offset"), 0))
+	summaries, err := h.svc.ListRunSummaries(c.Request.Context(), tenantID, parseInt32(c.Query("limit"), 50), parseInt32(c.Query("offset"), 0))
 	if err != nil {
 		httpx.Error(c, err)
 		return
 	}
-	items := make([]gen.UpdateRun, 0, len(runs))
-	for _, r := range runs {
-		items = append(items, toAPIRun(r, nil))
+	items := make([]gen.UpdateRun, 0, len(summaries))
+	for _, s := range summaries {
+		items = append(items, toAPIRunSummary(s))
 	}
 	c.JSON(http.StatusOK, gen.UpdateRunList{Items: items})
 }
@@ -260,6 +260,18 @@ func fromAPIItems(items []gen.UpdateItem) []Item {
 			Version: it.Version.Or(""),
 		})
 	}
+	return out
+}
+
+// toAPIRunSummary maps a RunSummary (from the list endpoint) to the OpenAPI
+// representation, populating the aggregate count fields and omitting the tasks
+// array (callers use the GET /update-runs/:runId detail endpoint for that).
+func toAPIRunSummary(s RunSummary) gen.UpdateRun {
+	out := toAPIRun(s.Run, nil)
+	out.TaskCount = gen.NewOptInt64(s.TaskCount)
+	out.SucceededCount = gen.NewOptInt64(s.SucceededCount)
+	out.FailedCount = gen.NewOptInt64(s.FailedCount)
+	out.SiteCount = gen.NewOptInt64(s.SiteCount)
 	return out
 }
 

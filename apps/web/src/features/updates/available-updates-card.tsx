@@ -32,6 +32,7 @@ import {
   type SiteAvailableUpdates,
 } from "@/features/updates/types";
 import { toast } from "@/components/toast";
+import { wpOrgSlug } from "@/features/updates/wp-org-slug";
 
 // AvailableUpdatesCard — the per-site "what needs updating" panel mounted on
 // the site detail page. Drives a row-per-target table with:
@@ -49,10 +50,13 @@ const WP_RELEASES = "https://wordpress.org/news/category/releases/";
 const CORE_SELECTION_KEY = "core:core";
 
 function changelogHref(item: AvailableUpdateItem): string {
+  // Use the directory slug (before the first slash) so "suremails/suremails.php"
+  // resolves to "suremails" not the 404-generating full file path.
+  const slug = wpOrgSlug(item.slug);
   if (item.type === "theme") {
-    return `https://wordpress.org/themes/${encodeURIComponent(item.slug)}/`;
+    return `https://wordpress.org/themes/${encodeURIComponent(slug)}/`;
   }
-  return `https://wordpress.org/plugins/${encodeURIComponent(item.slug)}/#developers`;
+  return `https://wordpress.org/plugins/${encodeURIComponent(slug)}/#developers`;
 }
 
 export function AvailableUpdatesCard({ siteId }: { siteId: string }) {

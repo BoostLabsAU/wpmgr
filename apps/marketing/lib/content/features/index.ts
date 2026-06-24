@@ -1,4 +1,4 @@
-// Feature content registry. All 13 feature pages, keyed by slug.
+// Feature content registry. All 14 feature pages, keyed by slug.
 // Import from here to get a typed FeaturePageData for any slug.
 export * from "./backups";
 export * from "./updates";
@@ -13,6 +13,7 @@ export * from "./two-factor-auth";
 export * from "./client-reports";
 export * from "./email-deliverability";
 export * from "./team-access";
+export * from "./file-manager";
 
 import type { FeaturePageData } from "@/lib/content/types";
 import { BACKUPS_PAGE } from "./backups";
@@ -28,6 +29,7 @@ import { TWO_FACTOR_AUTH_PAGE } from "./two-factor-auth";
 import { CLIENT_REPORTS_PAGE } from "./client-reports";
 import { EMAIL_DELIVERABILITY_PAGE } from "./email-deliverability";
 import { TEAM_ACCESS_PAGE } from "./team-access";
+import { FILE_MANAGER_PAGE } from "./file-manager";
 
 export const FEATURE_REGISTRY: Record<string, FeaturePageData> = {
   backups: BACKUPS_PAGE,
@@ -43,6 +45,7 @@ export const FEATURE_REGISTRY: Record<string, FeaturePageData> = {
   "client-reports": CLIENT_REPORTS_PAGE,
   "email-deliverability": EMAIL_DELIVERABILITY_PAGE,
   "team-access": TEAM_ACCESS_PAGE,
+  "file-manager": FILE_MANAGER_PAGE,
 };
 
 export const FEATURE_SLUGS = Object.keys(FEATURE_REGISTRY) as (keyof typeof FEATURE_REGISTRY)[];
@@ -78,6 +81,7 @@ export const HUB_CLUSTERS: FeatureHubCluster[] = [
       { slug: "backups", icon: "DatabaseBackup", title: "Backups and restore", summary: "Scheduled incremental backups with point-in-time restore and fleet-wide backup health." },
       { slug: "updates", icon: "RefreshCw", title: "Safe fleet updates", summary: "Bulk update plugins, themes, and core with auto-snapshot and auto-revert on failure." },
       { slug: "uptime-monitoring", icon: "Activity", title: "Uptime and health monitoring", summary: "Fleet status matrix, response-time trends, TLS expiry warnings, and instant alerts." },
+      { slug: "file-manager", icon: "FolderOpen", title: "File Manager", summary: "Browse, edit, upload, and manage site files from the dashboard. Version history, archive and extract, file search. Off by default, owner-gated, fully audited." },
     ],
   },
   {

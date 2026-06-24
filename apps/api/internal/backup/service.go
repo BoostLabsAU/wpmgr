@@ -2263,8 +2263,16 @@ func (s *Service) ClaimDueSchedules(ctx context.Context) ([]Schedule, error) {
 	for _, sched := range candidates {
 		si, serr := s.sites.GetBackupSiteInfo(ctx, sched.TenantID, sched.SiteID)
 		if serr != nil {
-			// Site lookup failed: leave this schedule out of nextAt so the claim
-			// loop skips it (it stays due and will be retried next tick).
+			// Site lookup failed: log so this is never silent, then leave this
+			// schedule out of nextAt so the claim loop skips it (it stays due
+			// and will be retried on the next scheduler tick). A missing nextAt
+			// entry means ClaimAndAdvanceDueSchedules will not advance the row,
+			// so the schedule remains claimable and no run is lost.
+			s.logger().Warn("backup_scheduler: site lookup failed for due schedule, skipping this tick",
+				slog.String("schedule_id", sched.ID.String()),
+				slog.String("site_id", sched.SiteID.String()),
+				slog.String("tenant_id", sched.TenantID.String()),
+				slog.Any("error", serr))
 			continue
 		}
 		loc := resolveLocation(si.WpTimezone, si.WpGmtOffset)

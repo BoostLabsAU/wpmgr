@@ -39,6 +39,10 @@ func (f *fakeRepo) ListRuns(context.Context, uuid.UUID, int32, int32) ([]Run, er
 	panic("not used")
 }
 
+func (f *fakeRepo) ListRunSummaries(context.Context, uuid.UUID, int32, int32) ([]RunSummary, error) {
+	panic("not used")
+}
+
 func (f *fakeRepo) ListTasks(_ context.Context, _ uuid.UUID, _ uuid.UUID) ([]Task, error) {
 	return f.tasks, nil
 }
@@ -230,5 +234,70 @@ func TestEventsHandlerEmitsNamedEventForLiveTransitions(t *testing.T) {
 		if !bytes.HasPrefix(line, []byte("event: task\n")) {
 			t.Fatalf("unexpected frame missing `event: task` prefix:\n%s", line)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Test: toAPIRunSummary populates aggregate count fields (#97)
+// ---------------------------------------------------------------------------
+
+// TestToAPIRunSummary_PopulatesCountFields is the regression test for issue
+// #97 ("Update runs list shows Tasks=0 + no signal"). The list handler
+// previously passed nil tasks to toAPIRun, producing UpdateRun.Tasks=[]. This
+// test verifies that toAPIRunSummary correctly populates the four aggregate
+// count fields (task_count, succeeded_count, failed_count, site_count) from
+// the RunSummary struct returned by ListRunSummaries.
+func TestToAPIRunSummary_PopulatesCountFields(t *testing.T) {
+	runID := uuid.New()
+	tenantID := uuid.New()
+	now := time.Now().UTC()
+
+	s := RunSummary{
+		Run: Run{
+			ID:        runID,
+			TenantID:  tenantID,
+			Status:    RunCompleted,
+			DryRun:    false,
+			CreatedAt: now,
+			UpdatedAt: now,
+		},
+		TaskCount:      17,
+		SucceededCount: 14,
+		FailedCount:    3,
+		SiteCount:      5,
+	}
+
+	out := toAPIRunSummary(s)
+
+	// Aggregate counts must be set (not the zero-value OptInt64).
+	if !out.TaskCount.IsSet() {
+		t.Fatal("TaskCount must be set on list response")
+	}
+	if v := out.TaskCount.Value; v != 17 {
+		t.Errorf("TaskCount = %d, want 17", v)
+	}
+	if !out.SucceededCount.IsSet() {
+		t.Fatal("SucceededCount must be set on list response")
+	}
+	if v := out.SucceededCount.Value; v != 14 {
+		t.Errorf("SucceededCount = %d, want 14", v)
+	}
+	if !out.FailedCount.IsSet() {
+		t.Fatal("FailedCount must be set on list response")
+	}
+	if v := out.FailedCount.Value; v != 3 {
+		t.Errorf("FailedCount = %d, want 3", v)
+	}
+	if !out.SiteCount.IsSet() {
+		t.Fatal("SiteCount must be set on list response")
+	}
+	if v := out.SiteCount.Value; v != 5 {
+		t.Errorf("SiteCount = %d, want 5", v)
+	}
+
+	// Tasks slice must NOT be populated on list responses (the web uses the
+	// aggregate counts, not per-task rows, in the list view).
+	if len(out.Tasks) != 0 {
+		t.Errorf("Tasks must be empty on list response, got %d tasks", len(out.Tasks))
 	}
 }

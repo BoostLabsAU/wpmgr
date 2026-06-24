@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sort"
 	"time"
 
@@ -2279,8 +2280,13 @@ func (r *pgRepo) ClaimAndAdvanceDueSchedules(ctx context.Context, now time.Time,
 		for _, sched := range candidates {
 			next, ok := nextAt[sched.ID]
 			if !ok {
-				// Caller did not supply a nextAt for this schedule: skip without
-				// advancing (it will be re-selected on the next tick).
+				// Caller did not supply a nextAt for this schedule (site lookup
+				// failed before claim, see ClaimDueSchedules). Log so this is
+				// never silent; the row stays due and will be retried next tick.
+				slog.Default().Warn("backup_scheduler: no nextAt for claimed schedule — site lookup must have failed",
+					slog.String("schedule_id", sched.ID.String()),
+					slog.String("site_id", sched.SiteID.String()),
+					slog.String("tenant_id", sched.TenantID.String()))
 				continue
 			}
 			tag, uerr := tx.Exec(ctx,

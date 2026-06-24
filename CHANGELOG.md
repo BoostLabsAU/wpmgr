@@ -8,6 +8,8 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ### Added
 
+- **File Manager.** Operators can browse, edit, upload, download, and manage files on any managed WordPress site directly from the dashboard, under a new Files tab on each site, without needing SFTP or cPanel access. Browse the full file tree; preview text files inline or download binary files via presigned URL. A sensitive-file deny-list (wp-config.php, .env, key files) requires owner confirmation before access. A separate per-site write toggle (off by default) unlocks editing, uploading (drag-and-drop), creating folders, renaming, deleting (typed confirmation), and chmod (safe modes only). Write operations reject executable content (PHP files, any file containing `<?php`) and refuse to touch protected roots (wp-admin, wp-includes, WordPress core). Zip any file or folder and download the archive; extract a zip back into the site with zip-slip and zip-bomb protection. Search files by name or content across the tree. Every edit and overwrite auto-saves an encrypted prior version that operators can browse and restore from a per-file version history panel. The file manager is off by default per site, restricted to owner and admin roles, and every read, write, delete, upload, extract, restore, and denial is written to the operator audit log. The Audit page is now a filterable timeline with filter-by-action-group (including "File manager") and filter-by-site; a "View activity" link in the file manager jumps straight to that site's file trail.
+
 - **CloudPanel cache purge support in the agent.** On CloudPanel sites, WPMgr now clears its disk page cache and CloudPanel Varnish together: full-site purges send both host and cache-tag Varnish purges, per-URL purges clear the matching Varnish URLs, and full-site purges also clean up the host PageSpeed cache when writable. The optional CloudPanel WordPress plugin is not required.
 
 ### Changed
@@ -20,6 +22,15 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
 - Advanced page-cache bypass and variant settings now reach the WordPress agent so saved URL, cookie, and query rules affect the rendered cache drop-in.
 - Isolated media-encoder River jobs into a dedicated schema in the bundled self-host profile so the encoder cannot take leadership for API uptime and cron jobs while image optimization and screenshot work still run.
+- Backup schedule form no longer rejects valid input: selecting a day of week (weekly), a day of month (monthly), or an interval (every N hours) now satisfies the cadence requirement and saves. The backup scheduler also now logs when a due schedule is skipped because its site could not be resolved, so a missed scheduled run can no longer fail silently.
+- Update runs list now shows each run's real task count, a marker when a run had failed tasks, and how many sites the run covered. On a finished run the detail progress bar now fills to completion instead of showing a sliver.
+- Bulk update from the Sites page: the plugins / themes / core target now drives the update modal, the modal defaults to only items that have an available update, and plugins and themes are separated into tabs.
+- Closing a dialog no longer leaves the page unclickable. A shared overlay could leave a pointer-events lock on the page after certain modals closed; the dialog now always clears it.
+- A failed admin bundle no longer takes down the Sites app for superadmins: the admin area is isolated behind an error boundary with a link back to Sites, and superadmin can now be revoked with the `WPMGR_SUPERADMIN_REVOKE_EMAILS` environment variable (mirroring the grant) instead of a manual database change.
+- Plugin "Changelog" links now use the plugin slug, producing a valid wordpress.org URL instead of a 404.
+- The Sites overview Uptime column now shows per-site uptime instead of staying blank.
+- "Open in wp-admin" for a multi-site selection now lists every selected site in a persistent panel with a per-site Open action, instead of a few auto-dismissing toasts.
+- A site's "Backup schedule runs" panel now shows past completed and failed runs that already exist instead of always reporting none.
 
 ## [0.57.0] - 2026-06-21
 

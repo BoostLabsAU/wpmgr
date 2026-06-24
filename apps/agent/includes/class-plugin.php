@@ -30,6 +30,20 @@ use WPMgr\Agent\Commands\MetadataCommand;
 use WPMgr\Agent\Commands\RefreshInventoryCommand;
 use WPMgr\Agent\Commands\RestoreCommand;
 use WPMgr\Agent\Commands\RollbackCommand;
+use WPMgr\Agent\Commands\FileArchiveCreateCommand;
+use WPMgr\Agent\Commands\FileChmodCommand;
+use WPMgr\Agent\Commands\FileDeleteCommand;
+use WPMgr\Agent\Commands\FileDownloadPrepareCommand;
+use WPMgr\Agent\Commands\FileExtractCommand;
+use WPMgr\Agent\Commands\FileListCommand;
+use WPMgr\Agent\Commands\FileMkdirCommand;
+use WPMgr\Agent\Commands\FileReadCommand;
+use WPMgr\Agent\Commands\FileRenameCommand;
+use WPMgr\Agent\Commands\FileSearchCommand;
+use WPMgr\Agent\Commands\FileUploadApplyCommand;
+use WPMgr\Agent\Commands\FileVersionRestoreCommand;
+use WPMgr\Agent\Commands\FileVersionsListCommand;
+use WPMgr\Agent\Commands\FileWriteCommand;
 use WPMgr\Agent\Commands\GetFileCommand;
 use WPMgr\Agent\Commands\ScanCommand;
 use WPMgr\Agent\Commands\SyncErrorConfigCommand;
@@ -421,6 +435,22 @@ final class Plugin
         }
 
         return self::$instance;
+    }
+
+    /**
+     * Reset the singleton for testing purposes.
+     *
+     * PHPUnit tests that call boot() must call this in their tear_down() to
+     * prevent the constructed singleton (with its Keystore, cached master key,
+     * and Brain Monkey stubs) from leaking into subsequent tests in the suite.
+     * Never call this outside of a test context.
+     *
+     * @internal For use by PluginActivationTest only.
+     * @return void
+     */
+    public static function resetForTesting(): void
+    {
+        self::$instance = null;
     }
 
     /**
@@ -1420,6 +1450,46 @@ final class Plugin
             // and kicks spawn_cron() so every verify dial drains overdue cron events
             // on page-cached idle sites.
             new PingCommand(),
+            // P1 read-only file manager (v1). Jail root = WPMGR_FILE_JAIL_ROOT
+            // constant (defaults to ABSPATH). Every path goes through the
+            // FileScanner realpath+strncmp containment guard. Sensitive-file
+            // deny-list (T6) applies to file_read and file_download_prepare.
+            //   file_list             -> one-level directory listing
+            //   file_read             -> base64 preview (≤ 256 KiB)
+            //   file_download_prepare -> stream file to CP-minted presigned S3 PUTs
+            new FileListCommand(),
+            new FileReadCommand(),
+            new FileDownloadPrepareCommand(),
+            // P2 guarded write / upload (v1.1). All paths go through jailPath();
+            // all writes enforce the T3 base-unresolved guard (throw before write).
+            // The executable-write prevention (T1, the core RCE control) covers:
+            //   extension deny-list + double-extension + content sniff + web-dir
+            //   — confirmed by the CP with confirm_executable_write=true (owner only).
+            //   file_write          -> atomic temp→rename write of ≤ 256 KiB text
+            //   file_mkdir          -> hardened directory creation
+            //   file_rename         -> atomic rename with guards on BOTH src+dst
+            //   file_delete         -> protected-root guard (T13) + recursive flag
+            //   file_chmod          -> safe-mode allowlist (no setuid/world-write)
+            //   file_upload_apply   -> stream-reassemble presigned-GET chunks + sniff
+            new FileWriteCommand(),
+            new FileMkdirCommand(),
+            new FileRenameCommand(),
+            new FileDeleteCommand(),
+            new FileChmodCommand(),
+            new FileUploadApplyCommand(),
+            // P3 advanced file operations (v1.2).
+            //   file_archive_create  -> zip one or more jailed paths and stage to S3
+            //   file_extract         -> extract a jailed .zip into a jailed destination
+            //                          (zip-slip + zip-bomb + exec + sensitive guards;
+            //                           quarantine → validate → atomic-swap pattern)
+            //   file_search          -> recursive literal-substring search within jail
+            //   file_versions_list   -> list pre-write staged backups for a jailed path
+            //   file_version_restore -> atomic restore of a staged version (pre-restore backup first)
+            new FileArchiveCreateCommand(),
+            new FileExtractCommand(),
+            new FileSearchCommand(),
+            new FileVersionsListCommand(),
+            new FileVersionRestoreCommand(),
         ];
     }
 

@@ -126,7 +126,50 @@ sharing the bootstrap superuser; never set it in production.
 
 ## 2. Bring up the stack
 
-Build the images locally from source:
+### Quickstart: prebuilt images, no clone (recommended for first-time installs)
+
+The one-liner below fetches every required file, generates all secrets, and
+prints the exact `docker compose` command to start WPMgr — no repo clone, no
+manual editing:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mosamlife/wpmgr/main/scripts/quickstart-selfhost.sh | bash
+```
+
+Or, if you prefer to inspect the script first:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/mosamlife/wpmgr/main/scripts/quickstart-selfhost.sh -o quickstart-selfhost.sh
+bash quickstart-selfhost.sh --hostname=https://wpmgr.example.com
+```
+
+Flags:
+- `--hostname=URL` — sets `WPMGR_PUBLIC_BASE_URL` non-interactively (recommended for servers).
+- `--version=vX.Y.Z` — pins a specific release tag; omit to use `:latest`.
+- `--dir=PATH` — writes everything into a custom directory (default: `./wpmgr`).
+
+The script downloads:
+
+| File | Why |
+|------|-----|
+| `infra/docker-compose.yml` | base stack |
+| `infra/docker-compose.prod.yml` | pull-only GHCR overlay |
+| `.env.example` + `scripts/init-env.sh` | env bootstrap |
+| `infra/seaweedfs/s3.json` | SeaweedFS S3 auth (bind-mounted) |
+| `infra/dex/config.yaml` | Dex OIDC config (bind-mounted) |
+| `infra/postgres/init/01-app-role.sh` | Postgres role init (bind-mounted) |
+| `infra/prometheus/prometheus.yml` + `infra/grafana/…` | observability profile |
+
+> **Port note:** the API listens on `:8080` *inside* the container, but is
+> published to the **host** on `:8081` (`WPMGR_API_PORT`). The dashboard nginx
+> is on **`:8088`** (`WPMGR_WEB_PORT`). These are the ports you curl and put
+> behind a reverse proxy. Neither is `:80` or `:8080` on the host — those are
+> deliberately avoided so first boot never needs root or collides with an
+> existing web server.
+
+### Or: build from source (clone path)
+
+If you have cloned the repo:
 
 ```bash
 docker compose -f infra/docker-compose.yml up -d
@@ -141,12 +184,12 @@ any of them in `.env` with the `WPMGR_*_PORT` vars (`WPMGR_WEB_PORT`,
 `WPMGR_API_PORT`, `WPMGR_S3_PORT`, `WPMGR_DEX_PORT`) — e.g. set
 `WPMGR_WEB_PORT=80` to serve the dashboard on the standard HTTP port.
 
-### Or: run the prebuilt GHCR images (no local build)
+### Prebuilt GHCR images (no local build)
 
 Pre-built `linux/amd64` images are published on GitHub Container Registry:
 `ghcr.io/mosamlife/wpmgr-api`, `-web`, and `-media-encoder` (each tagged
-`:vX.Y.Z` and `:latest`). Bring up the stack from them with the pull-only
-overlay:
+`:vX.Y.Z` and `:latest`). If you already have the compose files (via the
+quickstart or a clone), bring up the stack with the pull-only overlay:
 
 ```bash
 export WPMGR_VERSION=v0.19.0   # omit to track :latest
@@ -157,20 +200,27 @@ The overlay only swaps the three app services to `image:` + `pull_policy:
 always`; everything else (Postgres, Redis, SeaweedFS, ClickHouse, env, volumes)
 is inherited from the base file. Add `--profile media` for the encoder.
 
-> GHCR packages are private on first publish. The maintainer makes each
-> `wpmgr-*` package **Public** once (GitHub → Packages → package → Settings →
-> Change visibility → Public); after that `docker pull` needs no auth. arm64
-> multi-arch images are a near-term follow-up.
+> GHCR packages are public. `docker pull` needs no auth. arm64 multi-arch
+> images are a near-term follow-up.
 
 ## 3. Verify
 
 ```bash
-curl localhost:8081/healthz   # {"status":"ok"}  (default WPMGR_API_PORT=8081)
+# Direct to the API host port (WPMGR_API_PORT, default 8081 — NOT :8080):
+curl localhost:8081/healthz   # {"status":"ok"}
 curl localhost:8081/readyz    # 200 once DB/Redis/S3 are reachable
+
+# Or via the nginx web container (WPMGR_WEB_PORT, default 8088):
+curl localhost:8088/healthz   # proxied by nginx -> api:8080/healthz
 ```
 
 - `GET /healthz` — liveness (process is up).
 - `GET /readyz` — readiness (dependencies reachable).
+
+**Port disambiguation:** `:8080` is the container-internal listen address
+(`WPMGR_HTTP_ADDR`). It is **not** published to the host. What you `curl` is
+the **host** port — `8081` for the API directly, `8088` for the nginx web
+proxy. Both are overridable in `.env` via `WPMGR_API_PORT` and `WPMGR_WEB_PORT`.
 
 Open the dashboard at `http://localhost:8088` (the default `WPMGR_WEB_PORT`; the
 `web` service serves the built SPA via nginx and proxies to the API). Set

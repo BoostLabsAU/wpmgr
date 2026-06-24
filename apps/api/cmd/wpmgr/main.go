@@ -43,6 +43,7 @@ import (
 	"github.com/mosamlife/wpmgr/apps/api/internal/diagnostics"
 	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 	"github.com/mosamlife/wpmgr/apps/api/internal/email"
+	"github.com/mosamlife/wpmgr/apps/api/internal/files"
 	"github.com/mosamlife/wpmgr/apps/api/internal/httpclient"
 	"github.com/mosamlife/wpmgr/apps/api/internal/invitation"
 	"github.com/mosamlife/wpmgr/apps/api/internal/ipprovider"
@@ -222,6 +223,37 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 				if err := seedSuperadminAccount(ctx, migPool.Pool, logger, saBaseURL, email); err != nil {
 					logger.Warn("superadmin account create failed", slog.String("email", email), slog.Any("error", err))
 				}
+			}
+		}
+	}
+
+	// One-shot revoke: WPMGR_SUPERADMIN_REVOKE_EMAILS = "email[,email2]".
+	// Sets is_superadmin=false for each listed email. A no-op for unknown emails
+	// (no account to demote) and for emails already not superadmin. This is the
+	// intentional mirror of WPMGR_SUPERADMIN_EMAILS: grants are never implicit
+	// in this seeder and revokes are never implicit in the grant seeder.
+	// REMOVE this env var after it runs — re-revocation on every boot is harmless
+	// but noisy. is_superadmin is NOT API-settable; this boot hook is the only
+	// supported revoke path.
+	if raw := os.Getenv("WPMGR_SUPERADMIN_REVOKE_EMAILS"); raw != "" {
+		for _, email := range strings.Split(raw, ",") {
+			email = strings.ToLower(strings.TrimSpace(email))
+			if email == "" {
+				continue
+			}
+			tag, err := migPool.Pool.Exec(ctx,
+				`UPDATE users
+				    SET is_superadmin = false,
+				        updated_at    = now()
+				  WHERE lower(email) = $1 AND is_superadmin = true`, email,
+			)
+			switch {
+			case err != nil:
+				logger.Warn("superadmin revoke failed", slog.String("email", email), slog.Any("error", err))
+			case tag.RowsAffected() > 0:
+				logger.Info("superadmin revoked", slog.String("email", email))
+			default:
+				logger.Info("superadmin revoke: account not superadmin or not found, no change", slog.String("email", email))
 			}
 		}
 	}
@@ -447,6 +479,20 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	updateHub := update.NewHub()
 	updateRepo := update.NewRepo(pool)
 	sitesLookup := newSiteLookup(siteSvc)
+
+	// P1 File Manager (read-only). Dedicated signed agent client (same pattern as
+	// the other domains). The download presigner is wired from the blobstore in
+	// the backup block below; it stays nil (download degrades to not-configured)
+	// when object storage is off.
+	filesSvc := files.NewService(pool)
+	if cmdSigner != nil {
+		filesSvc.SetAgentClient(agentcmd.NewClient(ssrfClient, cmdSigner), newPerfSiteAdapter(siteSvc))
+	}
+	// File-transfers GC worker. The ObjectDeleter is wired from the blobstore
+	// alongside filesSvc.SetPresigner (below). It stays nil when object storage
+	// is not configured — in that case only DB rows are pruned.
+	fileTransfersGCWorker := files.NewFileTransfersGCWorker(pool, nil, logger) // deleter wired below if S3 enabled
+
 	updateWorker := update.NewWorker(updateRepo, sitesLookup, commander, prober, updateHub, auditRec, logger, cfg.Update.PerTenantParallelism)
 	// Updates feature (Track B): the refresh-inventory worker dispatches signed
 	// CP->agent commands to re-pull a site's inventory. It satisfies River's
@@ -507,6 +553,13 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		if berr := store.EnsureBucket(ctx); berr != nil {
 			return fmt.Errorf("blobstore ensure bucket: %w", berr)
 		}
+
+		// File Manager download path stages bytes through the same blobstore.
+		filesSvc.SetPresigner(store)
+		// Wire the deleter for the file-transfers GC (same Store satisfies the
+		// files.ObjectDeleter interface via its Delete method).
+		fileTransfersGCWorker = files.NewFileTransfersGCWorker(pool, store, logger)
+
 		var backupCmd backup.Commander
 		if cfg.Agent.SigningPrivateKey != "" {
 			signer, _ := agentcmd.NewSigner(cfg.Agent.SigningPrivateKey)
@@ -1268,6 +1321,9 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		// when WPMGR_WORDFENCE_API_KEY is unset).
 		vulnFeedWorker:   vulnFeedWorker,
 		vulnRescanWorker: vulnRescanWorker,
+		// m82 — file-transfers GC (always non-nil; object deletion is a no-op
+		// when S3 is not configured).
+		fileTransfersGCWorker: fileTransfersGCWorker,
 	})
 	if err != nil {
 		return err
@@ -1816,6 +1872,8 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 	authH := auth.NewHandler(authSvc, sessions, oidcProvider, newTenant)
 	authH.SetSecureCookies(cfg.IsProduction())
 
+	filesH := files.NewHandler(filesSvc, auditRec)
+
 	srv := server.New(server.Deps{
 		Config:          cfg,
 		Logger:          logger,
@@ -1829,6 +1887,7 @@ func run(ctx context.Context, cfg config.Config, logger *slog.Logger) error {
 		TenantH:         tenant.NewHandler(tenantSvc, auditRec),
 		SiteH:           siteH,
 		SiteEventsH:     siteEventsH,
+		FilesH:          filesH,
 		UpdateH:         updateH,
 		BackupH:         backupH,
 		BackupAgentH:    backupAgentH,
@@ -2266,6 +2325,10 @@ type riverDeps struct {
 	// WPMGR_WORDFENCE_API_KEY is not set.
 	vulnFeedWorker   *vuln.FeedWorker
 	vulnRescanWorker *vuln.RescanSiteWorker
+	// m82 — File-transfers GC: deletes stale file_transfers rows (and best-effort
+	// deletes their staged objects) once per day. Always wired; object deletion is
+	// a no-op when the object store is not configured.
+	fileTransfersGCWorker *files.FileTransfersGCWorker
 }
 
 // startRiver builds and starts the River client with the health-check worker, a
@@ -2671,6 +2734,19 @@ func startRiver(ctx context.Context, pool *pgxpool.Pool, logger *slog.Logger, d 
 	if d.vulnRescanWorker != nil {
 		river.AddWorker(workers, d.vulnRescanWorker)
 		queues[vuln.RescanSiteQueue] = river.QueueConfig{MaxWorkers: 8}
+	}
+
+	// m82 — file-transfers GC: prunes stale file_transfers rows (and their
+	// staged objects) once per day. Always wired; the worker no-ops cleanly
+	// when the deleter is nil (no object storage). RunOnStart: false — tables
+	// are small on a fresh deploy.
+	if d.fileTransfersGCWorker != nil {
+		river.AddWorker(workers, d.fileTransfersGCWorker)
+		periodics = append(periodics, river.NewPeriodicJob(
+			river.PeriodicInterval(24*time.Hour),
+			func() (river.JobArgs, *river.InsertOpts) { return files.FileTransfersGCArgs{}, nil },
+			&river.PeriodicJobOpts{RunOnStart: false},
+		))
 	}
 
 	client, err := river.NewClient(riverpgxv5.New(pool), &river.Config{

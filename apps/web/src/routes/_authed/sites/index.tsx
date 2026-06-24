@@ -26,6 +26,7 @@ import {
 } from "@/features/sites/use-site-connection";
 import { DestructiveConfirm } from "@/components/dialogs/destructive-confirm";
 import { useAutoLogin, canAutoLogin } from "@/features/sites/use-autologin";
+import { OpenInAdminPanel } from "@/features/sites/open-in-admin-panel";
 import {
   UpdateWizard,
   type WizardTarget,
@@ -175,6 +176,7 @@ function SitesPage() {
   const densityState = useSitesDensity();
 
   const [wizardTarget, setWizardTarget] = useState<WizardTarget | null>(null);
+  const [openAdminSites, setOpenAdminSites] = useState<Site[] | null>(null);
 
   // ── Derived filter options ─────────────────────────────────────────────────
 
@@ -468,13 +470,12 @@ function SitesPage() {
 
   const openUpdateWizardForSelection = useCallback(
     (kind: "plugins" | "themes" | "core") => {
-      console.debug("[sites] bulk update", {
-        kind,
-        siteIds: Array.from(selection.selected),
-      });
       setWizardTarget({
         kind: "sites",
         siteIds: Array.from(selection.selected),
+        // Pass the chosen target kind so the wizard can pre-scope to plugins,
+        // themes, or core and default to showing only items with updates.
+        updateKind: kind,
       });
     },
     [selection],
@@ -530,7 +531,7 @@ function SitesPage() {
     toast.info("Fleet-wide restore lands in Sprint 4");
   }, []);
 
-  const handleBulkOpenWpAdmin = useCallback(async () => {
+  const handleBulkOpenWpAdmin = useCallback(() => {
     if (!autoLogin) {
       toast.error("Auto-login requires admin permissions", {
         description: "Ask an admin to grant the role, then retry.",
@@ -538,63 +539,19 @@ function SitesPage() {
       return;
     }
     const ids = Array.from(selection.selected);
-    const cap = Math.min(ids.length, 8);
     const targets = ids
-      .slice(0, cap)
       .map((id) => selectedSites.find((s) => s.id === id))
       .filter((s): s is Site => s !== undefined);
 
     if (targets.length === 0) return;
 
-    // Resolve auto-login URLs for all selected sites.
-    // We do NOT call window.open inside the async onSuccess because browsers
-    // block popups not triggered directly by a user gesture. Instead, we open
-    // the first tab synchronously on the click, then surface the remaining
-    // resolved URLs as toasts with an "Open" action the operator clicks (each
-    // click is its own user gesture, so the pop-up is allowed).
-    toast.info(`Resolving wp-admin links for ${targets.length} ${targets.length === 1 ? "site" : "sites"}...`);
-
-    const results = await Promise.allSettled(
-      targets.map((site) => loginMutation.mutateAsync({ siteId: site.id })),
-    );
-
-    // Open the first resolved URL immediately. On browsers that block
-    // popups this is the only tab we can guarantee opens from this gesture;
-    // the remainder are surfaced via actionable toasts.
-    let firstOpened = false;
-    results.forEach((result, i) => {
-      // targets and results are always the same length (targets.map → allSettled).
-      // Guard for strict noUncheckedIndexedAccess — impossible in practice.
-      const site = targets[i];
-      if (!site) return;
-      if (result.status === "fulfilled") {
-        const url = result.value.redirect_url;
-        if (!firstOpened) {
-          window.open(url, "_blank", "noopener,noreferrer");
-          firstOpened = true;
-        } else {
-          // Each toast action is its own user gesture.
-          toast.info(`${site.name} ready`, {
-            description: "Click to open in wp-admin.",
-            action: {
-              label: "Open",
-              onClick: () =>
-                window.open(url, "_blank", "noopener,noreferrer"),
-            },
-          });
-        }
-      } else {
-        const err: unknown = result.reason;
-        toast.error(`Could not open ${site.name}`, {
-          description: err instanceof Error ? err.message : "Auto-login failed.",
-          action: {
-            label: "Try again",
-            onClick: () => handleOpenAutoLogin(site),
-          },
-        });
-      }
-    });
-  }, [autoLogin, loginMutation, selectedSites, selection, handleOpenAutoLogin]);
+    // Show the persistent panel listing ALL selected sites. The panel resolves
+    // auto-login URLs itself and lets the operator open each site individually
+    // (each click = its own user gesture, so popups are allowed) or all at once.
+    // This replaces the toast fan-out that was capped at ~5 visible toasts and
+    // lost sites when the first tab stole focus.
+    setOpenAdminSites(targets);
+  }, [autoLogin, selectedSites, selection]);
 
   const handleBulkTag = useCallback(() => {
     toast.info(`Tagging ${selection.count} sites lands in Sprint 4`);
@@ -740,7 +697,7 @@ function SitesPage() {
             onBulkUpdate={openUpdateWizardForSelection}
             onBulkBackup={() => { void handleBulkBackup(); }}
             onBulkRestore={handleBulkRestore}
-            onBulkOpenWpAdmin={() => { void handleBulkOpenWpAdmin(); }}
+            onBulkOpenWpAdmin={handleBulkOpenWpAdmin}
             onBulkTag={handleBulkTag}
             onBulkSetClient={handleBulkSetClient}
             onBulkPauseMonitoring={handleBulkPauseMonitoring}
@@ -933,6 +890,15 @@ function SitesPage() {
           onSuccess={() => selection.replace([])}
         />
       ) : null}
+
+      {/* Persistent "Open in wp-admin" panel — replaces the toast fan-out so
+          all N sites are reachable regardless of browser tab-focus or Sonner's
+          visible-toast cap. Rendered outside the auth gate because it handles
+          its own permission check (canAutoLogin) before opening. */}
+      <OpenInAdminPanel
+        sites={openAdminSites}
+        onClose={() => setOpenAdminSites(null)}
+      />
     </section>
   );
 }

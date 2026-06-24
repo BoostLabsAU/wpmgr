@@ -72,12 +72,16 @@ ORDER BY scheduled_for DESC
 LIMIT $3 OFFSET $4;
 
 -- name: ListUpcomingScheduleRuns :many
--- Runs that have not yet fired: status 'scheduled' or 'queued', scheduled_for
--- in the future. Used for the UI upcoming preview (typically 1–3 rows).
+-- Non-terminal runs for the UI upcoming panel. 'running' rows are always
+-- included (the backup is executing now, regardless of scheduled_for);
+-- 'scheduled'/'queued' rows are included only when scheduled_for is in the
+-- future (they represent fires that have not yet dispatched).
 SELECT * FROM backup_schedule_runs
 WHERE tenant_id = $1 AND site_id = $2
-  AND status IN ('scheduled', 'queued')
-  AND scheduled_for > now()
+  AND (
+      (status IN ('scheduled', 'queued') AND scheduled_for > now())
+      OR status = 'running'
+  )
 ORDER BY scheduled_for ASC
 LIMIT $3;
 
