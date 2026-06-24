@@ -32,6 +32,8 @@ import {
 } from "./hooks/use-file-content";
 import { useFileDownload } from "./hooks/use-file-download";
 import { FileVersionHistoryDialog } from "./FileVersionHistoryDialog";
+import { CodeEditor } from "./CodeEditor";
+import { langFromPath } from "./editor-lang";
 
 // FileDetailDrawer — opens on a file row click. Shows:
 //  - File metadata (path, size, mtime, mode)
@@ -179,12 +181,15 @@ export function FileDetailDrawer({
                 Showing the first 256 KiB. Download for the full file.
               </div>
             ) : null}
-            <pre
-              aria-label="File content preview"
-              className="max-h-96 overflow-auto rounded-md border border-[var(--color-border)] bg-[var(--color-muted)] p-3 font-mono text-[11px] leading-relaxed text-[var(--color-foreground)] scrollbar-thin"
-            >
-              {decodedText}
-            </pre>
+            <div className="overflow-hidden rounded-md border border-[var(--color-border)]">
+              <CodeEditor
+                value={decodedText ?? ""}
+                language={langFromPath(filePath ?? entry.name)}
+                readOnly
+                ariaLabel="File content preview"
+                height="min(55vh, 400px)"
+              />
+            </div>
           </div>
         );
       }
