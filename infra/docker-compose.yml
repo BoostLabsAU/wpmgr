@@ -73,7 +73,9 @@ services:
       # regardless of the published host port). The seaweedfs:3.80 image ships
       # busybox (so `wget` is present), but we use CMD-SHELL with a busybox-wget
       # fallback so the probe is resilient even if the base image's applet set
-      # changes. A generous start_period covers the gateway's volume/filer warmup.
+      # changes. start_period is 120s: on a cold volume SeaweedFS initialises its
+      # filer + S3 gateway sequentially, which can take 90–120 s on a slow host.
+      # Retries (15 x 10 s = 150 s) cover any remaining warmup after start_period.
       test:
         - CMD-SHELL
         - >-
@@ -81,8 +83,8 @@ services:
           || busybox wget -q -O /dev/null http://127.0.0.1:8333/status
       interval: 10s
       timeout: 5s
-      retries: 12
-      start_period: 60s
+      retries: 15
+      start_period: 120s
 
   # One-shot init: create the wpmgr-backups bucket via the S3 gateway.
   seaweedfs-init:
@@ -117,11 +119,15 @@ services:
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8123/ping"]
+      # ClickHouse exposes a plain HTTP /ping endpoint on port 8123 that returns
+      # "Ok." when the server is ready. A 30 s start_period covers the initial
+      # data directory setup on a cold volume; 8 retries (80 s) handle any
+      # remaining startup work.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8123/ping | grep -q Ok"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 15s
+      retries: 8
+      start_period: 30s
 
   api:
     build:
@@ -165,7 +171,11 @@ services:
       WPMGR_OIDC_ISSUER: ${WPMGR_OIDC_ISSUER:-http://dex.localhost:5556/dex}
       WPMGR_OIDC_CLIENT_ID: ${WPMGR_OIDC_CLIENT_ID:-wpmgr}
       WPMGR_OIDC_CLIENT_SECRET: ${WPMGR_OIDC_CLIENT_SECRET:-wpmgr-oidc-dev-secret}
-      WPMGR_OIDC_REDIRECT_URL: ${WPMGR_OIDC_REDIRECT_URL:-http://localhost:8080/auth/oidc/callback}
+      # The OIDC callback URL must be reachable by the user's browser. In the
+      # compose stack the browser hits nginx (WPMGR_WEB_PORT, default 8088) and
+      # nginx proxies /auth/* to the api. So the redirect URL uses port 8088, not
+      # the container-internal :8080 or the direct api host port (WPMGR_API_PORT).
+      WPMGR_OIDC_REDIRECT_URL: ${WPMGR_OIDC_REDIRECT_URL:-http://localhost:8088/auth/oidc/callback}
       WPMGR_REDIS_ADDR: redis:6379
       # M5.6/ADR-033: presigned URLs the agent receives MUST be reachable from
       # OUTSIDE this Docker network — `seaweedfs:8333` (Docker service name)
