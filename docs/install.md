@@ -277,6 +277,65 @@ For local development with hot-reload overrides, use `make dev` (runs
 `docker-compose.yml` + `docker-compose.dev.yml`) — see
 [contributing.md](./contributing.md).
 
+## Making the S3 endpoint reachable for backups (self-host) {#s3-networking}
+
+The API mints presigned S3 URLs from `WPMGR_S3_ENDPOINT` and hands them to the
+agent, which PUTs backup chunks directly to those URLs from the WordPress host.
+That means `WPMGR_S3_ENDPOINT` must resolve and accept connections from **two
+places at once**: the API container (to build the presigned URL) AND the remote
+WordPress server (to actually upload). The compose default
+`http://seaweedfs:8333` and `http://localhost:8333` satisfy neither requirement
+for a real off-host site. Symptoms when it is wrong: the backup dashboard shows
+"stalled, no progress for >2m", or the agent log contains
+`EncryptAndUpload: PUT failed for chunk` (the presigned URL is either
+unreachable from the WP host or returns 403).
+
+### Recommended: a public HTTPS subdomain via a reverse proxy
+
+Set `WPMGR_S3_ENDPOINT` to a subdomain you control:
+
+```bash
+WPMGR_S3_ENDPOINT=https://s3.yourdomain.com
+WPMGR_S3_FORCE_PATH_STYLE=true   # required for SeaweedFS/MinIO — keep this true
+```
+
+Then proxy that subdomain to the SeaweedFS S3 gateway. The compose stack
+publishes the gateway on **host port 8333** (`WPMGR_S3_PORT`).
+
+**If you are using Nginx Proxy Manager (NPM) or a proxy in a separate Docker
+network:** NPM runs on the host network (or its own bridge) and cannot resolve
+the compose service name `seaweedfs`. Point the proxy at the **Docker bridge
+gateway IP and the published host port** instead:
+
+```
+https://s3.yourdomain.com  ->  http://172.17.0.1:8333
+```
+
+`172.17.0.1` is the default `docker0` bridge gateway; traffic reaches
+SeaweedFS through the host without cross-network DNS. If you changed the
+published port via `WPMGR_S3_PORT`, substitute that port here.
+
+**NAT hairpinning gotcha:** do not point `WPMGR_S3_ENDPOINT` (or the proxy
+upstream) directly at the server's public IP. The API container calling its own
+public IP may not loop back on some hosts (common on Hetzner), and can also
+produce `SignatureDoesNotMatch` errors. Routing through the bridge IP
+(`172.17.0.1`) sidesteps that entirely.
+
+### WAF / Cloudflare in front of the managed WordPress site
+
+This is a separate concern from the S3 endpoint. If the WordPress site WPMgr
+manages sits behind Cloudflare or another WAF, managed-challenge rules can
+block the control plane's commands to the agent, which also appears as a
+stalled backup (no agent response). Allowlist the control-plane server's IP
+and the WPMgr agent User-Agent at the WAF so backup and restore traffic is not
+challenged.
+
+### Future: separate internal and public endpoints
+
+A dedicated `WPMGR_S3_PUBLIC_ENDPOINT` variable (so the internal API can reach
+SeaweedFS over a private path while the agent uses a separate public URL) is
+being considered to remove the single-value constraint described above.
+
 ## Adding a WordPress site
 
 Once running, install the agent plugin on each managed site and pair it from the

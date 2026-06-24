@@ -1,4 +1,4 @@
-import { useId, useRef, useState } from "react";
+import { useId, useState } from "react";
 import { AlertTriangle, Lock, Save, ShieldAlert } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,8 @@ import {
   SensitiveWriteError,
   useWriteFileContent,
 } from "./hooks/use-file-mutations";
+import { CodeEditor } from "./CodeEditor";
+import { langFromPath } from "./editor-lang";
 
 // FileEditDialog — inline code editor for small text files (admin+, write_enabled).
 //
@@ -31,8 +33,8 @@ import {
 //     and re-upload.
 //   - A "Make a backup before editing" advisory is always shown.
 //
-// No heavy CodeMirror dep — a monospace scrollable textarea is sufficient for
-// the file sizes in scope (≤ 256 KiB). The server is the authoritative gate.
+// Editor: CodeMirror 6 (lazy-loaded via CodeEditor; does not enter the main bundle).
+// The server is the authoritative write gate.
 
 export interface FileEditDialogProps {
   open: boolean;
@@ -57,7 +59,6 @@ export function FileEditDialog({
   isOwner,
 }: FileEditDialogProps) {
   const titleId = useId();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [content, setContent] = useState(initialContent);
 
   // Track elevated confirm states — only sent after explicit owner action.
@@ -226,26 +227,21 @@ export function FileEditDialog({
             </div>
           ) : null}
 
-          {/* Editor */}
-          <div className="relative">
-            <textarea
-              ref={textareaRef}
-              aria-label={`Edit ${fileName}`}
+          {/* Editor — CodeMirror 6, lazy-loaded chunk */}
+          <div
+            className={cn(
+              "relative overflow-hidden rounded-md border border-[var(--color-border)]",
+              isBusy && "pointer-events-none opacity-50",
+            )}
+          >
+            <CodeEditor
               value={content}
-              onChange={(e) => setContent(e.target.value)}
-              disabled={isBusy}
-              spellCheck={false}
-              autoCorrect="off"
-              autoCapitalize="off"
-              className={cn(
-                "block h-[min(60vh,480px)] w-full resize-none rounded-md border border-[var(--color-border)]",
-                "bg-[var(--color-muted)] px-3 py-2.5",
-                "font-mono text-[12px] leading-relaxed text-[var(--color-foreground)]",
-                "placeholder:text-[var(--color-muted-foreground)]",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-ring)]",
-                "disabled:opacity-50",
-                "scrollbar-thin",
-              )}
+              onChange={setContent}
+              language={langFromPath(filePath)}
+              readOnly={isBusy}
+              ariaLabel={`Edit ${fileName}`}
+              height="min(60vh, 480px)"
+              autoFocus
             />
             <div
               aria-hidden="true"
