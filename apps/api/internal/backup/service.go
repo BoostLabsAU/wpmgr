@@ -2254,6 +2254,9 @@ func (s *Service) ClaimDueSchedules(ctx context.Context) ([]Schedule, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.logger().Info("backup_scheduler: due candidates found",
+		slog.Int("due_candidates", len(candidates)),
+		slog.Time("now", now))
 	if len(candidates) == 0 {
 		return nil, nil
 	}

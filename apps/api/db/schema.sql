@@ -779,13 +779,18 @@ CREATE POLICY backup_schedules_tenant_isolation ON backup_schedules
     USING (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid)
     WITH CHECK (tenant_id = nullif(current_setting('app.tenant_id', true), '')::uuid);
 
--- The periodic scheduler enumerates DUE schedules across ALL tenants (it has no
--- tenant scope yet), mirroring the cross-tenant health job. Permit that read
--- when the app.agent GUC is 'on' (set by InAgentTx). The per-site backup work
--- it enqueues then runs tenant-scoped under the normal isolation policy.
+-- The periodic scheduler enumerates DUE schedules, claims them with FOR UPDATE,
+-- and advances next_run_at — all inside InAgentTx (app.agent='on').
+-- PostgreSQL applies both SELECT and UPDATE policies to SELECT … FOR UPDATE, so
+-- this must be FOR ALL (not FOR SELECT) so the UPDATE USING is satisfied and the
+-- locking query returns rows. Mirrors backup_schedule_runs_agent exactly.
+-- (Issue #96: the original FOR SELECT policy silently returned 0 rows on every
+-- FOR UPDATE attempt, causing ClaimAndAdvanceDueSchedules to never advance any
+-- schedule even when due rows existed.)
 CREATE POLICY backup_schedules_scheduler ON backup_schedules
-    FOR SELECT
-    USING (current_setting('app.agent', true) = 'on');
+    FOR ALL
+    USING (current_setting('app.agent', true) = 'on')
+    WITH CHECK (current_setting('app.agent', true) = 'on');
 
 -- ---------------------------------------------------------------------------
 -- backup_schedule_runs  (M17 — materialized schedule queue)
