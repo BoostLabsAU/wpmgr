@@ -715,6 +715,8 @@ func (c *pgxPoolConnAdapter) Release() { (*pgxpool.Conn)(c).Release() }
 // ClaimDueSchedules path (FOR UPDATE SKIP LOCKED) inside svc is the inner
 // guard that handles any race that slips past the advisory lock window.
 func (w *ScheduleWorker) Work(ctx context.Context, _ *river.Job[ScheduleArgs]) error {
+	w.logger.Info("backup_scheduler: pass started")
+
 	// Single-flight guard: take a session-level advisory lock on the scheduler
 	// namespace. Two CP instances racing on the same tick will both try to acquire;
 	// the loser skips the pass (returns nil). The winner proceeds.
@@ -740,12 +742,15 @@ func (w *ScheduleWorker) Work(ctx context.Context, _ *river.Job[ScheduleArgs]) e
 			w.logger.Info("backup_scheduler: advisory lock held by peer, skipping pass")
 			return nil
 		} else {
+			w.logger.Info("backup_scheduler: advisory lock acquired")
 			// Release the advisory lock when the pass finishes (session-level, so
 			// it must be explicitly released on the pinned conn, not left to GC).
 			defer func() {
 				_, _ = conn.Exec(ctx, `SELECT pg_advisory_unlock(hashtext('backup_scheduler'))`)
 			}()
 		}
+	} else {
+		w.logger.Info("backup_scheduler: no pool configured, skipping advisory lock")
 	}
 
 	// Atomic claim: select+lock+advance in one tx. Only claimed schedules are

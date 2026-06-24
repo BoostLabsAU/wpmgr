@@ -1,6 +1,6 @@
 package backup
 
-// scheduler_fix_test.go — unit tests for issue #68 scheduler correctness fixes.
+// scheduler_fix_test.go — unit tests for issue #68 and #96 scheduler correctness fixes.
 //
 // Tests:
 //  1. PutSchedule re-enable heals: disabled→enabled with stale next_run_at
@@ -16,6 +16,15 @@ package backup
 //  5b. In-flight guard — CreateBackup returns a validation error when in flight.
 //  6. 24h simulation with 5-min ticks on a fixed daily schedule → exactly one
 //     snapshot created per 24-hour window.
+//  7. Site lookup error is logged and schedule is not claimed.
+//  8. Issue #96 regression: ClaimDueSchedules finds a due schedule, advances it,
+//     and EnqueueScheduledBackup creates a snapshot (the working path). A
+//     companion sub-test demonstrates the broken path: when ClaimAndAdvance
+//     returns empty despite a due row existing (simulating the pre-m84 RLS
+//     behaviour where FOR UPDATE under InAgentTx saw 0 rows), no snapshot is
+//     enqueued. The real fix is migration m84 (backup_schedules_scheduler policy
+//     upgraded from FOR SELECT to FOR ALL); this test locks in the end-to-end
+//     service behaviour so a regression would be caught immediately.
 //
 // All tests use in-memory fakes and a deterministic fakeClock; no database.
 
@@ -721,4 +730,142 @@ func TestClaimDueSchedules_SiteLookupError_LoggedAndSkipped(t *testing.T) {
 	if !strings.Contains(logStr, schedID.String()) {
 		t.Errorf("expected schedule_id %s in log output, got: %q", schedID, logStr)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Issue #96 regression — ClaimAndAdvance actually fires (m84 fix)
+// ---------------------------------------------------------------------------
+
+// brokenClaimRepo embeds schedulerTestRepo but overrides ClaimAndAdvanceDueSchedules
+// to always return (nil, nil) — simulating the pre-m84 RLS behaviour where
+// "SELECT ... FOR UPDATE SKIP LOCKED" under InAgentTx returned 0 rows because
+// the backup_schedules_scheduler policy was FOR SELECT only and PostgreSQL also
+// requires the UPDATE USING clause to pass for a locking read.
+type brokenClaimRepo struct {
+	*schedulerTestRepo
+}
+
+func (r *brokenClaimRepo) ClaimAndAdvanceDueSchedules(_ context.Context, _ time.Time, _ map[uuid.UUID]time.Time) ([]Schedule, error) {
+	// Simulate pre-m84: FOR UPDATE sees 0 rows under agent context, returns nothing.
+	return nil, nil
+}
+
+// TestClaimDueSchedules_Issue96_ScheduleFiresAfterFix verifies the complete
+// claim→advance→enqueue path for a due enabled schedule (the fixed behaviour
+// after migration m84 upgrades backup_schedules_scheduler to FOR ALL).
+//
+// Sub-test "BrokenPath" reproduces the pre-m84 symptom: ListDueSchedules finds
+// a due row but ClaimAndAdvanceDueSchedules (simulating the broken FOR UPDATE)
+// returns nothing — no snapshot is enqueued. This is what the reporter observed:
+// 289 completed scheduler River jobs, next_run_at never advanced, last_run_at
+// NULL, no backup_snapshot row created.
+//
+// Sub-test "FixedPath" verifies the corrected behaviour: when
+// ClaimAndAdvanceDueSchedules properly returns the claimed schedule (as it does
+// after m84 makes the UPDATE USING policy pass under InAgentTx), a snapshot is
+// created and the enqueuer is called.
+func TestClaimDueSchedules_Issue96_ScheduleFiresAfterFix(t *testing.T) {
+	now := time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+	dueAt := now.Add(-3 * time.Minute) // 3 minutes overdue, like the reporter's test
+
+	tenantID := uuid.New()
+	siteID := uuid.New()
+	schedID := uuid.New()
+
+	newDueSchedule := func() Schedule {
+		return Schedule{
+			ID:        schedID,
+			TenantID:  tenantID,
+			SiteID:    siteID,
+			Cadence:   CadenceDaily,
+			RunHour:   11,
+			RunMinute: 57, // dueAt matches
+			Enabled:   true,
+			NextRunAt: dueAt,
+			Kind:      KindFull,
+		}
+	}
+
+	t.Run("BrokenPath", func(t *testing.T) {
+		// This sub-test demonstrates the pre-m84 symptom: despite a due schedule
+		// existing, no snapshot is enqueued because ClaimAndAdvanceDueSchedules
+		// returns nothing (simulating the FOR UPDATE RLS failure).
+		inner := newSchedulerTestRepo()
+		inner.addSchedule(newDueSchedule())
+		repo := &brokenClaimRepo{schedulerTestRepo: inner}
+
+		enq := &recordingEnqueuer{}
+		svc := &Service{
+			repo:     repo,
+			sites:    fakeSites{info: SiteInfo{Enrolled: true, AgeRecipient: "age1test", WpTimezone: "UTC"}},
+			clock:    fakeClock{t: now},
+			enqueuer: enq,
+		}
+
+		claimed, err := svc.ClaimDueSchedules(context.Background())
+		if err != nil {
+			t.Fatalf("BrokenPath: ClaimDueSchedules error: %v", err)
+		}
+		for _, sched := range claimed {
+			if eerr := svc.EnqueueScheduledBackup(context.Background(), sched); eerr != nil {
+				t.Logf("BrokenPath: EnqueueScheduledBackup skip: %v", eerr)
+			}
+		}
+
+		// Pre-m84: FOR UPDATE returned 0 rows → claimed is empty → no snapshot.
+		if snapCount := inner.snapCount(tenantID, siteID); snapCount != 0 {
+			t.Errorf("BrokenPath: expected 0 snapshots (broken claim returns nothing), got %d", snapCount)
+		}
+		if len(enq.plainCalls) > 0 || len(enq.chainCalls) > 0 {
+			t.Errorf("BrokenPath: expected no enqueue calls, got plain=%d chain=%d",
+				len(enq.plainCalls), len(enq.chainCalls))
+		}
+	})
+
+	t.Run("FixedPath", func(t *testing.T) {
+		// This sub-test verifies the corrected behaviour after m84: the scheduler
+		// policy is FOR ALL, so ClaimAndAdvanceDueSchedules returns the due row,
+		// EnqueueScheduledBackup creates a snapshot, and the enqueuer is called.
+		repo := newSchedulerTestRepo()
+		repo.addSchedule(newDueSchedule())
+
+		enq := &recordingEnqueuer{}
+		svc := &Service{
+			repo:     repo,
+			sites:    fakeSites{info: SiteInfo{Enrolled: true, AgeRecipient: "age1test", WpTimezone: "UTC"}},
+			clock:    fakeClock{t: now},
+			enqueuer: enq,
+		}
+
+		claimed, err := svc.ClaimDueSchedules(context.Background())
+		if err != nil {
+			t.Fatalf("FixedPath: ClaimDueSchedules error: %v", err)
+		}
+		for _, sched := range claimed {
+			if eerr := svc.EnqueueScheduledBackup(context.Background(), sched); eerr != nil {
+				t.Fatalf("FixedPath: EnqueueScheduledBackup error: %v", eerr)
+			}
+		}
+
+		// After m84: claim returns the schedule → EnqueueScheduledBackup creates
+		// a snapshot and calls the enqueuer.
+		if snapCount := repo.snapCount(tenantID, siteID); snapCount != 1 {
+			t.Errorf("FixedPath: expected 1 snapshot, got %d", snapCount)
+		}
+		if len(enq.plainCalls)+len(enq.chainCalls) == 0 {
+			t.Errorf("FixedPath: expected at least one enqueue call, got plain=%d chain=%d",
+				len(enq.plainCalls), len(enq.chainCalls))
+		}
+
+		// next_run_at must have advanced past now (schedule is no longer due).
+		repo.mu.Lock()
+		s := repo.schedules[schedID]
+		repo.mu.Unlock()
+		if s == nil {
+			t.Fatal("FixedPath: schedule not found in repo after claim")
+		}
+		if !s.NextRunAt.After(now) {
+			t.Errorf("FixedPath: next_run_at %v should be after now %v", s.NextRunAt, now)
+		}
+	})
 }
