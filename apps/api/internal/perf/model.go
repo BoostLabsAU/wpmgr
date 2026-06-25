@@ -159,6 +159,12 @@ type Config struct {
 	// The plaintext key is NEVER returned via the API; this flag lets the UI
 	// show whether RUM is fully provisioned without exposing the key.
 	BeaconKeySet bool
+	// RumAgentBeaconKeySet is the agent-reported plaintext key presence. Nil
+	// means the installed agent has not reported the field yet.
+	RumAgentBeaconKeySet *bool
+	// RumAgentBeaconKeyReportedAt is set when the agent last reported key
+	// presence. Nil means unknown or intentionally reset during reprovision.
+	RumAgentBeaconKeyReportedAt *time.Time
 
 	ConfigVersion int
 	CreatedAt     time.Time
@@ -182,9 +188,9 @@ const (
 
 // FontTranscodeResult is the domain view of one font_transcode_results row.
 type FontTranscodeResult struct {
-	SourceHash  string
-	TenantID    uuid.UUID
-	SiteID      uuid.UUID
+	SourceHash string
+	TenantID   uuid.UUID
+	SiteID     uuid.UUID
 	// State is derived: pending when Woff2Key==nil && !Negative; ready when
 	// Woff2Key!=nil; negative when Negative==true.
 	State       FontTranscodeState
@@ -214,13 +220,13 @@ type FontResult struct {
 	TenantID     uuid.UUID
 	SiteID       uuid.UUID
 	SourceHash   string
-	Family       string  // empty until the agent reports it
-	SourceFile   string  // basename of the original font URL
-	OriginalExt  string  // ttf | otf | woff
-	OriginalSize int     // bytes
-	Woff2Size    int     // bytes; 0 until ready
-	SubsetSize   int     // bytes; 0 unless subset
-	UnicodeRange string  // CSS unicode-range for the subset; "" unless subset
+	Family       string // empty until the agent reports it
+	SourceFile   string // basename of the original font URL
+	OriginalExt  string // ttf | otf | woff
+	OriginalSize int    // bytes
+	Woff2Size    int    // bytes; 0 until ready
+	SubsetSize   int    // bytes; 0 unless subset
+	UnicodeRange string // CSS unicode-range for the subset; "" unless subset
 	State        FontResultState
 	ErrorDetail  string  // non-empty when State == FontResultNegative
 	SavingsPct   float64 // 0..100; 0 when sizes unknown

@@ -1906,6 +1906,17 @@ type Invoker interface {
 	//
 	// POST /api/v1/sites/{siteId}/files/rename
 	RenameSiteFile(ctx context.Context, request *FileRenameRequest, params RenameSiteFileParams) (RenameSiteFileRes, error)
+	// ReprovisionRumBeaconKey invokes reprovisionRumBeaconKey operation.
+	//
+	// Rotates the site's stored RUM beacon-key hash and pushes the fresh
+	// plaintext key to the agent once. The plaintext key is never returned.
+	// If the agent push fails after the rotation is stored, HTTP 200 is still
+	// returned with the stored config and the warning is surfaced in the
+	// `X-Agent-Push-Warning` response header. Requires the `site.perf.config`
+	// permission and RUM must already be enabled.
+	//
+	// POST /api/v1/sites/{siteId}/perf/rum/reprovision
+	ReprovisionRumBeaconKey(ctx context.Context, params ReprovisionRumBeaconKeyParams) (ReprovisionRumBeaconKeyRes, error)
 	// ResendEmailLog invokes resendEmailLog operation.
 	//
 	// Dispatches the `resend_email` agent command for the given log entry.
@@ -23238,6 +23249,104 @@ func (c *Client) sendRenameSiteFile(ctx context.Context, request *FileRenameRequ
 
 	stage = "DecodeResponse"
 	result, err := decodeRenameSiteFileResponse(resp)
+	if err != nil {
+		return res, errors.Wrap(err, "decode response")
+	}
+
+	return result, nil
+}
+
+// ReprovisionRumBeaconKey invokes reprovisionRumBeaconKey operation.
+//
+// Rotates the site's stored RUM beacon-key hash and pushes the fresh
+// plaintext key to the agent once. The plaintext key is never returned.
+// If the agent push fails after the rotation is stored, HTTP 200 is still
+// returned with the stored config and the warning is surfaced in the
+// `X-Agent-Push-Warning` response header. Requires the `site.perf.config`
+// permission and RUM must already be enabled.
+//
+// POST /api/v1/sites/{siteId}/perf/rum/reprovision
+func (c *Client) ReprovisionRumBeaconKey(ctx context.Context, params ReprovisionRumBeaconKeyParams) (ReprovisionRumBeaconKeyRes, error) {
+	res, err := c.sendReprovisionRumBeaconKey(ctx, params)
+	return res, err
+}
+
+func (c *Client) sendReprovisionRumBeaconKey(ctx context.Context, params ReprovisionRumBeaconKeyParams) (res ReprovisionRumBeaconKeyRes, err error) {
+	otelAttrs := []attribute.KeyValue{
+		otelogen.OperationID("reprovisionRumBeaconKey"),
+		semconv.HTTPRequestMethodKey.String("POST"),
+		semconv.URLTemplateKey.String("/api/v1/sites/{siteId}/perf/rum/reprovision"),
+	}
+	otelAttrs = append(otelAttrs, c.cfg.Attributes...)
+
+	// Run stopwatch.
+	startTime := time.Now()
+	defer func() {
+		// Use floating point division here for higher precision (instead of Millisecond method).
+		elapsedDuration := time.Since(startTime)
+		c.duration.Record(ctx, float64(elapsedDuration)/float64(time.Millisecond), metric.WithAttributes(otelAttrs...))
+	}()
+
+	// Increment request counter.
+	c.requests.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+
+	// Start a span for this request.
+	ctx, span := c.cfg.Tracer.Start(ctx, ReprovisionRumBeaconKeyOperation,
+		trace.WithAttributes(otelAttrs...),
+		clientSpanKind,
+	)
+	// Track stage for error reporting.
+	var stage string
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, stage)
+			c.errors.Add(ctx, 1, metric.WithAttributes(otelAttrs...))
+		}
+		span.End()
+	}()
+
+	stage = "BuildURL"
+	u := uri.Clone(c.requestURL(ctx))
+	var pathParts [3]string
+	pathParts[0] = "/api/v1/sites/"
+	{
+		// Encode "siteId" parameter.
+		e := uri.NewPathEncoder(uri.PathEncoderConfig{
+			Param:   "siteId",
+			Style:   uri.PathStyleSimple,
+			Explode: false,
+		})
+		if err := func() error {
+			return e.EncodeValue(conv.UUIDToString(params.SiteId))
+		}(); err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		encoded, err := e.Result()
+		if err != nil {
+			return res, errors.Wrap(err, "encode path")
+		}
+		pathParts[1] = encoded
+	}
+	pathParts[2] = "/perf/rum/reprovision"
+	uri.AddPathParts(u, pathParts[:]...)
+
+	stage = "EncodeRequest"
+	r, err := ht.NewRequest(ctx, "POST", u)
+	if err != nil {
+		return res, errors.Wrap(err, "create request")
+	}
+
+	stage = "SendRequest"
+	resp, err := c.cfg.Client.Do(r)
+	if err != nil {
+		return res, errors.Wrap(err, "do request")
+	}
+	body := resp.Body
+	defer body.Close()
+
+	stage = "DecodeResponse"
+	result, err := decodeReprovisionRumBeaconKeyResponse(resp)
 	if err != nil {
 		return res, errors.Wrap(err, "decode response")
 	}

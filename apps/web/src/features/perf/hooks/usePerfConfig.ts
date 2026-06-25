@@ -5,7 +5,11 @@ import {
   type UseMutationResult,
   type UseQueryResult,
 } from "@tanstack/react-query";
-import { getPerfConfig, putPerfConfig } from "@wpmgr/api";
+import {
+  getPerfConfig,
+  putPerfConfig,
+  reprovisionRumBeaconKey,
+} from "@wpmgr/api";
 
 import { toast } from "@/components/toast";
 import { toError } from "@/features/auth/use-auth";
@@ -123,6 +127,39 @@ export function useUpdatePerfConfig(
           }
         }
         return merged;
+      });
+    },
+  });
+}
+
+/** Rotate and push a fresh RUM beacon key, then refresh config state. */
+export function useReprovisionRumBeaconKey(
+  siteId: string,
+): UseMutationResult<PerfConfig, Error, void> {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async () => {
+      const { data, error } = await reprovisionRumBeaconKey({
+        path: { siteId },
+      });
+      if (error) throw toError(error);
+      if (!data) throw new Error("Empty response");
+      return data as PerfConfig;
+    },
+    onSuccess: (saved) => {
+      qc.setQueryData<PerfConfig>(perfKeys.config(siteId), saved);
+      void qc.invalidateQueries({ queryKey: perfKeys.config(siteId) });
+      if (saved.rum_agent_beacon_key_set === true) {
+        toast.success("RUM key reprovisioned.");
+      } else {
+        toast.info("RUM key reprovisioned.", {
+          description: "Waiting for the agent to confirm the local key.",
+        });
+      }
+    },
+    onError: (err) => {
+      toast.error("Could not reprovision RUM key.", {
+        description: err.message,
       });
     },
   });

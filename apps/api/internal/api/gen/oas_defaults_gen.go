@@ -184,6 +184,22 @@ func (s *PerfConfig) setDefaults() {
 		val := bool(false)
 		s.WooCacheableSession.SetTo(val)
 	}
+	{
+		val := bool(false)
+		s.RumEnabled.SetTo(val)
+	}
+	{
+		val := float32(1)
+		s.RumSampleRate.SetTo(val)
+	}
+	{
+		val := int(8)
+		s.MaxDistinctCountries.SetTo(val)
+	}
+	{
+		val := int(30)
+		s.MinSampleCount.SetTo(val)
+	}
 }
 
 // setDefaults set default value of fields.

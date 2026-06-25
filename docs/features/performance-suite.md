@@ -2,8 +2,8 @@
 
 Speed up every WordPress site in your portfolio. The Performance Suite covers
 page caching, asset optimization, Remove Unused CSS (RUCSS), CDN delivery,
-bloat removal, media encoding, and database housekeeping. All features are
-per-site and toggled independently.
+bloat removal, real user monitoring, media encoding, and database housekeeping.
+All features are per-site and toggled independently.
 
 Design: [ADR-046](../adr/ADR-046-performance-suite-architecture.md).
 Architecture: [architecture/perf-suite.md](../architecture/perf-suite.md).
@@ -18,6 +18,7 @@ API reference: [api/perf.md](../api/perf.md).
 | Page caching | Agent (PHP drop-in) | [features/caching.md](./caching.md) |
 | Asset optimization (minify, fonts, images, JS delay, CDN, bloat) | Agent (WP hooks) | [features/optimization.md](./optimization.md) |
 | Remove Unused CSS | Control plane (pure Go) | [features/rucss.md](./rucss.md) |
+| Real User Monitoring | Agent-injected browser beacon + control plane rollups | [api/perf.md](../api/perf.md) |
 | Media Optimizer (WebP/AVIF encoding) | Control plane encoder service | [features/media-optimizer.md](./media-optimizer.md) |
 | Database Cleaner | Agent SQL + CP corpus | [features/database-cleaner.md](./database-cleaner.md) |
 
@@ -97,6 +98,27 @@ families.
 RUCSS never blocks render: on a cache miss the agent serves the full,
 unmodified CSS and the optimized version becomes available on the next request.
 On any CP failure or timeout the page is served unchanged with full CSS.
+
+---
+
+## Real User Monitoring
+
+Real User Monitoring records aggregate Core Web Vitals from visitor page loads
+after you enable it for a site. The control plane stores only a beacon-key hash;
+the agent stores the local plaintext key needed to inject beacons into cached
+HTML.
+
+The RUM status is healthy only when the control plane has a beacon-key hash and
+the agent has confirmed that its local plaintext key is present. If the dashboard
+shows the key as waiting for confirmation, an updated agent has not reported its
+local key state yet. If it shows the key as missing, the agent reported that its
+local plaintext key is absent.
+
+Use **Reprovision key** from the RUM panel to repair a missing agent key without
+editing the database. Reprovisioning rotates the stored hash, keeps the previous
+hash in the normal grace slot, and pushes a fresh plaintext key to the agent
+once. The operator API never returns the plaintext key. Current RUM injection
+still follows the existing cached-page optimization path.
 
 ---
 

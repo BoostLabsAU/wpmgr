@@ -1,11 +1,22 @@
 import { useId, useState } from "react";
-import { Loader2 } from "lucide-react";
+import { useParams } from "@tanstack/react-router";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Clock3,
+  KeyRound,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { SettingRow } from "../components/SettingRow";
 import { SettingsCard } from "../components/SettingsCard";
+import { useReprovisionRumBeaconKey } from "../hooks/usePerfConfig";
 import type { PerfConfig } from "../types";
 
 // Real User Monitoring (RUM) settings section.
@@ -35,6 +46,10 @@ export function RumSection({
   disabled,
   isSaving,
 }: RumSectionProps) {
+  const params = useParams({ strict: false });
+  const siteId = typeof params.siteId === "string" ? params.siteId : "";
+  const reprovision = useReprovisionRumBeaconKey(siteId);
+
   return (
     <SettingsCard
       title="Real User Monitoring"
@@ -66,8 +81,96 @@ export function RumSection({
           disabled={disabled}
           saving={isSaving("min_sample_count")}
         />
+        <RumKeyStatus
+          config={config}
+          disabled={disabled || siteId === ""}
+          reprovisioning={reprovision.isPending}
+          onReprovision={() => reprovision.mutate()}
+        />
       </SettingRow>
     </SettingsCard>
+  );
+}
+
+interface RumKeyStatusProps {
+  config: PerfConfig;
+  disabled: boolean;
+  reprovisioning: boolean;
+  onReprovision: () => void;
+}
+
+function RumKeyStatus({
+  config,
+  disabled,
+  reprovisioning,
+  onReprovision,
+}: RumKeyStatusProps) {
+  const cpKeySet = config.beacon_key_set === true;
+  const agentKeySet = config.rum_agent_beacon_key_set;
+  const healthy = (config.rum_enabled ?? false) && cpKeySet && agentKeySet === true;
+
+  let Icon = CheckCircle2;
+  let label = "Confirmed";
+  let description = "The control plane has a key hash and the agent confirmed its local key.";
+  let badgeVariant: "success" | "destructive" | "muted" = "success";
+  let className =
+    "border-green-200 bg-green-50 text-green-900 dark:border-green-900 dark:bg-green-950/40 dark:text-green-200";
+
+  if (!cpKeySet) {
+    Icon = KeyRound;
+    label = "Provisioning pending";
+    description = "The control plane has not recorded a RUM beacon-key hash yet.";
+    badgeVariant = "muted";
+    className =
+      "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200";
+  } else if (agentKeySet === false) {
+    Icon = AlertTriangle;
+    label = "Agent key missing";
+    description = "The agent reported that its local RUM beacon key is missing.";
+    badgeVariant = "destructive";
+    className =
+      "border-red-200 bg-red-50 text-red-950 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200";
+  } else if (!healthy) {
+    Icon = Clock3;
+    label = "Waiting for agent";
+    description = "The control plane has a key hash and is waiting for agent confirmation.";
+    badgeVariant = "muted";
+    className =
+      "border-amber-200 bg-amber-50 text-amber-950 dark:border-amber-900 dark:bg-amber-950/40 dark:text-amber-200";
+  }
+
+  return (
+    <div
+      className={`mt-3 flex flex-col gap-3 rounded-md border px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${className}`}
+    >
+      <div className="flex min-w-0 items-start gap-3">
+        <Icon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-sm font-medium">RUM key status</p>
+            <Badge variant={badgeVariant}>{label}</Badge>
+          </div>
+          <p className="mt-1 text-xs leading-5 opacity-90">{description}</p>
+        </div>
+      </div>
+      {!healthy ? (
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={onReprovision}
+          disabled={disabled || reprovisioning}
+          className="shrink-0 bg-background/80"
+        >
+          {reprovisioning ? (
+            <Loader2 aria-hidden="true" className="animate-spin" />
+          ) : (
+            <RefreshCw aria-hidden="true" />
+          )}
+          Reprovision key
+        </Button>
+      ) : null}
+    </div>
   );
 }
 

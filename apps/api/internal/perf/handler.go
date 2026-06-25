@@ -67,6 +67,7 @@ func (h *Handler) Register(r *gin.RouterGroup) {
 
 	g.GET("/perf/config", authz.RequirePermission(authz.PermSitePerfConfig), h.getConfig)
 	g.PUT("/perf/config", authz.RequirePermission(authz.PermSitePerfConfig), h.putConfig)
+	g.POST("/perf/rum/reprovision", authz.RequirePermission(authz.PermSitePerfConfig), h.reprovisionRumBeaconKey)
 
 	// All per-site perf routes live under the /perf/ namespace (the dashboard
 	// builds every URL as /sites/{id}/perf + suffix).
@@ -221,6 +222,38 @@ func (h *Handler) putConfig(c *gin.Context) {
 	h.record(c, p, audit.ActionPerfConfigUpdated, siteID, map[string]any{
 		"config_version": saved.ConfigVersion,
 		"cache_enabled":  saved.CacheEnabled,
+	})
+	c.JSON(http.StatusOK, toConfigDTO(saved))
+}
+
+func (h *Handler) reprovisionRumBeaconKey(c *gin.Context) {
+	p, _ := domain.PrincipalFromContext(c.Request.Context())
+	siteID, ok := parseSiteID(c)
+	if !ok {
+		return
+	}
+	saved, err := h.svc.ReprovisionRumBeaconKey(c.Request.Context(), p.TenantID, siteID)
+	if err != nil {
+		if _, isDomain := domain.AsDomain(err); isDomain {
+			httpx.Error(c, err)
+			return
+		}
+		if !isAgentPushWarning(err) {
+			httpx.Error(c, err)
+			return
+		}
+		c.Header("X-Agent-Push-Warning", err.Error())
+		h.record(c, p, audit.ActionPerfConfigUpdated, siteID, map[string]any{
+			"config_version":  saved.ConfigVersion,
+			"rum_reprovision": true,
+			"agent_warning":   true,
+		})
+		c.JSON(http.StatusOK, toConfigDTO(saved))
+		return
+	}
+	h.record(c, p, audit.ActionPerfConfigUpdated, siteID, map[string]any{
+		"config_version":  saved.ConfigVersion,
+		"rum_reprovision": true,
 	})
 	c.JSON(http.StatusOK, toConfigDTO(saved))
 }
@@ -417,7 +450,7 @@ func (h *Handler) getDbClean(c *gin.Context) {
 		return
 	}
 
-	var activeJobID any    // null when not active
+	var activeJobID any     // null when not active
 	var activeStartedAt any // null when not active
 	if activeState.Active {
 		activeJobID = activeState.JobID
@@ -427,10 +460,10 @@ func (h *Handler) getDbClean(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"clean_active":       activeState.Active,
-		"active_job_id":      activeJobID,
-		"active_started_at":  activeStartedAt,
-		"last_result":        dbCleanResultToGinH(result),
+		"clean_active":      activeState.Active,
+		"active_job_id":     activeJobID,
+		"active_started_at": activeStartedAt,
+		"last_result":       dbCleanResultToGinH(result),
 	})
 }
 
@@ -533,7 +566,7 @@ func (h *Handler) getDbScan(c *gin.Context) {
 		return
 	}
 
-	var activeJobID any   // null when not active
+	var activeJobID any     // null when not active
 	var activeStartedAt any // null when not active
 	if activeState.Active {
 		activeJobID = activeState.JobID
@@ -1180,12 +1213,12 @@ func (h *Handler) dbSearchReplace(c *gin.Context) {
 	}
 
 	h.record(c, p, audit.ActionDbSearchReplace, siteID, map[string]any{
-		"job_id":          out.JobID,
-		"search_len":      len(body.Search), // length only — do not log the actual value
-		"dry_run":         body.DryRun,
-		"tables_scanned":  out.TablesScanned,
-		"rows_matched":    out.RowsMatched,
-		"rows_changed":    out.RowsChanged,
+		"job_id":         out.JobID,
+		"search_len":     len(body.Search), // length only — do not log the actual value
+		"dry_run":        body.DryRun,
+		"tables_scanned": out.TablesScanned,
+		"rows_matched":   out.RowsMatched,
+		"rows_changed":   out.RowsChanged,
 	})
 
 	c.JSON(http.StatusOK, gin.H{
@@ -1412,15 +1445,15 @@ func (h *Handler) mediaCleanScan(c *gin.Context) {
 	})
 
 	c.JSON(http.StatusOK, gin.H{
-		"ok":               true,
-		"total":            out.Total,
-		"candidates":       out.Candidates,
-		"has_more":         out.HasMore,
-		"truncated":        out.Truncated,
+		"ok":                true,
+		"total":             out.Total,
+		"candidates":        out.Candidates,
+		"has_more":          out.HasMore,
+		"truncated":         out.Truncated,
 		"total_attachments": out.TotalAttachments,
-		"referenced_count": out.ReferencedCount,
-		"unused_count":     out.UnusedCount,
-		"referenced":       out.Referenced,
+		"referenced_count":  out.ReferencedCount,
+		"unused_count":      out.UnusedCount,
+		"referenced":        out.Referenced,
 	})
 }
 
@@ -1518,7 +1551,7 @@ func (h *Handler) mediaCleanIsolate(c *gin.Context) {
 // mediaCleanRestoreBody is the JSON body for POST /media/clean/restore.
 type mediaCleanRestoreBody struct {
 	// JobID is a CP-minted UUID v4. Required.
-	JobID         string   `json:"job_id"`
+	JobID string `json:"job_id"`
 	// QuarantineIDs are the manifest IDs returned by prior isolate calls.
 	QuarantineIDs []string `json:"quarantine_ids"`
 }
@@ -1566,7 +1599,7 @@ func (h *Handler) mediaCleanRestore(c *gin.Context) {
 // mediaCleanDeleteBody is the JSON body for POST /media/clean/delete.
 type mediaCleanDeleteBody struct {
 	// JobID is a CP-minted UUID v4. Required.
-	JobID         string   `json:"job_id"`
+	JobID string `json:"job_id"`
 	// QuarantineIDs are the manifest IDs to permanently remove.
 	QuarantineIDs []string `json:"quarantine_ids"`
 	// Confirm MUST be the exact string "DELETE". The agent enforces this

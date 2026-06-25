@@ -3,6 +3,7 @@ package perf
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -87,7 +88,8 @@ type repository interface {
 	GetConfig(ctx context.Context, tenantID, siteID uuid.UUID) (Config, error)
 	UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, error)
 	GetCDNCredentialsCiphertext(ctx context.Context, tenantID, siteID uuid.UUID) ([]byte, string, error)
-	UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error
+	UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool, rumBeaconKeyPresent *bool) error
+	MarkRumAgentBeaconKeyUnconfirmed(ctx context.Context, tenantID, siteID uuid.UUID) error
 	// M53 / #169 — agent-reported WooCommerce theme probe result (tri-state after M67).
 	// Returns (rowsAffected, error); 0 rows means no config row exists yet for the site.
 	UpdateWooFragmentsSupported(ctx context.Context, siteID uuid.UUID, supported bool) (int64, error)
@@ -131,6 +133,27 @@ type repository interface {
 
 var _ repository = (*Repo)(nil)
 
+type agentPushWarningError struct {
+	err error
+}
+
+func (e agentPushWarningError) Error() string {
+	return e.err.Error()
+}
+
+func (e agentPushWarningError) Unwrap() error {
+	return e.err
+}
+
+func isAgentPushWarning(err error) bool {
+	var warning agentPushWarningError
+	return errors.As(err, &warning)
+}
+
+type beaconKeyRotator interface {
+	RotateBeaconKey(ctx context.Context, tenantID, siteID uuid.UUID, newKeyHash []byte) error
+}
+
 // Service orchestrates the Performance Suite control plane.
 type Service struct {
 	repo          repository
@@ -144,7 +167,7 @@ type Service struct {
 	// beaconKeyRepo is the RUM beacon-key persistence layer. Used during
 	// UpdateConfig to generate/rotate the key when RUM is first enabled.
 	// nil = RUM beacon-key management disabled (tests/degraded mode).
-	beaconKeyRepo *rum.BeaconKeyRepo
+	beaconKeyRepo beaconKeyRotator
 	// cpBaseURL is the control-plane public base URL (e.g.
 	// "https://manage.example.com"). Used to derive the RUM ingest URL that is
 	// pushed to the agent as rum_ingest_url.
@@ -293,10 +316,78 @@ func (s *Service) UpdateConfig(ctx context.Context, tenantID, siteID uuid.UUID, 
 			}
 			// Refresh the verify card from the state the agent observed while
 			// applying the config (drop-in / WP_CACHE / .htaccess / server).
-			_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged)
+			s.recordInstallState(ctx, siteID, res)
 		}
 	}
 	return saved, nil
+}
+
+// ReprovisionRumBeaconKey rotates the RUM beacon key and pushes the fresh
+// plaintext to the agent once. The plaintext is not returned to callers.
+func (s *Service) ReprovisionRumBeaconKey(ctx context.Context, tenantID, siteID uuid.UUID) (Config, error) {
+	cfg, err := s.repo.GetConfig(ctx, tenantID, siteID)
+	if err == ErrNotFound {
+		return Config{}, domain.Validation("rum_not_enabled", "RUM must be enabled before reprovisioning the beacon key")
+	}
+	if err != nil {
+		return Config{}, err
+	}
+	if !cfg.RumEnabled {
+		return Config{}, domain.Validation("rum_not_enabled", "RUM must be enabled before reprovisioning the beacon key")
+	}
+	if s.beaconKeyRepo == nil {
+		return Config{}, domain.ServiceUnavailable("rum_beacon_key_unwired", "RUM beacon-key storage is not configured")
+	}
+	if s.agent == nil || s.sites == nil {
+		return Config{}, domain.ServiceUnavailable("agent_unwired", "agent command client is not configured")
+	}
+	siteURL, lookupErr := s.sites.GetSiteURL(ctx, tenantID, siteID)
+	if lookupErr != nil {
+		return Config{}, lookupErr
+	}
+
+	ciphertext, _, credErr := s.repo.GetCDNCredentialsCiphertext(ctx, tenantID, siteID)
+	if credErr != nil {
+		return Config{}, credErr
+	}
+	cfg.ConfigVersion++
+	saved, err := s.repo.UpsertConfig(ctx, UpsertConfigInput{Config: cfg, CDNCredentialsEncrypted: ciphertext})
+	if err != nil {
+		return Config{}, err
+	}
+
+	freshBeaconKey, keyHash, genErr := rum.GenerateBeaconKey()
+	if genErr != nil {
+		return Config{}, domain.Internal("rum_beacon_key_generate", "failed to generate RUM beacon key")
+	}
+	if rotErr := s.beaconKeyRepo.RotateBeaconKey(ctx, tenantID, siteID, keyHash); rotErr != nil {
+		return Config{}, rotErr
+	}
+	if markErr := s.repo.MarkRumAgentBeaconKeyUnconfirmed(ctx, tenantID, siteID); markErr != nil {
+		return saved, fmt.Errorf("rum beacon key rotated but confirmation reset failed: %w", markErr)
+	}
+
+	saved.BeaconKeySet = true
+	unconfirmed := false
+	saved.RumAgentBeaconKeySet = &unconfirmed
+	saved.RumAgentBeaconKeyReportedAt = nil
+	s.publish(ctx, tenantID, siteID, site.EventPerfConfigUpdated, map[string]any{
+		"config_version":  saved.ConfigVersion,
+		"rum_reprovision": true,
+	})
+
+	req := toPerfConfigRequest(saved, freshBeaconKey, s.cpBaseURL)
+	res, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, req)
+	if pushErr != nil {
+		return saved, agentPushWarningError{err: fmt.Errorf("rum beacon key reprovisioned but agent push failed: %w", pushErr)}
+	}
+	s.recordInstallState(ctx, siteID, res)
+
+	refreshed, refreshErr := s.repo.GetConfig(ctx, tenantID, siteID)
+	if refreshErr != nil {
+		return saved, refreshErr
+	}
+	return refreshed, nil
 }
 
 // resolveCDNCiphertext encrypts fresh credentials, or returns the prior stored
@@ -477,8 +568,17 @@ func (s *Service) ReportCacheStats(ctx context.Context, stats CacheStats) (Cache
 
 // MarkConfigApplied records the agent's install-state report (InAgentTx). Called
 // from the perf/config-ack agent endpoint.
-func (s *Service) MarkConfigApplied(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error {
-	return s.repo.UpdateInstallState(ctx, siteID, serverSoftware, dropinInstalled, wpCacheConstantSet, htaccessManaged)
+func (s *Service) MarkConfigApplied(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool, rumBeaconKeyPresent *bool) error {
+	return s.repo.UpdateInstallState(ctx, siteID, serverSoftware, dropinInstalled, wpCacheConstantSet, htaccessManaged, rumBeaconKeyPresent)
+}
+
+func (s *Service) recordInstallState(ctx context.Context, siteID uuid.UUID, res agentcmd.PerfConfigResult) {
+	if err := s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged, res.RumBeaconKeyPresent); err != nil {
+		s.logger.Warn("perf config install-state update failed",
+			slog.String("site_id", siteID.String()),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // MarkWooFragmentsSupported records the agent-reported WooCommerce theme-probe
@@ -533,7 +633,7 @@ func (s *Service) EnableCache(ctx context.Context, tenantID, siteID uuid.UUID) (
 		// WP_CACHE define written, .htaccess block managed). Previously
 		// wp_cache_constant_set was hardcoded false, so the dashboard's verify
 		// card always read "not set" even when the define was written.
-		_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged)
+		_ = s.repo.UpdateInstallState(ctx, siteID, res.ServerSoftware, res.DropinInstalled, res.WPCacheConstantSet, res.HtaccessManaged, nil)
 
 		// Push the FULL perf config so the optimization flags (minify, lazy-load,
 		// font-swap, …) actually land in the agent's wpmgr_perf_config option.
@@ -542,9 +642,11 @@ func (s *Service) EnableCache(ctx context.Context, tenantID, siteID uuid.UUID) (
 		// flags default off. Best-effort: caching is already on if this fails.
 		// Note: no fresh beacon key is generated here — beacon-key provisioning
 		// only happens in UpdateConfig where the operator explicitly enables RUM.
-		if _, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(cfg, "", s.cpBaseURL)); pushErr != nil {
+		if res, pushErr := s.agent.SyncPerfConfig(ctx, siteID, siteURL, toPerfConfigRequest(cfg, "", s.cpBaseURL)); pushErr != nil {
 			s.logger.Warn("cache enabled but optimize-config push failed",
 				slog.String("site_id", siteID.String()), slog.Any("error", pushErr))
+		} else {
+			s.recordInstallState(ctx, siteID, res)
 		}
 	}
 	s.publish(ctx, tenantID, siteID, site.EventCacheEnabled, map[string]any{"config_version": cfg.ConfigVersion})
@@ -1515,7 +1617,7 @@ func (s *Service) DBTableAction(ctx context.Context, tenantID, siteID uuid.UUID,
 
 // OrphanDeleteRequestItem is one item from the operator's POST body.
 type OrphanDeleteRequestItem struct {
-	Kind      string `json:"kind"`       // "option" | "cron" | "table"
+	Kind      string `json:"kind"` // "option" | "cron" | "table"
 	Name      string `json:"name"`
 	OwnerSlug string `json:"owner_slug"`
 }
@@ -1927,11 +2029,11 @@ func toPerfConfigRequest(c Config, freshBeaconKey, cpBaseURL string) agentcmd.Pe
 		JSDelayExcludes:          coalesce(c.JSDelayExcludes),
 		JSDelayThirdParty:        c.JSDelayThirdParty,
 		JSDelayThirdPartyExc:     coalesce(c.JSDelayThirdPartyExcludes),
-		FontsDisplaySwap:    c.FontsDisplaySwap,
-		FontsOptimizeGoogle: c.FontsOptimizeGoogle,
-		FontsPreload:        c.FontsPreload,
-		FontsTranscodeWOFF2: c.FontsTranscodeWOFF2,
-		LazyLoad:            c.LazyLoad,
+		FontsDisplaySwap:         c.FontsDisplaySwap,
+		FontsOptimizeGoogle:      c.FontsOptimizeGoogle,
+		FontsPreload:             c.FontsPreload,
+		FontsTranscodeWOFF2:      c.FontsTranscodeWOFF2,
+		LazyLoad:                 c.LazyLoad,
 		LazyLoadExclusions:       coalesce(c.LazyLoadExclusions),
 		ProperlySizeImages:       c.ProperlySizeImages,
 		YouTubePlaceholder:       c.YouTubePlaceholder,
@@ -2055,11 +2157,11 @@ func (s *Service) SearchReplace(ctx context.Context, tenantID, siteID uuid.UUID,
 	}
 
 	s.publish(ctx, tenantID, siteID, site.EventDbSearchReplaceCompleted, map[string]any{
-		"job_id":          jobID,
-		"dry_run":         in.DryRun,
-		"tables_scanned":  res.TablesScanned,
-		"rows_matched":    res.RowsMatched,
-		"rows_changed":    res.RowsChanged,
+		"job_id":         jobID,
+		"dry_run":        in.DryRun,
+		"tables_scanned": res.TablesScanned,
+		"rows_matched":   res.RowsMatched,
+		"rows_changed":   res.RowsChanged,
 	})
 
 	return SearchReplaceOutput{
@@ -2158,7 +2260,7 @@ type MediaCleanIsolateOutput struct {
 // MediaCleanRestoreInput is the validated operator input for restore.
 type MediaCleanRestoreInput struct {
 	// JobID is a CP-minted UUID v4 for idempotency.
-	JobID         string
+	JobID string
 	// QuarantineIDs are the opaque manifest IDs returned by prior isolate calls.
 	QuarantineIDs []string
 }
@@ -2174,7 +2276,7 @@ type MediaCleanRestoreOutput struct {
 // MediaCleanDeleteInput is the validated operator input for the permanent delete.
 type MediaCleanDeleteInput struct {
 	// JobID is a CP-minted UUID v4 for idempotency.
-	JobID         string
+	JobID string
 	// QuarantineIDs are the opaque manifest IDs to permanently remove.
 	QuarantineIDs []string
 	// Confirm MUST equal "DELETE" (case-sensitive). The agent enforces this
@@ -2383,7 +2485,7 @@ func (s *Service) MediaCleanRestore(ctx context.Context, tenantID, siteID uuid.U
 	})
 	if agentErr != nil {
 		s.publish(ctx, tenantID, siteID, site.EventMediaCleanRestoreFailed, map[string]any{
-			"error":                agentErr.Error(),
+			"error":               agentErr.Error(),
 			"requested_manifests": len(in.QuarantineIDs),
 		})
 		return MediaCleanRestoreOutput{}, agentErr

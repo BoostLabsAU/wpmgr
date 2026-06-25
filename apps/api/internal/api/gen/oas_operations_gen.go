@@ -206,6 +206,7 @@ const (
 	RegisterOperation                       OperationName = "Register"
 	RemoveClientMemberOperation             OperationName = "RemoveClientMember"
 	RenameSiteFileOperation                 OperationName = "RenameSiteFile"
+	ReprovisionRumBeaconKeyOperation        OperationName = "ReprovisionRumBeaconKey"
 	ResendEmailLogOperation                 OperationName = "ResendEmailLog"
 	ResendVerificationOperation             OperationName = "ResendVerification"
 	ResetPasswordOperation                  OperationName = "ResetPassword"

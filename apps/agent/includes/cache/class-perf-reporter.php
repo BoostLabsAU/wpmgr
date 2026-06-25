@@ -19,6 +19,7 @@ namespace WPMgr\Agent\Cache;
 
 use WPMgr\Agent\ObjectCache\ObjectCacheDropinInstaller;
 use WPMgr\Agent\ObjectCache\ObjectCacheHeartbeat;
+use WPMgr\Agent\Optimizer\PerfConfig;
 use WPMgr\Agent\Settings;
 use WPMgr\Agent\Signer;
 
@@ -259,6 +260,7 @@ final class PerfReporter
                 'dropin_installed'      => $dropinInstalled,
                 'wp_cache_constant_set' => $wpCacheSet,
                 'htaccess_managed'      => $htaccessManaged,
+                'rum_beacon_key_present' => PerfConfig::load()->rumBeaconKey !== '',
             ];
 
             $this->post(self::PATH_CONFIG_ACK, $body);

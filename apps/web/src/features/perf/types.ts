@@ -124,6 +124,15 @@ export interface PerfConfig {
    * "Insufficient samples". Default 30. Range 1..1000.
    */
   min_sample_count?: number;
+  /** Control-plane hash presence. The plaintext beacon key is never returned. */
+  readonly beacon_key_set?: boolean;
+  /**
+   * Agent-reported local plaintext key presence:
+   *   true = confirmed present, false = confirmed missing, null = not reported.
+   */
+  readonly rum_agent_beacon_key_set?: boolean | null;
+  /** ISO 8601 timestamp of the most recent agent key-presence report. */
+  readonly rum_agent_beacon_key_reported_at?: string | null;
 
   // WooCommerce cart-session caching (#169)
   //   woo_cacheable_session       — operator toggle (READ+WRITE).

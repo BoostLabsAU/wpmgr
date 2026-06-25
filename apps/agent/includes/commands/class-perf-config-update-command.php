@@ -111,7 +111,7 @@ final class PerfConfigUpdateCommand implements CommandInterface
                     $this->reporter->reportInstallState();
                     $this->reporter->reportStats();
                 }
-                return ['ok' => true, 'detail' => 'optimization config applied'];
+                return $this->addInstallStateFields(['ok' => true, 'detail' => 'optimization config applied']);
             }
             return ['ok' => false, 'detail' => 'no recognised config fields'];
         }
@@ -195,6 +195,7 @@ final class PerfConfigUpdateCommand implements CommandInterface
             }
         }
         $result['htaccess_managed'] = $htaccessManaged;
+        $result['rum_beacon_key_present'] = PerfConfig::load()->rumBeaconKey !== '';
 
         if ($stepOk === false && isset($result['steps']['wp_cache'])) {
             $wpCache = new WpCacheConstant();
@@ -222,6 +223,12 @@ final class PerfConfigUpdateCommand implements CommandInterface
         $current = PerfConfig::load()->toArray();
         // Only the keys PerfConfig recognises (intersection with the payload).
         $intersection = array_intersect_key($params, $current);
+        if (
+            array_key_exists('rum_beacon_key', $intersection)
+            && (!is_string($intersection['rum_beacon_key']) || $intersection['rum_beacon_key'] === '')
+        ) {
+            unset($intersection['rum_beacon_key']);
+        }
         if ($intersection === []) {
             return false;
         }

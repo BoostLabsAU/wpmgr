@@ -140,7 +140,22 @@ SET server_software       = @server_software,
     dropin_installed      = @dropin_installed,
     wp_cache_constant_set = @wp_cache_constant_set,
     htaccess_managed      = @htaccess_managed,
+    rum_agent_beacon_key_set = COALESCE(sqlc.narg('rum_beacon_key_present')::boolean, rum_agent_beacon_key_set),
+    rum_agent_beacon_key_reported_at = CASE
+        WHEN sqlc.narg('rum_beacon_key_present')::boolean IS NULL THEN rum_agent_beacon_key_reported_at
+        ELSE now()
+    END,
     updated_at            = now()
+WHERE site_id = @site_id
+RETURNING *;
+
+-- name: MarkRumAgentBeaconKeyUnconfirmed :one
+-- Reprovision rotates the CP hash before pushing plaintext; mark the agent copy
+-- unconfirmed until the sync response or async ack reports the persisted key.
+UPDATE site_perf_config
+SET rum_agent_beacon_key_set = false,
+    rum_agent_beacon_key_reported_at = NULL,
+    updated_at = now()
 WHERE site_id = @site_id
 RETURNING *;
 

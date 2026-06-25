@@ -553,6 +553,9 @@ import type {
   RenameSiteFileData,
   RenameSiteFileErrors,
   RenameSiteFileResponses,
+  ReprovisionRumBeaconKeyData,
+  ReprovisionRumBeaconKeyErrors,
+  ReprovisionRumBeaconKeyResponses,
   ResendEmailLogData,
   ResendEmailLogErrors,
   ResendEmailLogResponses,
@@ -3184,6 +3187,26 @@ export const putPerfConfig = <ThrowOnError extends boolean = false>(
       ...options.headers,
     },
   });
+
+/**
+ * Reprovision the RUM beacon key for a site
+ *
+ * Rotates the site's stored RUM beacon-key hash and pushes the fresh
+ * plaintext key to the agent once. The plaintext key is never returned.
+ * If the agent push fails after the rotation is stored, HTTP 200 is still
+ * returned with the stored config and the warning is surfaced in the
+ * `X-Agent-Push-Warning` response header. Requires the `site.perf.config`
+ * permission and RUM must already be enabled.
+ *
+ */
+export const reprovisionRumBeaconKey = <ThrowOnError extends boolean = false>(
+  options: Options<ReprovisionRumBeaconKeyData, ThrowOnError>,
+) =>
+  (options.client ?? client).post<
+    ReprovisionRumBeaconKeyResponses,
+    ReprovisionRumBeaconKeyErrors,
+    ThrowOnError
+  >({ url: "/api/v1/sites/{siteId}/perf/rum/reprovision", ...options });
 
 /**
  * Get the latest cache gauges for a site

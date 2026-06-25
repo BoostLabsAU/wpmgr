@@ -164,6 +164,29 @@ func TestToPerfConfigRequest_ingestURLTrailingSlashStripped(t *testing.T) {
 	}
 }
 
+func TestConfigDTOExposesKeyPresenceButNeverPlaintext(t *testing.T) {
+	present := true
+	dto := toConfigDTO(Config{
+		RumEnabled:           true,
+		BeaconKeySet:         true,
+		RumAgentBeaconKeySet: &present,
+	})
+	data, err := json.Marshal(dto)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	raw := string(data)
+
+	for _, key := range []string{"beacon_key_set", "rum_agent_beacon_key_set"} {
+		if !strings.Contains(raw, fmt.Sprintf("%q:", key)) {
+			t.Fatalf("response missing expected key %q: %s", key, raw)
+		}
+	}
+	if strings.Contains(raw, `"rum_beacon_key"`) {
+		t.Fatalf("operator response must never expose plaintext rum_beacon_key: %s", raw)
+	}
+}
+
 // TestToPerfConfigRequest_cdnWireAndFileTypeMapping verifies that the CDN
 // rewrite config is marshaled with the agent-side wire names and enum values,
 // and that provider/credential fields never leak into the agent payload.

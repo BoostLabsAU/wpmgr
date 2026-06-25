@@ -130,9 +130,9 @@ type agentObjectCacheBlock struct {
 	ConfigHash string `json:"config_hash,omitempty"`
 
 	// Stats delta fields (time-series history).
-	HitCount         int64   `json:"hit_count,omitempty"`
-	MissCount        int64   `json:"miss_count,omitempty"`
-	AvgWaitMs        float64 `json:"avg_wait_ms,omitempty"`
+	HitCount  int64   `json:"hit_count,omitempty"`
+	MissCount int64   `json:"miss_count,omitempty"`
+	AvgWaitMs float64 `json:"avg_wait_ms,omitempty"`
 	// OpsPerSec is typed float64 because the PHP agent emits round($ops/$elapsed, 2)
 	// which produces a fractional JSON number (e.g. 35.25). An int target would
 	// cause encoding/json to reject the whole block. The value is rounded to the
@@ -367,11 +367,12 @@ func (h *AgentHandler) statsReport(c *gin.Context) {
 // ---------------------------------------------------------------------------
 
 type configAckBody struct {
-	ConfigVersion      int    `json:"config_version"`
-	ServerSoftware     string `json:"server_software"`
-	DropinInstalled    bool   `json:"dropin_installed"`
-	WPCacheConstantSet bool   `json:"wp_cache_constant_set"`
-	HtaccessManaged    bool   `json:"htaccess_managed"`
+	ConfigVersion       int    `json:"config_version"`
+	ServerSoftware      string `json:"server_software"`
+	DropinInstalled     bool   `json:"dropin_installed"`
+	WPCacheConstantSet  bool   `json:"wp_cache_constant_set"`
+	HtaccessManaged     bool   `json:"htaccess_managed"`
+	RumBeaconKeyPresent *bool  `json:"rum_beacon_key_present,omitempty"`
 }
 
 func (h *AgentHandler) configAck(c *gin.Context) {
@@ -390,7 +391,7 @@ func (h *AgentHandler) configAck(c *gin.Context) {
 		httpx.Error(c, domain.Validation("invalid_body", "request body is not valid JSON: "+err.Error()))
 		return
 	}
-	if err := h.svc.MarkConfigApplied(c.Request.Context(), id.SiteID, in.ServerSoftware, in.DropinInstalled, in.WPCacheConstantSet, in.HtaccessManaged); err != nil {
+	if err := h.svc.MarkConfigApplied(c.Request.Context(), id.SiteID, in.ServerSoftware, in.DropinInstalled, in.WPCacheConstantSet, in.HtaccessManaged, in.RumBeaconKeyPresent); err != nil {
 		// A missing config row (the operator never saved one yet) is non-fatal: the
 		// agent will re-ack after the next config push. Return ok=true.
 		if err == ErrNotFound {

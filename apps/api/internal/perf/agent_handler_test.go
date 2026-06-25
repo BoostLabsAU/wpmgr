@@ -100,6 +100,16 @@ func buildAgentEngine(t *testing.T, id agent.Identity, ingest *RucssIngestServic
 	return eng
 }
 
+func buildConfigAckEngine(t *testing.T, id agent.Identity, repo *fakeRepo) *gin.Engine {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	svc := NewService(repo, nil, nil, nil)
+	h := NewAgentHandler(svc, nil, nil)
+	eng := gin.New()
+	eng.POST("/agent/v1/perf/config-ack", withIdentity(id, h.configAck))
+	return eng
+}
+
 func multipartRUCSS(t *testing.T, meta string, html, css []byte) (*bytes.Buffer, string) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -132,6 +142,75 @@ func gzipFor(t *testing.T, b []byte) []byte {
 		t.Fatalf("gzip close: %v", err)
 	}
 	return buf.Bytes()
+}
+
+func TestConfigAckOmittedRumBeaconKeyPresenceLeavesUnknown(t *testing.T) {
+	siteID, tenantID := uuid.New(), uuid.New()
+	repo := &fakeRepo{config: Config{}, configFound: true}
+	eng := buildConfigAckEngine(t, agent.Identity{SiteID: siteID, TenantID: tenantID}, repo)
+	body, _ := json.Marshal(map[string]any{
+		"config_version":        7,
+		"server_software":       "nginx",
+		"dropin_installed":      true,
+		"wp_cache_constant_set": true,
+		"htaccess_managed":      false,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/agent/v1/perf/config-ack", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	eng.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(repo.installUpdates) != 1 {
+		t.Fatalf("expected one install-state update, got %d", len(repo.installUpdates))
+	}
+	if repo.installUpdates[0].RumBeaconKeyPresent != nil {
+		t.Fatalf("omitted rum_beacon_key_present must stay nil, got %#v", repo.installUpdates[0].RumBeaconKeyPresent)
+	}
+	if repo.config.RumAgentBeaconKeySet != nil {
+		t.Fatalf("omitted rum_beacon_key_present must leave state unknown, got %#v", repo.config.RumAgentBeaconKeySet)
+	}
+}
+
+func TestConfigAckPersistsRumBeaconKeyPresence(t *testing.T) {
+	tests := []struct {
+		name  string
+		value bool
+	}{
+		{name: "present", value: true},
+		{name: "missing", value: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			siteID, tenantID := uuid.New(), uuid.New()
+			repo := &fakeRepo{config: Config{}, configFound: true}
+			eng := buildConfigAckEngine(t, agent.Identity{SiteID: siteID, TenantID: tenantID}, repo)
+			body, _ := json.Marshal(map[string]any{
+				"config_version":         8,
+				"server_software":        "nginx",
+				"dropin_installed":       true,
+				"wp_cache_constant_set":  true,
+				"htaccess_managed":       false,
+				"rum_beacon_key_present": tc.value,
+			})
+			req := httptest.NewRequest(http.MethodPost, "/agent/v1/perf/config-ack", bytes.NewReader(body))
+			rec := httptest.NewRecorder()
+
+			eng.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d body=%s", rec.Code, rec.Body.String())
+			}
+			if repo.config.RumAgentBeaconKeySet == nil || *repo.config.RumAgentBeaconKeySet != tc.value {
+				t.Fatalf("rum_agent_beacon_key_set = %#v, want %v", repo.config.RumAgentBeaconKeySet, tc.value)
+			}
+			if repo.config.RumAgentBeaconKeyReportedAt == nil {
+				t.Fatal("expected rum_agent_beacon_key_reported_at to be stamped")
+			}
+		})
+	}
 }
 
 // FIX 2: on a cache hit the handler must return the used-CSS CONTENT (text/css,
@@ -374,6 +453,7 @@ func buildStatsReportEngine(t *testing.T, id agent.Identity, oc objectCacheSvc) 
 //   - OpsPerSec is float64 in agentObjectCacheBlock (accepts 35.25).
 //   - ObjectCache is json.RawMessage (sub-block decoded separately, best-effort).
 //   - The response is 200 and IngestStats is called with the value.
+//
 // ---------------------------------------------------------------------------
 func TestStatsReportAcceptsFloatOpsPerSec(t *testing.T) {
 	siteID, tenantID := uuid.New(), uuid.New()
@@ -389,12 +469,12 @@ func TestStatsReportAcceptsFloatOpsPerSec(t *testing.T) {
 		"cache_hit_count":    10,
 		"cache_miss_count":   2,
 		"object_cache": map[string]any{
-			"state":         "connected",
-			"latency_ms":    1.5,
-			"hit_count":     800,
-			"miss_count":    200,
-			"ops_per_sec":   35.25, // fractional — was fatal before this fix
-			"avg_wait_ms":   0.8,
+			"state":       "connected",
+			"latency_ms":  1.5,
+			"hit_count":   800,
+			"miss_count":  200,
+			"ops_per_sec": 35.25, // fractional — was fatal before this fix
+			"avg_wait_ms": 0.8,
 		},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/agent/v1/cache/stats-report", bytes.NewReader(body))

@@ -1886,6 +1886,17 @@ type Handler interface {
 	//
 	// POST /api/v1/sites/{siteId}/files/rename
 	RenameSiteFile(ctx context.Context, req *FileRenameRequest, params RenameSiteFileParams) (RenameSiteFileRes, error)
+	// ReprovisionRumBeaconKey implements reprovisionRumBeaconKey operation.
+	//
+	// Rotates the site's stored RUM beacon-key hash and pushes the fresh
+	// plaintext key to the agent once. The plaintext key is never returned.
+	// If the agent push fails after the rotation is stored, HTTP 200 is still
+	// returned with the stored config and the warning is surfaced in the
+	// `X-Agent-Push-Warning` response header. Requires the `site.perf.config`
+	// permission and RUM must already be enabled.
+	//
+	// POST /api/v1/sites/{siteId}/perf/rum/reprovision
+	ReprovisionRumBeaconKey(ctx context.Context, params ReprovisionRumBeaconKeyParams) (ReprovisionRumBeaconKeyRes, error)
 	// ResendEmailLog implements resendEmailLog operation.
 	//
 	// Dispatches the `resend_email` agent command for the given log entry.

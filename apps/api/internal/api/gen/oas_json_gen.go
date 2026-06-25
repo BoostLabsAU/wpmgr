@@ -48594,6 +48594,48 @@ func (s *PerfConfig) encodeFields(e *jx.Encoder) {
 		}
 	}
 	{
+		if s.RumEnabled.Set {
+			e.FieldStart("rum_enabled")
+			s.RumEnabled.Encode(e)
+		}
+	}
+	{
+		if s.RumSampleRate.Set {
+			e.FieldStart("rum_sample_rate")
+			s.RumSampleRate.Encode(e)
+		}
+	}
+	{
+		if s.MaxDistinctCountries.Set {
+			e.FieldStart("max_distinct_countries")
+			s.MaxDistinctCountries.Encode(e)
+		}
+	}
+	{
+		if s.MinSampleCount.Set {
+			e.FieldStart("min_sample_count")
+			s.MinSampleCount.Encode(e)
+		}
+	}
+	{
+		if s.BeaconKeySet.Set {
+			e.FieldStart("beacon_key_set")
+			s.BeaconKeySet.Encode(e)
+		}
+	}
+	{
+		if s.RumAgentBeaconKeySet.Set {
+			e.FieldStart("rum_agent_beacon_key_set")
+			s.RumAgentBeaconKeySet.Encode(e)
+		}
+	}
+	{
+		if s.RumAgentBeaconKeyReportedAt.Set {
+			e.FieldStart("rum_agent_beacon_key_reported_at")
+			s.RumAgentBeaconKeyReportedAt.Encode(e, json.EncodeDateTime)
+		}
+	}
+	{
 		if s.ConfigVersion.Set {
 			e.FieldStart("config_version")
 			s.ConfigVersion.Encode(e)
@@ -48607,7 +48649,7 @@ func (s *PerfConfig) encodeFields(e *jx.Encoder) {
 	}
 }
 
-var jsonFieldsNameOfPerfConfig = [68]string{
+var jsonFieldsNameOfPerfConfig = [75]string{
 	0:  "cache_enabled",
 	1:  "cache_logged_in",
 	2:  "cache_mobile",
@@ -48674,8 +48716,15 @@ var jsonFieldsNameOfPerfConfig = [68]string{
 	63: "woo_cacheable_session",
 	64: "woo_theme_fragments_supported",
 	65: "woo_fragments_probed_at",
-	66: "config_version",
-	67: "updated_at",
+	66: "rum_enabled",
+	67: "rum_sample_rate",
+	68: "max_distinct_countries",
+	69: "min_sample_count",
+	70: "beacon_key_set",
+	71: "rum_agent_beacon_key_set",
+	72: "rum_agent_beacon_key_reported_at",
+	73: "config_version",
+	74: "updated_at",
 }
 
 // Decode decodes PerfConfig from json.
@@ -49418,6 +49467,76 @@ func (s *PerfConfig) Decode(d *jx.Decoder) error {
 				return nil
 			}(); err != nil {
 				return errors.Wrap(err, "decode field \"woo_fragments_probed_at\"")
+			}
+		case "rum_enabled":
+			if err := func() error {
+				s.RumEnabled.Reset()
+				if err := s.RumEnabled.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rum_enabled\"")
+			}
+		case "rum_sample_rate":
+			if err := func() error {
+				s.RumSampleRate.Reset()
+				if err := s.RumSampleRate.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rum_sample_rate\"")
+			}
+		case "max_distinct_countries":
+			if err := func() error {
+				s.MaxDistinctCountries.Reset()
+				if err := s.MaxDistinctCountries.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"max_distinct_countries\"")
+			}
+		case "min_sample_count":
+			if err := func() error {
+				s.MinSampleCount.Reset()
+				if err := s.MinSampleCount.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"min_sample_count\"")
+			}
+		case "beacon_key_set":
+			if err := func() error {
+				s.BeaconKeySet.Reset()
+				if err := s.BeaconKeySet.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"beacon_key_set\"")
+			}
+		case "rum_agent_beacon_key_set":
+			if err := func() error {
+				s.RumAgentBeaconKeySet.Reset()
+				if err := s.RumAgentBeaconKeySet.Decode(d); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rum_agent_beacon_key_set\"")
+			}
+		case "rum_agent_beacon_key_reported_at":
+			if err := func() error {
+				s.RumAgentBeaconKeyReportedAt.Reset()
+				if err := s.RumAgentBeaconKeyReportedAt.Decode(d, json.DecodeDateTime); err != nil {
+					return err
+				}
+				return nil
+			}(); err != nil {
+				return errors.Wrap(err, "decode field \"rum_agent_beacon_key_reported_at\"")
 			}
 		case "config_version":
 			if err := func() error {

@@ -1,10 +1,16 @@
 package perf
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/mosamlife/wpmgr/apps/api/internal/authz"
+	"github.com/mosamlife/wpmgr/apps/api/internal/domain"
 )
 
 // canonicalOperatorRoutes is the EXACT set of method+path tuples the operator
@@ -30,6 +36,7 @@ import (
 var canonicalOperatorRoutes = []string{
 	"GET    /api/v1/sites/:siteId/perf/config",
 	"PUT    /api/v1/sites/:siteId/perf/config",
+	"POST   /api/v1/sites/:siteId/perf/rum/reprovision",
 	"GET    /api/v1/sites/:siteId/perf/cache/stats",
 	"POST   /api/v1/sites/:siteId/perf/cache/purge",
 	"POST   /api/v1/sites/:siteId/perf/cache/preload",
@@ -114,6 +121,33 @@ func TestOperatorRoutesContract(t *testing.T) {
 			t.Fatalf("operator route mismatch at index %d:\n got: %q\nwant: %q\n\nfull got: %v\nfull want: %v",
 				i, got[i], want[i], got, want)
 		}
+	}
+}
+
+func TestReprovisionRumRouteRequiresPerfConfigPermission(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	engine := gin.New()
+	v1 := engine.Group("/api/v1")
+
+	h := NewHandler(&Service{}, nil, nil)
+	h.Register(v1)
+
+	siteID := uuid.New()
+	principal := domain.Principal{
+		Type:     domain.PrincipalUser,
+		UserID:   uuid.New(),
+		TenantID: uuid.New(),
+		Role:     string(authz.RoleViewer),
+		Scope:    domain.ScopeOrg,
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sites/"+siteID.String()+"/perf/rum/reprovision", nil)
+	req = req.WithContext(domain.WithPrincipal(req.Context(), principal))
+	rec := httptest.NewRecorder()
+
+	engine.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("viewer reprovision status = %d, want %d", rec.Code, http.StatusForbidden)
 	}
 }
 

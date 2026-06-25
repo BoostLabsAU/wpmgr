@@ -33,20 +33,20 @@ type PerfConfigRequest struct {
 	ConfigVersion int `json:"config_version"`
 
 	// Caching
-	CacheEnabled         bool     `json:"cache_enabled"`
-	CacheLoggedIn        bool     `json:"cache_logged_in"`
-	CacheMobile          bool     `json:"cache_mobile"`
-	CacheRefresh         bool     `json:"cache_refresh"`
-	CacheRefreshInterval string   `json:"cache_refresh_interval"`
-	CacheLinkPrefetch    bool     `json:"cache_link_prefetch"`
+	CacheEnabled         bool   `json:"cache_enabled"`
+	CacheLoggedIn        bool   `json:"cache_logged_in"`
+	CacheMobile          bool   `json:"cache_mobile"`
+	CacheRefresh         bool   `json:"cache_refresh"`
+	CacheRefreshInterval string `json:"cache_refresh_interval"`
+	CacheLinkPrefetch    bool   `json:"cache_link_prefetch"`
 	// Page-cache variant lists use the agent's persisted/drop-in config keys
 	// (unprefixed) on the wire, not the CP public/API field names. The agent
 	// stores and serves from bypass_urls, bypass_cookies, include_queries, and
 	// include_cookies; keeping these names aligned avoids silent ignore bugs.
-	CacheBypassURLs      []string `json:"bypass_urls"`
-	CacheBypassCookies   []string `json:"bypass_cookies"`
-	CacheIncludeQueries  []string `json:"include_queries"`
-	CacheIncludeCookies  []string `json:"include_cookies"`
+	CacheBypassURLs     []string `json:"bypass_urls"`
+	CacheBypassCookies  []string `json:"bypass_cookies"`
+	CacheIncludeQueries []string `json:"include_queries"`
+	CacheIncludeCookies []string `json:"include_cookies"`
 
 	// Preload (cache-warm) throttle (M37). Operator-tunable; the agent clamps
 	// each to the same bounds locally (concurrency 1..4, delay 0..10000 ms,
@@ -148,10 +148,11 @@ type PerfConfigResult struct {
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail"`
 	// Install-state facts the agent observed (optional; old agents omit them).
-	ServerSoftware     string `json:"server_software,omitempty"`
-	DropinInstalled    bool   `json:"dropin_installed,omitempty"`
-	WPCacheConstantSet bool   `json:"wp_cache_constant_set,omitempty"`
-	HtaccessManaged    bool   `json:"htaccess_managed,omitempty"`
+	ServerSoftware      string `json:"server_software,omitempty"`
+	DropinInstalled     bool   `json:"dropin_installed,omitempty"`
+	WPCacheConstantSet  bool   `json:"wp_cache_constant_set,omitempty"`
+	HtaccessManaged     bool   `json:"htaccess_managed,omitempty"`
+	RumBeaconKeyPresent *bool  `json:"rum_beacon_key_present,omitempty"`
 }
 
 // CacheEnableRequest is the POST body for `cache_enable`. It carries the config
@@ -462,7 +463,7 @@ type DBTableActionRequest struct {
 //
 //   - done      — action executed successfully.
 //   - skipped   — table failed the destructive safety gate: WP-core (drop+empty)
-//                 or unclassified/unknown (drop). plugin/theme/orphan are allowed.
+//     or unclassified/unknown (drop). plugin/theme/orphan are allowed.
 //   - rejected  — table name failed exact-match validation against information_schema.
 //   - not_found — table not found in information_schema at validation time.
 //   - error     — SQL execution returned an error (detail carries wpdb->last_error).

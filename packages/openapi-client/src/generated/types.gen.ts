@@ -2708,6 +2708,39 @@ export type PerfConfig = {
    *
    */
   readonly woo_fragments_probed_at?: string;
+  /**
+   * Enable RUM beacon injection for this site.
+   */
+  rum_enabled?: boolean;
+  /**
+   * Fraction of eligible pageviews to keep for RUM.
+   */
+  rum_sample_rate?: number;
+  /**
+   * Country-dimension cap before excess values fold into other.
+   */
+  max_distinct_countries?: number;
+  /**
+   * Minimum sample count before dashboard p75 values are shown.
+   */
+  min_sample_count?: number;
+  /**
+   * Whether the control plane has a stored RUM beacon-key hash.
+   */
+  readonly beacon_key_set?: boolean;
+  /**
+   * Agent-reported plaintext beacon-key presence. Null means the agent
+   * has not reported this field yet, false means it reported no local
+   * key, and true means it reported a persisted local key.
+   *
+   */
+  readonly rum_agent_beacon_key_set?: boolean;
+  /**
+   * Timestamp of the last agent key-presence report. Null when the state
+   * is unknown or has been reset by reprovision.
+   *
+   */
+  readonly rum_agent_beacon_key_reported_at?: string;
   readonly config_version?: number;
   readonly updated_at?: string;
 };
@@ -5651,6 +5684,22 @@ export type PerfConfigWritable = {
    *
    */
   woo_cacheable_session?: boolean;
+  /**
+   * Enable RUM beacon injection for this site.
+   */
+  rum_enabled?: boolean;
+  /**
+   * Fraction of eligible pageviews to keep for RUM.
+   */
+  rum_sample_rate?: number;
+  /**
+   * Country-dimension cap before excess values fold into other.
+   */
+  max_distinct_countries?: number;
+  /**
+   * Minimum sample count before dashboard p75 values are shown.
+   */
+  min_sample_count?: number;
 };
 
 export type Limit = number;
@@ -9449,6 +9498,35 @@ export type PutPerfConfigResponses = {
 
 export type PutPerfConfigResponse =
   PutPerfConfigResponses[keyof PutPerfConfigResponses];
+
+export type ReprovisionRumBeaconKeyData = {
+  body?: never;
+  path: {
+    siteId: string;
+  };
+  query?: never;
+  url: "/api/v1/sites/{siteId}/perf/rum/reprovision";
+};
+
+export type ReprovisionRumBeaconKeyErrors = {
+  /**
+   * Validation error
+   */
+  422: Error;
+};
+
+export type ReprovisionRumBeaconKeyError =
+  ReprovisionRumBeaconKeyErrors[keyof ReprovisionRumBeaconKeyErrors];
+
+export type ReprovisionRumBeaconKeyResponses = {
+  /**
+   * Updated performance config
+   */
+  200: PerfConfig;
+};
+
+export type ReprovisionRumBeaconKeyResponse =
+  ReprovisionRumBeaconKeyResponses[keyof ReprovisionRumBeaconKeyResponses];
 
 export type GetCacheStatsData = {
   body?: never;

@@ -5113,6 +5113,52 @@ export const PerfConfigSchema = {
       description:
         "RFC3339 timestamp of the last agent probe. Null when never probed.\n",
     },
+    rum_enabled: {
+      type: "boolean",
+      default: false,
+      description: "Enable RUM beacon injection for this site.",
+    },
+    rum_sample_rate: {
+      type: "number",
+      format: "float",
+      minimum: 0,
+      maximum: 1,
+      default: 1,
+      description: "Fraction of eligible pageviews to keep for RUM.",
+    },
+    max_distinct_countries: {
+      type: "integer",
+      default: 8,
+      description:
+        "Country-dimension cap before excess values fold into other.",
+    },
+    min_sample_count: {
+      type: "integer",
+      default: 30,
+      description:
+        "Minimum sample count before dashboard p75 values are shown.",
+    },
+    beacon_key_set: {
+      type: "boolean",
+      readOnly: true,
+      description:
+        "Whether the control plane has a stored RUM beacon-key hash.",
+    },
+    rum_agent_beacon_key_set: {
+      type: "boolean",
+      nullable: true,
+      readOnly: true,
+      description:
+        "Agent-reported plaintext beacon-key presence. Null means the agent\nhas not reported this field yet, false means it reported no local\nkey, and true means it reported a persisted local key.\n",
+    },
+    rum_agent_beacon_key_reported_at: {
+      type: "string",
+      format: "date-time",
+      nullable: true,
+      readOnly: true,
+      description:
+        "Timestamp of the last agent key-presence report. Null when the state\nis unknown or has been reset by reprovision.\n",
+    },
     config_version: {
       type: "integer",
       readOnly: true,
@@ -10158,6 +10204,31 @@ export const PerfConfigWritableSchema = {
       default: false,
       description:
         "When true the agent will cache the WooCommerce catalog shell for\nanonymous shoppers who have an active cart. The agent additionally\nhard-gates on its own theme probe (`woo_theme_fragments_supported`)\nbefore serving cached pages to cart-holding visitors, providing a\ndefense-in-depth layer independent of this flag.\nThe API accepts `woo_cacheable_session: true` even when\n`woo_theme_fragments_supported` is false — the agent will not act on\nit until its own probe passes. This allows operators to pre-enable the\nflag before the agent performs its first probe.\n",
+    },
+    rum_enabled: {
+      type: "boolean",
+      default: false,
+      description: "Enable RUM beacon injection for this site.",
+    },
+    rum_sample_rate: {
+      type: "number",
+      format: "float",
+      minimum: 0,
+      maximum: 1,
+      default: 1,
+      description: "Fraction of eligible pageviews to keep for RUM.",
+    },
+    max_distinct_countries: {
+      type: "integer",
+      default: 8,
+      description:
+        "Country-dimension cap before excess values fold into other.",
+    },
+    min_sample_count: {
+      type: "integer",
+      default: 30,
+      description:
+        "Minimum sample count before dashboard p75 values are shown.",
     },
   },
 } as const;

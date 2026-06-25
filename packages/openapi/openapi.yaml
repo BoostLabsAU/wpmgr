@@ -3985,6 +3985,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Error"
+  /api/v1/sites/{siteId}/perf/rum/reprovision:
+    post:
+      operationId: reprovisionRumBeaconKey
+      summary: Reprovision the RUM beacon key for a site
+      description: |
+        Rotates the site's stored RUM beacon-key hash and pushes the fresh
+        plaintext key to the agent once. The plaintext key is never returned.
+        If the agent push fails after the rotation is stored, HTTP 200 is still
+        returned with the stored config and the warning is surfaced in the
+        `X-Agent-Push-Warning` response header. Requires the `site.perf.config`
+        permission and RUM must already be enabled.
+      tags: [performance]
+      parameters:
+        - $ref: "#/components/parameters/SiteId"
+      responses:
+        "200":
+          description: Updated performance config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PerfConfig"
+        "422":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
   /api/v1/sites/{siteId}/perf/cache/stats:
     get:
       operationId: getCacheStats
@@ -11492,6 +11519,46 @@ components:
           readOnly: true
           description: |
             RFC3339 timestamp of the last agent probe. Null when never probed.
+        # Real User Monitoring
+        rum_enabled:
+          type: boolean
+          default: false
+          description: Enable RUM beacon injection for this site.
+        rum_sample_rate:
+          type: number
+          format: float
+          minimum: 0
+          maximum: 1
+          default: 1
+          description: Fraction of eligible pageviews to keep for RUM.
+        max_distinct_countries:
+          type: integer
+          default: 8
+          description: Country-dimension cap before excess values fold into other.
+        min_sample_count:
+          type: integer
+          default: 30
+          description: Minimum sample count before dashboard p75 values are shown.
+        beacon_key_set:
+          type: boolean
+          readOnly: true
+          description: Whether the control plane has a stored RUM beacon-key hash.
+        rum_agent_beacon_key_set:
+          type: boolean
+          nullable: true
+          readOnly: true
+          description: |
+            Agent-reported plaintext beacon-key presence. Null means the agent
+            has not reported this field yet, false means it reported no local
+            key, and true means it reported a persisted local key.
+        rum_agent_beacon_key_reported_at:
+          type: string
+          format: date-time
+          nullable: true
+          readOnly: true
+          description: |
+            Timestamp of the last agent key-presence report. Null when the state
+            is unknown or has been reset by reprovision.
         config_version: { type: integer, readOnly: true }
         updated_at: { type: string, format: date-time, readOnly: true }
     CacheStats:

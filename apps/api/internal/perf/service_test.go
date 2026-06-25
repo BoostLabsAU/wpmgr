@@ -22,14 +22,24 @@ import (
 // ---------------------------------------------------------------------------
 
 type fakeRepo struct {
-	mu          sync.Mutex
-	config      Config
-	configFound bool
-	ciphertext  []byte
-	provider    string
-	purges      []RecordPurgeInput
-	upserts     []UpsertConfigInput
-	markedKinds []string // kinds passed to MarkCachePurged
+	mu             sync.Mutex
+	config         Config
+	configFound    bool
+	ciphertext     []byte
+	provider       string
+	purges         []RecordPurgeInput
+	upserts        []UpsertConfigInput
+	markedKinds    []string // kinds passed to MarkCachePurged
+	installUpdates []installStateUpdate
+	rumUnconfirmed int
+}
+
+type installStateUpdate struct {
+	ServerSoftware      string
+	DropinInstalled     bool
+	WPCacheConstantSet  bool
+	HtaccessManaged     bool
+	RumBeaconKeyPresent *bool
 }
 
 func (r *fakeRepo) GetConfig(_ context.Context, tenantID, siteID uuid.UUID) (Config, error) {
@@ -47,10 +57,20 @@ func (r *fakeRepo) UpsertConfig(_ context.Context, in UpsertConfigInput) (Config
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.upserts = append(r.upserts, in)
-	r.config = in.Config
+	c := in.Config
+	if r.configFound {
+		c.BeaconKeySet = r.config.BeaconKeySet
+		c.RumAgentBeaconKeySet = cloneBool(r.config.RumAgentBeaconKeySet)
+		c.RumAgentBeaconKeyReportedAt = cloneTime(r.config.RumAgentBeaconKeyReportedAt)
+		c.ServerSoftware = r.config.ServerSoftware
+		c.DropinInstalled = r.config.DropinInstalled
+		c.WPCacheConstantSet = r.config.WPCacheConstantSet
+		c.HtaccessManaged = r.config.HtaccessManaged
+	}
+	r.config = c
 	r.configFound = true
 	r.ciphertext = in.CDNCredentialsEncrypted
-	return in.Config, nil
+	return c, nil
 }
 
 func (r *fakeRepo) GetCDNCredentialsCiphertext(_ context.Context, _, _ uuid.UUID) ([]byte, string, error) {
@@ -59,7 +79,36 @@ func (r *fakeRepo) GetCDNCredentialsCiphertext(_ context.Context, _, _ uuid.UUID
 	return r.ciphertext, r.provider, nil
 }
 
-func (r *fakeRepo) UpdateInstallState(context.Context, uuid.UUID, string, bool, bool, bool) error {
+func (r *fakeRepo) UpdateInstallState(_ context.Context, _ uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool, rumBeaconKeyPresent *bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	update := installStateUpdate{
+		ServerSoftware:      serverSoftware,
+		DropinInstalled:     dropinInstalled,
+		WPCacheConstantSet:  wpCacheConstantSet,
+		HtaccessManaged:     htaccessManaged,
+		RumBeaconKeyPresent: cloneBool(rumBeaconKeyPresent),
+	}
+	r.installUpdates = append(r.installUpdates, update)
+	r.config.ServerSoftware = serverSoftware
+	r.config.DropinInstalled = dropinInstalled
+	r.config.WPCacheConstantSet = wpCacheConstantSet
+	r.config.HtaccessManaged = htaccessManaged
+	if rumBeaconKeyPresent != nil {
+		r.config.RumAgentBeaconKeySet = cloneBool(rumBeaconKeyPresent)
+		now := time.Now().UTC()
+		r.config.RumAgentBeaconKeyReportedAt = &now
+	}
+	return nil
+}
+
+func (r *fakeRepo) MarkRumAgentBeaconKeyUnconfirmed(_ context.Context, _, _ uuid.UUID) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.rumUnconfirmed++
+	v := false
+	r.config.RumAgentBeaconKeySet = &v
+	r.config.RumAgentBeaconKeyReportedAt = nil
 	return nil
 }
 
@@ -189,6 +238,9 @@ func (e *fakeEvents) types() []string {
 
 type fakeAgent struct {
 	mu              sync.Mutex
+	syncRequests    []agentcmd.PerfConfigRequest
+	syncResult      agentcmd.PerfConfigResult
+	syncErr         error
 	purgeCalls      []agentcmd.CachePurgeRequest
 	purgeResult     agentcmd.CachePurgeResult
 	purgeErr        error
@@ -196,8 +248,15 @@ type fakeAgent struct {
 	snapshotErr     error
 }
 
-func (a *fakeAgent) SyncPerfConfig(context.Context, uuid.UUID, string, agentcmd.PerfConfigRequest) (agentcmd.PerfConfigResult, error) {
-	return agentcmd.PerfConfigResult{OK: true}, nil
+func (a *fakeAgent) SyncPerfConfig(_ context.Context, _ uuid.UUID, _ string, req agentcmd.PerfConfigRequest) (agentcmd.PerfConfigResult, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.syncRequests = append(a.syncRequests, req)
+	res := a.syncResult
+	if !res.OK && res.Detail == "" {
+		res.OK = true
+	}
+	return res, a.syncErr
 }
 func (a *fakeAgent) CacheEnable(context.Context, uuid.UUID, string, agentcmd.CacheEnableRequest) (agentcmd.CacheEnableResult, error) {
 	return agentcmd.CacheEnableResult{OK: true, Detail: "enabled"}, nil
@@ -319,6 +378,37 @@ func (s *fakeSites) GetSiteURL(context.Context, uuid.UUID, uuid.UUID) (string, e
 }
 func (s *fakeSites) ListSiteIDs(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
 	return nil, nil
+}
+
+type fakeBeaconKeyRotator struct {
+	mu     sync.Mutex
+	calls  int
+	hashes [][]byte
+	err    error
+}
+
+func (r *fakeBeaconKeyRotator) RotateBeaconKey(_ context.Context, _, _ uuid.UUID, newKeyHash []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls++
+	r.hashes = append(r.hashes, append([]byte(nil), newKeyHash...))
+	return r.err
+}
+
+func cloneBool(in *bool) *bool {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
+}
+
+func cloneTime(in *time.Time) *time.Time {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }
 
 // ---------------------------------------------------------------------------
@@ -502,6 +592,173 @@ func TestUpdateConfigBumpsVersionAndEmits(t *testing.T) {
 	}
 	if !contains(events.types(), site.EventPerfConfigUpdated) {
 		t.Fatalf("expected perf.config.updated event, got %v", events.types())
+	}
+}
+
+func TestUpdateConfigPersistsRumBeaconKeyPresenceWhenReported(t *testing.T) {
+	present := true
+	repo := &fakeRepo{config: Config{ConfigVersion: 1, BeaconKeySet: true}, configFound: true}
+	agent := &fakeAgent{syncResult: agentcmd.PerfConfigResult{OK: true, RumBeaconKeyPresent: &present}}
+	svc := NewService(repo, nil, nil, nil)
+	svc.SetAgentClient(agent, &fakeSites{url: "https://site.example.com"})
+
+	_, err := svc.UpdateConfig(context.Background(), uuid.New(), uuid.New(), UpdateConfigInput{
+		Config: Config{RumEnabled: true, BeaconKeySet: true},
+	})
+	if err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+
+	if repo.config.RumAgentBeaconKeySet == nil || !*repo.config.RumAgentBeaconKeySet {
+		t.Fatalf("expected reported RUM key presence to persist true, got %#v", repo.config.RumAgentBeaconKeySet)
+	}
+	if repo.config.RumAgentBeaconKeyReportedAt == nil {
+		t.Fatal("expected rum_agent_beacon_key_reported_at to be stamped")
+	}
+}
+
+func TestUpdateConfigUnchangedRumKeyOmitsPlaintextAndPreservesAgentState(t *testing.T) {
+	present := true
+	reportedAt := time.Now().UTC().Add(-time.Minute)
+	repo := &fakeRepo{
+		config: Config{
+			ConfigVersion:               4,
+			RumEnabled:                  true,
+			BeaconKeySet:                true,
+			RumAgentBeaconKeySet:        &present,
+			RumAgentBeaconKeyReportedAt: &reportedAt,
+		},
+		configFound: true,
+	}
+	agent := &fakeAgent{}
+	svc := NewService(repo, nil, nil, nil)
+	svc.SetAgentClient(agent, &fakeSites{url: "https://site.example.com"})
+	svc.cpBaseURL = "https://manage.example.com"
+
+	saved, err := svc.UpdateConfig(context.Background(), uuid.New(), uuid.New(), UpdateConfigInput{
+		Config: Config{RumEnabled: true, RumSampleRate: 1},
+	})
+	if err != nil {
+		t.Fatalf("UpdateConfig: %v", err)
+	}
+	if saved.RumAgentBeaconKeySet == nil || !*saved.RumAgentBeaconKeySet {
+		t.Fatalf("saved config must preserve confirmed agent key state, got %#v", saved.RumAgentBeaconKeySet)
+	}
+	if saved.RumAgentBeaconKeyReportedAt == nil || !saved.RumAgentBeaconKeyReportedAt.Equal(reportedAt) {
+		t.Fatalf("saved config must preserve agent key timestamp, got %#v", saved.RumAgentBeaconKeyReportedAt)
+	}
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.syncRequests) != 1 {
+		t.Fatalf("expected one agent push, got %d", len(agent.syncRequests))
+	}
+	if agent.syncRequests[0].RumBeaconKey != "" {
+		t.Fatalf("unchanged key push must omit plaintext, got %q", agent.syncRequests[0].RumBeaconKey)
+	}
+	if repo.config.RumAgentBeaconKeySet == nil || !*repo.config.RumAgentBeaconKeySet {
+		t.Fatalf("old-agent response must not clear agent key state, got %#v", repo.config.RumAgentBeaconKeySet)
+	}
+}
+
+func TestMarkConfigAppliedPreservesRumBeaconKeyPresenceWhenOmitted(t *testing.T) {
+	present := true
+	reportedAt := time.Now().UTC().Add(-time.Hour)
+	repo := &fakeRepo{
+		config: Config{
+			RumAgentBeaconKeySet:        &present,
+			RumAgentBeaconKeyReportedAt: &reportedAt,
+		},
+		configFound: true,
+	}
+	svc := NewService(repo, nil, nil, nil)
+
+	if err := svc.MarkConfigApplied(context.Background(), uuid.New(), "nginx", true, true, false, nil); err != nil {
+		t.Fatalf("MarkConfigApplied omitted: %v", err)
+	}
+	if repo.config.RumAgentBeaconKeySet == nil || !*repo.config.RumAgentBeaconKeySet {
+		t.Fatalf("omitted field must preserve true, got %#v", repo.config.RumAgentBeaconKeySet)
+	}
+	if repo.config.RumAgentBeaconKeyReportedAt == nil || !repo.config.RumAgentBeaconKeyReportedAt.Equal(reportedAt) {
+		t.Fatalf("omitted field must preserve reported timestamp, got %#v", repo.config.RumAgentBeaconKeyReportedAt)
+	}
+
+	missing := false
+	if err := svc.MarkConfigApplied(context.Background(), uuid.New(), "nginx", true, true, false, &missing); err != nil {
+		t.Fatalf("MarkConfigApplied false: %v", err)
+	}
+	if repo.config.RumAgentBeaconKeySet == nil || *repo.config.RumAgentBeaconKeySet {
+		t.Fatalf("reported false must persist false, got %#v", repo.config.RumAgentBeaconKeySet)
+	}
+	if repo.config.RumAgentBeaconKeyReportedAt == nil {
+		t.Fatal("reported false must stamp the timestamp")
+	}
+}
+
+func TestReprovisionRumBeaconKeyRotatesPushesAndConfirms(t *testing.T) {
+	reportedPresent := true
+	tenantID, siteID := uuid.New(), uuid.New()
+	repo := &fakeRepo{
+		config: Config{
+			TenantID:      tenantID,
+			SiteID:        siteID,
+			ConfigVersion: 2,
+			RumEnabled:    true,
+			RumSampleRate: 1,
+			BeaconKeySet:  true,
+		},
+		configFound: true,
+		ciphertext:  []byte("encrypted-cdn"),
+	}
+	agent := &fakeAgent{syncResult: agentcmd.PerfConfigResult{OK: true, RumBeaconKeyPresent: &reportedPresent}}
+	rotator := &fakeBeaconKeyRotator{}
+	svc := NewService(repo, nil, &fakeEvents{}, nil)
+	svc.SetAgentClient(agent, &fakeSites{url: "https://site.example.com"})
+	svc.cpBaseURL = "https://manage.example.com"
+	svc.beaconKeyRepo = rotator
+
+	saved, err := svc.ReprovisionRumBeaconKey(context.Background(), tenantID, siteID)
+	if err != nil {
+		t.Fatalf("ReprovisionRumBeaconKey: %v", err)
+	}
+	if saved.ConfigVersion != 3 {
+		t.Fatalf("expected version bump to 3, got %d", saved.ConfigVersion)
+	}
+	if rotator.calls != 1 || len(rotator.hashes[0]) == 0 {
+		t.Fatalf("expected one beacon hash rotation, got calls=%d hashes=%d", rotator.calls, len(rotator.hashes))
+	}
+	if repo.rumUnconfirmed != 1 {
+		t.Fatalf("expected one unconfirmed mark, got %d", repo.rumUnconfirmed)
+	}
+	if saved.RumAgentBeaconKeySet == nil || !*saved.RumAgentBeaconKeySet {
+		t.Fatalf("expected sync response to confirm agent key presence, got %#v", saved.RumAgentBeaconKeySet)
+	}
+	if saved.RumAgentBeaconKeyReportedAt == nil {
+		t.Fatal("expected sync response to stamp agent key timestamp")
+	}
+
+	agent.mu.Lock()
+	defer agent.mu.Unlock()
+	if len(agent.syncRequests) != 1 {
+		t.Fatalf("expected one agent push, got %d", len(agent.syncRequests))
+	}
+	req := agent.syncRequests[0]
+	if req.RumBeaconKey == "" {
+		t.Fatal("expected reprovision push to include fresh plaintext key")
+	}
+	if req.RumIngestURL != "https://manage.example.com/rum/ingest" {
+		t.Fatalf("unexpected ingest URL %q", req.RumIngestURL)
+	}
+}
+
+func TestReprovisionRumBeaconKeyRequiresEnabledRum(t *testing.T) {
+	repo := &fakeRepo{config: Config{RumEnabled: false}, configFound: true}
+	svc := NewService(repo, nil, nil, nil)
+
+	_, err := svc.ReprovisionRumBeaconKey(context.Background(), uuid.New(), uuid.New())
+	de, ok := domain.AsDomain(err)
+	if !ok || de.Code != "rum_not_enabled" {
+		t.Fatalf("expected rum_not_enabled domain error, got %v", err)
 	}
 }
 

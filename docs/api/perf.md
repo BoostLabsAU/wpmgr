@@ -79,6 +79,13 @@ state is read-only (agent-reported).
   "cdn_enabled": false,
   "cdn_file_types": "all",
   "cdn_has_credentials": false,
+  "rum_enabled": true,
+  "rum_sample_rate": 0.1,
+  "max_distinct_countries": 8,
+  "min_sample_count": 30,
+  "beacon_key_set": true,
+  "rum_agent_beacon_key_set": true,
+  "rum_agent_beacon_key_reported_at": "2026-06-03T10:11:13Z",
   "db_auto_clean": false,
   "db_auto_clean_interval": "weekly",
   "server_software": "Apache/2.4",
@@ -115,6 +122,12 @@ weekly`; `js_delay_method` ∈ `defer|async|interaction`; `db_auto_clean_interva
 ∈ `daily|weekly|monthly`; `cdn_file_types` ∈ `all|images|css_js`; `cdn_provider`
 ∈ `cloudflare|bunny|keycdn`; `cdn_url` required + valid `http(s)` when
 `cdn_enabled`.
+
+RUM fields use separate key-presence flags: `beacon_key_set` means the control
+plane has a stored beacon-key hash, while `rum_agent_beacon_key_set` is nullable
+agent-reported plaintext-key presence. `null` means an older or not-yet-confirmed
+agent has not reported key status. `false` means the agent reported that its
+local plaintext key is missing.
 
 **Response** `200 OK` — the stored config (same shape as GET). If the agent push
 fails after a successful store, the config is still saved and the warning is
@@ -443,6 +456,36 @@ These routes are hand-written Gin (ADR-047 governance). The web layer calls them
 via the raw `client.get` transport from `@wpmgr/api`. Source:
 `apps/api/internal/perf/rum_results_handler.go`, `apps/api/internal/perf/dto.go`.
 
+### POST /api/v1/sites/{siteId}/perf/rum/reprovision
+
+**Permission:** `site.perf.config` (operator). **Auth:** session cookie or API key.
+
+Repairs an enabled RUM site whose control plane has a beacon-key hash but the
+agent has not confirmed a local plaintext key. The control plane rotates the
+stored beacon-key hash, keeps the previous hash in the normal grace slot, pushes
+the fresh plaintext key to the agent once, and returns the refreshed performance
+config. The plaintext key is never returned by the operator API.
+
+No body.
+
+**Response** `200 OK`
+
+```json
+{
+  "rum_enabled": true,
+  "beacon_key_set": true,
+  "rum_agent_beacon_key_set": false,
+  "rum_agent_beacon_key_reported_at": null,
+  "config_version": 8
+}
+```
+
+If the post-store agent push fails, the config mutation remains saved and the
+warning is returned in the **`X-Agent-Push-Warning`** response header. The UI
+should refresh config and keep showing the pending or missing-key state until a
+sync response or `/agent/v1/perf/config-ack` confirms
+`rum_beacon_key_present: true`.
+
 ### GET /api/v1/sites/{siteId}/perf/rum/summary
 
 **Permission:** `site:read` (viewer+). **Auth:** session cookie or API key.
@@ -752,7 +795,8 @@ Install-state report after applying a config (≤16 KiB).
   "server_software": "Apache/2.4",
   "dropin_installed": true,
   "wp_cache_constant_set": true,
-  "htaccess_managed": true
+  "htaccess_managed": true,
+  "rum_beacon_key_present": true
 }
 ```
 
@@ -810,7 +854,9 @@ Contract: `apps/api/internal/agentcmd/cache_contract.go`.
 
 `cache_enable` / `perf_config_update` results additionally report
 `server_software`, `dropin_installed`, `wp_cache_constant_set`,
-`htaccess_managed`, which the CP records into `site_perf_config`.
+`htaccess_managed`, and optional `rum_beacon_key_present`, which the CP records
+into `site_perf_config`. Older agents may omit `rum_beacon_key_present`; omission
+means unknown and does not clear the previously recorded key status.
 
 ## SSE events
 

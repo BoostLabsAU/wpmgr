@@ -8658,6 +8658,7 @@ func (*Error) putPerfConfigRes()                  {}
 func (*Error) putSiteLoginBrandRes()              {}
 func (*Error) putSiteLoginProtectionRes()         {}
 func (*Error) refreshSiteDiagnosticsRes()         {}
+func (*Error) reprovisionRumBeaconKeyRes()        {}
 func (*Error) restoreSiteRes()                    {}
 func (*Error) revokeSiteRes()                     {}
 func (*Error) setSiteTagsRes()                    {}
@@ -22449,8 +22450,25 @@ type PerfConfig struct {
 	WooThemeFragmentsSupported OptNilBool `json:"woo_theme_fragments_supported"`
 	// RFC3339 timestamp of the last agent probe. Null when never probed.
 	WooFragmentsProbedAt OptNilDateTime `json:"woo_fragments_probed_at"`
-	ConfigVersion        OptInt         `json:"config_version"`
-	UpdatedAt            OptDateTime    `json:"updated_at"`
+	// Enable RUM beacon injection for this site.
+	RumEnabled OptBool `json:"rum_enabled"`
+	// Fraction of eligible pageviews to keep for RUM.
+	RumSampleRate OptFloat32 `json:"rum_sample_rate"`
+	// Country-dimension cap before excess values fold into other.
+	MaxDistinctCountries OptInt `json:"max_distinct_countries"`
+	// Minimum sample count before dashboard p75 values are shown.
+	MinSampleCount OptInt `json:"min_sample_count"`
+	// Whether the control plane has a stored RUM beacon-key hash.
+	BeaconKeySet OptBool `json:"beacon_key_set"`
+	// Agent-reported plaintext beacon-key presence. Null means the agent
+	// has not reported this field yet, false means it reported no local
+	// key, and true means it reported a persisted local key.
+	RumAgentBeaconKeySet OptNilBool `json:"rum_agent_beacon_key_set"`
+	// Timestamp of the last agent key-presence report. Null when the state
+	// is unknown or has been reset by reprovision.
+	RumAgentBeaconKeyReportedAt OptNilDateTime `json:"rum_agent_beacon_key_reported_at"`
+	ConfigVersion               OptInt         `json:"config_version"`
+	UpdatedAt                   OptDateTime    `json:"updated_at"`
 }
 
 // GetCacheEnabled returns the value of CacheEnabled.
@@ -22781,6 +22799,41 @@ func (s *PerfConfig) GetWooThemeFragmentsSupported() OptNilBool {
 // GetWooFragmentsProbedAt returns the value of WooFragmentsProbedAt.
 func (s *PerfConfig) GetWooFragmentsProbedAt() OptNilDateTime {
 	return s.WooFragmentsProbedAt
+}
+
+// GetRumEnabled returns the value of RumEnabled.
+func (s *PerfConfig) GetRumEnabled() OptBool {
+	return s.RumEnabled
+}
+
+// GetRumSampleRate returns the value of RumSampleRate.
+func (s *PerfConfig) GetRumSampleRate() OptFloat32 {
+	return s.RumSampleRate
+}
+
+// GetMaxDistinctCountries returns the value of MaxDistinctCountries.
+func (s *PerfConfig) GetMaxDistinctCountries() OptInt {
+	return s.MaxDistinctCountries
+}
+
+// GetMinSampleCount returns the value of MinSampleCount.
+func (s *PerfConfig) GetMinSampleCount() OptInt {
+	return s.MinSampleCount
+}
+
+// GetBeaconKeySet returns the value of BeaconKeySet.
+func (s *PerfConfig) GetBeaconKeySet() OptBool {
+	return s.BeaconKeySet
+}
+
+// GetRumAgentBeaconKeySet returns the value of RumAgentBeaconKeySet.
+func (s *PerfConfig) GetRumAgentBeaconKeySet() OptNilBool {
+	return s.RumAgentBeaconKeySet
+}
+
+// GetRumAgentBeaconKeyReportedAt returns the value of RumAgentBeaconKeyReportedAt.
+func (s *PerfConfig) GetRumAgentBeaconKeyReportedAt() OptNilDateTime {
+	return s.RumAgentBeaconKeyReportedAt
 }
 
 // GetConfigVersion returns the value of ConfigVersion.
@@ -23123,6 +23176,41 @@ func (s *PerfConfig) SetWooFragmentsProbedAt(val OptNilDateTime) {
 	s.WooFragmentsProbedAt = val
 }
 
+// SetRumEnabled sets the value of RumEnabled.
+func (s *PerfConfig) SetRumEnabled(val OptBool) {
+	s.RumEnabled = val
+}
+
+// SetRumSampleRate sets the value of RumSampleRate.
+func (s *PerfConfig) SetRumSampleRate(val OptFloat32) {
+	s.RumSampleRate = val
+}
+
+// SetMaxDistinctCountries sets the value of MaxDistinctCountries.
+func (s *PerfConfig) SetMaxDistinctCountries(val OptInt) {
+	s.MaxDistinctCountries = val
+}
+
+// SetMinSampleCount sets the value of MinSampleCount.
+func (s *PerfConfig) SetMinSampleCount(val OptInt) {
+	s.MinSampleCount = val
+}
+
+// SetBeaconKeySet sets the value of BeaconKeySet.
+func (s *PerfConfig) SetBeaconKeySet(val OptBool) {
+	s.BeaconKeySet = val
+}
+
+// SetRumAgentBeaconKeySet sets the value of RumAgentBeaconKeySet.
+func (s *PerfConfig) SetRumAgentBeaconKeySet(val OptNilBool) {
+	s.RumAgentBeaconKeySet = val
+}
+
+// SetRumAgentBeaconKeyReportedAt sets the value of RumAgentBeaconKeyReportedAt.
+func (s *PerfConfig) SetRumAgentBeaconKeyReportedAt(val OptNilDateTime) {
+	s.RumAgentBeaconKeyReportedAt = val
+}
+
 // SetConfigVersion sets the value of ConfigVersion.
 func (s *PerfConfig) SetConfigVersion(val OptInt) {
 	s.ConfigVersion = val
@@ -23133,7 +23221,8 @@ func (s *PerfConfig) SetUpdatedAt(val OptDateTime) {
 	s.UpdatedAt = val
 }
 
-func (*PerfConfig) putPerfConfigRes() {}
+func (*PerfConfig) putPerfConfigRes()           {}
+func (*PerfConfig) reprovisionRumBeaconKeyRes() {}
 
 // Ref: #/components/schemas/PortalBackupItem
 type PortalBackupItem struct {

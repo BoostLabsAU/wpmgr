@@ -18,6 +18,7 @@ House rules: no em dashes, no en dashes, no competitor names. Use "to" for range
 
 ### Fixed
 
+- RUM now distinguishes a stored control-plane beacon-key hash from the WordPress agent's local plaintext key state, and operators can reprovision a missing agent key without database edits.
 - Saved CDN rewrite settings now reach the WordPress agent with the selected asset type scope while CDN credentials remain control-plane only.
 - Backups now preserve plugin and theme vendor code in directories named `cache`, `upgrade`, or `upgrade-temp-backup` while still excluding runtime cache and update staging roots.
 - Advanced page-cache bypass and variant settings now reach the WordPress agent so saved URL, cookie, and query rules affect the rendered cache drop-in.

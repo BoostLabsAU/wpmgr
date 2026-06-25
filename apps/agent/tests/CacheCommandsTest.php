@@ -16,12 +16,17 @@ namespace WPMgr\Agent\Tests;
 use Brain\Monkey;
 use Brain\Monkey\Functions;
 use WPMgr\Agent\Cache\CacheManager;
+use WPMgr\Agent\Cache\PerfReporter;
 use WPMgr\Agent\Commands\CacheDisableCommand;
 use WPMgr\Agent\Commands\CacheEnableCommand;
 use WPMgr\Agent\Commands\CachePreloadCommand;
 use WPMgr\Agent\Commands\CachePurgeCommand;
 use WPMgr\Agent\Commands\DbCleanCommand;
 use WPMgr\Agent\Commands\PerfConfigUpdateCommand;
+use WPMgr\Agent\Keystore;
+use WPMgr\Agent\Optimizer\PerfConfig;
+use WPMgr\Agent\Settings;
+use WPMgr\Agent\Signer;
 use Yoast\PHPUnitPolyfills\TestCases\TestCase;
 
 /**
@@ -44,6 +49,7 @@ final class CacheCommandsTest extends TestCase
 
         $this->optionStore = [];
         Functions\when('get_option')->alias(fn ($k, $d = false) => $this->optionStore[$k] ?? $d);
+        Functions\when('get_site_option')->alias(fn ($k, $d = false) => $this->optionStore[$k] ?? $d);
         Functions\when('update_option')->alias(function ($k, $v) {
             $this->optionStore[$k] = $v;
             return true;
@@ -59,6 +65,7 @@ final class CacheCommandsTest extends TestCase
         Functions\when('wp_clear_scheduled_hook')->justReturn(true);
         Functions\when('add_filter')->justReturn(true);
         Functions\when('add_action')->justReturn(true);
+        Functions\when('wp_json_encode')->alias(static fn ($v) => json_encode($v));
 
         // Task #171 — the preload warmer now enqueues into a custom table via
         // PreloadQueue. Install a minimal in-memory $wpdb double so addTask()
@@ -283,6 +290,109 @@ final class CacheCommandsTest extends TestCase
         $this->assertArrayHasKey('dropin_installed', $res);
         $this->assertArrayHasKey('wp_cache_constant_set', $res);
         $this->assertArrayHasKey('htaccess_managed', $res);
+    }
+
+    public function test_perf_config_update_reports_rum_key_presence_in_sync_response(): void
+    {
+        $this->optionStore[PerfConfig::OPTION] = ['rum_beacon_key' => 'stored-public-key'];
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], ['rum_enabled' => true]);
+
+        $this->assertTrue($res['ok']);
+        $this->assertArrayHasKey('rum_beacon_key_present', $res);
+        $this->assertTrue($res['rum_beacon_key_present']);
+    }
+
+    public function test_perf_config_update_reports_missing_rum_key_in_sync_response(): void
+    {
+        $this->optionStore[PerfConfig::OPTION] = ['rum_beacon_key' => ''];
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], ['rum_enabled' => true]);
+
+        $this->assertTrue($res['ok']);
+        $this->assertArrayHasKey('rum_beacon_key_present', $res);
+        $this->assertFalse($res['rum_beacon_key_present']);
+    }
+
+    public function test_perf_config_update_preserves_existing_rum_key_when_empty_key_is_pushed(): void
+    {
+        $this->optionStore[PerfConfig::OPTION] = [
+            'rum_enabled'    => true,
+            'rum_beacon_key' => 'stored-public-key',
+        ];
+        $cmd = new PerfConfigUpdateCommand($this->manager());
+        $res = $cmd->execute([], [
+            'rum_enabled'    => true,
+            'rum_beacon_key' => '',
+        ]);
+
+        $this->assertTrue($res['ok']);
+        $stored = $this->optionStore[PerfConfig::OPTION] ?? [];
+        $this->assertSame('stored-public-key', $stored['rum_beacon_key']);
+    }
+
+    public function test_perf_reporter_config_ack_reports_rum_key_presence(): void
+    {
+        $this->ensureSodiumStubs();
+
+        $this->optionStore[Settings::OPTION_SITE_ID] = 'site-uuid';
+        $this->optionStore[Settings::OPTION_CP_URL]  = 'https://cp.example.test';
+        $this->optionStore[PerfConfig::OPTION]       = ['rum_beacon_key' => 'stored-public-key'];
+
+        $capturedUrl = '';
+        $capturedArgs = [];
+        Functions\when('wp_remote_post')->alias(function ($url, $args = []) use (&$capturedUrl, &$capturedArgs) {
+            $capturedUrl  = (string) $url;
+            $capturedArgs = is_array($args) ? $args : [];
+            return ['response' => ['code' => 202], 'body' => ''];
+        });
+
+        $keystore = new Keystore();
+        $keystore->generateSiteKeypair();
+        $reporter = new PerfReporter(new Settings(), new Signer($keystore), $this->manager());
+        $reporter->reportInstallState();
+
+        $this->assertSame('https://cp.example.test/agent/v1/perf/config-ack', $capturedUrl);
+        $payload = json_decode((string) ($capturedArgs['body'] ?? ''), true);
+        $this->assertIsArray($payload);
+        $this->assertArrayHasKey('rum_beacon_key_present', $payload);
+        $this->assertTrue($payload['rum_beacon_key_present']);
+    }
+
+    private function ensureSodiumStubs(): void
+    {
+        if (function_exists('sodium_crypto_sign_keypair') || function_exists('WPMgr\\Agent\\sodium_crypto_sign_keypair')) {
+            return;
+        }
+
+        eval(<<<'PHP'
+namespace WPMgr\Agent;
+
+function sodium_crypto_sign_keypair(): string
+{
+    return str_repeat('s', 64) . str_repeat('p', 32);
+}
+
+function sodium_crypto_sign_publickey(string $keypair): string
+{
+    return substr($keypair, -32);
+}
+
+function sodium_crypto_sign_secretkey(string $keypair): string
+{
+    return substr($keypair, 0, 64);
+}
+
+function sodium_crypto_sign_detached(string $message, string $secretKey): string
+{
+    return hash('sha512', $message . $secretKey, true);
+}
+
+function sodium_memzero(string &$value): void
+{
+    $value = '';
+}
+PHP);
     }
 
     /**

@@ -605,6 +605,10 @@ type RenameSiteFileRes interface {
 	renameSiteFileRes()
 }
 
+type ReprovisionRumBeaconKeyRes interface {
+	reprovisionRumBeaconKeyRes()
+}
+
 type ResendEmailLogRes interface {
 	resendEmailLogRes()
 }

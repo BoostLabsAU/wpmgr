@@ -180,15 +180,31 @@ func (r *Repo) UpsertConfig(ctx context.Context, in UpsertConfigInput) (Config, 
 // UpdateInstallState records the agent-observed server/install facts. Agent write
 // path (InAgentTx). The tenant scoping is enforced by the agent identity + the
 // site_id; the row's tenant_id is never changed here.
-func (r *Repo) UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool) error {
+func (r *Repo) UpdateInstallState(ctx context.Context, siteID uuid.UUID, serverSoftware string, dropinInstalled, wpCacheConstantSet, htaccessManaged bool, rumBeaconKeyPresent *bool) error {
 	return r.pool.InAgentTx(ctx, func(tx pgx.Tx) error {
 		_, qerr := sqlc.New(tx).UpdatePerfInstallState(ctx, sqlc.UpdatePerfInstallStateParams{
-			ServerSoftware:     strPtr(serverSoftware),
-			DropinInstalled:    dropinInstalled,
-			WpCacheConstantSet: wpCacheConstantSet,
-			HtaccessManaged:    htaccessManaged,
-			SiteID:             siteID,
+			ServerSoftware:      strPtr(serverSoftware),
+			DropinInstalled:     dropinInstalled,
+			WpCacheConstantSet:  wpCacheConstantSet,
+			HtaccessManaged:     htaccessManaged,
+			RumBeaconKeyPresent: rumBeaconKeyPresent,
+			SiteID:              siteID,
 		})
+		if qerr != nil {
+			if errors.Is(qerr, pgx.ErrNoRows) {
+				return ErrNotFound
+			}
+			return qerr
+		}
+		return nil
+	})
+}
+
+// MarkRumAgentBeaconKeyUnconfirmed resets the agent-side key confirmation after
+// the CP rotates the RUM beacon hash for explicit reprovision.
+func (r *Repo) MarkRumAgentBeaconKeyUnconfirmed(ctx context.Context, tenantID, siteID uuid.UUID) error {
+	return r.pool.InTenantTx(ctx, tenantID, func(tx pgx.Tx) error {
+		_, qerr := sqlc.New(tx).MarkRumAgentBeaconKeyUnconfirmed(ctx, siteID)
 		if qerr != nil {
 			if errors.Is(qerr, pgx.ErrNoRows) {
 				return ErrNotFound
@@ -543,8 +559,9 @@ func (r *Repo) GetStalledDBScanJobs(ctx context.Context, scanThreshold time.Dura
 // DBScanResultInput carries the parameters for upserting a scan result.
 // Phase 2.1: TablesJSON carries the per-table inventory JSON alongside CategoriesJSON.
 // Phase 3.3 (M41): OrphanedOptionsJSON, OrphanedCronJSON, InstalledPluginsJSON
-//   carry the orphan-enumeration output from agents >= 0.16.0. nil/empty values
-//   default to '[]' so rows from older agents remain safe to read.
+//
+//	carry the orphan-enumeration output from agents >= 0.16.0. nil/empty values
+//	default to '[]' so rows from older agents remain safe to read.
 type DBScanResultInput struct {
 	SiteID         uuid.UUID
 	TenantID       uuid.UUID
@@ -832,8 +849,9 @@ func (r *Repo) PruneCacheHitRatioHistory(ctx context.Context, retention time.Dur
 // DBScanResult is the model returned from a scan result lookup.
 // Phase 2.1: TablesJSON holds the per-table inventory JSONB column.
 // Phase 3.3 (M41): OrphanedOptionsJSON, OrphanedCronJSON, InstalledPluginsJSON
-//   hold the orphan-enumeration columns. They default to '[]' for rows from
-//   agents < 0.16.0 via the schema DEFAULT.
+//
+//	hold the orphan-enumeration columns. They default to '[]' for rows from
+//	agents < 0.16.0 via the schema DEFAULT.
 type DBScanResult struct {
 	SiteID         uuid.UUID
 	TenantID       uuid.UUID
@@ -863,9 +881,9 @@ type DBScanResult struct {
 // DBCleanResultInput carries the parameters for upserting a clean result.
 // It is assembled from the final done=true progress push in HandleDBCleanProgress.
 type DBCleanResultInput struct {
-	SiteID      uuid.UUID
-	TenantID    uuid.UUID
-	JobID       string
+	SiteID   uuid.UUID
+	TenantID uuid.UUID
+	JobID    string
 	// ResultJSON is the per-category {rows_deleted, bytes_freed, state} map
 	// serialised as JSONB. nil/empty defaults to '{}'.
 	ResultJSON  []byte
@@ -1015,82 +1033,84 @@ func (r *Repo) GetDBScanResult(ctx context.Context, tenantID, siteID uuid.UUID) 
 
 func configFromRow(row sqlc.SitePerfConfig) Config {
 	return Config{
-		SiteID:                    row.SiteID,
-		TenantID:                  row.TenantID,
-		CacheEnabled:              row.CacheEnabled,
-		CacheLoggedIn:             row.CacheLoggedIn,
-		CacheMobile:               row.CacheMobile,
-		CacheRefresh:              row.CacheRefresh,
-		CacheRefreshInterval:      row.CacheRefreshInterval,
-		CacheLinkPrefetch:         row.CacheLinkPrefetch,
-		CacheBypassURLs:           coalesce(row.CacheBypassUrls),
-		CacheBypassCookies:        coalesce(row.CacheBypassCookies),
-		CacheIncludeQueries:       coalesce(row.CacheIncludeQueries),
-		CacheIncludeCookies:       coalesce(row.CacheIncludeCookies),
-		PreloadConcurrency:        int(row.PreloadConcurrency),
-		PreloadDelayMs:            int(row.PreloadDelayMs),
-		PreloadBatchSize:          int(row.PreloadBatchSize),
-		PreloadMaxLoad:            float64(row.PreloadMaxLoad),
-		CSSJSMinify:               row.CssJsMinify,
-		CSSRucss:                  row.CssRucss,
-		CSSRucssIncludeSelectors:  coalesce(row.CssRucssIncludeSelectors),
-		CSSJSSelfHostThirdParty:   row.CssJsSelfHostThirdParty,
-		JSDelay:                   row.JsDelay,
-		JSDelayMethod:             row.JsDelayMethod,
-		JSDelayExcludes:           coalesce(row.JsDelayExcludes),
-		JSDelayThirdParty:         row.JsDelayThirdParty,
-		JSDelayThirdPartyExcludes: coalesce(row.JsDelayThirdPartyExcludes),
-		FontsDisplaySwap:    row.FontsDisplaySwap,
-		FontsOptimizeGoogle: row.FontsOptimizeGoogle,
-		FontsPreload:        row.FontsPreload,
-		LazyLoad:            row.LazyLoad,
-		LazyLoadExclusions:        coalesce(row.LazyLoadExclusions),
-		ProperlySizeImages:        row.ProperlySizeImages,
-		YouTubePlaceholder:        row.YoutubePlaceholder,
-		SelfHostGravatars:         row.SelfHostGravatars,
-		CDNEnabled:                row.CdnEnabled,
-		CDNURL:                    derefStr(row.CdnUrl),
-		CDNFileTypes:              row.CdnFileTypes,
-		CDNProvider:               derefStr(row.CdnProvider),
-		CDNHasCredentials:         len(row.CdnCredentialsEncrypted) > 0,
-		DBAutoClean:               row.DbAutoClean,
-		DBAutoCleanInterval:       row.DbAutoCleanInterval,
-		DBPostRevisions:           row.DbPostRevisions,
-		DBPostAutoDrafts:          row.DbPostAutoDrafts,
-		DBPostTrashed:             row.DbPostTrashed,
-		DBCommentsSpam:            row.DbCommentsSpam,
-		DBCommentsTrashed:         row.DbCommentsTrashed,
-		DBTransientsExpired:       row.DbTransientsExpired,
-		DBOptimizeTables:          row.DbOptimizeTables,
-		NextDBCleanAt:             tsToTimePtr(row.NextDbCleanAt),
-		BloatDisableBlockCSS:      row.BloatDisableBlockCss,
-		BloatDisableDashicons:     row.BloatDisableDashicons,
-		BloatDisableEmojis:        row.BloatDisableEmojis,
-		BloatDisableJQueryMig:     row.BloatDisableJqueryMigrate,
-		BloatDisableXMLRPC:        row.BloatDisableXmlRpc,
-		BloatDisableRSSFeed:       row.BloatDisableRssFeed,
-		BloatDisableOembeds:       row.BloatDisableOembeds,
-		BloatHeartbeatControl:     row.BloatHeartbeatControl,
-		BloatPostRevisionControl:  row.BloatPostRevisionsControl,
-		ServerSoftware:             derefStr(row.ServerSoftware),
-		DropinInstalled:            row.DropinInstalled,
-		WPCacheConstantSet:         row.WpCacheConstantSet,
-		HtaccessManaged:            row.HtaccessManaged,
-		WooCacheableSession:        row.WooCacheableSession,
-		WooThemeFragmentsSupported: row.WooThemeFragmentsSupported,
-		WooFragmentsProbedAt:       tsToTimePtr(row.WooFragmentsProbedAt),
-		FontsTranscodeWOFF2:        row.FontsTranscodeWoff2,
-		FontsSubset:                row.FontsSubset,
-		FontsSubsetMode:            row.FontsSubsetMode,
-		FontsSubsetRange:           row.FontsSubsetRange,
-		RumEnabled:                 row.RumEnabled,
-		RumSampleRate:              float64(row.RumSampleRate),
-		MaxDistinctCountries:       int(row.MaxDistinctCountries),
-		MinSampleCount:             int(row.MinSampleCount),
-		BeaconKeySet:               row.BeaconKeyHash != nil,
-		ConfigVersion:              int(row.ConfigVersion),
-		CreatedAt:           row.CreatedAt,
-		UpdatedAt:           row.UpdatedAt,
+		SiteID:                      row.SiteID,
+		TenantID:                    row.TenantID,
+		CacheEnabled:                row.CacheEnabled,
+		CacheLoggedIn:               row.CacheLoggedIn,
+		CacheMobile:                 row.CacheMobile,
+		CacheRefresh:                row.CacheRefresh,
+		CacheRefreshInterval:        row.CacheRefreshInterval,
+		CacheLinkPrefetch:           row.CacheLinkPrefetch,
+		CacheBypassURLs:             coalesce(row.CacheBypassUrls),
+		CacheBypassCookies:          coalesce(row.CacheBypassCookies),
+		CacheIncludeQueries:         coalesce(row.CacheIncludeQueries),
+		CacheIncludeCookies:         coalesce(row.CacheIncludeCookies),
+		PreloadConcurrency:          int(row.PreloadConcurrency),
+		PreloadDelayMs:              int(row.PreloadDelayMs),
+		PreloadBatchSize:            int(row.PreloadBatchSize),
+		PreloadMaxLoad:              float64(row.PreloadMaxLoad),
+		CSSJSMinify:                 row.CssJsMinify,
+		CSSRucss:                    row.CssRucss,
+		CSSRucssIncludeSelectors:    coalesce(row.CssRucssIncludeSelectors),
+		CSSJSSelfHostThirdParty:     row.CssJsSelfHostThirdParty,
+		JSDelay:                     row.JsDelay,
+		JSDelayMethod:               row.JsDelayMethod,
+		JSDelayExcludes:             coalesce(row.JsDelayExcludes),
+		JSDelayThirdParty:           row.JsDelayThirdParty,
+		JSDelayThirdPartyExcludes:   coalesce(row.JsDelayThirdPartyExcludes),
+		FontsDisplaySwap:            row.FontsDisplaySwap,
+		FontsOptimizeGoogle:         row.FontsOptimizeGoogle,
+		FontsPreload:                row.FontsPreload,
+		LazyLoad:                    row.LazyLoad,
+		LazyLoadExclusions:          coalesce(row.LazyLoadExclusions),
+		ProperlySizeImages:          row.ProperlySizeImages,
+		YouTubePlaceholder:          row.YoutubePlaceholder,
+		SelfHostGravatars:           row.SelfHostGravatars,
+		CDNEnabled:                  row.CdnEnabled,
+		CDNURL:                      derefStr(row.CdnUrl),
+		CDNFileTypes:                row.CdnFileTypes,
+		CDNProvider:                 derefStr(row.CdnProvider),
+		CDNHasCredentials:           len(row.CdnCredentialsEncrypted) > 0,
+		DBAutoClean:                 row.DbAutoClean,
+		DBAutoCleanInterval:         row.DbAutoCleanInterval,
+		DBPostRevisions:             row.DbPostRevisions,
+		DBPostAutoDrafts:            row.DbPostAutoDrafts,
+		DBPostTrashed:               row.DbPostTrashed,
+		DBCommentsSpam:              row.DbCommentsSpam,
+		DBCommentsTrashed:           row.DbCommentsTrashed,
+		DBTransientsExpired:         row.DbTransientsExpired,
+		DBOptimizeTables:            row.DbOptimizeTables,
+		NextDBCleanAt:               tsToTimePtr(row.NextDbCleanAt),
+		BloatDisableBlockCSS:        row.BloatDisableBlockCss,
+		BloatDisableDashicons:       row.BloatDisableDashicons,
+		BloatDisableEmojis:          row.BloatDisableEmojis,
+		BloatDisableJQueryMig:       row.BloatDisableJqueryMigrate,
+		BloatDisableXMLRPC:          row.BloatDisableXmlRpc,
+		BloatDisableRSSFeed:         row.BloatDisableRssFeed,
+		BloatDisableOembeds:         row.BloatDisableOembeds,
+		BloatHeartbeatControl:       row.BloatHeartbeatControl,
+		BloatPostRevisionControl:    row.BloatPostRevisionsControl,
+		ServerSoftware:              derefStr(row.ServerSoftware),
+		DropinInstalled:             row.DropinInstalled,
+		WPCacheConstantSet:          row.WpCacheConstantSet,
+		HtaccessManaged:             row.HtaccessManaged,
+		WooCacheableSession:         row.WooCacheableSession,
+		WooThemeFragmentsSupported:  row.WooThemeFragmentsSupported,
+		WooFragmentsProbedAt:        tsToTimePtr(row.WooFragmentsProbedAt),
+		FontsTranscodeWOFF2:         row.FontsTranscodeWoff2,
+		FontsSubset:                 row.FontsSubset,
+		FontsSubsetMode:             row.FontsSubsetMode,
+		FontsSubsetRange:            row.FontsSubsetRange,
+		RumEnabled:                  row.RumEnabled,
+		RumSampleRate:               float64(row.RumSampleRate),
+		MaxDistinctCountries:        int(row.MaxDistinctCountries),
+		MinSampleCount:              int(row.MinSampleCount),
+		BeaconKeySet:                row.BeaconKeyHash != nil,
+		RumAgentBeaconKeySet:        row.RumAgentBeaconKeySet,
+		RumAgentBeaconKeyReportedAt: tsToTimePtr(row.RumAgentBeaconKeyReportedAt),
+		ConfigVersion:               int(row.ConfigVersion),
+		CreatedAt:                   row.CreatedAt,
+		UpdatedAt:                   row.UpdatedAt,
 	}
 }
 
